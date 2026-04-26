@@ -23,7 +23,7 @@ DEFAULT_WELCOME = (
 )
 DEFAULT_COOLDOWN_MIN = 60
 DEFAULT_TRIGGERS = ["выдай рабочую беседу", "создай рабочую беседу", "новая беседа"]
-DEFAULT_WORKERS = ["pride_sys01", "pride_manager1", "TimonSkupCL"]
+DEFAULT_WORKERS = ["pride_sys01", "pride_manager1", "TimonSkupCL", "SIMBA_PRIDE_ADM"]
 
 # === Static chat settings ===
 CHAT_TITLE_TEMPLATE = "[PRIDE] Поставки РС | {client_name}"
