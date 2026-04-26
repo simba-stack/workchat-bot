@@ -26,6 +26,6 @@ DEFAULT_TRIGGERS = ["выдай рабочую беседу", "создай ра
 DEFAULT_WORKERS = ["pride_sys01", "pride_manager1", "TimonSkupCL"]
 
 # === Static chat settings ===
-CHAT_TITLE_TEMPLATE = "Работа - {client_name}"
-CHAT_DESCRIPTION_TEMPLATE = "Рабочая беседа с клиентом {client_name}"
+CHAT_TITLE_TEMPLATE = "[PRIDE] Поставки РС | {client_name}"
+CHAT_DESCRIPTION_TEMPLATE = "[PRIDE] Поставки РС с клиентом {client_name}"
 USERBOT_AS_ADMIN = True
