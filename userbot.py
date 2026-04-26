@@ -18,7 +18,12 @@ from telethon.tl.functions.channels import (
     GetParticipantRequest,
 )
 from telethon.tl.functions.messages import ExportChatInviteRequest
-from telethon.tl.types import ChatAdminRights, PeerUser
+from telethon.tl.types import (
+    ChatAdminRights, PeerUser,
+    MessageEntityBold, MessageEntityItalic, MessageEntityUnderline,
+    MessageEntityStrike, MessageEntityCode, MessageEntityPre,
+    MessageEntityBlockquote, MessageEntityTextUrl, MessageEntityCustomEmoji,
+)
 from telethon.errors import (
     UserPrivacyRestrictedError,
     UserNotMutualContactError,
@@ -32,6 +37,58 @@ import config
 from storage import storage
 
 logger = logging.getLogger(__name__)
+
+
+def _split_text(text: str, limit: int = 3900) -> list:
+    """Split long text into chunks <= limit. Tries to break on newlines/spaces."""
+    if len(text) <= limit:
+        return [text]
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = text.rfind(" ", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        parts.append(text[:cut])
+        text = text[cut:].lstrip()
+    if text:
+        parts.append(text)
+    return parts
+
+
+def _entities_to_telethon(items: list) -> list:
+    """Convert aiogram-style entity dicts -> Telethon entities. Unknown types skipped."""
+    out = []
+    for e in items or []:
+        try:
+            t = e.get("type"); off = int(e["offset"]); ln = int(e["length"])
+        except Exception:
+            continue
+        if t == "custom_emoji":
+            cid = e.get("custom_emoji_id") or e.get("customEmojiId")
+            if cid:
+                out.append(MessageEntityCustomEmoji(off, ln, int(cid)))
+        elif t == "bold":
+            out.append(MessageEntityBold(off, ln))
+        elif t == "italic":
+            out.append(MessageEntityItalic(off, ln))
+        elif t == "underline":
+            out.append(MessageEntityUnderline(off, ln))
+        elif t == "strikethrough":
+            out.append(MessageEntityStrike(off, ln))
+        elif t == "code":
+            out.append(MessageEntityCode(off, ln))
+        elif t == "pre":
+            lang = e.get("language") or ""
+            out.append(MessageEntityPre(off, ln, lang))
+        elif t in ("blockquote", "expandable_blockquote"):
+            out.append(MessageEntityBlockquote(off, ln))
+        elif t == "text_link":
+            url = e.get("url") or ""
+            if url:
+                out.append(MessageEntityTextUrl(off, ln, url))
+    return out
 
 
 class UserbotService:
@@ -113,12 +170,22 @@ class UserbotService:
         if not info or info.get("welcome_sent"):
             return False
         welcome = storage.get_welcome()
+        entities_raw = storage.get_welcome_entities()
         try:
-            await self.client.send_message(chat_id, welcome)
+            if entities_raw:
+                # Custom-emoji / formatting present — send single message with entities.
+                # (entities offsets are anchored to full text; splitting would corrupt them)
+                ents = _entities_to_telethon(entities_raw)
+                await self.client.send_message(chat_id, welcome, formatting_entities=ents)
+            else:
+                # Plain text — split into chunks if too long
+                for chunk in _split_text(welcome, 3900):
+                    await self.client.send_message(chat_id, chunk)
+                    await asyncio.sleep(0.3)
             await storage.mark_welcome_sent(chat_id)
             logger.info(
-                "Welcome sent (source=%s) to chat=%s for client=%s",
-                source, chat_id, expected_client_id,
+                "Welcome sent (source=%s, entities=%d, len=%d) to chat=%s for client=%s",
+                source, len(entities_raw), len(welcome), chat_id, expected_client_id,
             )
             return True
         except Exception as e:
@@ -221,6 +288,10 @@ class UserbotService:
                 statuses[uname_or_id] = f"flood wait {e.seconds}s"
             except Exception as e:
                 statuses[uname_or_id] = f"ошибка: {e}"
+
+        # Log invite statuses so we can debug from Railway logs
+        for u, s in statuses.items():
+            logger.info("invite chat=%s @%s -> %s", channel.id, u, s)
 
         # 5. Make userbot admin (so it can send welcome)
         if config.USERBOT_AS_ADMIN and self._me:

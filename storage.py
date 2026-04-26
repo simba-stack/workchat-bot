@@ -31,6 +31,7 @@ def _default_state() -> dict:
         "admins": [],
         "workers": list(config.DEFAULT_WORKERS),
         "welcome_message": config.DEFAULT_WELCOME,
+        "welcome_entities": [],  # serialized aiogram MessageEntity list
         "cooldown_minutes": config.DEFAULT_COOLDOWN_MIN,
         "trigger_phrases": list(config.DEFAULT_TRIGGERS),
         "stats": {"total_chats_created": 0, "creations_by_user": {}},
@@ -120,9 +121,13 @@ class Storage:
     def get_welcome(self) -> str:
         return self.state["welcome_message"]
 
-    async def set_welcome(self, text: str):
+    def get_welcome_entities(self) -> list:
+        return list(self.state.get("welcome_entities") or [])
+
+    async def set_welcome(self, text: str, entities: Optional[list] = None):
         async with _lock:
             self.state["welcome_message"] = text
+            self.state["welcome_entities"] = entities or []
             await self._save_unlocked()
 
     # === Cooldown ===

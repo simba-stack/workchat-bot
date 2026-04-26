@@ -75,7 +75,12 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
         await state.set_state(AdminFSM.add_worker)
     elif action == "welcome_edit":
         await call.message.edit_text(
-            "Пришлите новый текст приветствия. Можно с эмодзи и переносами.\n\n"
+            "Пришлите новый текст приветствия одним сообщением.\n\n"
+            "💎 <b>Premium-эмодзи / форматирование:</b> перешлите/скопируйте сюда "
+            "своё готовое сообщение из Telegram (со своего premium-аккаунта) — "
+            "бот сохранит текст вместе с эмодзи и форматированием.\n\n"
+            "📝 Лимит — 4096 символов на сообщение. Длинный текст без премиум-эмодзи "
+            "будет автоматически разбит при отправке.\n\n"
             "Или /admin чтобы отменить.",
             reply_markup=back_kb(),
         )
@@ -208,9 +213,21 @@ async def fsm_set_welcome(message: Message, state: FSMContext):
     if not text.strip():
         await message.answer("Текст пустой. Пришлите ещё раз или /admin.")
         return
-    await storage.set_welcome(text)
+    # Capture entities (custom_emoji / bold / italic / etc.) for forwarded or styled messages.
+    raw_entities = message.entities or message.caption_entities or []
+    serialized = []
+    for e in raw_entities:
+        try:
+            serialized.append(e.model_dump(mode="json", exclude_none=True))
+        except Exception:
+            try:
+                serialized.append(e.dict(exclude_none=True))
+            except Exception:
+                pass
+    await storage.set_welcome(text, serialized)
     await state.clear()
-    await message.answer("✅ Приветствие обновлено", reply_markup=main_menu_kb())
+    note = f"✅ Приветствие обновлено (символов: {len(text)}, entities: {len(serialized)})"
+    await message.answer(note, reply_markup=main_menu_kb())
 
 
 @router.message(AdminFSM.set_cooldown)
@@ -237,17 +254,4 @@ async def fsm_set_cooldown(message: Message, state: FSMContext):
 @router.message(AdminFSM.add_admin)
 async def fsm_add_admin(message: Message, state: FSMContext):
     if not storage.is_admin(message.from_user.id):
-        await state.clear()
-        return
-    if message.text == "/admin":
-        await state.clear()
-        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
-        return
-    try:
-        uid = int((message.text or "").strip())
-    except ValueError:
-        await message.answer("Нужно число (Telegram ID). Пришлите ещё раз или /admin.")
-        return
-    await storage.add_admin(uid)
-    await state.clear()
-    await message.answer(f"✅ Добавлен админ <code>{uid}</code>", reply_markup=main_menu_kb())
+        awa
