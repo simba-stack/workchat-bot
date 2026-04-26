@@ -1,15 +1,23 @@
-"""Main entry: aiogram bot + userbot, with admin panel and cooldowns."""
+"""Main entry: aiogram bot + userbot, with admin panel, cooldowns, captcha."""
 import asyncio
 import logging
 import html
+import random
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    User as TgUser,
+)
 
 import config
 from storage import storage
@@ -39,6 +47,56 @@ WELCOME_TEXT = (
     "Или /new_chat"
 )
 
+CAPTCHA_MAX_ATTEMPTS = 3
+
+
+class CaptchaFSM(StatesGroup):
+    waiting = State()
+
+
+def _gen_captcha() -> tuple[str, int, list[int]]:
+    """Возвращает (текст_примера, правильный_ответ, 4_варианта_перемешанных)."""
+    a = random.randint(2, 9)
+    b = random.randint(2, 9)
+    if random.random() < 0.5:
+        text = f"{a} + {b}"
+        ans = a + b
+    else:
+        if b > a:
+            a, b = b, a
+        text = f"{a} − {b}"
+        ans = a - b
+    wrong: set[int] = set()
+    while len(wrong) < 3:
+        delta = random.randint(-4, 4)
+        if delta == 0:
+            continue
+        w = ans + delta
+        if w < 0 or w == ans:
+            continue
+        wrong.add(w)
+    options = [ans, *wrong]
+    random.shuffle(options)
+    return text, ans, options
+
+
+def _captcha_kb(options: list[int]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=str(o), callback_data=f"cap:{o}")
+        for o in options
+    ]])
+
+
+async def _start_captcha(message: Message, state: FSMContext):
+    text, ans, options = _gen_captcha()
+    await message.answer(
+        "🤖 Подтвердите, что вы не бот.\n\n"
+        f"Решите пример: <b>{text} = ?</b>",
+        reply_markup=_captcha_kb(options),
+    )
+    await state.set_state(CaptchaFSM.waiting)
+    await state.update_data(captcha_answer=ans, captcha_attempts=0)
+
 
 @main_router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
@@ -55,10 +113,10 @@ async def on_help(message: Message, state: FSMContext):
 @main_router.message(Command("new_chat"))
 async def on_new_chat(message: Message, state: FSMContext):
     await state.clear()
-    await create_chat_for(message)
+    await _start_captcha(message, state)
 
 
-@main_router.message(F.text)
+@main_router.message(F.text, ~F.text.startswith("/"))
 async def on_text(message: Message, state: FSMContext):
     text = (message.text or "").strip()
 
@@ -71,11 +129,11 @@ async def on_text(message: Message, state: FSMContext):
         )
         return
 
-    # 2) Trigger phrases
+    # 2) Trigger phrases → капча → кулдаун → беседа
     triggers = storage.get_triggers()
     low = text.lower()
     if any(p in low for p in triggers):
-        await create_chat_for(message)
+        await _start_captcha(message, state)
         return
 
     # 3) Fallback
@@ -84,17 +142,65 @@ async def on_text(message: Message, state: FSMContext):
     )
 
 
-async def create_chat_for(message: Message):
-    user = message.from_user
+@main_router.callback_query(CaptchaFSM.waiting, F.data.startswith("cap:"))
+async def on_captcha_answer(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    expected = data.get("captcha_answer")
+    attempts = int(data.get("captcha_attempts", 0))
+    try:
+        chosen = int(call.data.split(":", 1)[1])
+    except ValueError:
+        await call.answer()
+        return
+
+    if chosen == expected:
+        await state.clear()
+        try:
+            await call.message.edit_text("✅ Капча пройдена. Создаю рабочую беседу…")
+        except Exception:
+            pass
+        await call.answer()
+        await _create_chat_for_user(call.message.chat.id, call.from_user)
+        return
+
+    attempts += 1
+    if attempts >= CAPTCHA_MAX_ATTEMPTS:
+        await state.clear()
+        try:
+            await call.message.edit_text(
+                f"❌ Слишком много неправильных ответов ({CAPTCHA_MAX_ATTEMPTS}/{CAPTCHA_MAX_ATTEMPTS}).\n"
+                "Отправьте триггер ещё раз, чтобы получить новую капчу."
+            )
+        except Exception:
+            pass
+        await call.answer("Капча провалена", show_alert=True)
+        return
+
+    text, ans, options = _gen_captcha()
+    try:
+        await call.message.edit_text(
+            f"❌ Неверно. Попытка {attempts}/{CAPTCHA_MAX_ATTEMPTS}.\n\n"
+            f"Новый пример: <b>{text} = ?</b>",
+            reply_markup=_captcha_kb(options),
+        )
+    except Exception:
+        pass
+    await state.update_data(captcha_answer=ans, captcha_attempts=attempts)
+    await call.answer("Неверно")
+
+
+async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
+    """Создаёт беседу. reply_chat_id — куда писать ответы клиенту."""
     if not user:
         return
 
-    # Cooldown
+    # Cooldown (после капчи)
     remaining = storage.check_cooldown(user.id)
     if remaining is not None:
         m, s = divmod(remaining, 60)
-        await message.answer(
-            f"⏱ Подождите ещё <b>{m} мин {s} с</b> до следующего запроса."
+        await bot.send_message(
+            reply_chat_id,
+            f"⏱ Подождите ещё <b>{m} мин {s} с</b> до следующего запроса.",
         )
         return
 
@@ -105,7 +211,7 @@ async def create_chat_for(message: Message):
     else:
         client_name = f"user_{user.id}"
 
-    progress = await message.answer("⏳ Создаю рабочую беседу, минутку...")
+    progress = await bot.send_message(reply_chat_id, "⏳ Создаю рабочую беседу, минутку...")
 
     try:
         result = await userbot.create_work_chat(
