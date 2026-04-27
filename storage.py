@@ -31,13 +31,15 @@ def _default_state() -> dict:
         "admins": [],
         "workers": list(config.DEFAULT_WORKERS),
         "welcome_message": config.DEFAULT_WELCOME,
-        "welcome_entities": [],  # serialized aiogram MessageEntity list
+        "welcome_entities": [],
         "cooldown_minutes": config.DEFAULT_COOLDOWN_MIN,
         "trigger_phrases": list(config.DEFAULT_TRIGGERS),
         "stats": {"total_chats_created": 0, "creations_by_user": {}},
         "user_cooldowns": {},
         "managed_chats": {},
         "admin_secret_command": "",
+        "brain_chat_id": 0,
+        "client_idle_minutes": 5,
     }
 
 
@@ -177,6 +179,9 @@ class Storage:
     def get_chat_info(self, chat_id) -> Optional[dict]:
         return self.state["managed_chats"].get(_norm_chat_id(chat_id))
 
+    def get_managed_chat_ids(self) -> list:
+        return list(self.state.get("managed_chats", {}).keys())
+
     async def mark_welcome_sent(self, chat_id):
         key = _norm_chat_id(chat_id)
         async with _lock:
@@ -192,6 +197,23 @@ class Storage:
     # === Secret command ===
     def get_secret_command(self) -> str:
         return self.state["admin_secret_command"]
+
+    # === Brain chat ===
+    def get_brain_chat_id(self) -> int:
+        return int(self.state.get("brain_chat_id") or 0)
+
+    async def set_brain_chat_id(self, chat_id: int):
+        async with _lock:
+            self.state["brain_chat_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def get_client_idle_minutes(self) -> int:
+        return int(self.state.get("client_idle_minutes") or 5)
+
+    async def set_client_idle_minutes(self, minutes: int):
+        async with _lock:
+            self.state["client_idle_minutes"] = int(minutes)
+            await self._save_unlocked()
 
 
 storage = Storage(config.STORAGE_PATH)
