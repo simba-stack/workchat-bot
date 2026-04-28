@@ -4,9 +4,12 @@
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
     "watchPatterns": [
-      "**",
-      "!knowledge/**",
-      "!*.md"
+      "*.py",
+      "Dockerfile",
+      "requirements.txt",
+      "railway.json",
+      ".env.example",
+      ".gitattributes"
     ]
   },
   "deploy": {
