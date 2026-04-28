@@ -154,21 +154,32 @@ async def classify_fact(text: str) -> Optional[dict]:
         logger.warning("classify_fact: no Anthropic client (API key missing)")
         return None
     model = storage.get_ai_model() or config.DEFAULT_AI_MODEL
+    # Длинный мануал может потребовать большой output (markdown-блок + commit msg).
+    # 600 раньше обрезало JSON и парсер падал — поднимаем до 4096.
     try:
         msg = await cli.messages.create(
             model=model,
-            max_tokens=600,
+            max_tokens=4096,
             messages=[{"role": "user", "content": _classifier_prompt(text)}],
         )
     except Exception as e:
-        logger.warning("classify_fact API error: %s", e)
+        logger.warning("classify_fact API error (text_len=%d): %s", len(text), e)
         return None
     raw = "".join(b.text for b in msg.content if hasattr(b, "text"))
     raw = _strip_code_fences(raw)
+    stop = getattr(msg, "stop_reason", None)
+    if stop == "max_tokens":
+        logger.warning(
+            "classify_fact: hit max_tokens limit (text_len=%d, raw_len=%d) — JSON может быть обрезан",
+            len(text), len(raw),
+        )
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning("classify_fact JSON parse failed: %s | raw=%r", e, raw[:200])
+        logger.warning(
+            "classify_fact JSON parse failed: %s | stop=%s raw_head=%r raw_tail=%r",
+            e, stop, raw[:300], raw[-300:],
+        )
         return None
     if data.get("skip"):
         logger.info("classify_fact: skipped — %s", data.get("reason"))

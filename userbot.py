@@ -120,6 +120,10 @@ class UserbotService:
         # Ключ — нормализованный chat_id (str), значение — unix time.
         # Если worker писал в последние client_idle_minutes минут — AI молчит.
         self._last_worker_ts: dict[str, float] = {}
+        # Кеш resolved-сущностей чатов для брейн/координаторской беседы.
+        # Telethon send_message по сырому int ID иногда даёт InvalidPeer;
+        # get_entity один раз за сессию решает проблему.
+        self._chat_entity_cache: dict[int, object] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
         """Возвращает (создаёт при необходимости) Lock для конкретного чата."""
@@ -134,6 +138,23 @@ class UserbotService:
             "Userbot started: %s (@%s, id=%s)",
             self._me.first_name, self._me.username, self._me.id,
         )
+        # Прогреваем сущности брейн / координаторского чатов, если они заданы.
+        # Telethon после рестарта может не иметь их в кеше — get_entity заполнит.
+        for label, cid in (
+            ("brain_chat", storage.get_brain_chat_id()),
+            ("coord_chat", storage.get_coordination_chat_id()),
+        ):
+            if not cid:
+                continue
+            try:
+                ent = await self.client.get_entity(cid)
+                self._chat_entity_cache[int(cid)] = ent
+                logger.info("%s entity primed: id=%s type=%s", label, cid, type(ent).__name__)
+            except Exception as e:
+                logger.warning(
+                    "%s entity prime FAILED for id=%s: %s — sends в этот чат могут падать с InvalidPeer",
+                    label, cid, e,
+                )
 
         @self.client.on(events.ChatAction)
         async def _on_chat_action(event):
@@ -292,6 +313,27 @@ class UserbotService:
             )
         except Exception as e:
             logger.warning("watch chat=%s: unexpected error: %s", channel.id, e)
+
+    async def _resolve_chat_target(self, chat_id):
+        """Возвращает entity для send_message (cache'им чтобы не дёргать API).
+
+        Telethon при сыром int chat_id (особенно для не-prefixed форм) иногда
+        выдаёт InvalidPeer. get_entity нормализует, кеш сохраняет результат
+        на всё время жизни процесса. None при ошибке.
+        """
+        try:
+            cid_int = int(chat_id)
+        except Exception:
+            return chat_id  # пусть Telethon сам что-то сделает
+        if cid_int in self._chat_entity_cache:
+            return self._chat_entity_cache[cid_int]
+        try:
+            ent = await self.client.get_entity(cid_int)
+            self._chat_entity_cache[cid_int] = ent
+            return ent
+        except Exception as e:
+            logger.warning("resolve_chat_target failed for %s: %s", cid_int, e)
+            return cid_int  # fallback — пусть send попытается с raw ID
 
     # === AI brain handlers ===
 
@@ -639,7 +681,8 @@ class UserbotService:
             f"🤖 {at}"
         )
         try:
-            await self.client.send_message(bid, log_msg)
+            target = await self._resolve_chat_target(bid)
+            await self.client.send_message(target, log_msg)
         except Exception as e:
             logger.warning("brain log send failed: %s", e)
 
@@ -783,7 +826,8 @@ class UserbotService:
             f"💬 Чат: {chat_link}"
         )
         try:
-            await self.client.send_message(coord_id, text, parse_mode="html", link_preview=False)
+            target = await self._resolve_chat_target(coord_id)
+            await self.client.send_message(target, text, parse_mode="html", link_preview=False)
         except Exception as e:
             await storage.bump_escalate_stats(error=True)
             logger.warning("escalate send failed: %s", e)
