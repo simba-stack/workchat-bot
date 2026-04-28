@@ -40,18 +40,54 @@ userbot = UserbotService()
 main_router = Router()
 
 
-WELCOME_TEXT = (
+# === Опрос источника трафика на /start ===
+SOURCES = [
+    "Continental",
+    "FRK",
+    "BG CHAT",
+    "MARKET 404",
+    "ZLOY ZAM",
+    "VERA CHAT",
+    "BRO CHAT",
+    "GRAND",
+    "ШТУРМ",
+    "ПОСОВЕТОВАЛИ",
+]
+
+START_GREETING = (
     "👋 Здравствуйте!\n\n"
-    "Я создам для вас рабочую беседу с нашими специалистами.\n\n"
-    "Чтобы получить беседу, отправьте сообщение:\n"
-    "<b>выдай рабочую беседу</b>\n\n"
-    "Или /new_chat"
+    "Перед тем как создать рабочую беседу — подскажите, "
+    "<b>где вы о нас узнали?</b>"
+)
+
+WELCOME_AFTER_SURVEY = (
+    "Спасибо!\n\n"
+    "Чтобы получить рабочую беседу с нашими специалистами — "
+    "нажмите кнопку ниже."
 )
 
 CAPTCHA_MAX_ATTEMPTS = 3
 
 # Интервал периодической очистки storage (раз в 6 часов)
 _CLEANUP_INTERVAL_SEC = 6 * 3600
+
+
+def _sources_kb() -> InlineKeyboardMarkup:
+    """Клавиатура с 10 источниками (5 рядов по 2 кнопки)."""
+    rows = []
+    for i in range(0, len(SOURCES), 2):
+        row = [InlineKeyboardButton(text=SOURCES[i], callback_data=f"src:{i}")]
+        if i + 1 < len(SOURCES):
+            row.append(InlineKeyboardButton(text=SOURCES[i + 1], callback_data=f"src:{i + 1}"))
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _get_chat_kb() -> InlineKeyboardMarkup:
+    """Кнопка «Получить рабочую беседу» — ведёт на капчу."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📩 Получить рабочую беседу", callback_data="gw:get")
+    ]])
 
 
 class CaptchaFSM(StatesGroup):
@@ -91,33 +127,94 @@ def _captcha_kb(options: list[int]) -> InlineKeyboardMarkup:
     ]])
 
 
-async def _start_captcha(message: Message, state: FSMContext):
+def _make_captcha_text() -> tuple[str, InlineKeyboardMarkup, int]:
+    """Готовит текст + клавиатуру + правильный ответ капчи. Side-effect-free."""
     text, ans, options = _gen_captcha()
-    await message.answer(
+    msg = (
         "🤖 Подтвердите, что вы не бот.\n\n"
-        f"Решите пример: <b>{text} = ?</b>",
-        reply_markup=_captcha_kb(options),
+        f"Решите пример: <b>{text} = ?</b>"
     )
+    return msg, _captcha_kb(options), ans
+
+
+async def _start_captcha(message: Message, state: FSMContext):
+    """Показ капчи новым сообщением (триггерные фразы)."""
+    msg, kb, ans = _make_captcha_text()
+    await message.answer(msg, reply_markup=kb)
     await state.set_state(CaptchaFSM.waiting)
     await state.update_data(captcha_answer=ans, captcha_attempts=0)
+
+
+async def _start_captcha_inline(call: CallbackQuery, state: FSMContext):
+    """Показ капчи редактированием текущего сообщения (после клика по inline-кнопке)."""
+    msg, kb, ans = _make_captcha_text()
+    try:
+        await call.message.edit_text(msg, reply_markup=kb)
+    except Exception:
+        await call.message.answer(msg, reply_markup=kb)
+    await state.set_state(CaptchaFSM.waiting)
+    await state.update_data(captcha_answer=ans, captcha_attempts=0)
+
+
+async def _send_post_survey(message_or_call, state: FSMContext):
+    """Отправляет welcome-сообщение с кнопкой «Получить рабочую беседу».
+    Принимает либо Message (новый месседж), либо CallbackQuery (edit_text)."""
+    await state.clear()
+    if isinstance(message_or_call, CallbackQuery):
+        try:
+            await message_or_call.message.edit_text(
+                WELCOME_AFTER_SURVEY, reply_markup=_get_chat_kb()
+            )
+        except Exception:
+            await message_or_call.message.answer(
+                WELCOME_AFTER_SURVEY, reply_markup=_get_chat_kb()
+            )
+    else:
+        await message_or_call.answer(
+            WELCOME_AFTER_SURVEY, reply_markup=_get_chat_kb()
+        )
 
 
 @main_router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(WELCOME_TEXT)
+    # Если пользователь уже был атрибутирован — пропускаем опрос,
+    # сразу даём кнопку «Получить рабочую беседу».
+    if storage.get_user_source(message.from_user.id):
+        await _send_post_survey(message, state)
+        return
+    await message.answer(START_GREETING, reply_markup=_sources_kb())
 
 
 @main_router.message(Command("help"))
 async def on_help(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(WELCOME_TEXT)
+    await on_start(message, state)
 
 
-@main_router.message(Command("new_chat"))
-async def on_new_chat(message: Message, state: FSMContext):
-    await state.clear()
-    await _start_captcha(message, state)
+@main_router.callback_query(F.data.startswith("src:"))
+async def on_source_pick(call: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал источник трафика."""
+    try:
+        idx = int(call.data.split(":", 1)[1])
+        source = SOURCES[idx]
+    except (ValueError, IndexError):
+        await call.answer()
+        return
+    recorded = await storage.register_source(call.from_user.id, source)
+    if recorded:
+        logger.info("Source attributed: user=%s -> %s", call.from_user.id, source)
+        await call.answer(f"Спасибо! Источник: {source}")
+    else:
+        await call.answer()
+    await _send_post_survey(call, state)
+
+
+@main_router.callback_query(F.data == "gw:get")
+async def on_get_chat_clicked(call: CallbackQuery, state: FSMContext):
+    """Пользователь нажал «Получить рабочую беседу» → показываем капчу."""
+    await call.answer()
+    await _start_captcha_inline(call, state)
 
 
 @main_router.message(F.text, ~F.text.startswith("/"))
@@ -133,16 +230,16 @@ async def on_text(message: Message, state: FSMContext):
         )
         return
 
-    # 2) Триггерные фразы → капча → кулдаун → беседа
+    # 2) Триггерные фразы → капча → кулдаун → беседа (legacy fallback)
     triggers = storage.get_triggers()
     low = text.lower()
     if any(p in low for p in triggers):
         await _start_captcha(message, state)
         return
 
-    # 3) Fallback
+    # 3) Fallback — отправляем на /start
     await message.answer(
-        "Я понимаю команду <b>выдай рабочую беседу</b> или /new_chat."
+        "Чтобы получить рабочую беседу — отправьте /start.",
     )
 
 

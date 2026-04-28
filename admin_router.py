@@ -1,4 +1,5 @@
 """Admin panel: /admin command, inline-keyboard menu, FSM for inputs."""
+import html
 import logging
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -25,6 +26,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💬 Приветствие", callback_data="adm:welcome")],
         [InlineKeyboardButton(text="⏱ Кулдаун", callback_data="adm:cooldown")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
+        [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
         [InlineKeyboardButton(text="🔐 Админы", callback_data="adm:admins")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="adm:close")],
     ])
@@ -64,6 +66,8 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
         await render_cooldown(call)
     elif action == "stats":
         await render_stats(call)
+    elif action == "traffic":
+        await render_traffic(call)
     elif action == "admins":
         await render_admins(call)
     elif action == "worker_add":
@@ -168,6 +172,36 @@ async def render_stats(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=kb)
 
 
+async def render_traffic(call: CallbackQuery):
+    """Список источников трафика, отсортированный по количеству ответов."""
+    sources = storage.get_source_stats()
+    total = sum(sources.values())
+    if not sources:
+        text = (
+            "📈 <b>Источники трафика</b>\n\n"
+            "<i>Пока никто не выбрал источник.</i>\n\n"
+            "Источник записывается автоматически при первом ответе клиента "
+            "на опрос после /start."
+        )
+    else:
+        sorted_src = sorted(sources.items(), key=lambda x: -x[1])
+        rows = []
+        for src, cnt in sorted_src:
+            pct = (cnt * 100) // total if total else 0
+            rows.append(
+                f"• <b>{html.escape(src)}</b> — {cnt} ({pct}%)"
+            )
+        text = (
+            f"📈 <b>Источники трафика</b>\n\n"
+            f"Всего ответов: <b>{total}</b>\n\n"
+            + "\n".join(rows)
+        )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
+    ])
+    await call.message.edit_text(text, reply_markup=kb)
+
+
 async def render_admins(call: CallbackQuery):
     admins = storage.get_admins()
     text = f"🔐 <b>Админы ({len(admins)})</b>\n\n"
@@ -254,4 +288,25 @@ async def fsm_set_cooldown(message: Message, state: FSMContext):
 @router.message(AdminFSM.add_admin)
 async def fsm_add_admin(message: Message, state: FSMContext):
     if not storage.is_admin(message.from_user.id):
-        awa
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        new_id = int((message.text or "").strip())
+        if new_id <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer(
+            "Нужно числовой Telegram ID (положительное целое). "
+            "Пришлите ещё раз или /admin для отмены."
+        )
+        return
+    await storage.add_admin(new_id)
+    await state.clear()
+    await message.answer(
+        f"✅ Добавлен админ <code>{new_id}</code>",
+        reply_markup=main_menu_kb(),
+    )

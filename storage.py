@@ -54,6 +54,9 @@ def _default_state() -> dict:
         "admin_secret_command": "",
         "brain_chat_id": 0,
         "client_idle_minutes": 5,
+        # Источник трафика: счётчик по источникам и атрибуция per-user
+        "source_stats": {},
+        "user_sources": {},
     }
 
 
@@ -272,6 +275,34 @@ class Storage:
         async with _lock:
             self.state["client_idle_minutes"] = int(minutes)
             await self._save_unlocked()
+
+    # === Traffic source ===
+    async def register_source(self, user_id: int, source: str) -> bool:
+        """Атрибутирует пользователя к источнику трафика.
+
+        Считается только первый выбор: повторные клики игнорируются,
+        чтобы счётчик не накручивался при повторном /start.
+        Возвращает True если источник записан впервые, False если уже был.
+        """
+        source = (source or "").strip()
+        if not source:
+            return False
+        async with _lock:
+            uid = str(user_id)
+            sources = self.state.setdefault("user_sources", {})
+            stats = self.state.setdefault("source_stats", {})
+            if uid in sources:
+                return False
+            sources[uid] = source
+            stats[source] = stats.get(source, 0) + 1
+            await self._save_unlocked()
+            return True
+
+    def get_source_stats(self) -> dict:
+        return dict(self.state.get("source_stats", {}))
+
+    def get_user_source(self, user_id: int) -> Optional[str]:
+        return self.state.get("user_sources", {}).get(str(user_id))
 
 
 storage = Storage(config.STORAGE_PATH)
