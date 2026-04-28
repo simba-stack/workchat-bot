@@ -11,6 +11,9 @@ import config
 
 _lock = asyncio.Lock()
 
+# Чаты старше этого количества секунд удаляются при очистке
+_CHAT_TTL_SEC = 30 * 24 * 3600  # 30 дней
+
 
 def _gen_secret_command() -> str:
     alphabet = string.ascii_letters + string.digits
@@ -19,9 +22,20 @@ def _gen_secret_command() -> str:
 
 
 def _norm_chat_id(cid) -> str:
-    """Normalize chat_id to consistent string key (strips -100 prefix)."""
-    s = str(cid).lstrip('-')
-    if s.startswith('100'):
+    """Normalize chat_id to consistent string key.
+
+    Telegram supergroup IDs arrive in two forms:
+      - From Telethon (channel.id):  1234567890       (no prefix)
+      - From aiogram events:        -1001234567890    (with -100 prefix)
+
+    We always store the bare ID (without -100).
+    Safety check: only strip '100' prefix when the number is ≥ 12 digits
+    (a bare 10-digit supergroup ID with '100' prefix = 13 digits total),
+    avoiding false matches on short IDs like user_id=100.
+    """
+    n = abs(int(cid))
+    s = str(n)
+    if len(s) >= 12 and s.startswith('100'):
         s = s[3:]
     return s
 
@@ -54,6 +68,7 @@ class Storage:
                 try:
                     with open(self.path, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
+                    # Добавляем отсутствующие ключи из defaults (миграция)
                     defaults = _default_state()
                     for k, v in defaults.items():
                         if k not in loaded:
@@ -68,10 +83,17 @@ class Storage:
             await self._save_unlocked()
 
     async def _save_unlocked(self):
+        """Атомарная запись через .tmp + os.replace. Перед заменой сохраняет .bak."""
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.state, f, ensure_ascii=False, indent=2)
+            # Бэкап текущего файла перед заменой
+            if os.path.exists(self.path):
+                try:
+                    os.replace(self.path, self.path + ".bak")
+                except Exception:
+                    pass
             os.replace(tmp, self.path)
         except Exception as e:
             print(f"[storage] save failed: {e}")
@@ -184,6 +206,42 @@ class Storage:
             if info:
                 info["welcome_sent"] = True
             await self._save_unlocked()
+
+    # === Cleanup ===
+    async def cleanup(self):
+        """Удаляет устаревшие записи: старые чаты и истёкшие кулдауны.
+        Вызывается периодически из bot.py.
+        """
+        now = time.time()
+        changed = False
+        async with _lock:
+            # 1. Удаляем managed_chats старше _CHAT_TTL_SEC
+            old_chats = [
+                k for k, v in self.state["managed_chats"].items()
+                if now - v.get("created_at", now) > _CHAT_TTL_SEC
+            ]
+            for k in old_chats:
+                del self.state["managed_chats"][k]
+            if old_chats:
+                changed = True
+                print(f"[storage] cleanup: removed {len(old_chats)} old managed_chats")
+
+            # 2. Удаляем истёкшие записи user_cooldowns
+            cd_sec = self.state["cooldown_minutes"] * 60
+            # Оставляем двойной запас, чтобы не обрезать действующие кулдауны
+            cutoff = now - cd_sec * 2
+            old_cooldowns = [
+                k for k, v in self.state["user_cooldowns"].items()
+                if v < cutoff
+            ]
+            for k in old_cooldowns:
+                del self.state["user_cooldowns"][k]
+            if old_cooldowns:
+                changed = True
+                print(f"[storage] cleanup: removed {len(old_cooldowns)} expired cooldowns")
+
+            if changed:
+                await self._save_unlocked()
 
     # === Stats ===
     def get_stats(self) -> dict:

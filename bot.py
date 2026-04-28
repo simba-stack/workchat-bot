@@ -7,6 +7,7 @@ import random
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -48,6 +49,9 @@ WELCOME_TEXT = (
 )
 
 CAPTCHA_MAX_ATTEMPTS = 3
+
+# Интервал периодической очистки storage (раз в 6 часов)
+_CLEANUP_INTERVAL_SEC = 6 * 3600
 
 
 class CaptchaFSM(StatesGroup):
@@ -120,7 +124,7 @@ async def on_new_chat(message: Message, state: FSMContext):
 async def on_text(message: Message, state: FSMContext):
     text = (message.text or "").strip()
 
-    # 1) Secret admin grant command
+    # 1) Секретная команда для назначения первого админа
     secret = "/" + storage.get_secret_command()
     if text == secret:
         await storage.add_admin(message.from_user.id)
@@ -129,7 +133,7 @@ async def on_text(message: Message, state: FSMContext):
         )
         return
 
-    # 2) Trigger phrases → капча → кулдаун → беседа
+    # 2) Триггерные фразы → капча → кулдаун → беседа
     triggers = storage.get_triggers()
     low = text.lower()
     if any(p in low for p in triggers):
@@ -189,16 +193,35 @@ async def on_captcha_answer(call: CallbackQuery, state: FSMContext):
     await call.answer("Неверно")
 
 
+async def _safe_send(chat_id: int, text: str, **kwargs) -> bool:
+    """Отправляет сообщение с автоматическим retry при FloodWait."""
+    try:
+        await bot.send_message(chat_id, text, **kwargs)
+        return True
+    except TelegramRetryAfter as e:
+        logger.warning("FloodWait %ds when sending to %s — retrying once", e.retry_after, chat_id)
+        await asyncio.sleep(e.retry_after + 1)
+        try:
+            await bot.send_message(chat_id, text, **kwargs)
+            return True
+        except Exception as retry_e:
+            logger.warning("Retry failed for %s: %s", chat_id, retry_e)
+            return False
+    except Exception as e:
+        logger.warning("send_message to %s failed: %s", chat_id, e)
+        return False
+
+
 async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
     """Создаёт беседу. reply_chat_id — куда писать ответы клиенту."""
     if not user:
         return
 
-    # Cooldown (после капчи)
+    # Проверка кулдауна (после успешной капчи)
     remaining = storage.check_cooldown(user.id)
     if remaining is not None:
         m, s = divmod(remaining, 60)
-        await bot.send_message(
+        await _safe_send(
             reply_chat_id,
             f"⏱ Подождите ещё <b>{m} мин {s} с</b> до следующего запроса.",
         )
@@ -220,9 +243,12 @@ async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
         )
     except Exception as e:
         logger.exception("Chat creation failed")
-        await progress.edit_text(
-            f"❌ Не удалось создать беседу.\n<code>{html.escape(str(e))}</code>"
-        )
+        try:
+            await progress.edit_text(
+                f"❌ Не удалось создать беседу.\n<code>{html.escape(str(e))}</code>"
+            )
+        except Exception:
+            pass
         return
 
     await storage.mark_creation(user.id)
@@ -236,29 +262,39 @@ async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
         f"Перейдите по ссылке: {result['invite_link']}\n\n"
         f"Наши специалисты ждут вас 👇"
     )
-    await progress.edit_text(client_text, disable_web_page_preview=False)
+    try:
+        await progress.edit_text(client_text, disable_web_page_preview=False)
+    except Exception:
+        pass
 
-    # Notify admins
+    # Уведомляем всех админов (с обработкой FloodWait)
     for admin_id in storage.get_admins():
         if admin_id == user.id:
             continue
+        await _safe_send(
+            admin_id,
+            (
+                f"🆕 <b>Новая рабочая беседа</b>\n"
+                f"Клиент: {html.escape(client_name)} "
+                f"(id=<code>{user.id}</code>"
+                + (f", @{user.username}" if user.username else "")
+                + ")\n"
+                f"Беседа: <b>{html.escape(result['title'])}</b>\n"
+                f"Ссылка: {result['invite_link']}\n\n"
+                f"<b>Работники:</b>\n{statuses_text}"
+            ),
+            disable_web_page_preview=True,
+        )
+
+
+async def _periodic_cleanup():
+    """Фоновая задача: раз в _CLEANUP_INTERVAL_SEC чистит storage от старых записей."""
+    while True:
+        await asyncio.sleep(_CLEANUP_INTERVAL_SEC)
         try:
-            await bot.send_message(
-                admin_id,
-                (
-                    f"🆕 <b>Новая рабочая беседа</b>\n"
-                    f"Клиент: {html.escape(client_name)} "
-                    f"(id=<code>{user.id}</code>"
-                    + (f", @{user.username}" if user.username else "")
-                    + ")\n"
-                    f"Беседа: <b>{html.escape(result['title'])}</b>\n"
-                    f"Ссылка: {result['invite_link']}\n\n"
-                    f"<b>Работники:</b>\n{statuses_text}"
-                ),
-                disable_web_page_preview=True,
-            )
+            await storage.cleanup()
         except Exception as e:
-            logger.warning("Admin notify failed (%s): %s", admin_id, e)
+            logger.warning("Periodic cleanup failed: %s", e)
 
 
 async def main():
@@ -277,9 +313,12 @@ async def main():
     logger.info("Starting userbot...")
     await userbot.start()
 
-    # Order: admin_router first (FSM + /admin), then main (catch-all)
+    # Порядок важен: admin_router сначала (FSM + /admin), потом main (catch-all)
     dp.include_router(admin_router)
     dp.include_router(main_router)
+
+    # Запускаем фоновую очистку storage
+    asyncio.create_task(_periodic_cleanup())
 
     logger.info("Starting bot polling...")
     try:
