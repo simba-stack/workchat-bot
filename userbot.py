@@ -37,6 +37,11 @@ from telethon.errors import (
     UsernameNotOccupiedError,
     UserNotParticipantError,
 )
+try:
+    from telethon.errors import UserAlreadyParticipantError  # type: ignore
+except ImportError:  # старые версии
+    class UserAlreadyParticipantError(Exception):
+        pass
 
 import config
 from storage import storage
@@ -493,9 +498,32 @@ class UserbotService:
 
         brain_notes = await self._fetch_brain_notes()
 
-        # Запрос в Claude
+        # Контекст клиента — AI должен знать его username для tools
+        client_username = None
+        if client_id:
+            try:
+                client_entity = await self.client.get_entity(client_id)
+                client_username = getattr(client_entity, "username", None)
+            except Exception as e:
+                logger.warning("client entity resolve failed: %s", e)
+        client_context = {
+            "id": client_id,
+            "name": chat_info.get("client_name") or "",
+            "username": client_username or "",
+        }
+
+        # Tool executor — bind chat_id для текущего вызова
+        async def _executor(name, inp):
+            return await self._execute_ai_tool(name, inp, chat_id)
+
+        # Запрос в Claude (с tools — может вызвать инструменты автоматически)
         async with self.client.action(chat_id, "typing"):
-            reply, usage = await brain.generate_reply(history, brain_notes=brain_notes)
+            reply, usage = await brain.generate_reply(
+                history,
+                brain_notes=brain_notes,
+                tools_executor=_executor,
+                client_context=client_context,
+            )
         if reply is None:
             await storage.bump_ai_stats(errors=1)
             logger.warning("AI: chat=%s — claude returned None", chat_id)
@@ -610,6 +638,87 @@ class UserbotService:
             await self.client.send_message(bid, log_msg)
         except Exception as e:
             logger.warning("brain log send failed: %s", e)
+
+    # === AI tool-use ===
+    # Имя бота для CRM-флоу зашито здесь; легко вынести в config/storage если
+    # появятся другие интеграции.
+    CRM_BOT_USERNAME = "PrideCONTROLE_bot"
+
+    async def _execute_ai_tool(self, tool_name: str, tool_input: dict, chat_id) -> dict:
+        """Диспетчер AI-инструментов. Возвращает dict {status: ok|error, ...}."""
+        logger.info("AI tool exec: %s input=%s chat=%s", tool_name, tool_input, chat_id)
+        if tool_name == "add_supplier_to_crm":
+            return await self._tool_add_supplier_to_crm(
+                chat_id=chat_id,
+                client_username=tool_input.get("client_username", ""),
+            )
+        return {"status": "error", "error": f"unknown_tool:{tool_name}"}
+
+    async def _tool_add_supplier_to_crm(self, chat_id, client_username: str) -> dict:
+        """Tool: подключить @PrideCONTROLE_bot и отправить '+поставщик @username'.
+
+        Шаги:
+          1. Резолв CRM-бота
+          2. InviteToChannelRequest (если уже участник — игнорим UserAlreadyParticipantError)
+          3. EditAdminRequest — выдаём права (не фатально если не получилось)
+          4. send_message '+поставщик @username'
+        """
+        username = (client_username or "").lstrip("@").strip()
+        if not username:
+            return {"status": "error", "error": "client_username_empty"}
+
+        # 1. Резолв бота
+        try:
+            bot_entity = await self.client.get_entity(self.CRM_BOT_USERNAME)
+        except UsernameNotOccupiedError:
+            return {"status": "error", "step": "resolve", "error": "crm_bot_not_found"}
+        except Exception as e:
+            return {"status": "error", "step": "resolve", "error": str(e)}
+
+        # 2. Инвайт в чат
+        try:
+            await self.client(InviteToChannelRequest(chat_id, [bot_entity]))
+            invite_status = "added"
+        except UserAlreadyParticipantError:
+            invite_status = "already_in_chat"
+        except UserPrivacyRestrictedError:
+            return {"status": "error", "step": "invite", "error": "privacy_restricted"}
+        except FloodWaitError as e:
+            return {"status": "error", "step": "invite", "error": f"flood_wait_{e.seconds}s"}
+        except Exception as e:
+            # Может быть уже в чате но другая ошибка — продолжим, дальше увидим
+            logger.warning("CRM invite warning: %s", e)
+            invite_status = f"warn:{type(e).__name__}"
+
+        # 3. Админка (best effort — если не получилось, шаг 4 всё равно может пройти)
+        try:
+            rights = ChatAdminRights(
+                change_info=False, post_messages=False, edit_messages=False,
+                delete_messages=True, ban_users=False, invite_users=True,
+                pin_messages=False, add_admins=False, anonymous=False, manage_call=False,
+            )
+            await self.client(EditAdminRequest(
+                channel=chat_id, user_id=bot_entity, admin_rights=rights, rank="CRM",
+            ))
+            admin_status = "granted"
+        except Exception as e:
+            logger.warning("CRM admin grant non-fatal: %s", e)
+            admin_status = f"skipped:{type(e).__name__}"
+
+        # 4. Команда боту
+        try:
+            await self.client.send_message(chat_id, f"+поставщик @{username}")
+        except FloodWaitError as e:
+            return {"status": "error", "step": "command", "error": f"flood_wait_{e.seconds}s"}
+        except Exception as e:
+            return {"status": "error", "step": "command", "error": str(e)}
+
+        return {
+            "status": "ok",
+            "invite": invite_status,
+            "admin": admin_status,
+            "command_sent": f"+поставщик @{username}",
+        }
 
     async def stop(self):
         await self.client.disconnect()

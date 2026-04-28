@@ -23,6 +23,38 @@ KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 # Skip memories/ subdirectory and any file starting with _ or .
 _SKIP_NAMES = {"memories", ".obsidian"}
 
+# === Tools для AI (Claude tool_use) ===
+# Каждый tool описывает одно атомарное действие, которое AI может вызвать
+# через Anthropic API. Реальное выполнение делает userbot.py через Telethon.
+SUPPLIER_TOOL = {
+    "name": "add_supplier_to_crm",
+    "description": (
+        "Подключает CRM для оформления клиента как поставщика РС/счёта/ИП. "
+        "Выполняет 3 шага АВТОМАТИЧЕСКИ в текущей рабочей беседе: "
+        "(1) добавляет бота @PrideCONTROLE_bot в чат, "
+        "(2) даёт ему права админа, "
+        "(3) отправляет команду '+поставщик @<username_клиента>'. "
+        "Используй ВСЕГДА когда клиент сообщает что готов продать или передать "
+        "расчётный счёт / ИП / реквизиты. Без этого инструмента клиент НЕ сможет "
+        "ничего оформить — ты обязан вызвать его, а не пересказывать шаги словами."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "client_username": {
+                "type": "string",
+                "description": (
+                    "Telegram username клиента БЕЗ @ префикса (например 'rfc_tasya'). "
+                    "Возьми из блока 'ТЕКУЩИЙ КЛИЕНТ' в системном промпте."
+                ),
+            }
+        },
+        "required": ["client_username"],
+    },
+}
+
+ALL_TOOLS = [SUPPLIER_TOOL]
+
 # Strip Obsidian-style [[wiki links]] for cleaner Claude context.
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
@@ -66,8 +98,8 @@ def _load_knowledge() -> str:
     return "\n\n".join(parts)
 
 
-def _build_system_prompt(brain_notes: str = "") -> str:
-    """Compose system prompt from knowledge + admin brain-chat notes."""
+def _build_system_prompt(brain_notes: str = "", client_context: Optional[dict] = None) -> str:
+    """Compose system prompt from knowledge + admin brain-chat notes + client info."""
     knowledge = _load_knowledge()
     intro = (
         "Ты — ассистент компании PRIDE (поставки РС). Ты общаешься с клиентом "
@@ -75,7 +107,9 @@ def _build_system_prompt(brain_notes: str = "") -> str:
         "Отвечай на «вы», вежливо, по делу, кратко. Опирайся ТОЛЬКО на факты из "
         "приведённой ниже базы знаний — если ответа нет, скажи что уточнишь у "
         "менеджера. Не выдумывай цены, сроки и обещания. Один ответ — одно "
-        "сообщение, без markdown-разметки."
+        "сообщение, без markdown-разметки.\n\n"
+        "Если у тебя есть инструменты (tools) и сценарий из базы знаний требует "
+        "действий — ВЫЗЫВАЙ инструмент, не пересказывай шаги словами."
     )
     parts = [intro]
     if knowledge:
@@ -85,6 +119,20 @@ def _build_system_prompt(brain_notes: str = "") -> str:
             "# === ДОПОЛНИТЕЛЬНЫЕ ЗНАНИЯ И ПРАВКИ АДМИНА (свежие) ===\n"
             + brain_notes.strip()
         )
+    if client_context:
+        cn = client_context.get("name") or "?"
+        cu = client_context.get("username") or ""
+        cid = client_context.get("id") or ""
+        block = f"# === ТЕКУЩИЙ КЛИЕНТ ===\nИмя: {cn}\n"
+        if cu:
+            block += f"Username: @{cu}\n"
+        if cid:
+            block += f"Telegram ID: {cid}\n"
+        block += (
+            "Используй эти данные когда инструменту нужен username клиента "
+            "(передавай БЕЗ @ префикса)."
+        )
+        parts.append(block)
     return "\n\n".join(parts)
 
 
@@ -92,46 +140,99 @@ async def generate_reply(
     history: list[dict],
     brain_notes: str = "",
     model: Optional[str] = None,
+    tools_executor=None,
+    client_context: Optional[dict] = None,
 ) -> tuple[Optional[str], Optional[dict]]:
     """Call Claude. history must be a non-empty list of {role, content}, last from user.
 
+    Если передан tools_executor (async callable(tool_name, tool_input) -> dict),
+    AI получает доступ к ALL_TOOLS и может их вызывать. Делается tool-use loop:
+    AI запрашивает инструмент → исполняем → возвращаем результат → AI пишет
+    финальный текст. Без tools_executor — обычный текстовый режим.
+
+    client_context: {"name": "...", "username": "...", "id": ...} для системного
+    промпта — AI знает кто текущий клиент (нужно для tool параметров).
+
     Returns (text, usage) on success, (None, None) on failure.
-    usage = {"input_tokens": int, "output_tokens": int}
+    usage = {"input_tokens": total, "output_tokens": total} — суммировано
+    по всем итерациям tool-use loop.
     """
-    client = _get_client()
-    if client is None:
+    cli = _get_client()
+    if cli is None:
         return None, None
     if not history:
         logger.warning("generate_reply called with empty history")
         return None, None
 
-    system = _build_system_prompt(brain_notes)
+    system = _build_system_prompt(brain_notes, client_context=client_context)
     use_model = model or storage.get_ai_model() or config.DEFAULT_AI_MODEL
 
-    try:
-        msg = await client.messages.create(
-            model=use_model,
-            max_tokens=config.AI_MAX_TOKENS,
-            system=system,
-            messages=history,
-        )
-    except APIError as e:
-        logger.warning("Anthropic API error (%s): %s", type(e).__name__, e)
-        return None, None
-    except Exception as e:
-        logger.exception("Unexpected Claude call failure: %s", e)
-        return None, None
-
-    text = ""
-    for block in msg.content:
-        if hasattr(block, "text"):
-            text += block.text
-    text = text.strip()
-    if not text:
-        return None, None
-
-    usage = {
-        "input_tokens": getattr(msg.usage, "input_tokens", 0),
-        "output_tokens": getattr(msg.usage, "output_tokens", 0),
+    api_kwargs = {
+        "model": use_model,
+        "max_tokens": config.AI_MAX_TOKENS,
+        "system": system,
+        "messages": list(history),  # копия — будем мутировать в tool-use loop
     }
-    return text, usage
+    if tools_executor is not None:
+        api_kwargs["tools"] = ALL_TOOLS
+
+    total_in = 0
+    total_out = 0
+    # Защита от бесконечного цикла tool-use
+    for iteration in range(5):
+        try:
+            msg = await cli.messages.create(**api_kwargs)
+        except APIError as e:
+            logger.warning("Anthropic API error (%s): %s", type(e).__name__, e)
+            return None, None
+        except Exception as e:
+            logger.exception("Unexpected Claude call failure: %s", e)
+            return None, None
+
+        total_in += getattr(msg.usage, "input_tokens", 0)
+        total_out += getattr(msg.usage, "output_tokens", 0)
+
+        if msg.stop_reason != "tool_use":
+            # Финальный ответ — собираем text из блоков
+            text_parts = []
+            for block in msg.content:
+                if hasattr(block, "text") and block.text:
+                    text_parts.append(block.text)
+            text = "".join(text_parts).strip()
+            if not text:
+                # Возможно AI ответил только tool_use'ом без текста — не баг,
+                # но в чат отправлять нечего. Возвращаем пустой ответ как пропуск.
+                return None, None
+            return text, {"input_tokens": total_in, "output_tokens": total_out}
+
+        # stop_reason == "tool_use" → исполняем все tool_use блоки в этом ответе
+        if tools_executor is None:
+            # AI попросил tool, но executor не задан — не должно случаться
+            logger.warning("AI returned tool_use but no executor provided")
+            return None, None
+        tool_results = []
+        for block in msg.content:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            tool_name = block.name
+            tool_input = block.input or {}
+            tool_id = block.id
+            logger.info("AI tool call: %s(%s)", tool_name, tool_input)
+            try:
+                result = await tools_executor(tool_name, tool_input)
+            except Exception as e:
+                logger.exception("tool %s failed: %s", tool_name, e)
+                result = {"status": "error", "error": str(e)}
+            # tool_result content должно быть строкой или списком блоков
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": str(result),
+            })
+
+        # Прокидываем диалог дальше: assistant message + tool results
+        api_kwargs["messages"].append({"role": "assistant", "content": msg.content})
+        api_kwargs["messages"].append({"role": "user", "content": tool_results})
+
+    logger.warning("generate_reply: tool-use loop hit 5 iterations limit")
+    return None, {"input_tokens": total_in, "output_tokens": total_out}
