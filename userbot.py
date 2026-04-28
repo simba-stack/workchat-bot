@@ -305,8 +305,23 @@ class UserbotService:
         chat_id = event.chat_id
         bid = storage.get_brain_chat_id()
 
+        # Импортируем нормализатор локально — он уже умеет ходить по разным
+        # форматам chat_id (signed -100xxx supergroup, bare, signed group).
+        from storage import _norm_chat_id
+
+        # Диагностический лог — видно в Railway всё что прилетает в userbot
+        try:
+            sender_id_dbg = event.sender_id
+        except Exception:
+            sender_id_dbg = "?"
+        logger.info(
+            "userbot event: chat_id=%s norm=%s brain_id=%s norm_brain=%s sender=%s",
+            chat_id, _norm_chat_id(chat_id), bid,
+            (_norm_chat_id(bid) if bid else "—"), sender_id_dbg,
+        )
+
         # Сообщение в брейн-чате — отдельный путь: writeback в граф знаний
-        if bid and abs(int(chat_id)) == abs(int(bid)):
+        if bid and _norm_chat_id(chat_id) == _norm_chat_id(bid):
             await self._handle_brain_chat_writeback(event)
             return
 
