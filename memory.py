@@ -41,6 +41,36 @@ KNOWN_FILES = {
     "memories/auto.md": "Свободные заметки, не подпадающие под категории",
 }
 
+
+def _existing_knowledge_notes() -> list[str]:
+    """Уникальные имена нот из knowledge/ для подсказок AI [[wiki-links]].
+
+    Исключаем:
+      - .obsidian/ (системные настройки)
+      - memories/ (мета-ноты для дампа разговоров — не для семантических ссылок)
+      - README (бессмысленно линковать, плюс часто дублируется в подпапках)
+    Дедупликация по stem (имени без .md) — Obsidian резолвит [[name]] в один файл.
+    Загружается на лету: после нового коммита в knowledge/ список обновится сам.
+    """
+    from pathlib import Path
+    root = Path(__file__).parent / "knowledge"
+    if not root.exists():
+        return []
+    seen = set()
+    notes = []
+    for p in sorted(root.rglob("*.md")):
+        rel = p.relative_to(root)
+        if rel.parts and rel.parts[0] in {".obsidian", "memories"}:
+            continue
+        stem = p.stem
+        if stem.lower() == "readme":
+            continue
+        if stem in seen:
+            continue
+        seen.add(stem)
+        notes.append(stem)
+    return notes
+
 _anthropic: Optional[AsyncAnthropic] = None
 
 
@@ -53,11 +83,14 @@ def _get_anthropic() -> Optional[AsyncAnthropic]:
 
 def _classifier_prompt(text: str) -> str:
     files = "\n".join(f"- {n}: {d}" for n, d in KNOWN_FILES.items())
+    notes = _existing_knowledge_notes()
+    notes_str = ", ".join(f"[[{n}]]" for n in notes) if notes else "(пока пусто)"
     return (
         "Ты — librarian для базы знаний компании в Obsidian-vault. "
         "Админ присылает короткое сообщение. Задача: решить, в какой "
         "knowledge-файл это сохранить, и оформить как markdown-блок для append.\n\n"
         f"Доступные файлы:\n{files}\n\n"
+        f"Существующие ноты в графе: {notes_str}\n\n"
         "ПРАВИЛО ПО УМОЛЧАНИЮ — SKIP. Сохраняй только если сообщение является "
         "ЯВНЫМ декларативным фактом о компании / услуге / процессе. "
         "При малейших сомнениях — skip.\n\n"
@@ -79,8 +112,15 @@ def _classifier_prompt(text: str) -> str:
         "Формат успеха: {\"file\": \"имя.md\", \"content\": \"markdown-блок\", "
         "\"commit_message\": \"ai-knowledge: краткое описание\"}\n"
         "- content начинается с h2/h3 заголовка (## или ###), потом 1-3 строки\n"
-        "- file — одно из перечисленных или новое 'lowercase-name.md' (латиница)\n"
-        "- Можно [[wiki-links]] на другие knowledge-файлы\n\n"
+        "- file — одно из перечисленных или новое 'lowercase-name.md' (латиница)\n\n"
+        "ОБЯЗАТЕЛЬНО — wiki-links для графа знаний:\n"
+        "В content в конце добавь строку «Связано: [[нота1]] [[нота2]]» с 1-3 "
+        "ссылками на существующие ноты (см. список выше) которые семантически "
+        "связаны с этим фактом. Например, факт про доставку → [[pricing]] [[faq]]. "
+        "Факт про политику возврата → [[policy]] [[pricing]]. Если факт уникален "
+        "и реально не пересекается ни с одной нотой — добавь хотя бы [[index]] "
+        "(он связывает всю карту). НЕ добавляй ссылку на ноту, в которую сам "
+        "сейчас сохраняешь (например в pricing.md не пиши [[pricing]]).\n\n"
         "ТОЛЬКО валидный JSON, никакого пояснительного текста до или после!\n\n"
         f"Сообщение админа: {text!r}"
     )
