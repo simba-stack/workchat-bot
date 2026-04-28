@@ -647,21 +647,21 @@ class UserbotService:
     async def _execute_ai_tool(self, tool_name: str, tool_input: dict, chat_id) -> dict:
         """Диспетчер AI-инструментов. Возвращает dict {status: ok|error, ...}."""
         logger.info("AI tool exec: %s input=%s chat=%s", tool_name, tool_input, chat_id)
-        if tool_name == "add_supplier_to_crm":
-            return await self._tool_add_supplier_to_crm(
+        if tool_name == "add_partner_to_crm":
+            return await self._tool_add_partner_to_crm(
                 chat_id=chat_id,
                 client_username=tool_input.get("client_username", ""),
             )
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
 
-    async def _tool_add_supplier_to_crm(self, chat_id, client_username: str) -> dict:
-        """Tool: подключить @PrideCONTROLE_bot и отправить '+поставщик @username'.
+    async def _tool_add_partner_to_crm(self, chat_id, client_username: str) -> dict:
+        """Tool: подключить @PrideCONTROLE_bot и отправить '+партнер @username'.
 
         Шаги:
           1. Резолв CRM-бота
           2. InviteToChannelRequest (если уже участник — игнорим UserAlreadyParticipantError)
           3. EditAdminRequest — выдаём права (не фатально если не получилось)
-          4. send_message '+поставщик @username'
+          4. send_message '+партнер @username'
         """
         username = (client_username or "").lstrip("@").strip()
         if not username:
@@ -707,7 +707,7 @@ class UserbotService:
 
         # 4. Команда боту
         try:
-            await self.client.send_message(chat_id, f"+поставщик @{username}")
+            await self.client.send_message(chat_id, f"+партнер @{username}")
         except FloodWaitError as e:
             return {"status": "error", "step": "command", "error": f"flood_wait_{e.seconds}s"}
         except Exception as e:
@@ -717,7 +717,7 @@ class UserbotService:
             "status": "ok",
             "invite": invite_status,
             "admin": admin_status,
-            "command_sent": f"+поставщик @{username}",
+            "command_sent": f"+партнер @{username}",
         }
 
     async def stop(self):
