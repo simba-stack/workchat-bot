@@ -26,6 +26,15 @@ AI_BRAIN_NOTES_LIMIT = int(os.getenv("CLAUDE_BRAIN_NOTES_LIMIT", "30"))
 AI_TYPING_DELAY_MIN = float(os.getenv("CLAUDE_TYPING_DELAY_MIN", "3"))
 AI_TYPING_DELAY_MAX = float(os.getenv("CLAUDE_TYPING_DELAY_MAX", "8"))
 
+# === GitHub writeback (memory.py) ===
+# Token used to commit knowledge/*.md updates back to the repo.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "simba-stack")
+GITHUB_REPO_NAME = os.getenv("GITHUB_REPO_NAME", "workchat-bot")
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+# Subdir inside the repo where knowledge files live.
+KNOWLEDGE_SUBDIR = os.getenv("KNOWLEDGE_SUBDIR", "knowledge")
+
 # Persistent JSON storage path (mount Railway Volume here)
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/app/data/state.json")
 

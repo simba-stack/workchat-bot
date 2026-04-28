@@ -67,6 +67,13 @@ def _default_state() -> dict:
             "errors_total": 0,
             "skipped_worker_active": 0,
         },
+        # Auto-writeback в knowledge/ через GitHub API (memory.py)
+        "ai_writeback_enabled": False,
+        "writeback_stats": {
+            "commits_total": 0,
+            "skipped_total": 0,
+            "errors_total": 0,
+        },
     }
 
 
@@ -366,6 +373,31 @@ class Storage:
             stats["skipped_worker_active"] = (
                 int(stats.get("skipped_worker_active", 0)) + skipped_worker_active
             )
+            await self._save_unlocked()
+
+    # === Writeback в граф знаний (memory.py + GitHub API) ===
+    def is_writeback_enabled(self) -> bool:
+        return bool(self.state.get("ai_writeback_enabled", False))
+
+    async def set_writeback_enabled(self, enabled: bool):
+        async with _lock:
+            self.state["ai_writeback_enabled"] = bool(enabled)
+            await self._save_unlocked()
+
+    def get_writeback_stats(self) -> dict:
+        return dict(self.state.get("writeback_stats") or {})
+
+    async def bump_writeback_stats(
+        self, *, commits: int = 0, skipped: int = 0, errors: int = 0
+    ):
+        async with _lock:
+            stats = self.state.setdefault(
+                "writeback_stats",
+                {"commits_total": 0, "skipped_total": 0, "errors_total": 0},
+            )
+            stats["commits_total"] = int(stats.get("commits_total", 0)) + commits
+            stats["skipped_total"] = int(stats.get("skipped_total", 0)) + skipped
+            stats["errors_total"] = int(stats.get("errors_total", 0)) + errors
             await self._save_unlocked()
 
 

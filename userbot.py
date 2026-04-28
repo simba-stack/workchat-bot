@@ -41,6 +41,7 @@ from telethon.errors import (
 import config
 from storage import storage
 import brain
+import memory
 
 logger = logging.getLogger(__name__)
 
@@ -302,12 +303,15 @@ class UserbotService:
         7. Отправляем ответ. Логируем в brain_chat. Бампим ai_stats.
         """
         chat_id = event.chat_id
+        bid = storage.get_brain_chat_id()
+
+        # Сообщение в брейн-чате — отдельный путь: writeback в граф знаний
+        if bid and abs(int(chat_id)) == abs(int(bid)):
+            await self._handle_brain_chat_writeback(event)
+            return
+
         chat_info = storage.get_chat_info(chat_id)
         if not chat_info:
-            return
-        # brain_chat — туда AI пишет логи, но НЕ отвечает на сообщения там
-        bid = storage.get_brain_chat_id()
-        if bid and abs(int(chat_id)) == abs(int(bid)):
             return
         if not event.message or not (event.message.text or "").strip():
             return
@@ -348,9 +352,10 @@ class UserbotService:
         if client_id and sender_id != client_id:
             return
 
-        idle_min = max(1, storage.get_client_idle_minutes())
+        idle_min = max(0, storage.get_client_idle_minutes())
         idle_sec = idle_min * 60
-        if time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+        # idle_sec == 0 -> AI всегда отвечает (без проверки worker activity)
+        if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
             await storage.bump_ai_stats(skipped_worker_active=1)
             logger.info("AI: skip chat=%s — worker active in last %dm", chat_id, idle_min)
             return
@@ -362,6 +367,85 @@ class UserbotService:
             return
         async with lock:
             await self._do_ai_reply(event, chat_info, idle_sec, chat_key)
+
+    async def _handle_brain_chat_writeback(self, event):
+        """Сообщение в брейн-чате → попытка записать факт в knowledge/ через GitHub.
+
+        Игнорим:
+          - сообщения юзербота (включая [AI-LOG])
+          - команды (начинающиеся с /)
+          - пустые / служебные
+          - если writeback выключен в админке
+        """
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        # свои логи и реплики не процессим
+        if self._me and event.sender_id == self._me.id:
+            return
+        if text.startswith("[AI-LOG]"):
+            return
+        if text.startswith("/"):
+            return  # команды бота — не наша епархия здесь
+        if not storage.is_writeback_enabled():
+            return
+        if not config.ANTHROPIC_API_KEY:
+            return
+
+        logger.info("brain writeback: processing %d chars from chat=%s", len(text), event.chat_id)
+        try:
+            result = await memory.process_brain_chat_message(text)
+        except Exception as e:
+            logger.exception("brain writeback unexpected error: %s", e)
+            await storage.bump_writeback_stats(errors=1)
+            return
+
+        status = result.get("status")
+        if status == "ok":
+            await storage.bump_writeback_stats(commits=1)
+            url = result.get("url") or ""
+            file = result.get("file")
+            preview = result.get("preview", "")
+            reply = (
+                f"✅ Сохранено в `knowledge/{file}`\n"
+                f"Commit: {url}\n\n"
+                f"```\n{preview}\n```"
+            )
+            try:
+                await event.reply(reply, link_preview=False)
+            except Exception as e:
+                logger.warning("brain writeback ack failed: %s", e)
+        elif status == "skipped":
+            await storage.bump_writeback_stats(skipped=1)
+            try:
+                await event.reply("📝 Принял к сведению, но это не похоже на факт для сохранения.")
+            except Exception:
+                pass
+        elif status == "commit_fail":
+            await storage.bump_writeback_stats(errors=1)
+            file = result.get("file") or "?"
+            try:
+                await event.reply(
+                    f"⚠️ Не смог закоммитить в `knowledge/{file}` "
+                    f"(GitHub API). Проверь GITHUB_TOKEN и логи."
+                )
+            except Exception:
+                pass
+        elif status == "no_token":
+            try:
+                await event.reply(
+                    "⚠️ GITHUB_TOKEN не задан в env — writeback в граф невозможен."
+                )
+            except Exception:
+                pass
+        elif status == "classify_fail":
+            await storage.bump_writeback_stats(errors=1)
+            try:
+                await event.reply("⚠️ Claude не смог разобрать сообщение в JSON.")
+            except Exception:
+                pass
 
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
         """Внутренняя часть AI-ответа: задержка набора, fetch контекста, Claude, send."""
@@ -376,7 +460,7 @@ class UserbotService:
             await asyncio.sleep(delay)
 
         # Повторная проверка worker activity (мог написать пока спали)
-        if time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+        if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
             await storage.bump_ai_stats(skipped_worker_active=1)
             logger.info("AI: chat=%s — worker came in during typing delay, skip", chat_id)
             return

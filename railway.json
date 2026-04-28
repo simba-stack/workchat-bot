@@ -2,7 +2,12 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": [
+      "**",
+      "!knowledge/**",
+      "!*.md"
+    ]
   },
   "deploy": {
     "startCommand": "python -u bot.py",

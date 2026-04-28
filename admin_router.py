@@ -22,6 +22,7 @@ class AdminFSM(StatesGroup):
     add_admin = State()
     set_brain_chat = State()
     set_ai_model = State()
+    set_idle_minutes = State()
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -79,6 +80,12 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
         await storage.set_ai_enabled(not storage.is_ai_enabled())
         await call.answer("AI " + ("включён" if storage.is_ai_enabled() else "выключен"))
         await render_ai(call)
+    elif action == "wb_toggle":
+        await storage.set_writeback_enabled(not storage.is_writeback_enabled())
+        await call.answer(
+            "Writeback " + ("включён" if storage.is_writeback_enabled() else "выключен")
+        )
+        await render_ai(call)
     elif action == "ai_set_chat":
         await call.message.edit_text(
             "Пришлите ID чата для логов AI (число, например <code>-1001234567890</code> "
@@ -101,6 +108,18 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
             reply_markup=back_kb(),
         )
         await state.set_state(AdminFSM.set_ai_model)
+    elif action == "ai_set_idle":
+        await call.message.edit_text(
+            "Пришлите значение «тишины сотрудников» в минутах "
+            "(целое число от 0 до 1440).\n\n"
+            "<b>0</b> = AI отвечает всегда, даже если только что писал сотрудник "
+            "(может пересекаться с живым общением!).\n\n"
+            "<b>5</b> (по умолчанию) — если сотрудник писал в последние 5 минут, "
+            "AI молчит. Безопасно: AI не вмешивается в живой диалог.\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_idle_minutes)
     elif action == "admins":
         await render_admins(call)
     elif action == "worker_add":
@@ -221,26 +240,48 @@ async def render_ai(call: CallbackQuery):
         else "\n\n⚠️ <b>ANTHROPIC_API_KEY не задан в env</b> — AI не сможет отвечать."
     )
 
+    # Writeback (auto-commit в knowledge/)
+    wb_enabled = storage.is_writeback_enabled()
+    wb_stats = storage.get_writeback_stats()
+    wb_emoji = "🟢" if wb_enabled else "🔴"
+    wb_status = "ВКЛ" if wb_enabled else "ВЫКЛ"
+    has_gh_token = bool(config.GITHUB_TOKEN)
+    wb_warn = (
+        "" if has_gh_token
+        else "\n⚠️ <b>GITHUB_TOKEN не задан</b> — writeback не сработает."
+    )
+
     text = (
         f"🧠 <b>AI brain (Claude)</b>\n\n"
         f"Статус: {status_emoji} <b>{status_text}</b>\n"
         f"Модель: <code>{html.escape(model)}</code>\n"
         f"Brain chat: <code>{brain_id or '— не задан —'}</code>\n"
         f"Тишина сотрудников: <b>{idle_min}</b> мин "
-        f"(если worker писал недавно — AI молчит)\n\n"
-        f"<b>Статистика:</b>\n"
-        f"• Ответов отправлено: <b>{stats.get('replies_total', 0)}</b>\n"
-        f"• Tokens in: {stats.get('input_tokens_total', 0)}\n"
-        f"• Tokens out: {stats.get('output_tokens_total', 0)}\n"
+        f"(0 = всегда отвечать)\n\n"
+        f"<b>Reply-статистика:</b>\n"
+        f"• Ответов: <b>{stats.get('replies_total', 0)}</b>\n"
+        f"• Tokens in/out: {stats.get('input_tokens_total', 0)} / "
+        f"{stats.get('output_tokens_total', 0)}\n"
         f"• Ошибок: {stats.get('errors_total', 0)}\n"
         f"• Пропущено (worker активен): {stats.get('skipped_worker_active', 0)}"
-        f"{api_warn}"
+        f"{api_warn}\n\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"📝 <b>Writeback в knowledge/</b>: {wb_emoji} {wb_status}\n"
+        f"<i>Каждое сообщение в брейн-чате (не команда, не от юзербота) "
+        f"AI попробует сохранить в graph через GitHub API.</i>\n"
+        f"• Коммитов: <b>{wb_stats.get('commits_total', 0)}</b>\n"
+        f"• Пропущено (не факт): {wb_stats.get('skipped_total', 0)}\n"
+        f"• Ошибок: {wb_stats.get('errors_total', 0)}"
+        f"{wb_warn}"
     )
     toggle_label = "🔴 Выключить AI" if enabled else "🟢 Включить AI"
+    wb_label = "🔴 Выключить writeback" if wb_enabled else "🟢 Включить writeback"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=toggle_label, callback_data="adm:ai_toggle")],
+        [InlineKeyboardButton(text=wb_label, callback_data="adm:wb_toggle")],
         [InlineKeyboardButton(text="🆔 Brain chat ID", callback_data="adm:ai_set_chat")],
         [InlineKeyboardButton(text="🤖 Модель Claude", callback_data="adm:ai_set_model")],
+        [InlineKeyboardButton(text="⏱ Тишина сотрудников", callback_data="adm:ai_set_idle")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
     ])
     await call.message.edit_text(text, reply_markup=kb)
@@ -436,5 +477,36 @@ async def fsm_set_ai_model(message: Message, state: FSMContext):
     effective = raw or config.DEFAULT_AI_MODEL
     await message.answer(
         f"✅ Модель: <code>{effective}</code>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_idle_minutes)
+async def fsm_set_idle_minutes(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        minutes = int((message.text or "").strip())
+        if minutes < 0 or minutes > 1440:
+            raise ValueError()
+    except ValueError:
+        await message.answer(
+            "Нужно целое число от 0 до 1440. Пришлите ещё раз или /admin для отмены."
+        )
+        return
+    await storage.set_client_idle_minutes(minutes)
+    await state.clear()
+    descr = (
+        "AI всегда отвечает (без проверки активности сотрудников)"
+        if minutes == 0
+        else f"AI молчит, если worker писал в последние <b>{minutes}</b> мин"
+    )
+    await message.answer(
+        f"✅ Тишина сотрудников: <b>{minutes}</b> мин\n{descr}",
         reply_markup=main_menu_kb(),
     )
