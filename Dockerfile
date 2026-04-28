@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Системные пакеты для сборки cryptg (ускоряет Telethon)
+# gcc нужен для сборки cryptg (ускоряет шифрование Telethon в ~10x)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
@@ -12,6 +12,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# -u для немедленного flush логов в Railway/Docker
+# -u для немедленного flush логов в Railway
 CMD ["python", "-u", "bot.py"]
-
