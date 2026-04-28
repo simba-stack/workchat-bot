@@ -512,9 +512,13 @@ class UserbotService:
             "username": client_username or "",
         }
 
-        # Tool executor — bind chat_id для текущего вызова
+        # Tool executor — bind chat_id и id текущего сообщения клиента (для линка
+        # в эскалации). last_msg_id может быть None если message нет (служебка).
+        last_msg_id = getattr(getattr(event, "message", None), "id", None)
         async def _executor(name, inp):
-            return await self._execute_ai_tool(name, inp, chat_id)
+            return await self._execute_ai_tool(
+                name, inp, chat_id=chat_id, last_msg_id=last_msg_id
+            )
 
         # Запрос в Claude (с tools — может вызвать инструменты автоматически)
         async with self.client.action(chat_id, "typing"):
@@ -644,13 +648,26 @@ class UserbotService:
     # появятся другие интеграции.
     CRM_BOT_USERNAME = "PrideCONTROLE_bot"
 
-    async def _execute_ai_tool(self, tool_name: str, tool_input: dict, chat_id) -> dict:
+    async def _execute_ai_tool(
+        self, tool_name: str, tool_input: dict, chat_id, last_msg_id=None
+    ) -> dict:
         """Диспетчер AI-инструментов. Возвращает dict {status: ok|error, ...}."""
-        logger.info("AI tool exec: %s input=%s chat=%s", tool_name, tool_input, chat_id)
+        logger.info(
+            "AI tool exec: %s input=%s chat=%s msg=%s",
+            tool_name, tool_input, chat_id, last_msg_id,
+        )
         if tool_name == "add_partner_to_crm":
             return await self._tool_add_partner_to_crm(
                 chat_id=chat_id,
                 client_username=tool_input.get("client_username", ""),
+            )
+        if tool_name == "escalate_to_team":
+            return await self._tool_escalate_to_team(
+                work_chat_id=chat_id,
+                last_msg_id=last_msg_id,
+                specialist=tool_input.get("specialist", ""),
+                reason=tool_input.get("reason", ""),
+                client_question=tool_input.get("client_question", ""),
             )
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
 
@@ -718,6 +735,67 @@ class UserbotService:
             "invite": invite_status,
             "admin": admin_status,
             "command_sent": f"+партнер @{username}",
+        }
+
+    async def _tool_escalate_to_team(
+        self,
+        work_chat_id,
+        last_msg_id,
+        specialist: str,
+        reason: str,
+        client_question: str,
+    ) -> dict:
+        """Tool: пишет в координаторскую беседу формат эскалации.
+
+        Шаги:
+          1. Resolve coordination_chat_id из storage. Если 0 — error.
+          2. Валидация specialist (whitelist).
+          3. Строим t.me/c-ссылки на сообщение и беседу (private supergroup).
+          4. Берём имя клиента из managed_chats[chat_id].client_name.
+          5. send_message в координаторский чат.
+          6. Бампим escalate_stats.
+        """
+        coord_id = storage.get_coordination_chat_id()
+        if not coord_id:
+            return {"status": "error", "error": "coordination_chat_not_set"}
+
+        allowed = {"TimonSkupCL", "pride_sys01", "pride_manager1"}
+        spec = (specialist or "").lstrip("@").strip()
+        if spec not in allowed:
+            return {"status": "error", "error": f"unknown_specialist:{spec}"}
+
+        # Линки t.me/c/<bare_chat_id>/<msg_id>. _norm_chat_id снимает -100 префикс.
+        from storage import _norm_chat_id
+        bare = _norm_chat_id(work_chat_id)
+        chat_link = f"https://t.me/c/{bare}"
+        msg_link = f"{chat_link}/{last_msg_id}" if last_msg_id else chat_link
+
+        info = storage.get_chat_info(work_chat_id) or {}
+        client_name = info.get("client_name") or "—"
+
+        text = (
+            f"🆘 @{spec}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"<b>Причина:</b> {reason}\n\n"
+            f"<b>Клиент:</b> {client_name}\n"
+            f"<b>Вопрос клиента:</b>\n«{client_question}»\n\n"
+            f"📎 Сообщение: {msg_link}\n"
+            f"💬 Чат: {chat_link}"
+        )
+        try:
+            await self.client.send_message(coord_id, text, parse_mode="html", link_preview=False)
+        except Exception as e:
+            await storage.bump_escalate_stats(error=True)
+            logger.warning("escalate send failed: %s", e)
+            return {"status": "error", "step": "send", "error": str(e)}
+
+        await storage.bump_escalate_stats(specialist=spec)
+        logger.info("AI escalated to @%s in coord_chat=%s", spec, coord_id)
+        return {
+            "status": "ok",
+            "specialist": spec,
+            "coord_chat": coord_id,
+            "msg_link": msg_link,
         }
 
     async def stop(self):

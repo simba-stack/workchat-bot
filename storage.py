@@ -74,6 +74,13 @@ def _default_state() -> dict:
             "skipped_total": 0,
             "errors_total": 0,
         },
+        # Координаторская беседа — куда AI шлёт эскалации команде
+        "coordination_chat_id": 0,
+        "escalate_stats": {
+            "calls_total": 0,
+            "by_specialist": {},
+            "errors_total": 0,
+        },
     }
 
 
@@ -398,6 +405,33 @@ class Storage:
             stats["commits_total"] = int(stats.get("commits_total", 0)) + commits
             stats["skipped_total"] = int(stats.get("skipped_total", 0)) + skipped
             stats["errors_total"] = int(stats.get("errors_total", 0)) + errors
+            await self._save_unlocked()
+
+    # === Координаторская беседа (для эскалации) ===
+    def get_coordination_chat_id(self) -> int:
+        return int(self.state.get("coordination_chat_id") or 0)
+
+    async def set_coordination_chat_id(self, chat_id: int):
+        async with _lock:
+            self.state["coordination_chat_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def get_escalate_stats(self) -> dict:
+        return dict(self.state.get("escalate_stats") or {})
+
+    async def bump_escalate_stats(self, *, specialist: str = "", error: bool = False):
+        async with _lock:
+            stats = self.state.setdefault(
+                "escalate_stats",
+                {"calls_total": 0, "by_specialist": {}, "errors_total": 0},
+            )
+            if error:
+                stats["errors_total"] = int(stats.get("errors_total", 0)) + 1
+            else:
+                stats["calls_total"] = int(stats.get("calls_total", 0)) + 1
+                if specialist:
+                    by = stats.setdefault("by_specialist", {})
+                    by[specialist] = int(by.get(specialist, 0)) + 1
             await self._save_unlocked()
 
 

@@ -23,6 +23,7 @@ class AdminFSM(StatesGroup):
     set_brain_chat = State()
     set_ai_model = State()
     set_idle_minutes = State()
+    set_coord_chat = State()
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -108,6 +109,17 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
             reply_markup=back_kb(),
         )
         await state.set_state(AdminFSM.set_ai_model)
+    elif action == "ai_set_coord":
+        await call.message.edit_text(
+            "Пришлите ID координаторской беседы (число, например "
+            "<code>-1001234567890</code> для супергрупп или <code>0</code> чтобы "
+            "отключить эскалацию).\n\n"
+            "<i>Юзербот должен быть участником этой беседы — туда он будет писать "
+            "вызовы специалистам команды.</i>\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_coord_chat)
     elif action == "ai_set_idle":
         await call.message.edit_text(
             "Пришлите значение «тишины сотрудников» в минутах "
@@ -274,12 +286,30 @@ async def render_ai(call: CallbackQuery):
         f"• Ошибок: {wb_stats.get('errors_total', 0)}"
         f"{wb_warn}"
     )
+    # Координаторская беседа (для эскалаций)
+    coord_id = storage.get_coordination_chat_id()
+    esc_stats = storage.get_escalate_stats()
+    by_spec = esc_stats.get("by_specialist", {}) or {}
+    by_spec_str = ", ".join(f"@{u}: {c}" for u, c in by_spec.items()) if by_spec else "—"
+
+    text += (
+        f"\n\n━━━━━━━━━━━━━━\n"
+        f"🆘 <b>Координаторская беседа</b>: "
+        f"<code>{coord_id or '— не задана —'}</code>\n"
+        f"<i>Куда AI пишет вызовы специалистам команды (TimonSkupCL, "
+        f"pride_sys01, pride_manager1).</i>\n"
+        f"• Эскалаций: <b>{esc_stats.get('calls_total', 0)}</b>\n"
+        f"• По специалистам: {by_spec_str}\n"
+        f"• Ошибок: {esc_stats.get('errors_total', 0)}"
+    )
+
     toggle_label = "🔴 Выключить AI" if enabled else "🟢 Включить AI"
     wb_label = "🔴 Выключить writeback" if wb_enabled else "🟢 Включить writeback"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=toggle_label, callback_data="adm:ai_toggle")],
         [InlineKeyboardButton(text=wb_label, callback_data="adm:wb_toggle")],
         [InlineKeyboardButton(text="🆔 Brain chat ID", callback_data="adm:ai_set_chat")],
+        [InlineKeyboardButton(text="🆘 Координат. чат ID", callback_data="adm:ai_set_coord")],
         [InlineKeyboardButton(text="🤖 Модель Claude", callback_data="adm:ai_set_model")],
         [InlineKeyboardButton(text="⏱ Тишина сотрудников", callback_data="adm:ai_set_idle")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
@@ -510,3 +540,35 @@ async def fsm_set_idle_minutes(message: Message, state: FSMContext):
         f"✅ Тишина сотрудников: <b>{minutes}</b> мин\n{descr}",
         reply_markup=main_menu_kb(),
     )
+
+
+@router.message(AdminFSM.set_coord_chat)
+async def fsm_set_coord_chat(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        chat_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer(
+            "Нужно целое число (chat_id). Пришлите ещё раз или /admin для отмены."
+        )
+        return
+    await storage.set_coordination_chat_id(chat_id)
+    await state.clear()
+    if chat_id == 0:
+        await message.answer(
+            "✅ Координаторская беседа очищена (эскалация отключена).",
+            reply_markup=main_menu_kb(),
+        )
+    else:
+        await message.answer(
+            f"✅ Координаторская беседа: <code>{chat_id}</code>\n\n"
+            f"<i>Убедитесь, что юзербот участник этой беседы и что в ней "
+            f"присутствуют @TimonSkupCL, @pride_sys01, @pride_manager1.</i>",
+            reply_markup=main_menu_kb(),
+        )
