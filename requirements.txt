@@ -2,3 +2,4 @@ aiogram==3.27.0
 telethon==1.43.2
 python-dotenv==1.0.1
 cryptg
+anthropic==0.40.0

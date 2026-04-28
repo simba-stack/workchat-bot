@@ -57,6 +57,16 @@ def _default_state() -> dict:
         # Источник трафика: счётчик по источникам и атрибуция per-user
         "source_stats": {},
         "user_sources": {},
+        # AI brain (Claude)
+        "ai_enabled": False,
+        "ai_model": "",  # пусто = берём config.DEFAULT_AI_MODEL
+        "ai_stats": {
+            "replies_total": 0,
+            "input_tokens_total": 0,
+            "output_tokens_total": 0,
+            "errors_total": 0,
+            "skipped_worker_active": 0,
+        },
     }
 
 
@@ -303,6 +313,60 @@ class Storage:
 
     def get_user_source(self, user_id: int) -> Optional[str]:
         return self.state.get("user_sources", {}).get(str(user_id))
+
+    # === AI brain ===
+    def is_ai_enabled(self) -> bool:
+        return bool(self.state.get("ai_enabled", False))
+
+    async def set_ai_enabled(self, enabled: bool):
+        async with _lock:
+            self.state["ai_enabled"] = bool(enabled)
+            await self._save_unlocked()
+
+    def get_ai_model(self) -> str:
+        return self.state.get("ai_model") or ""
+
+    async def set_ai_model(self, model: str):
+        async with _lock:
+            self.state["ai_model"] = (model or "").strip()
+            await self._save_unlocked()
+
+    def get_ai_stats(self) -> dict:
+        return dict(self.state.get("ai_stats") or {})
+
+    async def bump_ai_stats(
+        self,
+        *,
+        replies: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        errors: int = 0,
+        skipped_worker_active: int = 0,
+    ):
+        """Атомарно инкрементит выбранные счётчики ai_stats."""
+        async with _lock:
+            stats = self.state.setdefault(
+                "ai_stats",
+                {
+                    "replies_total": 0,
+                    "input_tokens_total": 0,
+                    "output_tokens_total": 0,
+                    "errors_total": 0,
+                    "skipped_worker_active": 0,
+                },
+            )
+            stats["replies_total"] = int(stats.get("replies_total", 0)) + replies
+            stats["input_tokens_total"] = (
+                int(stats.get("input_tokens_total", 0)) + input_tokens
+            )
+            stats["output_tokens_total"] = (
+                int(stats.get("output_tokens_total", 0)) + output_tokens
+            )
+            stats["errors_total"] = int(stats.get("errors_total", 0)) + errors
+            stats["skipped_worker_active"] = (
+                int(stats.get("skipped_worker_active", 0)) + skipped_worker_active
+            )
+            await self._save_unlocked()
 
 
 storage = Storage(config.STORAGE_PATH)

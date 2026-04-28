@@ -2,6 +2,8 @@
 import html
 import logging
 from aiogram import Router, F
+
+import config
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -18,6 +20,8 @@ class AdminFSM(StatesGroup):
     set_welcome = State()
     set_cooldown = State()
     add_admin = State()
+    set_brain_chat = State()
+    set_ai_model = State()
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -27,6 +31,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⏱ Кулдаун", callback_data="adm:cooldown")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
+        [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
         [InlineKeyboardButton(text="🔐 Админы", callback_data="adm:admins")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="adm:close")],
     ])
@@ -68,6 +73,34 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
         await render_stats(call)
     elif action == "traffic":
         await render_traffic(call)
+    elif action == "ai":
+        await render_ai(call)
+    elif action == "ai_toggle":
+        await storage.set_ai_enabled(not storage.is_ai_enabled())
+        await call.answer("AI " + ("включён" if storage.is_ai_enabled() else "выключен"))
+        await render_ai(call)
+    elif action == "ai_set_chat":
+        await call.message.edit_text(
+            "Пришлите ID чата для логов AI (число, например <code>-1001234567890</code> "
+            "для супергрупп или <code>0</code> чтобы отключить).\n\n"
+            "<i>Юзербот должен быть участником этого чата — он будет туда писать "
+            "[AI-LOG] записи и читать заметки админа как доп. контекст.</i>\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_brain_chat)
+    elif action == "ai_set_model":
+        await call.message.edit_text(
+            "Пришлите название модели Claude.\n\n"
+            "Варианты:\n"
+            "• <code>claude-sonnet-4-6</code> — баланс (рекомендуется)\n"
+            "• <code>claude-opus-4-6</code> — самый умный, дороже в 5x\n"
+            "• <code>claude-haiku-4-5-20251001</code> — быстрый и дешёвый\n\n"
+            "Пустая строка — вернуть на дефолт из config.\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_ai_model)
     elif action == "admins":
         await render_admins(call)
     elif action == "worker_add":
@@ -167,6 +200,47 @@ async def render_stats(call: CallbackQuery):
     text += "<b>Топ клиентов:</b>\n"
     text += "\n".join(f"• <code>{uid}</code> — {cnt}" for uid, cnt in top) if top else "<i>пусто</i>"
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
+    ])
+    await call.message.edit_text(text, reply_markup=kb)
+
+
+async def render_ai(call: CallbackQuery):
+    """🧠 AI panel: статус, модель, brain_chat, статистика."""
+    enabled = storage.is_ai_enabled()
+    model = storage.get_ai_model() or config.DEFAULT_AI_MODEL
+    brain_id = storage.get_brain_chat_id()
+    idle_min = storage.get_client_idle_minutes()
+    stats = storage.get_ai_stats()
+    api_key_set = bool(config.ANTHROPIC_API_KEY)
+
+    status_emoji = "🟢" if enabled else "🔴"
+    status_text = "ВКЛ" if enabled else "ВЫКЛ"
+    api_warn = (
+        "" if api_key_set
+        else "\n\n⚠️ <b>ANTHROPIC_API_KEY не задан в env</b> — AI не сможет отвечать."
+    )
+
+    text = (
+        f"🧠 <b>AI brain (Claude)</b>\n\n"
+        f"Статус: {status_emoji} <b>{status_text}</b>\n"
+        f"Модель: <code>{html.escape(model)}</code>\n"
+        f"Brain chat: <code>{brain_id or '— не задан —'}</code>\n"
+        f"Тишина сотрудников: <b>{idle_min}</b> мин "
+        f"(если worker писал недавно — AI молчит)\n\n"
+        f"<b>Статистика:</b>\n"
+        f"• Ответов отправлено: <b>{stats.get('replies_total', 0)}</b>\n"
+        f"• Tokens in: {stats.get('input_tokens_total', 0)}\n"
+        f"• Tokens out: {stats.get('output_tokens_total', 0)}\n"
+        f"• Ошибок: {stats.get('errors_total', 0)}\n"
+        f"• Пропущено (worker активен): {stats.get('skipped_worker_active', 0)}"
+        f"{api_warn}"
+    )
+    toggle_label = "🔴 Выключить AI" if enabled else "🟢 Включить AI"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_label, callback_data="adm:ai_toggle")],
+        [InlineKeyboardButton(text="🆔 Brain chat ID", callback_data="adm:ai_set_chat")],
+        [InlineKeyboardButton(text="🤖 Модель Claude", callback_data="adm:ai_set_model")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
     ])
     await call.message.edit_text(text, reply_markup=kb)
@@ -308,5 +382,59 @@ async def fsm_add_admin(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"✅ Добавлен админ <code>{new_id}</code>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_brain_chat)
+async def fsm_set_brain_chat(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        chat_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer(
+            "Нужно целое число (chat_id). Пришлите ещё раз или /admin для отмены."
+        )
+        return
+    await storage.set_brain_chat_id(chat_id)
+    await state.clear()
+    if chat_id == 0:
+        await message.answer("✅ Brain chat очищен (логи отключены).", reply_markup=main_menu_kb())
+    else:
+        await message.answer(
+            f"✅ Brain chat установлен: <code>{chat_id}</code>\n\n"
+            f"<i>Убедитесь, что юзербот участник этого чата.</i>",
+            reply_markup=main_menu_kb(),
+        )
+
+
+@router.message(AdminFSM.set_ai_model)
+async def fsm_set_ai_model(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    raw = (message.text or "").strip()
+    # Простая валидация: только claude-* модели или пустая строка для дефолта
+    if raw and not raw.startswith("claude-"):
+        await message.answer(
+            "Имя модели должно начинаться с <code>claude-</code>. "
+            "Пришлите ещё раз или /admin для отмены."
+        )
+        return
+    await storage.set_ai_model(raw)
+    await state.clear()
+    effective = raw or config.DEFAULT_AI_MODEL
+    await message.answer(
+        f"✅ Модель: <code>{effective}</code>",
         reply_markup=main_menu_kb(),
     )

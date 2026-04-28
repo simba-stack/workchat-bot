@@ -11,6 +11,8 @@ the second will see welcome_sent=True and exit immediately.
 """
 import logging
 import asyncio
+import random
+import time
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -38,6 +40,7 @@ from telethon.errors import (
 
 import config
 from storage import storage
+import brain
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,12 @@ class UserbotService:
         # Per-chat locks для защиты от race condition в _send_welcome.
         # Только один путь (event или poll) может отправить welcome — второй увидит флаг.
         self._welcome_locks: dict[int, asyncio.Lock] = {}
+        # AI: per-chat lock (не отвечаем на два сообщения параллельно в одном чате)
+        self._ai_locks: dict[int, asyncio.Lock] = {}
+        # AI: последний timestamp активности сотрудника/админа в managed-чате.
+        # Ключ — нормализованный chat_id (str), значение — unix time.
+        # Если worker писал в последние client_idle_minutes минут — AI молчит.
+        self._last_worker_ts: dict[str, float] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
         """Возвращает (создаёт при необходимости) Lock для конкретного чата."""
@@ -126,6 +135,13 @@ class UserbotService:
                 await self._handle_chat_action(event)
             except Exception as e:
                 logger.warning("ChatAction handler error: %s", e)
+
+        @self.client.on(events.NewMessage(incoming=True))
+        async def _on_new_message(event):
+            try:
+                await self._handle_ai_message(event)
+            except Exception as e:
+                logger.exception("AI message handler error: %s", e)
 
     async def _handle_chat_action(self, event):
         try:
@@ -270,6 +286,231 @@ class UserbotService:
             )
         except Exception as e:
             logger.warning("watch chat=%s: unexpected error: %s", channel.id, e)
+
+    # === AI brain handlers ===
+
+    async def _handle_ai_message(self, event):
+        """Реакция на новые сообщения в managed-чатах. Триггер AI-ответа.
+
+        Логика:
+        1. Игнорим всё, что не в managed_chats или в brain_chat.
+        2. Если автор — worker/admin/сам юзербот: апдейтим _last_worker_ts и выходим.
+        3. Если AI выключен — выходим.
+        4. Если worker писал в последние client_idle_minutes — выходим (skipped_worker_active++).
+        5. Sleep 3-8с (имитация набора). Повторная проверка worker activity.
+        6. Fetch history + brain_notes → brain.generate_reply.
+        7. Отправляем ответ. Логируем в brain_chat. Бампим ai_stats.
+        """
+        chat_id = event.chat_id
+        chat_info = storage.get_chat_info(chat_id)
+        if not chat_info:
+            return
+        # brain_chat — туда AI пишет логи, но НЕ отвечает на сообщения там
+        bid = storage.get_brain_chat_id()
+        if bid and abs(int(chat_id)) == abs(int(bid)):
+            return
+        if not event.message or not (event.message.text or "").strip():
+            return
+
+        sender_id = event.sender_id
+        if self._me and sender_id == self._me.id:
+            return  # своё сообщение
+
+        # Определяем кто прислал (worker/admin или клиент)
+        try:
+            sender = await event.get_sender()
+        except Exception:
+            sender = None
+        sender_username = (getattr(sender, "username", "") or "").lower()
+        workers_lc = {w.lower() for w in storage.get_workers()}
+        is_worker = (
+            (sender_username and sender_username in workers_lc)
+            or (sender_id in storage.get_admins())
+        )
+
+        # Используем нормализованный ключ для _last_worker_ts (как в storage)
+        from storage import _norm_chat_id  # локальный импорт, чтобы не циклить
+        chat_key = _norm_chat_id(chat_id)
+
+        if is_worker:
+            self._last_worker_ts[chat_key] = time.time()
+            logger.info("AI: worker activity in chat=%s by @%s", chat_id, sender_username)
+            return
+
+        # === Это сообщение клиента ===
+        if not storage.is_ai_enabled():
+            return
+        if not config.ANTHROPIC_API_KEY:
+            return
+
+        client_id = chat_info.get("client_id")
+        # Параноя: отвечаем только если автор именно наш зарегистрированный клиент
+        if client_id and sender_id != client_id:
+            return
+
+        idle_min = max(1, storage.get_client_idle_minutes())
+        idle_sec = idle_min * 60
+        if time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+            await storage.bump_ai_stats(skipped_worker_active=1)
+            logger.info("AI: skip chat=%s — worker active in last %dm", chat_id, idle_min)
+            return
+
+        # Per-chat lock: не запускаем второй AI-ответ пока не закончим первый
+        lock = self._ai_locks.setdefault(chat_key, asyncio.Lock())
+        if lock.locked():
+            logger.info("AI: chat=%s already processing — skip", chat_id)
+            return
+        async with lock:
+            await self._do_ai_reply(event, chat_info, idle_sec, chat_key)
+
+    async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
+        """Внутренняя часть AI-ответа: задержка набора, fetch контекста, Claude, send."""
+        chat_id = event.chat_id
+
+        # Имитация набора: случайная пауза перед запросом
+        delay = random.uniform(config.AI_TYPING_DELAY_MIN, config.AI_TYPING_DELAY_MAX)
+        try:
+            async with self.client.action(chat_id, "typing"):
+                await asyncio.sleep(delay)
+        except Exception:
+            await asyncio.sleep(delay)
+
+        # Повторная проверка worker activity (мог написать пока спали)
+        if time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+            await storage.bump_ai_stats(skipped_worker_active=1)
+            logger.info("AI: chat=%s — worker came in during typing delay, skip", chat_id)
+            return
+
+        # Сборка истории и brain_notes
+        client_id = chat_info.get("client_id") or 0
+        try:
+            history = await self._fetch_history_for_claude(chat_id, client_id)
+        except Exception as e:
+            logger.warning("AI: history fetch failed for chat=%s: %s", chat_id, e)
+            history = []
+        if not history or history[-1]["role"] != "user":
+            logger.info("AI: chat=%s — empty/invalid history", chat_id)
+            return
+
+        brain_notes = await self._fetch_brain_notes()
+
+        # Запрос в Claude
+        async with self.client.action(chat_id, "typing"):
+            reply, usage = await brain.generate_reply(history, brain_notes=brain_notes)
+        if reply is None:
+            await storage.bump_ai_stats(errors=1)
+            logger.warning("AI: chat=%s — claude returned None", chat_id)
+            return
+
+        # Отправка ответа
+        try:
+            for chunk in _split_text(reply, 3900):
+                await self.client.send_message(chat_id, chunk)
+                await asyncio.sleep(0.3)
+        except Exception as e:
+            logger.warning("AI: send failed chat=%s: %s", chat_id, e)
+            await storage.bump_ai_stats(errors=1)
+            return
+
+        await storage.bump_ai_stats(
+            replies=1,
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+        )
+        logger.info(
+            "AI: replied chat=%s in=%s out=%s",
+            chat_id, usage.get("input_tokens"), usage.get("output_tokens"),
+        )
+
+        # Лог в brain_chat (если задан)
+        client_text = (event.message.text or "").strip()
+        await self._log_to_brain(
+            chat_id=chat_id,
+            chat_info=chat_info,
+            client_text=client_text,
+            ai_text=reply,
+            usage=usage,
+        )
+
+    async def _fetch_history_for_claude(self, chat_id, client_id: int) -> list[dict]:
+        """Считывает последние config.AI_HISTORY_LIMIT сообщений и форматирует под API.
+
+        Чужие сообщения (от не-клиента и не-юзербота) идут как user с префиксом имени —
+        чтобы Claude видел контекст разговора, но не путался в ролях.
+        """
+        msgs: list[dict] = []
+        try:
+            async for m in self.client.iter_messages(chat_id, limit=config.AI_HISTORY_LIMIT):
+                txt = (m.text or "").strip()
+                if not txt:
+                    continue
+                if self._me and m.sender_id == self._me.id:
+                    msgs.insert(0, {"role": "assistant", "content": txt})
+                elif client_id and m.sender_id == client_id:
+                    msgs.insert(0, {"role": "user", "content": txt})
+                else:
+                    try:
+                        s = await m.get_sender()
+                    except Exception:
+                        s = None
+                    name = getattr(s, "first_name", None) or "Сотрудник"
+                    msgs.insert(0, {"role": "user", "content": f"[{name}]: {txt}"})
+        except Exception as e:
+            logger.warning("history iter failed for chat=%s: %s", chat_id, e)
+            return []
+
+        # Claude API требует, чтобы первое сообщение было role=user.
+        while msgs and msgs[0]["role"] != "user":
+            msgs.pop(0)
+        # И последнее тоже должно быть user (мы только что получили клиентское).
+        while msgs and msgs[-1]["role"] != "user":
+            msgs.pop()
+        return msgs
+
+    async def _fetch_brain_notes(self) -> str:
+        """Свежие заметки админа из brain_chat. AI-логи (с маркером) пропускаем."""
+        bid = storage.get_brain_chat_id()
+        if not bid:
+            return ""
+        parts: list[str] = []
+        try:
+            async for m in self.client.iter_messages(bid, limit=config.AI_BRAIN_NOTES_LIMIT):
+                txt = (m.text or "").strip()
+                if not txt:
+                    continue
+                if txt.startswith("[AI-LOG]"):
+                    continue  # это наши же логи — пропускаем
+                ts = m.date.strftime("%Y-%m-%d %H:%M") if m.date else ""
+                parts.insert(0, f"[{ts}] {txt}")
+        except Exception as e:
+            logger.warning("brain notes fetch failed: %s", e)
+            return ""
+        return "\n".join(parts)
+
+    async def _log_to_brain(
+        self, chat_id, chat_info: dict, client_text: str, ai_text: str, usage: dict
+    ):
+        """Пишет [AI-LOG] запись в brain_chat для аудита админа."""
+        bid = storage.get_brain_chat_id()
+        if not bid:
+            return
+        client_name = chat_info.get("client_name") or "—"
+        in_t = usage.get("input_tokens", 0)
+        out_t = usage.get("output_tokens", 0)
+        # Обрезаем длинные тексты, чтобы не забивать brain_chat
+        ct = client_text if len(client_text) <= 600 else client_text[:600] + "…"
+        at = ai_text if len(ai_text) <= 1500 else ai_text[:1500] + "…"
+        log_msg = (
+            f"[AI-LOG] 💬 {client_name}\n"
+            f"chat_id={chat_id}, tokens in={in_t} out={out_t}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"👤 {ct}\n\n"
+            f"🤖 {at}"
+        )
+        try:
+            await self.client.send_message(bid, log_msg)
+        except Exception as e:
+            logger.warning("brain log send failed: %s", e)
 
     async def stop(self):
         await self.client.disconnect()
