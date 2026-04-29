@@ -156,6 +156,27 @@ class UserbotService:
                     label, cid, e,
                 )
 
+        # Диагностика: листим топ-30 чатов, в которых состоит юзербот.
+        # Помогает админу найти актуальный chat_id если чат был upgraded в
+        # супергруппу или если ID в админке устарел.
+        try:
+            count = 0
+            async for dialog in self.client.iter_dialogs(limit=30):
+                ent = dialog.entity
+                etype = type(ent).__name__
+                title = getattr(ent, "title", None) or getattr(ent, "first_name", "") or "?"
+                # event.chat_id Telethon выдаёт в Bot API форме (signed),
+                # show_id отображаем в этом же формате.
+                show_id = dialog.id
+                logger.info(
+                    "DIALOG[%d]: chat_id=%s title=%r type=%s",
+                    count, show_id, title[:60], etype,
+                )
+                count += 1
+            logger.info("DIALOG: listed %d chats", count)
+        except Exception as e:
+            logger.warning("dialog listing failed: %s", e)
+
         @self.client.on(events.ChatAction)
         async def _on_chat_action(event):
             try:
