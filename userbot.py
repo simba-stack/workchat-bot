@@ -1022,9 +1022,12 @@ class UserbotService:
             return
         if self._me and event.sender_id == self._me.id:
             return
-        if event.sender_id not in storage.get_admins():
-            logger.info("deals_chat: sender %s not admin, skip", event.sender_id)
-            return
+        # Намеренно НЕ требуем admin-права: сам факт что отправитель — участник
+        # чата «Сделки и выплаты» = допуск (Telegram-членство как ACL).
+        # Ставим в логи кто написал, чтобы можно было аудитить при проблемах.
+        logger.info(
+            "deals_chat msg from sender=%s, len=%d", event.sender_id, len(text)
+        )
 
         for rx, new_status in self._DEALS_STATUS_PATTERNS:
             m = rx.search(text)
