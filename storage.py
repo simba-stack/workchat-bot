@@ -513,8 +513,13 @@ class Storage:
         fee,
         method: str,
         status: str = "ПОПОЛНИТЬ",
+        work_chat_id=None,
     ) -> bool:
-        """Создаёт новую запись сделки. Возвращает False если deal_id уже существует."""
+        """Создаёт новую запись сделки. Возвращает False если deal_id уже существует.
+
+        work_chat_id — chat_id рабочей беседы с клиентом (где была создана сделка).
+        Используется для прямого уведомления клиента при смене статуса.
+        """
         deal_id = (deal_id or "").strip()
         if not deal_id:
             return False
@@ -532,6 +537,9 @@ class Storage:
                 "status": status,
                 "created_at": time.time(),
                 "history": [{"ts": time.time(), "status": status}],
+                "work_chat_id": work_chat_id,
+                # message_id поста в чате «Сделки и выплаты» — для редактирования
+                "deals_group_msg_id": None,
             }
             stats = self.state.setdefault(
                 "deals_stats",
@@ -572,6 +580,17 @@ class Storage:
 
     def get_deals_stats(self) -> dict:
         return dict(self.state.get("deals_stats") or {})
+
+    async def set_deals_group_msg_id(self, deal_id: str, msg_id):
+        """Запоминает message_id поста в чате 'Сделки и выплаты' для редактирования."""
+        async with _lock:
+            deals = self.state.get("deals") or {}
+            d = deals.get(str(deal_id).strip())
+            if d is None:
+                return False
+            d["deals_group_msg_id"] = msg_id
+            await self._save_unlocked()
+            return True
 
 
 storage = Storage(config.STORAGE_PATH)

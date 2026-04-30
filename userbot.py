@@ -747,7 +747,7 @@ class UserbotService:
                 client_question=tool_input.get("client_question", ""),
             )
         if tool_name == "record_deal":
-            return await self._tool_record_deal(**tool_input)
+            return await self._tool_record_deal(work_chat_id=chat_id, **tool_input)
         if tool_name == "update_deal_status":
             return await self._tool_update_deal_status(**tool_input)
         if tool_name == "find_deal":
@@ -895,8 +895,14 @@ class UserbotService:
         amount: str = "",
         fee: str = "",
         method: str = "",
+        work_chat_id=None,
     ) -> dict:
-        """Создаёт запись сделки в storage. Не дублирует."""
+        """Создаёт запись сделки в storage. Не дублирует.
+
+        work_chat_id передаётся диспетчером — это chat_id текущего работ-чата
+        с клиентом. Запоминаем его в записи сделки чтобы потом уведомлять
+        клиента о смене статуса.
+        """
         deal_id = (deal_id or "").strip()
         if not deal_id:
             return {"status": "error", "error": "deal_id_empty"}
@@ -911,6 +917,7 @@ class UserbotService:
             fee=fee,
             method=method,
             status="ПОПОЛНИТЬ",
+            work_chat_id=work_chat_id,
         )
         if not ok:
             return {"status": "error", "error": "add_failed"}
@@ -960,6 +967,17 @@ class UserbotService:
     async def _tool_post_deals_group(
         self, deal_id: str = "", custom_text: str = ""
     ) -> dict:
+        """Логирует сделку в чате «Сделки и выплаты».
+
+        Если для этой сделки уже есть deals_group_msg_id — редактируем
+        существующий пост (статус обновляется на месте). Если нет — отправляем
+        новое сообщение и запоминаем msg_id для будущих обновлений.
+
+        Если edit падает (Telegram-лимит 48ч на edit, или пост удалили) —
+        фоллбэк на новое send.
+
+        Формат: «@ник — банк — сумма — дата — id — СТАТУС» (без fee).
+        """
         gid = storage.get_deals_group_id()
         if not gid:
             return {"status": "error", "error": "deals_group_not_set"}
@@ -969,29 +987,53 @@ class UserbotService:
 
         if custom_text:
             text = custom_text
-        else:
-            from datetime import datetime
-            ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
-            uname = d.get("client_username") or "?"
-            fee_val = d.get("fee", "")
-            # Косметика: пустые / нулевые fee показываем как «—» (например USDT TRC20 без комиссии)
-            if fee_val in ("", "0", "0%", 0, None):
-                fee_str = "—"
-            else:
-                fee_str = str(fee_val)
-            text = (
-                f"@{uname} — {d.get('bank','?')} — fee {fee_str} — "
-                f"{d.get('amount','?')} — {ts} — {deal_id} — "
-                f"{d.get('status','?')}"
-            )
+            # custom_text — всегда новый send, не пытаемся редактировать
+            try:
+                target = await self._resolve_chat_target(gid)
+                await self.client.send_message(target, text, link_preview=False)
+            except Exception as e:
+                logger.warning("post_deals_group(custom) send failed: %s", e)
+                return {"status": "error", "step": "send", "error": str(e)}
+            return {"status": "ok", "deals_group": gid, "mode": "send_custom"}
+
+        from datetime import datetime
+        ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
+        uname = d.get("client_username") or "?"
+        text = (
+            f"@{uname} — {d.get('bank','?')} — {d.get('amount','?')} — "
+            f"{ts} — {deal_id} — {d.get('status','?')}"
+        )
+
+        existing_msg_id = d.get("deals_group_msg_id")
+        target = await self._resolve_chat_target(gid)
+
+        # Попытка edit если уже постили
+        if existing_msg_id:
+            try:
+                await self.client.edit_message(target, existing_msg_id, text, link_preview=False)
+                logger.info("edited deals_group msg=%s for deal=%s", existing_msg_id, deal_id)
+                return {"status": "ok", "deals_group": gid, "mode": "edited", "msg_id": existing_msg_id}
+            except Exception as e:
+                logger.warning(
+                    "edit deals_group msg=%s failed (%s) — fallback to send",
+                    existing_msg_id, e,
+                )
+                # Падает edit — fallback ниже на send
+
+        # Новое сообщение
         try:
-            target = await self._resolve_chat_target(gid)
-            await self.client.send_message(target, text, link_preview=False)
+            sent = await self.client.send_message(target, text, link_preview=False)
         except Exception as e:
             logger.warning("post_deals_group send failed: %s", e)
             return {"status": "error", "step": "send", "error": str(e)}
-        logger.info("posted to deals_group: chat=%s len=%d", gid, len(text))
-        return {"status": "ok", "deals_group": gid, "preview": text[:200]}
+        new_msg_id = getattr(sent, "id", None)
+        if new_msg_id:
+            await storage.set_deals_group_msg_id(deal_id, new_msg_id)
+        logger.info(
+            "posted to deals_group: chat=%s msg_id=%s len=%d",
+            gid, new_msg_id, len(text),
+        )
+        return {"status": "ok", "deals_group": gid, "mode": "sent", "msg_id": new_msg_id}
 
     # === Авто-детект статусов в deals/accounts чатах ===
 
@@ -1107,36 +1149,25 @@ class UserbotService:
             logger.warning("post_deals_group failed after status change: %s", e)
 
         # 2. Уведомить клиента в его рабочем чате
-        client_username = deal.get("client_username") or ""
-        if not client_username:
-            return
-        # Ищем managed_chat у которого client_username совпадает
-        target_chat_id = None
-        from storage import _norm_chat_id  # noqa
-        for cid_key, info in (storage.state.get("managed_chats") or {}).items():
-            if (info.get("client_name", "") and
-                client_username.lower() in info.get("client_name", "").lower()):
-                # Грубый матч по имени клиента (мы хранили full_name, не username)
-                target_chat_id = cid_key
-                break
-            # Точная попытка по client_id если запомнили
-            # (storage.register_chat сохраняет client_id, мы можем искать по нему)
-        # Формируем уведомление по статусу
+        # work_chat_id запомнили в record_deal — используем напрямую (надёжнее
+        # чем матч по имени клиента, который мы делали раньше).
+        work_chat = deal.get("work_chat_id")
         client_msg = self._client_status_message(new_status, deal)
-        if not target_chat_id or not client_msg:
+        if not work_chat or not client_msg:
+            logger.info(
+                "client notify skipped: deal=%s work_chat=%s msg=%r",
+                deal_id, work_chat, bool(client_msg),
+            )
             return
         try:
-            # cid_key — это нормализованный bare ID (без -100). Telethon
-            # принимает int с минусом для супергрупп — реконструируем форму.
-            try:
-                cid_int = -1 * int("100" + cid_key)
-            except Exception:
-                cid_int = int(cid_key)
-            target = await self._resolve_chat_target(cid_int)
+            target = await self._resolve_chat_target(work_chat)
             await self.client.send_message(target, client_msg, link_preview=False)
-            logger.info("client notified about deal=%s status=%s in chat=%s", deal_id, new_status, cid_int)
+            logger.info(
+                "client notified deal=%s status=%s chat=%s",
+                deal_id, new_status, work_chat,
+            )
         except Exception as e:
-            logger.warning("client notify failed: %s", e)
+            logger.warning("client notify failed for deal=%s: %s", deal_id, e)
 
     @staticmethod
     def _client_status_message(status: str, deal: dict) -> str:
