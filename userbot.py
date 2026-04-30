@@ -733,6 +733,14 @@ class UserbotService:
                 reason=tool_input.get("reason", ""),
                 client_question=tool_input.get("client_question", ""),
             )
+        if tool_name == "record_deal":
+            return await self._tool_record_deal(**tool_input)
+        if tool_name == "update_deal_status":
+            return await self._tool_update_deal_status(**tool_input)
+        if tool_name == "find_deal":
+            return await self._tool_find_deal(**tool_input)
+        if tool_name == "post_deals_group":
+            return await self._tool_post_deals_group(**tool_input)
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
 
     async def _tool_add_partner_to_crm(self, chat_id, client_username: str) -> dict:
@@ -862,6 +870,109 @@ class UserbotService:
             "coord_chat": coord_id,
             "msg_link": msg_link,
         }
+
+    # === Tools для системы учёта сделок ===
+
+    async def _tool_record_deal(
+        self,
+        deal_id: str = "",
+        client_username: str = "",
+        fio: str = "",
+        bank: str = "",
+        amount: str = "",
+        fee: str = "",
+        method: str = "",
+    ) -> dict:
+        """Создаёт запись сделки в storage. Не дублирует."""
+        deal_id = (deal_id or "").strip()
+        if not deal_id:
+            return {"status": "error", "error": "deal_id_empty"}
+        if storage.get_deal(deal_id):
+            return {"status": "error", "error": "deal_already_exists", "deal_id": deal_id}
+        ok = await storage.add_deal(
+            deal_id=deal_id,
+            client_username=client_username,
+            fio=fio,
+            bank=bank,
+            amount=amount,
+            fee=fee,
+            method=method,
+            status="ПОПОЛНИТЬ",
+        )
+        if not ok:
+            return {"status": "error", "error": "add_failed"}
+        logger.info("deal recorded: %s | @%s | %s | %s", deal_id, client_username, bank, amount)
+        return {"status": "ok", "deal_id": deal_id, "initial_status": "ПОПОЛНИТЬ"}
+
+    async def _tool_update_deal_status(
+        self, deal_id: str = "", new_status: str = ""
+    ) -> dict:
+        ok = await storage.update_deal_status(deal_id, new_status)
+        if not ok:
+            return {"status": "error", "error": "deal_not_found_or_invalid", "deal_id": deal_id}
+        d = storage.get_deal(deal_id) or {}
+        logger.info("deal status updated: %s -> %s", deal_id, new_status)
+        return {
+            "status": "ok",
+            "deal_id": deal_id,
+            "new_status": new_status,
+            "client_username": d.get("client_username"),
+            "fio": d.get("fio"),
+            "bank": d.get("bank"),
+        }
+
+    async def _tool_find_deal(
+        self,
+        deal_id: str = "",
+        username: str = "",
+        fio: str = "",
+        bank: str = "",
+    ) -> dict:
+        # Хотя бы один параметр должен быть задан
+        if not any([deal_id, username, fio, bank]):
+            return {"status": "error", "error": "no_query_params"}
+        results = storage.find_deal_by(
+            deal_id=deal_id or None,
+            username=username or None,
+            fio=fio or None,
+            bank=bank or None,
+        )
+        # Сериализуем без поля history (и без timestamps), чтобы AI получил компактный JSON
+        clean = []
+        for d in results:
+            cd = {k: v for k, v in d.items() if k not in ("history", "created_at")}
+            clean.append(cd)
+        return {"status": "ok", "found": len(clean), "deals": clean}
+
+    async def _tool_post_deals_group(
+        self, deal_id: str = "", custom_text: str = ""
+    ) -> dict:
+        gid = storage.get_deals_group_id()
+        if not gid:
+            return {"status": "error", "error": "deals_group_not_set"}
+        d = storage.get_deal(deal_id)
+        if not d and not custom_text:
+            return {"status": "error", "error": "deal_not_found", "deal_id": deal_id}
+
+        if custom_text:
+            text = custom_text
+        else:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
+            uname = d.get("client_username") or "?"
+            text = (
+                f"@{uname} — {d.get('bank','?')} — fee {d.get('fee','?')} — "
+                f"{d.get('amount','?')} — {ts} — {deal_id} — "
+                f"{d.get('status','?')}"
+            )
+        try:
+            target = await self._resolve_chat_target(gid)
+            await self.client.send_message(target, text, link_preview=False)
+        except Exception as e:
+            logger.warning("post_deals_group send failed: %s", e)
+            return {"status": "error", "step": "send", "error": str(e)}
+        logger.info("posted to deals_group: chat=%s len=%d", gid, len(text))
+        return {"status": "ok", "deals_group": gid, "preview": text[:200]}
 
     async def stop(self):
         await self.client.disconnect()

@@ -81,6 +81,19 @@ def _default_state() -> dict:
             "by_specialist": {},
             "errors_total": 0,
         },
+        # === Учёт сделок ===
+        # Чат «Сделки и выплаты» (логирование/обновления статусов)
+        "deals_group_id": 0,
+        # Чат «Отработка аккаунтов» (источник статусов от операционистов)
+        "accounts_group_id": 0,
+        # Сами сделки: deal_id (str) -> {client_username, fio, bank, amount,
+        # fee, method, status, created_at, history: [{ts, status}]}
+        "deals": {},
+        "deals_stats": {
+            "created_total": 0,
+            "by_status": {},
+            "errors_total": 0,
+        },
     }
 
 
@@ -433,6 +446,132 @@ class Storage:
                     by = stats.setdefault("by_specialist", {})
                     by[specialist] = int(by.get(specialist, 0)) + 1
             await self._save_unlocked()
+
+    # === Учёт сделок ===
+    def get_deals_group_id(self) -> int:
+        return int(self.state.get("deals_group_id") or 0)
+
+    async def set_deals_group_id(self, chat_id: int):
+        async with _lock:
+            self.state["deals_group_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def get_accounts_group_id(self) -> int:
+        return int(self.state.get("accounts_group_id") or 0)
+
+    async def set_accounts_group_id(self, chat_id: int):
+        async with _lock:
+            self.state["accounts_group_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def get_deal(self, deal_id: str) -> Optional[dict]:
+        return (self.state.get("deals") or {}).get(str(deal_id).strip())
+
+    def list_deals(self, status: Optional[str] = None) -> dict:
+        all_deals = self.state.get("deals") or {}
+        if status is None:
+            return dict(all_deals)
+        return {k: v for k, v in all_deals.items() if v.get("status") == status}
+
+    def find_deal_by(
+        self,
+        deal_id: Optional[str] = None,
+        username: Optional[str] = None,
+        fio: Optional[str] = None,
+        bank: Optional[str] = None,
+    ) -> list:
+        """Универсальный поиск сделок. Возвращает список совпавших dict (с deal_id внутри).
+
+        Все условия применяются как AND, но fio/bank сравниваются case-insensitive
+        и подстрокой. None — параметр игнорируется.
+        """
+        out = []
+        deals = self.state.get("deals") or {}
+        for did, d in deals.items():
+            if deal_id and str(deal_id).strip() != did:
+                continue
+            if username:
+                u = (d.get("client_username") or "").lstrip("@").lower()
+                if username.lstrip("@").lower() != u:
+                    continue
+            if fio:
+                if fio.lower() not in (d.get("fio") or "").lower():
+                    continue
+            if bank:
+                if bank.lower() not in (d.get("bank") or "").lower():
+                    continue
+            out.append({"deal_id": did, **d})
+        return out
+
+    async def add_deal(
+        self,
+        deal_id: str,
+        client_username: str,
+        fio: str,
+        bank: str,
+        amount,
+        fee,
+        method: str,
+        status: str = "ПОПОЛНИТЬ",
+    ) -> bool:
+        """Создаёт новую запись сделки. Возвращает False если deal_id уже существует."""
+        deal_id = (deal_id or "").strip()
+        if not deal_id:
+            return False
+        async with _lock:
+            deals = self.state.setdefault("deals", {})
+            if deal_id in deals:
+                return False
+            deals[deal_id] = {
+                "client_username": (client_username or "").lstrip("@"),
+                "fio": fio or "",
+                "bank": bank or "",
+                "amount": amount,
+                "fee": fee,
+                "method": method or "",
+                "status": status,
+                "created_at": time.time(),
+                "history": [{"ts": time.time(), "status": status}],
+            }
+            stats = self.state.setdefault(
+                "deals_stats",
+                {"created_total": 0, "by_status": {}, "errors_total": 0},
+            )
+            stats["created_total"] = int(stats.get("created_total", 0)) + 1
+            by = stats.setdefault("by_status", {})
+            by[status] = int(by.get(status, 0)) + 1
+            await self._save_unlocked()
+            return True
+
+    async def update_deal_status(self, deal_id: str, new_status: str) -> bool:
+        """Меняет статус сделки + добавляет запись в history. Возвращает False если не найдена."""
+        deal_id = (deal_id or "").strip()
+        new_status = (new_status or "").strip()
+        if not deal_id or not new_status:
+            return False
+        async with _lock:
+            deals = self.state.get("deals") or {}
+            d = deals.get(deal_id)
+            if not d:
+                return False
+            old_status = d.get("status", "")
+            d["status"] = new_status
+            d.setdefault("history", []).append(
+                {"ts": time.time(), "status": new_status}
+            )
+            stats = self.state.setdefault(
+                "deals_stats",
+                {"created_total": 0, "by_status": {}, "errors_total": 0},
+            )
+            by = stats.setdefault("by_status", {})
+            if old_status:
+                by[old_status] = max(0, int(by.get(old_status, 0)) - 1)
+            by[new_status] = int(by.get(new_status, 0)) + 1
+            await self._save_unlocked()
+            return True
+
+    def get_deals_stats(self) -> dict:
+        return dict(self.state.get("deals_stats") or {})
 
 
 storage = Storage(config.STORAGE_PATH)

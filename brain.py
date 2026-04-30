@@ -108,7 +108,118 @@ ESCALATE_TOOL = {
     },
 }
 
-ALL_TOOLS = [PARTNER_TOOL, ESCALATE_TOOL]
+# === Tools для системы учёта сделок ===
+RECORD_DEAL_TOOL = {
+    "name": "record_deal",
+    "description": (
+        "Записывает НОВУЮ сделку в базу storage.deals. Используй после того как "
+        "клиент подтвердил сумму И прислал ID сделки из гарант-системы. "
+        "ВАЖНО: 1 аккаунт = 1 сделка — даже если у клиента несколько аккаунтов, "
+        "вызывай этот инструмент отдельно для каждого. После успешного "
+        "record_deal сразу же вызывай post_deals_group(deal_id) — чтобы залогать "
+        "в чат «Сделки и выплаты». См. knowledge/deals.md для полного флоу."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "deal_id": {"type": "string", "description": "Уникальный ID сделки от клиента (например ID12345)"},
+            "client_username": {"type": "string", "description": "Telegram username клиента БЕЗ @"},
+            "fio": {"type": "string", "description": "ФИО клиента/держателя счёта"},
+            "bank": {"type": "string", "description": "Банк (Альфа, ОЗОН, Райффайзен, ВТБ, Точка, Уралсиб, ЛОКО, БКС, Дело, УБРИР)"},
+            "amount": {"type": "string", "description": "Сумма к выплате клиенту (как строка с валютой, например '50000₽' или '500$')"},
+            "fee": {"type": "string", "description": "Комиссия (например '5%' или '2500₽')"},
+            "method": {
+                "type": "string",
+                "enum": ["USDT_TRC20", "GUARANTOR"],
+                "description": "Способ выплаты"
+            },
+        },
+        "required": ["deal_id", "client_username", "fio", "bank", "amount", "fee", "method"],
+    },
+}
+
+UPDATE_DEAL_STATUS_TOOL = {
+    "name": "update_deal_status",
+    "description": (
+        "Меняет статус существующей сделки. Используй когда:\n"
+        "- Админ говорит «Сделка X пополнена» -> status=ПОПОЛНЕНО\n"
+        "- Из чата отработки приходит «[ФИО] — [БАНК] — ОТРАБОТАНО» — найди "
+        "сделку через find_deal и переведи в status=ГОТОВО_К_ОТПУСКУ\n"
+        "- Сделка отпущена -> status=ЗАВЕРШЕНА\n\n"
+        "После update_deal_status ВСЕГДА вызови post_deals_group(deal_id) — "
+        "чтобы обновлённый статус ушёл в группу 1."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "deal_id": {"type": "string", "description": "ID сделки"},
+            "new_status": {
+                "type": "string",
+                "enum": [
+                    "ПОПОЛНИТЬ", "ОЖИДАЕТ_ПОПОЛНЕНИЯ", "ПОПОЛНЕНО",
+                    "В_РАБОТЕ", "ГОТОВО_К_ОТПУСКУ", "ЗАВЕРШЕНА",
+                ],
+                "description": "Новый статус сделки",
+            },
+        },
+        "required": ["deal_id", "new_status"],
+    },
+}
+
+FIND_DEAL_TOOL = {
+    "name": "find_deal",
+    "description": (
+        "Ищет сделки в storage.deals по любой комбинации фильтров (AND-логика). "
+        "Используй когда:\n"
+        "- Клиент спрашивает статус -> запроси у него ФИО + банк, потом найди\n"
+        "- Из группы отработки пришёл [ФИО] — [БАНК] — ОТРАБОТАНО -> найди по fio + bank\n"
+        "- Нужно проверить существует ли уже сделка с этим ID\n\n"
+        "Возвращает список найденных сделок (может быть 0, 1 или несколько). "
+        "Хотя бы один из параметров обязателен."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "deal_id": {"type": "string", "description": "Точный ID сделки"},
+            "username": {"type": "string", "description": "Telegram username клиента БЕЗ @"},
+            "fio": {"type": "string", "description": "ФИО (case-insensitive substring)"},
+            "bank": {"type": "string", "description": "Банк (case-insensitive substring)"},
+        },
+    },
+}
+
+POST_DEALS_GROUP_TOOL = {
+    "name": "post_deals_group",
+    "description": (
+        "Отправляет в чат «Сделки и выплаты» сообщение о сделке в формате:\n"
+        "  [ник] — [банк] — [fee] — [сумма] — [дата] — [id] — [СТАТУС]\n\n"
+        "Если deal_id передан — берёт все поля из storage.deals автоматически. "
+        "Если ещё передан custom_text — отправит этот текст вместо стандартного "
+        "формата (например, для произвольных уведомлений типа «Сделка ID12345 "
+        "готова к отпуску»).\n\n"
+        "Используй ВСЕГДА после record_deal и после каждого update_deal_status."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "deal_id": {"type": "string", "description": "ID сделки в storage.deals"},
+            "custom_text": {
+                "type": "string",
+                "description": "Опционально: произвольный текст вместо стандартного формата",
+            },
+        },
+        "required": ["deal_id"],
+    },
+}
+
+ALL_TOOLS = [
+    PARTNER_TOOL,
+    ESCALATE_TOOL,
+    RECORD_DEAL_TOOL,
+    UPDATE_DEAL_STATUS_TOOL,
+    FIND_DEAL_TOOL,
+    POST_DEALS_GROUP_TOOL,
+]
 
 # Strip Obsidian-style [[wiki links]] for cleaner Claude context.
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
