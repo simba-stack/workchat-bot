@@ -412,6 +412,12 @@ class UserbotService:
         if not event.message or not (event.message.text or "").strip():
             return
 
+        # Детект "🔗 Перевяз ЛК выполнен" в work-чате — авто-форвард в accounts_group.
+        # Срабатывает на сообщения от @PrideCONTROLE_bot или другого источника
+        # с текстом, начинающимся примерно с "Перевяз ЛК выполнен".
+        if await self._maybe_handle_perevyaz(event, chat_info):
+            return  # уже обработано — не запускаем обычный AI-ответ
+
         sender_id = event.sender_id
         if self._me and sender_id == self._me.id:
             return  # своё сообщение
@@ -1039,6 +1045,9 @@ class UserbotService:
     _DEALS_STATUS_PATTERNS = [
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?завершен", re.I | re.S), "ЗАВЕРШЕНА"),
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?отпущен", re.I | re.S), "ЗАВЕРШЕНА"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?(успешно\s+)?отработан", re.I | re.S), "ЗАВЕРШЕНА"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?(отмен|отказ)", re.I | re.S), "ОТМЕНА_СДЕЛКИ"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?блок", re.I | re.S), "ЗАБЛОКИРОВАН"),
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?готов[ао]?\s+к\s+отпуск", re.I | re.S), "ГОТОВО_К_ОТПУСКУ"),
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?в\s+работе", re.I | re.S), "В_РАБОТЕ"),
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?пополнен", re.I | re.S), "ПОПОЛНЕНО"),
@@ -1183,7 +1192,101 @@ class UserbotService:
             return f"Сделка {did} ({bank}) почти готова к отпуску."
         if status == "ЗАВЕРШЕНА":
             return f"Сделка {did} завершена ({bank}), всё прошло успешно."
+        if status == "ЗАБЛОКИРОВАН":
+            return f"По сделке {did} ({bank}) есть нюансы — оператор разбирается."
+        if status == "ОТМЕНА_СДЕЛКИ":
+            # Клиента уведомляем нейтрально — без слова «отменена», менеджер
+            # обычно сам объясняет почему. AI просто фиксирует факт.
+            return f"Сделка {did} ({bank}) приостановлена. Менеджер свяжется."
         return ""
+
+    # === Перевяз ЛК — авто-форвард в Отработка аккаунтов ===
+
+    _PEREVYAZ_RE = re.compile(
+        r"перевяз\s+лк\s+выполнен", re.I
+    )
+    # Извлекатели полей (искали бы и без эмодзи)
+    _PEREVYAZ_FIO_RE = re.compile(r"фио\s*:?[\s]*(.+)", re.I)
+    _PEREVYAZ_LK_RE = re.compile(r"лк\s*:?[\s]*(.+)", re.I)
+
+    async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
+        """Если в работ-чате появилось 'Перевяз ЛК выполнен' — форвардит в
+        accounts_group по шаблону. Возвращает True если обработано (не запускать
+        обычный AI ответ).
+
+        Шаблон отправки:
+            Банк: <банк сделки>
+            Номер сделки: <id или метка>
+            Статус: В РАБОТЕ
+            Поставщик: @<client_username>
+        """
+        text = (event.message.text or "")
+        if not self._PEREVYAZ_RE.search(text):
+            return False
+
+        accounts_id = storage.get_accounts_group_id()
+        if not accounts_id:
+            logger.warning("perevyaz: accounts_group_id не задан, форвард пропущен")
+            return False
+
+        # Парсим ФИО / ЛК (в основном для логов и диагностики)
+        fio = ""
+        lk = ""
+        for line in text.splitlines():
+            m = self._PEREVYAZ_FIO_RE.match(line.strip())
+            if m and not fio:
+                fio = m.group(1).strip()
+                continue
+            m = self._PEREVYAZ_LK_RE.match(line.strip())
+            if m and not lk:
+                lk = m.group(1).strip()
+        logger.info("perevyaz detected: fio=%r lk=%r chat=%s", fio, lk, event.chat_id)
+
+        # Ищем активную сделку по client_id из managed_chats
+        client_id = chat_info.get("client_id")
+        client_username = chat_info.get("client_name", "") or ""
+        # Ищем сделки где client_username совпадает с username клиента — fallback
+        # по chat-info client_name (мы не всегда знаем @username точно).
+        deal = None
+        if client_id:
+            # Перебираем deals и ищем тот, где work_chat_id совпадает с этим
+            for did, d in (storage.list_deals() or {}).items():
+                if d.get("work_chat_id") and abs(int(d["work_chat_id"])) == abs(int(event.chat_id)):
+                    if d.get("status") not in ("ЗАВЕРШЕНА", "ОТМЕНА_СДЕЛКИ"):
+                        deal = {"deal_id": did, **d}
+                        break
+
+        bank = (deal or {}).get("bank") or lk or "—"
+        deal_id = (deal or {}).get("deal_id", "")
+        method = (deal or {}).get("method", "")
+        client_uname = (deal or {}).get("client_username") or client_username or "—"
+
+        # Номер сделки или плейсхолдер по методу
+        if deal_id:
+            deal_line = f"Номер сделки: #{deal_id}"
+        elif method == "USDT_TRC20":
+            deal_line = "Номер сделки: выплата на USDT TRC20"
+        else:
+            deal_line = "Номер сделки: выплата после отработки"
+
+        msg = (
+            f"Банк: {bank}\n"
+            f"{deal_line}\n"
+            f"Статус: В РАБОТЕ\n"
+            f"Поставщик: @{client_uname.lstrip('@')}"
+        )
+        try:
+            target = await self._resolve_chat_target(accounts_id)
+            await self.client.send_message(target, msg, link_preview=False)
+            logger.info("perevyaz forwarded to accounts_group=%s deal=%s", accounts_id, deal_id)
+        except Exception as e:
+            logger.warning("perevyaz forward failed: %s", e)
+            return True  # пытались, не попало — но всё равно событие "обработано"
+
+        # Если есть сделка — переводим её в В_РАБОТЕ и уведомляем клиента
+        if deal_id:
+            await self._apply_status_change(deal_id, "В_РАБОТЕ")
+        return True
 
     async def stop(self):
         await self.client.disconnect()
