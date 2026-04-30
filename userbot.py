@@ -12,6 +12,7 @@ the second will see welcome_sent=True and exit immediately.
 import logging
 import asyncio
 import random
+import re
 import time
 
 from telethon import TelegramClient, events
@@ -391,6 +392,18 @@ class UserbotService:
         # Сообщение в брейн-чате — отдельный путь: writeback в граф знаний
         if bid and _norm_chat_id(chat_id) == _norm_chat_id(bid):
             await self._handle_brain_chat_writeback(event)
+            return
+
+        # Сообщение в чате «Сделки и выплаты» — авто-детект смены статуса
+        deals_id = storage.get_deals_group_id()
+        if deals_id and _norm_chat_id(chat_id) == _norm_chat_id(deals_id):
+            await self._handle_deals_group_message(event)
+            return
+
+        # Сообщение в чате «Отработка аккаунтов» — авто-детект ОТРАБОТАНО
+        accounts_id = storage.get_accounts_group_id()
+        if accounts_id and _norm_chat_id(chat_id) == _norm_chat_id(accounts_id):
+            await self._handle_accounts_group_message(event)
             return
 
         chat_info = storage.get_chat_info(chat_id)
@@ -960,8 +973,14 @@ class UserbotService:
             from datetime import datetime
             ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
             uname = d.get("client_username") or "?"
+            fee_val = d.get("fee", "")
+            # Косметика: пустые / нулевые fee показываем как «—» (например USDT TRC20 без комиссии)
+            if fee_val in ("", "0", "0%", 0, None):
+                fee_str = "—"
+            else:
+                fee_str = str(fee_val)
             text = (
-                f"@{uname} — {d.get('bank','?')} — fee {d.get('fee','?')} — "
+                f"@{uname} — {d.get('bank','?')} — fee {fee_str} — "
                 f"{d.get('amount','?')} — {ts} — {deal_id} — "
                 f"{d.get('status','?')}"
             )
@@ -973,6 +992,162 @@ class UserbotService:
             return {"status": "error", "step": "send", "error": str(e)}
         logger.info("posted to deals_group: chat=%s len=%d", gid, len(text))
         return {"status": "ok", "deals_group": gid, "preview": text[:200]}
+
+    # === Авто-детект статусов в deals/accounts чатах ===
+
+    # Регексы для распознавания статусных команд админа в чате «Сделки и выплаты».
+    # Порядок важен: первый матч выигрывает.
+    # Группа 1 — deal_id (после # или без).
+    _DEALS_STATUS_PATTERNS = [
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?завершен", re.I | re.S), "ЗАВЕРШЕНА"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?отпущен", re.I | re.S), "ЗАВЕРШЕНА"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?готов[ао]?\s+к\s+отпуск", re.I | re.S), "ГОТОВО_К_ОТПУСКУ"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?в\s+работе", re.I | re.S), "В_РАБОТЕ"),
+        (re.compile(r"сделк[ауи]\s+#?(\S+).*?пополнен", re.I | re.S), "ПОПОЛНЕНО"),
+    ]
+
+    async def _handle_deals_group_message(self, event):
+        """Админ написал в «Сделки и выплаты» что-то про статус сделки.
+
+        Распознаёт «Сделка #X пополнена / в работе / готова к отпуску /
+        завершена / отпущена», вызывает update_deal_status + post_deals_group
+        + уведомляет клиента в его рабочем чате.
+
+        Игнорим: свои сообщения, сообщения от не-админов.
+        """
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        if self._me and event.sender_id == self._me.id:
+            return
+        if event.sender_id not in storage.get_admins():
+            logger.info("deals_chat: sender %s not admin, skip", event.sender_id)
+            return
+
+        for rx, new_status in self._DEALS_STATUS_PATTERNS:
+            m = rx.search(text)
+            if not m:
+                continue
+            deal_id = m.group(1).lstrip("#").strip(".,;:!?")
+            logger.info("deals_chat pattern matched: deal=%s -> status=%s", deal_id, new_status)
+            await self._apply_status_change(deal_id, new_status)
+            return
+        logger.info("deals_chat: no status pattern matched in %r", text[:120])
+
+    async def _handle_accounts_group_message(self, event):
+        """Чат «Отработка аккаунтов»: «ФИО — БАНК — ОТРАБОТАНО».
+
+        Парсит, ищет сделку через find_deal_by(fio, bank), если найдена
+        ровно одна — переводит в ГОТОВО_К_ОТПУСКУ. Иначе логирует.
+        """
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        if self._me and event.sender_id == self._me.id:
+            return
+        # Здесь админство НЕ проверяем — операционисты могут не быть админами
+
+        # Шаблон: что-то — что-то — ОТРАБОТАНО (либо просто "отработано")
+        if "отработано" not in text.lower():
+            return
+        # Разбиваем по разделителям: — / – / -
+        parts = re.split(r"\s*[—–\-]\s*", text)
+        # Хотя бы 3 части (фио, банк, статус)
+        if len(parts) < 3:
+            logger.info("accounts_chat: malformed (parts<3): %r", text[:120])
+            return
+        fio = parts[0].strip()
+        bank = parts[1].strip()
+        if not fio or not bank:
+            return
+        results = storage.find_deal_by(fio=fio, bank=bank)
+        # Учитываем только активные (не уже завершённые)
+        active = [d for d in results if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")]
+        if len(active) == 0:
+            logger.warning(
+                "accounts_chat: no active deal for fio=%r bank=%r (total=%d)",
+                fio, bank, len(results),
+            )
+            return
+        if len(active) > 1:
+            logger.warning(
+                "accounts_chat: multiple active deals for fio=%r bank=%r (count=%d)",
+                fio, bank, len(active),
+            )
+            # Для безопасности — берём самую свежую по created_at
+            active.sort(key=lambda d: d.get("created_at", 0), reverse=True)
+        deal_id = active[0]["deal_id"]
+        logger.info(
+            "accounts_chat ОТРАБОТАНО: deal=%s fio=%r bank=%r -> ГОТОВО_К_ОТПУСКУ",
+            deal_id, fio, bank,
+        )
+        await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
+
+    async def _apply_status_change(self, deal_id: str, new_status: str):
+        """Универсальная процедура: update_deal_status + post в deals_group +
+        notify клиента в его work_chat (если можем найти).
+        """
+        ok = await storage.update_deal_status(deal_id, new_status)
+        if not ok:
+            logger.warning("apply_status_change: deal %s not found in storage", deal_id)
+            return
+        deal = storage.get_deal(deal_id) or {}
+
+        # 1. Пост в чат «Сделки и выплаты»
+        try:
+            await self._tool_post_deals_group(deal_id=deal_id)
+        except Exception as e:
+            logger.warning("post_deals_group failed after status change: %s", e)
+
+        # 2. Уведомить клиента в его рабочем чате
+        client_username = deal.get("client_username") or ""
+        if not client_username:
+            return
+        # Ищем managed_chat у которого client_username совпадает
+        target_chat_id = None
+        from storage import _norm_chat_id  # noqa
+        for cid_key, info in (storage.state.get("managed_chats") or {}).items():
+            if (info.get("client_name", "") and
+                client_username.lower() in info.get("client_name", "").lower()):
+                # Грубый матч по имени клиента (мы хранили full_name, не username)
+                target_chat_id = cid_key
+                break
+            # Точная попытка по client_id если запомнили
+            # (storage.register_chat сохраняет client_id, мы можем искать по нему)
+        # Формируем уведомление по статусу
+        client_msg = self._client_status_message(new_status, deal)
+        if not target_chat_id or not client_msg:
+            return
+        try:
+            # cid_key — это нормализованный bare ID (без -100). Telethon
+            # принимает int с минусом для супергрупп — реконструируем форму.
+            try:
+                cid_int = -1 * int("100" + cid_key)
+            except Exception:
+                cid_int = int(cid_key)
+            target = await self._resolve_chat_target(cid_int)
+            await self.client.send_message(target, client_msg, link_preview=False)
+            logger.info("client notified about deal=%s status=%s in chat=%s", deal_id, new_status, cid_int)
+        except Exception as e:
+            logger.warning("client notify failed: %s", e)
+
+    @staticmethod
+    def _client_status_message(status: str, deal: dict) -> str:
+        """Текст уведомления клиенту по новому статусу. Пусто = не уведомляем."""
+        bank = deal.get("bank", "")
+        if status == "ПОПОЛНЕНО":
+            return f"Сделка пополнена ({bank}), начинаем работу."
+        if status == "В_РАБОТЕ":
+            return f"Ваш аккаунт ({bank}) в работе."
+        if status == "ГОТОВО_К_ОТПУСКУ":
+            return f"Аккаунт ({bank}) почти готов к отпуску."
+        if status == "ЗАВЕРШЕНА":
+            return f"Сделка завершена ({bank}), всё прошло успешно."
+        return ""
 
     async def stop(self):
         await self.client.disconnect()
