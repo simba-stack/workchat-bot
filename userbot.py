@@ -1152,7 +1152,7 @@ class UserbotService:
         # work_chat_id запомнили в record_deal — используем напрямую (надёжнее
         # чем матч по имени клиента, который мы делали раньше).
         work_chat = deal.get("work_chat_id")
-        client_msg = self._client_status_message(new_status, deal)
+        client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
         if not work_chat or not client_msg:
             logger.info(
                 "client notify skipped: deal=%s work_chat=%s msg=%r",
@@ -1170,17 +1170,23 @@ class UserbotService:
             logger.warning("client notify failed for deal=%s: %s", deal_id, e)
 
     @staticmethod
-    def _client_status_message(status: str, deal: dict) -> str:
-        """Текст уведомления клиенту по новому статусу. Пусто = не уведомляем."""
+    def _client_status_message(status: str, deal: dict, deal_id: str = "") -> str:
+        """Текст уведомления клиенту по новому статусу. Пусто = не уведомляем.
+
+        deal_id обязательно включается в сообщение — клиент должен видеть
+        ID своей сделки в каждом уведомлении.
+        """
         bank = deal.get("bank", "")
+        # # перед deal_id для единообразия (как в чате выплат)
+        did = f"#{deal_id}" if deal_id else ""
         if status == "ПОПОЛНЕНО":
-            return f"Сделка пополнена ({bank}), начинаем работу."
+            return f"Сделка {did} пополнена ({bank}), начинаем работу."
         if status == "В_РАБОТЕ":
-            return f"Ваш аккаунт ({bank}) в работе."
+            return f"Ваш аккаунт {did} ({bank}) в работе."
         if status == "ГОТОВО_К_ОТПУСКУ":
-            return f"Аккаунт ({bank}) почти готов к отпуску."
+            return f"Сделка {did} ({bank}) почти готова к отпуску."
         if status == "ЗАВЕРШЕНА":
-            return f"Сделка завершена ({bank}), всё прошло успешно."
+            return f"Сделка {did} завершена ({bank}), всё прошло успешно."
         return ""
 
     async def stop(self):
