@@ -40,6 +40,14 @@ def _norm_chat_id(cid) -> str:
     return s
 
 
+def _norm_deal_id(deal_id) -> str:
+    """Нормализует deal_id: убирает решётку и пробелы.
+
+    AI часто шлёт '#95941' (как в чате), храним всегда без решётки.
+    """
+    return str(deal_id or "").lstrip("#").strip()
+
+
 def _default_state() -> dict:
     return {
         "admins": [],
@@ -465,7 +473,7 @@ class Storage:
             await self._save_unlocked()
 
     def get_deal(self, deal_id: str) -> Optional[dict]:
-        return (self.state.get("deals") or {}).get(str(deal_id).strip())
+        return (self.state.get("deals") or {}).get(_norm_deal_id(deal_id))
 
     def list_deals(self, status: Optional[str] = None) -> dict:
         all_deals = self.state.get("deals") or {}
@@ -488,7 +496,7 @@ class Storage:
         out = []
         deals = self.state.get("deals") or {}
         for did, d in deals.items():
-            if deal_id and str(deal_id).strip() != did:
+            if deal_id and _norm_deal_id(deal_id) != did:
                 continue
             if username:
                 u = (d.get("client_username") or "").lstrip("@").lower()
@@ -520,7 +528,7 @@ class Storage:
         work_chat_id — chat_id рабочей беседы с клиентом (где была создана сделка).
         Используется для прямого уведомления клиента при смене статуса.
         """
-        deal_id = (deal_id or "").strip()
+        deal_id = _norm_deal_id(deal_id)
         if not deal_id:
             return False
         async with _lock:
@@ -553,7 +561,7 @@ class Storage:
 
     async def update_deal_status(self, deal_id: str, new_status: str) -> bool:
         """Меняет статус сделки + добавляет запись в history. Возвращает False если не найдена."""
-        deal_id = (deal_id or "").strip()
+        deal_id = _norm_deal_id(deal_id)
         new_status = (new_status or "").strip()
         if not deal_id or not new_status:
             return False
@@ -585,7 +593,7 @@ class Storage:
         """Запоминает message_id поста в чате 'Сделки и выплаты' для редактирования."""
         async with _lock:
             deals = self.state.get("deals") or {}
-            d = deals.get(str(deal_id).strip())
+            d = deals.get(_norm_deal_id(deal_id))
             if d is None:
                 return False
             d["deals_group_msg_id"] = msg_id

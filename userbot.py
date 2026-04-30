@@ -965,43 +965,40 @@ class UserbotService:
         return {"status": "ok", "found": len(clean), "deals": clean}
 
     async def _tool_post_deals_group(
-        self, deal_id: str = "", custom_text: str = ""
+        self, deal_id: str = "", custom_text: str = "", **_kwargs
     ) -> dict:
         """Логирует сделку в чате «Сделки и выплаты».
+
+        Формат СТРОГО фиксированный — нельзя менять:
+            @ник — банк — сумма — дата — id — СТАТУС
+
+        custom_text игнорируется (исторически принимали, AI злоупотреблял —
+        выдумывал свои форматы). Если AI всё-таки передал — просто игнорим.
 
         Если для этой сделки уже есть deals_group_msg_id — редактируем
         существующий пост (статус обновляется на месте). Если нет — отправляем
         новое сообщение и запоминаем msg_id для будущих обновлений.
 
-        Если edit падает (Telegram-лимит 48ч на edit, или пост удалили) —
-        фоллбэк на новое send.
-
-        Формат: «@ник — банк — сумма — дата — id — СТАТУС» (без fee).
+        Если edit падает (Telegram-лимит 48ч, пост удалён) — фоллбэк на send.
         """
         gid = storage.get_deals_group_id()
         if not gid:
             return {"status": "error", "error": "deals_group_not_set"}
-        d = storage.get_deal(deal_id)
-        if not d and not custom_text:
-            return {"status": "error", "error": "deal_not_found", "deal_id": deal_id}
 
-        if custom_text:
-            text = custom_text
-            # custom_text — всегда новый send, не пытаемся редактировать
-            try:
-                target = await self._resolve_chat_target(gid)
-                await self.client.send_message(target, text, link_preview=False)
-            except Exception as e:
-                logger.warning("post_deals_group(custom) send failed: %s", e)
-                return {"status": "error", "step": "send", "error": str(e)}
-            return {"status": "ok", "deals_group": gid, "mode": "send_custom"}
+        # Нормализуем deal_id (убираем "#" если был передан)
+        from storage import _norm_deal_id
+        deal_id_norm = _norm_deal_id(deal_id)
+        d = storage.get_deal(deal_id_norm)
+        if not d:
+            return {"status": "error", "error": "deal_not_found", "deal_id": deal_id_norm}
 
         from datetime import datetime
         ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
         uname = d.get("client_username") or "?"
+        # ID отображается без решётки в логе чата (так короче и чище)
         text = (
             f"@{uname} — {d.get('bank','?')} — {d.get('amount','?')} — "
-            f"{ts} — {deal_id} — {d.get('status','?')}"
+            f"{ts} — {deal_id_norm} — {d.get('status','?')}"
         )
 
         existing_msg_id = d.get("deals_group_msg_id")
@@ -1011,14 +1008,13 @@ class UserbotService:
         if existing_msg_id:
             try:
                 await self.client.edit_message(target, existing_msg_id, text, link_preview=False)
-                logger.info("edited deals_group msg=%s for deal=%s", existing_msg_id, deal_id)
+                logger.info("edited deals_group msg=%s for deal=%s", existing_msg_id, deal_id_norm)
                 return {"status": "ok", "deals_group": gid, "mode": "edited", "msg_id": existing_msg_id}
             except Exception as e:
                 logger.warning(
                     "edit deals_group msg=%s failed (%s) — fallback to send",
                     existing_msg_id, e,
                 )
-                # Падает edit — fallback ниже на send
 
         # Новое сообщение
         try:
@@ -1028,7 +1024,7 @@ class UserbotService:
             return {"status": "error", "step": "send", "error": str(e)}
         new_msg_id = getattr(sent, "id", None)
         if new_msg_id:
-            await storage.set_deals_group_msg_id(deal_id, new_msg_id)
+            await storage.set_deals_group_msg_id(deal_id_norm, new_msg_id)
         logger.info(
             "posted to deals_group: chat=%s msg_id=%s len=%d",
             gid, new_msg_id, len(text),
