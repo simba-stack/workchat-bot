@@ -1003,6 +1003,49 @@ class UserbotService:
         deal_id = active[0]["deal_id"]
         logger.info("accounts_chat ОТРАБОТАНО: deal=%s fio=%r bank=%r -> ГОТОВО_К_ОТПУСКУ", deal_id, fio, bank)
         await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
+        # После «ОТРАБОТАНО» запрашиваем у Тимона отпуск/выплату по методу,
+        # который выбрал клиент при оформлении (GUARANTOR / USDT_TRC20).
+        try:
+            await self._send_release_request(deal_id)
+        except Exception as e:
+            logger.warning("send_release_request failed for deal=%s: %s", deal_id, e)
+
+    async def _send_release_request(self, deal_id: str) -> bool:
+        """После статуса ГОТОВО_К_ОТПУСКУ шлёт запрос в чат «Сделки и выплаты»
+        с тегом @TimonSkupCL — отпустить деньги в гаранте или отправить выплату
+        на USDT TRC20 (по методу из deal.method).
+
+        Если deals_group_id не задан — ничего не делает.
+        """
+        gid = storage.get_deals_group_id()
+        if not gid:
+            logger.info("release_request: deals_group_id не задан, пропуск")
+            return False
+        deal = storage.get_deal(deal_id) or {}
+        method = (deal.get("method") or "").upper()
+        bank = deal.get("bank") or "—"
+        fio = (deal.get("fio") or "").strip() or "—"
+        if method == "GUARANTOR":
+            ask = "отпустить деньги в гаранте"
+        elif method == "USDT_TRC20":
+            ask = "отправить выплату на USDT TRC20"
+        else:
+            ask = f"отпустить (метод: {method or 'не указан'})"
+        text = (
+            f"❓ Сделка #{deal_id} ({bank}, {fio}) отработана — {ask}? "
+            f"@TimonSkupCL"
+        )
+        try:
+            target = await self._resolve_chat_target(gid)
+            await self.client.send_message(target, text, link_preview=False)
+            logger.info(
+                "release request sent: deal=%s method=%s -> deals_group=%s",
+                deal_id, method, gid,
+            )
+            return True
+        except Exception as e:
+            logger.warning("release request send failed for deal=%s: %s", deal_id, e)
+            return False
 
     async def _refresh_accounts_post(self, deal_id: str) -> bool:
         """Перерисовывает пост в чате «Отработка аккаунтов» текущим состоянием
@@ -1022,6 +1065,7 @@ class UserbotService:
             method=deal.get("method") or "",
             client_username=deal.get("client_username") or "",
             status_internal=deal.get("status") or "В_РАБОТЕ",
+            fio=deal.get("fio") or "",
         )
         try:
             target = await self._resolve_chat_target(accounts_id)
@@ -1110,7 +1154,15 @@ class UserbotService:
         method: str = "",
         client_username: str = "",
         status_internal: str = "ПОПОЛНИТЬ",
+        fio: str = "",
     ) -> str:
+        """Шаблон поста для чата «Отработка аккаунтов»:
+            Банк: ...
+            ФИО: ... (ЛК-ФИО клиента, держатель счёта)
+            Номер сделки: ...
+            Статус: ...
+            Поставщик: @...
+        """
         if deal_id:
             deal_line = f"Номер сделки: #{deal_id}"
         elif method == "USDT_TRC20":
@@ -1119,8 +1171,10 @@ class UserbotService:
             deal_line = "Номер сделки: выплата после отработки"
         status_label = cls._accounts_status_label(status_internal)
         uname = (client_username or "").lstrip("@").strip() or "—"
+        fio_clean = (fio or "").strip() or "—"
         return (
             f"Банк: {bank or '—'}\n"
+            f"ФИО: {fio_clean}\n"
             f"{deal_line}\n"
             f"Статус: {status_label}\n"
             f"Поставщик: @{uname}"
@@ -1166,6 +1220,9 @@ class UserbotService:
         method = (deal or {}).get("method", "")
         client_uname = (deal or {}).get("client_username") or ""
         status_internal = (deal or {}).get("status") or "В_РАБОТЕ"
+        # ФИО берём из deal (там точно ФИО держателя ЛК), либо
+        # из распарсенной из работ-чата строки «ФИО: …» (fallback).
+        fio_value = (deal or {}).get("fio") or fio or ""
 
         msg = self._build_accounts_msg(
             bank=bank,
@@ -1173,6 +1230,7 @@ class UserbotService:
             method=method,
             client_username=client_uname,
             status_internal=status_internal,
+            fio=fio_value,
         )
         sent = None
         try:
