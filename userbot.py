@@ -1,4 +1,4 @@
-"""Userbot service: creates supergroups, invites workers, sends welcome on client join.
+"""Userbot service: создаёт супергруппы, приглашает работников, шлёт welcome при входе клиента.
 
 Welcome delivery has two channels:
 1. Realtime: events.ChatAction handler (fires when Telegram pushes us the join event)
@@ -112,22 +112,12 @@ class UserbotService:
             session = "userbot_session"
         self.client = TelegramClient(session, config.API_ID, config.API_HASH)
         self._me = None
-        # Per-chat locks для защиты от race condition в _send_welcome.
-        # Только один путь (event или poll) может отправить welcome — второй увидит флаг.
         self._welcome_locks: dict[int, asyncio.Lock] = {}
-        # AI: per-chat lock (не отвечаем на два сообщения параллельно в одном чате)
         self._ai_locks: dict[int, asyncio.Lock] = {}
-        # AI: последний timestamp активности сотрудника/админа в managed-чате.
-        # Ключ — нормализованный chat_id (str), значение — unix time.
-        # Если worker писал в последние client_idle_minutes минут — AI молчит.
         self._last_worker_ts: dict[str, float] = {}
-        # Кеш resolved-сущностей чатов для брейн/координаторской беседы.
-        # Telethon send_message по сырому int ID иногда даёт InvalidPeer;
-        # get_entity один раз за сессию решает проблему.
         self._chat_entity_cache: dict[int, object] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
-        """Возвращает (создаёт при необходимости) Lock для конкретного чата."""
         if chat_id not in self._welcome_locks:
             self._welcome_locks[chat_id] = asyncio.Lock()
         return self._welcome_locks[chat_id]
@@ -139,8 +129,6 @@ class UserbotService:
             "Userbot started: %s (@%s, id=%s)",
             self._me.first_name, self._me.username, self._me.id,
         )
-        # Прогреваем сущности брейн / координаторского чатов, если они заданы.
-        # Telethon после рестарта может не иметь их в кеше — get_entity заполнит.
         for label, cid in (
             ("brain_chat", storage.get_brain_chat_id()),
             ("coord_chat", storage.get_coordination_chat_id()),
@@ -157,17 +145,12 @@ class UserbotService:
                     label, cid, e,
                 )
 
-        # Диагностика: листим топ-30 чатов, в которых состоит юзербот.
-        # Помогает админу найти актуальный chat_id если чат был upgraded в
-        # супергруппу или если ID в админке устарел.
         try:
             count = 0
             async for dialog in self.client.iter_dialogs(limit=30):
                 ent = dialog.entity
                 etype = type(ent).__name__
                 title = getattr(ent, "title", None) or getattr(ent, "first_name", "") or "?"
-                # event.chat_id Telethon выдаёт в Bot API форме (signed),
-                # show_id отображаем в этом же формате.
                 show_id = dialog.id
                 logger.info(
                     "DIALOG[%d]: chat_id=%s title=%r type=%s",
@@ -235,23 +218,12 @@ class UserbotService:
         await self._send_welcome(event.chat_id, expected, source="event")
 
     async def _send_welcome(self, chat_id, expected_client_id: int, source: str = "?"):
-        """Отправляет welcome-сообщение. Идемпотентна: защищена Lock'ом per chat_id.
-
-        Порядок работы:
-        1. Захватываем lock для этого chat_id — только один путь проходит одновременно.
-        2. Проверяем флаг welcome_sent (быстрый выход если уже отправлено).
-        3. Ждём 1 секунду (клиент должен увидеть чат).
-        4. Снова проверяем (другой путь мог успеть пока мы спали).
-        5. Отправляем и ставим флаг.
-        """
         lock = self._get_welcome_lock(int(chat_id))
         async with lock:
             info = storage.get_chat_info(chat_id)
             if not info or info.get("welcome_sent"):
                 return False
-            # Небольшая задержка, чтобы клиент успел загрузить чат
             await asyncio.sleep(1)
-            # Повторная проверка — другой путь мог отправить пока мы спали
             info = storage.get_chat_info(chat_id)
             if not info or info.get("welcome_sent"):
                 return False
@@ -260,11 +232,9 @@ class UserbotService:
             entities_raw = storage.get_welcome_entities()
             try:
                 if entities_raw:
-                    # Кастомные эмодзи / форматирование — отправляем одним сообщением
                     ents = _entities_to_telethon(entities_raw)
                     await self.client.send_message(chat_id, welcome, formatting_entities=ents)
                 else:
-                    # Обычный текст — режем на части при необходимости
                     for chunk in _split_text(welcome, 3900):
                         await self.client.send_message(chat_id, chunk)
                         await asyncio.sleep(0.3)
@@ -296,33 +266,23 @@ class UserbotService:
                 return False
 
     async def _watch_for_client_join(self, channel, client_id: int, timeout_sec: int = 600):
-        """Fallback: poll participants of `channel` every 3s for up to `timeout_sec`.
-        As soon as `client_id` is in the chat — send welcome (if not already).
-        """
         deadline = asyncio.get_event_loop().time() + timeout_sec
         try:
             while asyncio.get_event_loop().time() < deadline:
-                # Досрочный выход если welcome уже отправлен (например, через ChatAction)
                 info = storage.get_chat_info(channel.id)
                 if info and info.get("welcome_sent"):
-                    logger.info(
-                        "watch chat=%s: welcome already sent, exiting watcher", channel.id
-                    )
+                    logger.info("watch chat=%s: welcome already sent, exiting watcher", channel.id)
                     return
                 try:
                     await self.client(GetParticipantRequest(
                         channel=channel,
                         participant=PeerUser(client_id),
                     ))
-                    # Клиент в чате → отправляем welcome
-                    logger.info(
-                        "watch chat=%s: client %s joined, sending welcome",
-                        channel.id, client_id,
-                    )
+                    logger.info("watch chat=%s: client %s joined, sending welcome", channel.id, client_id)
                     await self._send_welcome(channel.id, client_id, source="poll")
                     return
                 except UserNotParticipantError:
-                    pass  # ещё не вошёл — продолжаем поллинг
+                    pass
                 except FloodWaitError as e:
                     logger.warning("watch chat=%s flood wait %ss", channel.id, e.seconds)
                     await asyncio.sleep(e.seconds + 1)
@@ -330,23 +290,15 @@ class UserbotService:
                 except Exception as e:
                     logger.warning("watch chat=%s poll error: %s", channel.id, e)
                 await asyncio.sleep(3)
-            logger.info(
-                "watch chat=%s: timeout (%ss), client never joined", channel.id, timeout_sec
-            )
+            logger.info("watch chat=%s: timeout (%ss), client never joined", channel.id, timeout_sec)
         except Exception as e:
             logger.warning("watch chat=%s: unexpected error: %s", channel.id, e)
 
     async def _resolve_chat_target(self, chat_id):
-        """Возвращает entity для send_message (cache'им чтобы не дёргать API).
-
-        Telethon при сыром int chat_id (особенно для не-prefixed форм) иногда
-        выдаёт InvalidPeer. get_entity нормализует, кеш сохраняет результат
-        на всё время жизни процесса. None при ошибке.
-        """
         try:
             cid_int = int(chat_id)
         except Exception:
-            return chat_id  # пусть Telethon сам что-то сделает
+            return chat_id
         if cid_int in self._chat_entity_cache:
             return self._chat_entity_cache[cid_int]
         try:
@@ -355,30 +307,16 @@ class UserbotService:
             return ent
         except Exception as e:
             logger.warning("resolve_chat_target failed for %s: %s", cid_int, e)
-            return cid_int  # fallback — пусть send попытается с raw ID
+            return cid_int
 
     # === AI brain handlers ===
 
     async def _handle_ai_message(self, event):
-        """Реакция на новые сообщения в managed-чатах. Триггер AI-ответа.
-
-        Логика:
-        1. Игнорим всё, что не в managed_chats или в brain_chat.
-        2. Если автор — worker/admin/сам юзербот: апдейтим _last_worker_ts и выходим.
-        3. Если AI выключен — выходим.
-        4. Если worker писал в последние client_idle_minutes — выходим (skipped_worker_active++).
-        5. Sleep 3-8с (имитация набора). Повторная проверка worker activity.
-        6. Fetch history + brain_notes → brain.generate_reply.
-        7. Отправляем ответ. Логируем в brain_chat. Бампим ai_stats.
-        """
         chat_id = event.chat_id
         bid = storage.get_brain_chat_id()
 
-        # Импортируем нормализатор локально — он уже умеет ходить по разным
-        # форматам chat_id (signed -100xxx supergroup, bare, signed group).
         from storage import _norm_chat_id
 
-        # Диагностический лог — видно в Railway всё что прилетает в userbot
         try:
             sender_id_dbg = event.sender_id
         except Exception:
@@ -389,18 +327,15 @@ class UserbotService:
             (_norm_chat_id(bid) if bid else "—"), sender_id_dbg,
         )
 
-        # Сообщение в брейн-чате — отдельный путь: writeback в граф знаний
         if bid and _norm_chat_id(chat_id) == _norm_chat_id(bid):
             await self._handle_brain_chat_writeback(event)
             return
 
-        # Сообщение в чате «Сделки и выплаты» — авто-детект смены статуса
         deals_id = storage.get_deals_group_id()
         if deals_id and _norm_chat_id(chat_id) == _norm_chat_id(deals_id):
             await self._handle_deals_group_message(event)
             return
 
-        # Сообщение в чате «Отработка аккаунтов» — авто-детект ОТРАБОТАНО
         accounts_id = storage.get_accounts_group_id()
         if accounts_id and _norm_chat_id(chat_id) == _norm_chat_id(accounts_id):
             await self._handle_accounts_group_message(event)
@@ -412,17 +347,13 @@ class UserbotService:
         if not event.message or not (event.message.text or "").strip():
             return
 
-        # Детект "🔗 Перевяз ЛК выполнен" в work-чате — авто-форвард в accounts_group.
-        # Срабатывает на сообщения от @PrideCONTROLE_bot или другого источника
-        # с текстом, начинающимся примерно с "Перевяз ЛК выполнен".
         if await self._maybe_handle_perevyaz(event, chat_info):
-            return  # уже обработано — не запускаем обычный AI-ответ
+            return
 
         sender_id = event.sender_id
         if self._me and sender_id == self._me.id:
-            return  # своё сообщение
+            return
 
-        # Определяем кто прислал (worker/admin или клиент)
         try:
             sender = await event.get_sender()
         except Exception:
@@ -434,8 +365,7 @@ class UserbotService:
             or (sender_id in storage.get_admins())
         )
 
-        # Используем нормализованный ключ для _last_worker_ts (как в storage)
-        from storage import _norm_chat_id  # локальный импорт, чтобы не циклить
+        from storage import _norm_chat_id  # noqa: F811
         chat_key = _norm_chat_id(chat_id)
 
         if is_worker:
@@ -443,26 +373,22 @@ class UserbotService:
             logger.info("AI: worker activity in chat=%s by @%s", chat_id, sender_username)
             return
 
-        # === Это сообщение клиента ===
         if not storage.is_ai_enabled():
             return
         if not config.ANTHROPIC_API_KEY:
             return
 
         client_id = chat_info.get("client_id")
-        # Параноя: отвечаем только если автор именно наш зарегистрированный клиент
         if client_id and sender_id != client_id:
             return
 
         idle_min = max(0, storage.get_client_idle_minutes())
         idle_sec = idle_min * 60
-        # idle_sec == 0 -> AI всегда отвечает (без проверки worker activity)
         if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
             await storage.bump_ai_stats(skipped_worker_active=1)
             logger.info("AI: skip chat=%s — worker active in last %dm", chat_id, idle_min)
             return
 
-        # Per-chat lock: не запускаем второй AI-ответ пока не закончим первый
         lock = self._ai_locks.setdefault(chat_key, asyncio.Lock())
         if lock.locked():
             logger.info("AI: chat=%s already processing — skip", chat_id)
@@ -471,26 +397,17 @@ class UserbotService:
             await self._do_ai_reply(event, chat_info, idle_sec, chat_key)
 
     async def _handle_brain_chat_writeback(self, event):
-        """Сообщение в брейн-чате → попытка записать факт в knowledge/ через GitHub.
-
-        Игнорим:
-          - сообщения юзербота (включая [AI-LOG])
-          - команды (начинающиеся с /)
-          - пустые / служебные
-          - если writeback выключен в админке
-        """
         if not event.message:
             return
         text = (event.message.text or "").strip()
         if not text:
             return
-        # свои логи и реплики не процессим
         if self._me and event.sender_id == self._me.id:
             return
         if text.startswith("[AI-LOG]"):
             return
         if text.startswith("/"):
-            return  # команды бота — не наша епархия здесь
+            return
         if not storage.is_writeback_enabled():
             return
         if not config.ANTHROPIC_API_KEY:
@@ -537,9 +454,7 @@ class UserbotService:
                 pass
         elif status == "no_token":
             try:
-                await event.reply(
-                    "⚠️ GITHUB_TOKEN не задан в env — writeback в граф невозможен."
-                )
+                await event.reply("⚠️ GITHUB_TOKEN не задан в env — writeback в граф невозможен.")
             except Exception:
                 pass
         elif status == "classify_fail":
@@ -550,10 +465,8 @@ class UserbotService:
                 pass
 
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
-        """Внутренняя часть AI-ответа: задержка набора, fetch контекста, Claude, send."""
         chat_id = event.chat_id
 
-        # Имитация набора: случайная пауза перед запросом
         delay = random.uniform(config.AI_TYPING_DELAY_MIN, config.AI_TYPING_DELAY_MAX)
         try:
             async with self.client.action(chat_id, "typing"):
@@ -561,13 +474,11 @@ class UserbotService:
         except Exception:
             await asyncio.sleep(delay)
 
-        # Повторная проверка worker activity (мог написать пока спали)
         if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
             await storage.bump_ai_stats(skipped_worker_active=1)
             logger.info("AI: chat=%s — worker came in during typing delay, skip", chat_id)
             return
 
-        # Сборка истории и brain_notes
         client_id = chat_info.get("client_id") or 0
         try:
             history = await self._fetch_history_for_claude(chat_id, client_id)
@@ -580,7 +491,6 @@ class UserbotService:
 
         brain_notes = await self._fetch_brain_notes()
 
-        # Контекст клиента — AI должен знать его username для tools
         client_username = None
         if client_id:
             try:
@@ -594,15 +504,10 @@ class UserbotService:
             "username": client_username or "",
         }
 
-        # Tool executor — bind chat_id и id текущего сообщения клиента (для линка
-        # в эскалации). last_msg_id может быть None если message нет (служебка).
         last_msg_id = getattr(getattr(event, "message", None), "id", None)
         async def _executor(name, inp):
-            return await self._execute_ai_tool(
-                name, inp, chat_id=chat_id, last_msg_id=last_msg_id
-            )
+            return await self._execute_ai_tool(name, inp, chat_id=chat_id, last_msg_id=last_msg_id)
 
-        # Запрос в Claude (с tools — может вызвать инструменты автоматически)
         async with self.client.action(chat_id, "typing"):
             reply, usage = await brain.generate_reply(
                 history,
@@ -615,7 +520,6 @@ class UserbotService:
             logger.warning("AI: chat=%s — claude returned None", chat_id)
             return
 
-        # Отправка ответа
         try:
             for chunk in _split_text(reply, 3900):
                 await self.client.send_message(chat_id, chunk)
@@ -635,7 +539,6 @@ class UserbotService:
             chat_id, usage.get("input_tokens"), usage.get("output_tokens"),
         )
 
-        # Лог в brain_chat (если задан)
         client_text = (event.message.text or "").strip()
         await self._log_to_brain(
             chat_id=chat_id,
@@ -646,11 +549,6 @@ class UserbotService:
         )
 
     async def _fetch_history_for_claude(self, chat_id, client_id: int) -> list[dict]:
-        """Считывает последние config.AI_HISTORY_LIMIT сообщений и форматирует под API.
-
-        Чужие сообщения (от не-клиента и не-юзербота) идут как user с префиксом имени —
-        чтобы Claude видел контекст разговора, но не путался в ролях.
-        """
         msgs: list[dict] = []
         try:
             async for m in self.client.iter_messages(chat_id, limit=config.AI_HISTORY_LIMIT):
@@ -672,16 +570,13 @@ class UserbotService:
             logger.warning("history iter failed for chat=%s: %s", chat_id, e)
             return []
 
-        # Claude API требует, чтобы первое сообщение было role=user.
         while msgs and msgs[0]["role"] != "user":
             msgs.pop(0)
-        # И последнее тоже должно быть user (мы только что получили клиентское).
         while msgs and msgs[-1]["role"] != "user":
             msgs.pop()
         return msgs
 
     async def _fetch_brain_notes(self) -> str:
-        """Свежие заметки админа из brain_chat. AI-логи (с маркером) пропускаем."""
         bid = storage.get_brain_chat_id()
         if not bid:
             return ""
@@ -692,7 +587,7 @@ class UserbotService:
                 if not txt:
                     continue
                 if txt.startswith("[AI-LOG]"):
-                    continue  # это наши же логи — пропускаем
+                    continue
                 ts = m.date.strftime("%Y-%m-%d %H:%M") if m.date else ""
                 parts.insert(0, f"[{ts}] {txt}")
         except Exception as e:
@@ -700,17 +595,13 @@ class UserbotService:
             return ""
         return "\n".join(parts)
 
-    async def _log_to_brain(
-        self, chat_id, chat_info: dict, client_text: str, ai_text: str, usage: dict
-    ):
-        """Пишет [AI-LOG] запись в brain_chat для аудита админа."""
+    async def _log_to_brain(self, chat_id, chat_info: dict, client_text: str, ai_text: str, usage: dict):
         bid = storage.get_brain_chat_id()
         if not bid:
             return
         client_name = chat_info.get("client_name") or "—"
         in_t = usage.get("input_tokens", 0)
         out_t = usage.get("output_tokens", 0)
-        # Обрезаем длинные тексты, чтобы не забивать brain_chat
         ct = client_text if len(client_text) <= 600 else client_text[:600] + "…"
         at = ai_text if len(ai_text) <= 1500 else ai_text[:1500] + "…"
         log_msg = (
@@ -727,14 +618,9 @@ class UserbotService:
             logger.warning("brain log send failed: %s", e)
 
     # === AI tool-use ===
-    # Имя бота для CRM-флоу зашито здесь; легко вынести в config/storage если
-    # появятся другие интеграции.
     CRM_BOT_USERNAME = "PrideCONTROLE_bot"
 
-    async def _execute_ai_tool(
-        self, tool_name: str, tool_input: dict, chat_id, last_msg_id=None
-    ) -> dict:
-        """Диспетчер AI-инструментов. Возвращает dict {status: ok|error, ...}."""
+    async def _execute_ai_tool(self, tool_name: str, tool_input: dict, chat_id, last_msg_id=None) -> dict:
         logger.info(
             "AI tool exec: %s input=%s chat=%s msg=%s",
             tool_name, tool_input, chat_id, last_msg_id,
@@ -763,19 +649,10 @@ class UserbotService:
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
 
     async def _tool_add_partner_to_crm(self, chat_id, client_username: str) -> dict:
-        """Tool: подключить @PrideCONTROLE_bot и отправить '+партнер @username'.
-
-        Шаги:
-          1. Резолв CRM-бота
-          2. InviteToChannelRequest (если уже участник — игнорим UserAlreadyParticipantError)
-          3. EditAdminRequest — выдаём права (не фатально если не получилось)
-          4. send_message '+партнер @username'
-        """
         username = (client_username or "").lstrip("@").strip()
         if not username:
             return {"status": "error", "error": "client_username_empty"}
 
-        # 1. Резолв бота
         try:
             bot_entity = await self.client.get_entity(self.CRM_BOT_USERNAME)
         except UsernameNotOccupiedError:
@@ -783,7 +660,6 @@ class UserbotService:
         except Exception as e:
             return {"status": "error", "step": "resolve", "error": str(e)}
 
-        # 2. Инвайт в чат
         try:
             await self.client(InviteToChannelRequest(chat_id, [bot_entity]))
             invite_status = "added"
@@ -794,11 +670,9 @@ class UserbotService:
         except FloodWaitError as e:
             return {"status": "error", "step": "invite", "error": f"flood_wait_{e.seconds}s"}
         except Exception as e:
-            # Может быть уже в чате но другая ошибка — продолжим, дальше увидим
             logger.warning("CRM invite warning: %s", e)
             invite_status = f"warn:{type(e).__name__}"
 
-        # 3. Админка (best effort — если не получилось, шаг 4 всё равно может пройти)
         try:
             rights = ChatAdminRights(
                 change_info=False, post_messages=False, edit_messages=False,
@@ -813,7 +687,6 @@ class UserbotService:
             logger.warning("CRM admin grant non-fatal: %s", e)
             admin_status = f"skipped:{type(e).__name__}"
 
-        # 4. Команда боту
         try:
             await self.client.send_message(chat_id, f"+партнер @{username}")
         except FloodWaitError as e:
@@ -828,24 +701,7 @@ class UserbotService:
             "command_sent": f"+партнер @{username}",
         }
 
-    async def _tool_escalate_to_team(
-        self,
-        work_chat_id,
-        last_msg_id,
-        specialist: str,
-        reason: str,
-        client_question: str,
-    ) -> dict:
-        """Tool: пишет в координаторскую беседу формат эскалации.
-
-        Шаги:
-          1. Resolve coordination_chat_id из storage. Если 0 — error.
-          2. Валидация specialist (whitelist).
-          3. Строим t.me/c-ссылки на сообщение и беседу (private supergroup).
-          4. Берём имя клиента из managed_chats[chat_id].client_name.
-          5. send_message в координаторский чат.
-          6. Бампим escalate_stats.
-        """
+    async def _tool_escalate_to_team(self, work_chat_id, last_msg_id, specialist: str, reason: str, client_question: str) -> dict:
         coord_id = storage.get_coordination_chat_id()
         if not coord_id:
             return {"status": "error", "error": "coordination_chat_not_set"}
@@ -855,7 +711,6 @@ class UserbotService:
         if spec not in allowed:
             return {"status": "error", "error": f"unknown_specialist:{spec}"}
 
-        # Линки t.me/c/<bare_chat_id>/<msg_id>. _norm_chat_id снимает -100 префикс.
         from storage import _norm_chat_id
         bare = _norm_chat_id(work_chat_id)
         chat_link = f"https://t.me/c/{bare}"
@@ -883,12 +738,7 @@ class UserbotService:
 
         await storage.bump_escalate_stats(specialist=spec)
         logger.info("AI escalated to @%s in coord_chat=%s", spec, coord_id)
-        return {
-            "status": "ok",
-            "specialist": spec,
-            "coord_chat": coord_id,
-            "msg_link": msg_link,
-        }
+        return {"status": "ok", "specialist": spec, "coord_chat": coord_id, "msg_link": msg_link}
 
     # === Tools для системы учёта сделок ===
 
@@ -903,12 +753,6 @@ class UserbotService:
         method: str = "",
         work_chat_id=None,
     ) -> dict:
-        """Создаёт запись сделки в storage. Не дублирует.
-
-        work_chat_id передаётся диспетчером — это chat_id текущего работ-чата
-        с клиентом. Запоминаем его в записи сделки чтобы потом уведомлять
-        клиента о смене статуса.
-        """
         deal_id = (deal_id or "").strip()
         if not deal_id:
             return {"status": "error", "error": "deal_id_empty"}
@@ -928,11 +772,23 @@ class UserbotService:
         if not ok:
             return {"status": "error", "error": "add_failed"}
         logger.info("deal recorded: %s | @%s | %s | %s", deal_id, client_username, bank, amount)
+
+        # Если перевяз случился ДО record_deal — accounts_group уже содержит
+        # пост с «Номер сделки: выплата после отработки» (или USDT_TRC20).
+        # Подменяем deal_id на актуальный, обновляем статус.
+        if work_chat_id is not None:
+            pending_msg_id = await storage.pop_pending_accounts_post(work_chat_id)
+            if pending_msg_id:
+                await storage.set_accounts_group_msg_id(deal_id, pending_msg_id)
+                await self._refresh_accounts_post(deal_id)
+                logger.info(
+                    "record_deal: linked PENDING accounts_msg=%s to deal=%s",
+                    pending_msg_id, deal_id,
+                )
+
         return {"status": "ok", "deal_id": deal_id, "initial_status": "ПОПОЛНИТЬ"}
 
-    async def _tool_update_deal_status(
-        self, deal_id: str = "", new_status: str = ""
-    ) -> dict:
+    async def _tool_update_deal_status(self, deal_id: str = "", new_status: str = "") -> dict:
         ok = await storage.update_deal_status(deal_id, new_status)
         if not ok:
             return {"status": "error", "error": "deal_not_found_or_invalid", "deal_id": deal_id}
@@ -947,14 +803,7 @@ class UserbotService:
             "bank": d.get("bank"),
         }
 
-    async def _tool_find_deal(
-        self,
-        deal_id: str = "",
-        username: str = "",
-        fio: str = "",
-        bank: str = "",
-    ) -> dict:
-        # Хотя бы один параметр должен быть задан
+    async def _tool_find_deal(self, deal_id: str = "", username: str = "", fio: str = "", bank: str = "") -> dict:
         if not any([deal_id, username, fio, bank]):
             return {"status": "error", "error": "no_query_params"}
         results = storage.find_deal_by(
@@ -963,35 +812,17 @@ class UserbotService:
             fio=fio or None,
             bank=bank or None,
         )
-        # Сериализуем без поля history (и без timestamps), чтобы AI получил компактный JSON
         clean = []
         for d in results:
             cd = {k: v for k, v in d.items() if k not in ("history", "created_at")}
             clean.append(cd)
         return {"status": "ok", "found": len(clean), "deals": clean}
 
-    async def _tool_post_deals_group(
-        self, deal_id: str = "", custom_text: str = "", **_kwargs
-    ) -> dict:
-        """Логирует сделку в чате «Сделки и выплаты».
-
-        Формат СТРОГО фиксированный — нельзя менять:
-            @ник — банк — сумма — дата — id — СТАТУС
-
-        custom_text игнорируется (исторически принимали, AI злоупотреблял —
-        выдумывал свои форматы). Если AI всё-таки передал — просто игнорим.
-
-        Если для этой сделки уже есть deals_group_msg_id — редактируем
-        существующий пост (статус обновляется на месте). Если нет — отправляем
-        новое сообщение и запоминаем msg_id для будущих обновлений.
-
-        Если edit падает (Telegram-лимит 48ч, пост удалён) — фоллбэк на send.
-        """
+    async def _tool_post_deals_group(self, deal_id: str = "", custom_text: str = "", **_kwargs) -> dict:
         gid = storage.get_deals_group_id()
         if not gid:
             return {"status": "error", "error": "deals_group_not_set"}
 
-        # Нормализуем deal_id (убираем "#" если был передан)
         from storage import _norm_deal_id
         deal_id_norm = _norm_deal_id(deal_id)
         d = storage.get_deal(deal_id_norm)
@@ -1001,7 +832,6 @@ class UserbotService:
         from datetime import datetime
         ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
         uname = d.get("client_username") or "?"
-        # ID отображается без решётки в логе чата (так короче и чище)
         text = (
             f"@{uname} — {d.get('bank','?')} — {d.get('amount','?')} — "
             f"{ts} — {deal_id_norm} — {d.get('status','?')}"
@@ -1010,19 +840,14 @@ class UserbotService:
         existing_msg_id = d.get("deals_group_msg_id")
         target = await self._resolve_chat_target(gid)
 
-        # Попытка edit если уже постили
         if existing_msg_id:
             try:
                 await self.client.edit_message(target, existing_msg_id, text, link_preview=False)
                 logger.info("edited deals_group msg=%s for deal=%s", existing_msg_id, deal_id_norm)
                 return {"status": "ok", "deals_group": gid, "mode": "edited", "msg_id": existing_msg_id}
             except Exception as e:
-                logger.warning(
-                    "edit deals_group msg=%s failed (%s) — fallback to send",
-                    existing_msg_id, e,
-                )
+                logger.warning("edit deals_group msg=%s failed (%s) — fallback to send", existing_msg_id, e)
 
-        # Новое сообщение
         try:
             sent = await self.client.send_message(target, text, link_preview=False)
         except Exception as e:
@@ -1031,17 +856,50 @@ class UserbotService:
         new_msg_id = getattr(sent, "id", None)
         if new_msg_id:
             await storage.set_deals_group_msg_id(deal_id_norm, new_msg_id)
-        logger.info(
-            "posted to deals_group: chat=%s msg_id=%s len=%d",
-            gid, new_msg_id, len(text),
-        )
+        logger.info("posted to deals_group: chat=%s msg_id=%s len=%d", gid, new_msg_id, len(text))
         return {"status": "ok", "deals_group": gid, "mode": "sent", "msg_id": new_msg_id}
 
     # === Авто-детект статусов в deals/accounts чатах ===
 
-    # Регексы для распознавания статусных команд админа в чате «Сделки и выплаты».
-    # Порядок важен: первый матч выигрывает.
-    # Группа 1 — deal_id (после # или без).
+    _DEALS_QUERY_PATTERNS = [
+        (
+            re.compile(
+                r"(?:список|дай|что|какие|покажи).{0,40}?"
+                r"(?:для\s+|на\s+|нужно\s+)?попол(?:нен|нить|нения)",
+                re.I | re.S,
+            ),
+            ("ПОПОЛНИТЬ", "ОЖИДАЕТ_ПОПОЛНЕНИЯ"),
+            "📋 Сделки на пополнение",
+        ),
+        (
+            re.compile(
+                r"(?:список|дай|что|какие|покажи|\bлк\b).{0,40}?в\s+работе",
+                re.I | re.S,
+            ),
+            ("ПОПОЛНЕНО", "В_РАБОТЕ", "ГОТОВО_К_ОТПУСКУ"),
+            "🔧 ЛК в работе",
+        ),
+        (
+            re.compile(
+                r"(?:список|дай|что|какие|покажи).{0,40}?отработан"
+                r"|^\s*отработанн",
+                re.I | re.S | re.M,
+            ),
+            ("ЗАВЕРШЕНА",),
+            "✅ Отработанные ЛК",
+        ),
+        (
+            re.compile(
+                r"(?:список|дай|что|какие|покажи).{0,40}?блок"
+                r"|заблокирован"
+                r"|^\s*блок(?:и|ов|ах)?\s*\??\s*$",
+                re.I | re.S | re.M,
+            ),
+            ("ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"),
+            "🚫 Блоки и отмены",
+        ),
+    ]
+
     _DEALS_STATUS_PATTERNS = [
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?завершен", re.I | re.S), "ЗАВЕРШЕНА"),
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?отпущен", re.I | re.S), "ЗАВЕРШЕНА"),
@@ -1053,15 +911,43 @@ class UserbotService:
         (re.compile(r"сделк[ауи]\s+#?(\S+).*?пополнен", re.I | re.S), "ПОПОЛНЕНО"),
     ]
 
+    @staticmethod
+    def _format_deals_list(statuses: tuple, header: str) -> str:
+        all_deals = storage.list_deals() or {}
+        target = set(statuses)
+        matching = [(did, d) for did, d in all_deals.items() if d.get("status") in target]
+        if not matching:
+            return f"{header}: пусто"
+        matching.sort(key=lambda x: x[1].get("created_at", 0), reverse=True)
+        lines = [f"{header} ({len(matching)}):", ""]
+        for did, d in matching:
+            fio = (d.get("fio") or "").strip() or "—"
+            bank = (d.get("bank") or "").strip() or "—"
+            amount = str(d.get("amount") or "").strip() or "—"
+            status = d.get("status") or "—"
+            uname_raw = (d.get("client_username") or "").lstrip("@").strip()
+            uname_part = f" — @{uname_raw}" if uname_raw else ""
+            lines.append(f"• {fio}{uname_part} — #{did} — {bank} — {amount} — {status}")
+        return "\n".join(lines)
+
+    async def _handle_deals_query(self, event, statuses: tuple, header: str) -> None:
+        msg = self._format_deals_list(statuses, header)
+        chunks = _split_text(msg, 3900)
+        try:
+            await event.reply(chunks[0], link_preview=False)
+            if len(chunks) > 1:
+                target = await self._resolve_chat_target(event.chat_id)
+                for extra in chunks[1:]:
+                    await asyncio.sleep(0.3)
+                    await self.client.send_message(target, extra, link_preview=False)
+            logger.info(
+                "deals_chat list query: header=%r, statuses=%s, parts=%d, len=%d",
+                header, statuses, len(chunks), len(msg),
+            )
+        except Exception as e:
+            logger.warning("deals list reply failed: %s", e)
+
     async def _handle_deals_group_message(self, event):
-        """Админ написал в «Сделки и выплаты» что-то про статус сделки.
-
-        Распознаёт «Сделка #X пополнена / в работе / готова к отпуску /
-        завершена / отпущена», вызывает update_deal_status + post_deals_group
-        + уведомляет клиента в его рабочем чате.
-
-        Игнорим: свои сообщения, сообщения от не-админов.
-        """
         if not event.message:
             return
         text = (event.message.text or "").strip()
@@ -1069,12 +955,13 @@ class UserbotService:
             return
         if self._me and event.sender_id == self._me.id:
             return
-        # Намеренно НЕ требуем admin-права: сам факт что отправитель — участник
-        # чата «Сделки и выплаты» = допуск (Telegram-членство как ACL).
-        # Ставим в логи кто написал, чтобы можно было аудитить при проблемах.
-        logger.info(
-            "deals_chat msg from sender=%s, len=%d", event.sender_id, len(text)
-        )
+        logger.info("deals_chat msg from sender=%s, len=%d", event.sender_id, len(text))
+
+        for rx, statuses, header in self._DEALS_QUERY_PATTERNS:
+            if rx.search(text):
+                logger.info("deals_chat query matched: header=%r statuses=%s", header, statuses)
+                await self._handle_deals_query(event, statuses, header)
+                return
 
         for rx, new_status in self._DEALS_STATUS_PATTERNS:
             m = rx.search(text)
@@ -1087,11 +974,6 @@ class UserbotService:
         logger.info("deals_chat: no status pattern matched in %r", text[:120])
 
     async def _handle_accounts_group_message(self, event):
-        """Чат «Отработка аккаунтов»: «ФИО — БАНК — ОТРАБОТАНО».
-
-        Парсит, ищет сделку через find_deal_by(fio, bank), если найдена
-        ровно одна — переводит в ГОТОВО_К_ОТПУСКУ. Иначе логирует.
-        """
         if not event.message:
             return
         text = (event.message.text or "").strip()
@@ -1099,14 +981,10 @@ class UserbotService:
             return
         if self._me and event.sender_id == self._me.id:
             return
-        # Здесь админство НЕ проверяем — операционисты могут не быть админами
 
-        # Шаблон: что-то — что-то — ОТРАБОТАНО (либо просто "отработано")
         if "отработано" not in text.lower():
             return
-        # Разбиваем по разделителям: — / – / -
         parts = re.split(r"\s*[—–\-]\s*", text)
-        # Хотя бы 3 части (фио, банк, статус)
         if len(parts) < 3:
             logger.info("accounts_chat: malformed (parts<3): %r", text[:120])
             return
@@ -1115,47 +993,64 @@ class UserbotService:
         if not fio or not bank:
             return
         results = storage.find_deal_by(fio=fio, bank=bank)
-        # Учитываем только активные (не уже завершённые)
         active = [d for d in results if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")]
         if len(active) == 0:
-            logger.warning(
-                "accounts_chat: no active deal for fio=%r bank=%r (total=%d)",
-                fio, bank, len(results),
-            )
+            logger.warning("accounts_chat: no active deal for fio=%r bank=%r (total=%d)", fio, bank, len(results))
             return
         if len(active) > 1:
-            logger.warning(
-                "accounts_chat: multiple active deals for fio=%r bank=%r (count=%d)",
-                fio, bank, len(active),
-            )
-            # Для безопасности — берём самую свежую по created_at
+            logger.warning("accounts_chat: multiple active deals for fio=%r bank=%r (count=%d)", fio, bank, len(active))
             active.sort(key=lambda d: d.get("created_at", 0), reverse=True)
         deal_id = active[0]["deal_id"]
-        logger.info(
-            "accounts_chat ОТРАБОТАНО: deal=%s fio=%r bank=%r -> ГОТОВО_К_ОТПУСКУ",
-            deal_id, fio, bank,
-        )
+        logger.info("accounts_chat ОТРАБОТАНО: deal=%s fio=%r bank=%r -> ГОТОВО_К_ОТПУСКУ", deal_id, fio, bank)
         await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
+
+    async def _refresh_accounts_post(self, deal_id: str) -> bool:
+        """Перерисовывает пост в чате «Отработка аккаунтов» текущим состоянием
+        сделки. Используется после record_deal (когда подцепили pending пост)
+        и после смены статуса. Если у сделки нет accounts_group_msg_id —
+        ничего не делает."""
+        deal = storage.get_deal(deal_id) or {}
+        msg_id = deal.get("accounts_group_msg_id")
+        if not msg_id:
+            return False
+        accounts_id = storage.get_accounts_group_id()
+        if not accounts_id:
+            return False
+        text = self._build_accounts_msg(
+            bank=deal.get("bank") or "",
+            deal_id=deal_id,
+            method=deal.get("method") or "",
+            client_username=deal.get("client_username") or "",
+            status_internal=deal.get("status") or "В_РАБОТЕ",
+        )
+        try:
+            target = await self._resolve_chat_target(accounts_id)
+            await self.client.edit_message(target, msg_id, text, link_preview=False)
+            logger.info("refreshed accounts_msg=%s for deal=%s status=%s", msg_id, deal_id, deal.get("status"))
+            return True
+        except Exception as e:
+            logger.warning("refresh accounts_msg=%s for deal=%s failed: %s", msg_id, deal_id, e)
+            return False
 
     async def _apply_status_change(self, deal_id: str, new_status: str):
         """Универсальная процедура: update_deal_status + post в deals_group +
-        notify клиента в его work_chat (если можем найти).
-        """
+        обновление поста в accounts_group + notify клиента в его work_chat."""
         ok = await storage.update_deal_status(deal_id, new_status)
         if not ok:
             logger.warning("apply_status_change: deal %s not found in storage", deal_id)
             return
         deal = storage.get_deal(deal_id) or {}
 
-        # 1. Пост в чат «Сделки и выплаты»
         try:
             await self._tool_post_deals_group(deal_id=deal_id)
         except Exception as e:
             logger.warning("post_deals_group failed after status change: %s", e)
 
-        # 2. Уведомить клиента в его рабочем чате
-        # work_chat_id запомнили в record_deal — используем напрямую (надёжнее
-        # чем матч по имени клиента, который мы делали раньше).
+        try:
+            await self._refresh_accounts_post(deal_id)
+        except Exception as e:
+            logger.warning("refresh_accounts_post failed after status change: %s", e)
+
         work_chat = deal.get("work_chat_id")
         client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
         if not work_chat or not client_msg:
@@ -1167,22 +1062,13 @@ class UserbotService:
         try:
             target = await self._resolve_chat_target(work_chat)
             await self.client.send_message(target, client_msg, link_preview=False)
-            logger.info(
-                "client notified deal=%s status=%s chat=%s",
-                deal_id, new_status, work_chat,
-            )
+            logger.info("client notified deal=%s status=%s chat=%s", deal_id, new_status, work_chat)
         except Exception as e:
             logger.warning("client notify failed for deal=%s: %s", deal_id, e)
 
     @staticmethod
     def _client_status_message(status: str, deal: dict, deal_id: str = "") -> str:
-        """Текст уведомления клиенту по новому статусу. Пусто = не уведомляем.
-
-        deal_id обязательно включается в сообщение — клиент должен видеть
-        ID своей сделки в каждом уведомлении.
-        """
         bank = deal.get("bank", "")
-        # # перед deal_id для единообразия (как в чате выплат)
         did = f"#{deal_id}" if deal_id else ""
         if status == "ПОПОЛНЕНО":
             return f"Сделка {did} пополнена ({bank}), начинаем работу."
@@ -1195,31 +1081,56 @@ class UserbotService:
         if status == "ЗАБЛОКИРОВАН":
             return f"По сделке {did} ({bank}) есть нюансы — оператор разбирается."
         if status == "ОТМЕНА_СДЕЛКИ":
-            # Клиента уведомляем нейтрально — без слова «отменена», менеджер
-            # обычно сам объясняет почему. AI просто фиксирует факт.
             return f"Сделка {did} ({bank}) приостановлена. Менеджер свяжется."
         return ""
 
     # === Перевяз ЛК — авто-форвард в Отработка аккаунтов ===
 
-    _PEREVYAZ_RE = re.compile(
-        r"перевяз\s+лк\s+выполнен", re.I
-    )
-    # Извлекатели полей (искали бы и без эмодзи)
+    # Маппинг внутренних статусов → строки для шаблона accounts_group.
+    _ACCOUNTS_STATUS_MAP = {
+        "ПОПОЛНИТЬ": "В РАБОТЕ",
+        "ОЖИДАЕТ_ПОПОЛНЕНИЯ": "В РАБОТЕ",
+        "ПОПОЛНЕНО": "В РАБОТЕ",
+        "В_РАБОТЕ": "В РАБОТЕ",
+        "ГОТОВО_К_ОТПУСКУ": "В РАБОТЕ",
+        "ЗАВЕРШЕНА": "УСПЕШНО ОТРАБОТАНО",
+        "ОТМЕНА_СДЕЛКИ": "ОТМЕНА СДЕЛКИ",
+        "ЗАБЛОКИРОВАН": "БЛОК",
+    }
+
+    @classmethod
+    def _accounts_status_label(cls, internal_status: str) -> str:
+        return cls._ACCOUNTS_STATUS_MAP.get(internal_status, "В РАБОТЕ")
+
+    @classmethod
+    def _build_accounts_msg(
+        cls,
+        bank: str,
+        deal_id: str = "",
+        method: str = "",
+        client_username: str = "",
+        status_internal: str = "ПОПОЛНИТЬ",
+    ) -> str:
+        if deal_id:
+            deal_line = f"Номер сделки: #{deal_id}"
+        elif method == "USDT_TRC20":
+            deal_line = "Номер сделки: выплата на USDT TRC20"
+        else:
+            deal_line = "Номер сделки: выплата после отработки"
+        status_label = cls._accounts_status_label(status_internal)
+        uname = (client_username or "").lstrip("@").strip() or "—"
+        return (
+            f"Банк: {bank or '—'}\n"
+            f"{deal_line}\n"
+            f"Статус: {status_label}\n"
+            f"Поставщик: @{uname}"
+        )
+
+    _PEREVYAZ_RE = re.compile(r"перевяз\s+лк\s+выполнен", re.I)
     _PEREVYAZ_FIO_RE = re.compile(r"фио\s*:?[\s]*(.+)", re.I)
     _PEREVYAZ_LK_RE = re.compile(r"лк\s*:?[\s]*(.+)", re.I)
 
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
-        """Если в работ-чате появилось 'Перевяз ЛК выполнен' — форвардит в
-        accounts_group по шаблону. Возвращает True если обработано (не запускать
-        обычный AI ответ).
-
-        Шаблон отправки:
-            Банк: <банк сделки>
-            Номер сделки: <id или метка>
-            Статус: В РАБОТЕ
-            Поставщик: @<client_username>
-        """
         text = (event.message.text or "")
         if not self._PEREVYAZ_RE.search(text):
             return False
@@ -1229,7 +1140,6 @@ class UserbotService:
             logger.warning("perevyaz: accounts_group_id не задан, форвард пропущен")
             return False
 
-        # Парсим ФИО / ЛК (в основном для логов и диагностики)
         fio = ""
         lk = ""
         for line in text.splitlines():
@@ -1242,14 +1152,9 @@ class UserbotService:
                 lk = m.group(1).strip()
         logger.info("perevyaz detected: fio=%r lk=%r chat=%s", fio, lk, event.chat_id)
 
-        # Ищем активную сделку по client_id из managed_chats
         client_id = chat_info.get("client_id")
-        client_username = chat_info.get("client_name", "") or ""
-        # Ищем сделки где client_username совпадает с username клиента — fallback
-        # по chat-info client_name (мы не всегда знаем @username точно).
         deal = None
         if client_id:
-            # Перебираем deals и ищем тот, где work_chat_id совпадает с этим
             for did, d in (storage.list_deals() or {}).items():
                 if d.get("work_chat_id") and abs(int(d["work_chat_id"])) == abs(int(event.chat_id)):
                     if d.get("status") not in ("ЗАВЕРШЕНА", "ОТМЕНА_СДЕЛКИ"):
@@ -1259,31 +1164,34 @@ class UserbotService:
         bank = (deal or {}).get("bank") or lk or "—"
         deal_id = (deal or {}).get("deal_id", "")
         method = (deal or {}).get("method", "")
-        client_uname = (deal or {}).get("client_username") or client_username or "—"
+        client_uname = (deal or {}).get("client_username") or ""
+        status_internal = (deal or {}).get("status") or "В_РАБОТЕ"
 
-        # Номер сделки или плейсхолдер по методу
-        if deal_id:
-            deal_line = f"Номер сделки: #{deal_id}"
-        elif method == "USDT_TRC20":
-            deal_line = "Номер сделки: выплата на USDT TRC20"
-        else:
-            deal_line = "Номер сделки: выплата после отработки"
-
-        msg = (
-            f"Банк: {bank}\n"
-            f"{deal_line}\n"
-            f"Статус: В РАБОТЕ\n"
-            f"Поставщик: @{client_uname.lstrip('@')}"
+        msg = self._build_accounts_msg(
+            bank=bank,
+            deal_id=deal_id,
+            method=method,
+            client_username=client_uname,
+            status_internal=status_internal,
         )
+        sent = None
         try:
             target = await self._resolve_chat_target(accounts_id)
-            await self.client.send_message(target, msg, link_preview=False)
+            sent = await self.client.send_message(target, msg, link_preview=False)
             logger.info("perevyaz forwarded to accounts_group=%s deal=%s", accounts_id, deal_id)
         except Exception as e:
             logger.warning("perevyaz forward failed: %s", e)
-            return True  # пытались, не попало — но всё равно событие "обработано"
+            return True
 
-        # Если есть сделка — переводим её в В_РАБОТЕ и уведомляем клиента
+        sent_msg_id = getattr(sent, "id", None)
+        if sent_msg_id:
+            if deal_id:
+                await storage.set_accounts_group_msg_id(deal_id, sent_msg_id)
+                logger.info("perevyaz: linked accounts_msg=%s to deal=%s", sent_msg_id, deal_id)
+            else:
+                await storage.set_pending_accounts_post(event.chat_id, sent_msg_id)
+                logger.info("perevyaz: stashed accounts_msg=%s as PENDING for chat=%s", sent_msg_id, event.chat_id)
+
         if deal_id:
             await self._apply_status_change(deal_id, "В_РАБОТЕ")
         return True
@@ -1295,18 +1203,13 @@ class UserbotService:
         title = config.CHAT_TITLE_TEMPLATE.format(client_name=client_name)
         about = config.CHAT_DESCRIPTION_TEMPLATE.format(client_name=client_name)
 
-        # 1. Создаём супергруппу
-        result = await self.client(
-            CreateChannelRequest(title=title, about=about, megagroup=True)
-        )
+        result = await self.client(CreateChannelRequest(title=title, about=about, megagroup=True))
         channel = result.chats[0]
         logger.info("Created group '%s' (id=%s)", title, channel.id)
 
-        # 2. Регистрируем чат для welcome-флоу
         if client_id:
             await storage.register_chat(channel.id, client_id, client_name)
 
-        # 3. Резолвим работников из текущего списка storage
         workers = storage.get_workers()
         statuses: dict = {}
         users_to_invite = []
@@ -1326,7 +1229,6 @@ class UserbotService:
             except Exception as e:
                 statuses[uname] = f"ошибка резолва: {e}"
 
-        # 4. Инвайтим работников по одному
         for user in users_to_invite:
             uname_or_id = user.username or str(user.id)
             try:
@@ -1345,11 +1247,9 @@ class UserbotService:
             except Exception as e:
                 statuses[uname_or_id] = f"ошибка: {e}"
 
-        # Логируем статусы инвайтов в Railway logs
         for u, s in statuses.items():
             logger.info("invite chat=%s @%s -> %s", channel.id, u, s)
 
-        # 5. Делаем юзербота админом (чтобы мог отправлять сообщения)
         if config.USERBOT_AS_ADMIN and self._me:
             try:
                 rights = ChatAdminRights(
@@ -1363,11 +1263,8 @@ class UserbotService:
             except Exception as e:
                 logger.warning("Admin grant failed: %s", e)
 
-        # 6. Экспортируем invite link
         invite = await self.client(ExportChatInviteRequest(channel))
 
-        # 7. Fallback watcher в фоне.
-        # _welcome_locks[channel.id] гарантирует, что только один из двух путей отправит welcome.
         if client_id:
             asyncio.create_task(self._watch_for_client_join(channel, client_id))
 

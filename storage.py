@@ -1,4 +1,4 @@
-"""JSON-based persistent storage for bot state."""
+"""JSON-based persistent storage for bot state. Atomic via .tmp+os.replace."""
 import json
 import os
 import asyncio
@@ -28,10 +28,7 @@ def _norm_chat_id(cid) -> str:
       - From Telethon (channel.id):  1234567890       (no prefix)
       - From aiogram events:        -1001234567890    (with -100 prefix)
 
-    We always store the bare ID (without -100).
-    Safety check: only strip '100' prefix when the number is ≥ 12 digits
-    (a bare 10-digit supergroup ID with '100' prefix = 13 digits total),
-    avoiding false matches on short IDs like user_id=100.
+    Always store the bare ID (without -100). Strip '100' only when len >= 12.
     """
     n = abs(int(cid))
     s = str(n)
@@ -41,10 +38,7 @@ def _norm_chat_id(cid) -> str:
 
 
 def _norm_deal_id(deal_id) -> str:
-    """Нормализует deal_id: убирает решётку и пробелы.
-
-    AI часто шлёт '#95941' (как в чате), храним всегда без решётки.
-    """
+    """Нормализует deal_id: убирает решётку и пробелы."""
     return str(deal_id or "").lstrip("#").strip()
 
 
@@ -62,12 +56,10 @@ def _default_state() -> dict:
         "admin_secret_command": "",
         "brain_chat_id": 0,
         "client_idle_minutes": 5,
-        # Источник трафика: счётчик по источникам и атрибуция per-user
         "source_stats": {},
         "user_sources": {},
-        # AI brain (Claude)
         "ai_enabled": False,
-        "ai_model": "",  # пусто = берём config.DEFAULT_AI_MODEL
+        "ai_model": "",
         "ai_stats": {
             "replies_total": 0,
             "input_tokens_total": 0,
@@ -75,33 +67,32 @@ def _default_state() -> dict:
             "errors_total": 0,
             "skipped_worker_active": 0,
         },
-        # Auto-writeback в knowledge/ через GitHub API (memory.py)
         "ai_writeback_enabled": False,
         "writeback_stats": {
             "commits_total": 0,
             "skipped_total": 0,
             "errors_total": 0,
         },
-        # Координаторская беседа — куда AI шлёт эскалации команде
         "coordination_chat_id": 0,
         "escalate_stats": {
             "calls_total": 0,
             "by_specialist": {},
             "errors_total": 0,
         },
-        # === Учёт сделок ===
-        # Чат «Сделки и выплаты» (логирование/обновления статусов)
         "deals_group_id": 0,
-        # Чат «Отработка аккаунтов» (источник статусов от операционистов)
         "accounts_group_id": 0,
-        # Сами сделки: deal_id (str) -> {client_username, fio, bank, amount,
-        # fee, method, status, created_at, history: [{ts, status}]}
+        # deals: deal_id -> {client_username, fio, bank, amount, fee, method,
+        # status, created_at, history, work_chat_id, deals_group_msg_id,
+        # accounts_group_msg_id}
         "deals": {},
         "deals_stats": {
             "created_total": 0,
             "by_status": {},
             "errors_total": 0,
         },
+        # Перевяз-форварды в «Отработка аккаунтов» сделанные ДО record_deal.
+        # Ключ — _norm_chat_id(work_chat_id), значение — msg_id.
+        "pending_accounts_posts": {},
     }
 
 
@@ -118,7 +109,6 @@ class Storage:
                 try:
                     with open(self.path, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
-                    # Добавляем отсутствующие ключи из defaults (миграция)
                     defaults = _default_state()
                     for k, v in defaults.items():
                         if k not in loaded:
@@ -133,12 +123,10 @@ class Storage:
             await self._save_unlocked()
 
     async def _save_unlocked(self):
-        """Атомарная запись через .tmp + os.replace. Перед заменой сохраняет .bak."""
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.state, f, ensure_ascii=False, indent=2)
-            # Бэкап текущего файла перед заменой
             if os.path.exists(self.path):
                 try:
                     os.replace(self.path, self.path + ".bak")
@@ -152,7 +140,6 @@ class Storage:
         async with _lock:
             await self._save_unlocked()
 
-    # === Admins ===
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.state["admins"]
 
@@ -171,7 +158,6 @@ class Storage:
     def get_admins(self):
         return list(self.state["admins"])
 
-    # === Workers ===
     def get_workers(self):
         return list(self.state["workers"])
 
@@ -189,7 +175,6 @@ class Storage:
                 self.state["workers"].remove(username)
             await self._save_unlocked()
 
-    # === Welcome ===
     def get_welcome(self) -> str:
         return self.state["welcome_message"]
 
@@ -202,7 +187,6 @@ class Storage:
             self.state["welcome_entities"] = entities or []
             await self._save_unlocked()
 
-    # === Cooldown ===
     def get_cooldown_minutes(self) -> int:
         return self.state["cooldown_minutes"]
 
@@ -230,11 +214,9 @@ class Storage:
             self.state["stats"]["creations_by_user"][uid] = cur + 1
             await self._save_unlocked()
 
-    # === Triggers ===
     def get_triggers(self):
         return list(self.state["trigger_phrases"])
 
-    # === Managed chats ===
     async def register_chat(self, chat_id, client_id: int, client_name: str):
         key = _norm_chat_id(chat_id)
         async with _lock:
@@ -260,15 +242,10 @@ class Storage:
                 info["welcome_sent"] = True
             await self._save_unlocked()
 
-    # === Cleanup ===
     async def cleanup(self):
-        """Удаляет устаревшие записи: старые чаты и истёкшие кулдауны.
-        Вызывается периодически из bot.py.
-        """
         now = time.time()
         changed = False
         async with _lock:
-            # 1. Удаляем managed_chats старше _CHAT_TTL_SEC
             old_chats = [
                 k for k, v in self.state["managed_chats"].items()
                 if now - v.get("created_at", now) > _CHAT_TTL_SEC
@@ -279,9 +256,7 @@ class Storage:
                 changed = True
                 print(f"[storage] cleanup: removed {len(old_chats)} old managed_chats")
 
-            # 2. Удаляем истёкшие записи user_cooldowns
             cd_sec = self.state["cooldown_minutes"] * 60
-            # Оставляем двойной запас, чтобы не обрезать действующие кулдауны
             cutoff = now - cd_sec * 2
             old_cooldowns = [
                 k for k, v in self.state["user_cooldowns"].items()
@@ -296,15 +271,12 @@ class Storage:
             if changed:
                 await self._save_unlocked()
 
-    # === Stats ===
     def get_stats(self) -> dict:
         return dict(self.state["stats"])
 
-    # === Secret command ===
     def get_secret_command(self) -> str:
         return self.state["admin_secret_command"]
 
-    # === Brain chat ===
     def get_brain_chat_id(self) -> int:
         return int(self.state.get("brain_chat_id") or 0)
 
@@ -321,14 +293,7 @@ class Storage:
             self.state["client_idle_minutes"] = int(minutes)
             await self._save_unlocked()
 
-    # === Traffic source ===
     async def register_source(self, user_id: int, source: str) -> bool:
-        """Атрибутирует пользователя к источнику трафика.
-
-        Считается только первый выбор: повторные клики игнорируются,
-        чтобы счётчик не накручивался при повторном /start.
-        Возвращает True если источник записан впервые, False если уже был.
-        """
         source = (source or "").strip()
         if not source:
             return False
@@ -349,7 +314,6 @@ class Storage:
     def get_user_source(self, user_id: int) -> Optional[str]:
         return self.state.get("user_sources", {}).get(str(user_id))
 
-    # === AI brain ===
     def is_ai_enabled(self) -> bool:
         return bool(self.state.get("ai_enabled", False))
 
@@ -378,7 +342,6 @@ class Storage:
         errors: int = 0,
         skipped_worker_active: int = 0,
     ):
-        """Атомарно инкрементит выбранные счётчики ai_stats."""
         async with _lock:
             stats = self.state.setdefault(
                 "ai_stats",
@@ -403,7 +366,6 @@ class Storage:
             )
             await self._save_unlocked()
 
-    # === Writeback в граф знаний (memory.py + GitHub API) ===
     def is_writeback_enabled(self) -> bool:
         return bool(self.state.get("ai_writeback_enabled", False))
 
@@ -428,7 +390,6 @@ class Storage:
             stats["errors_total"] = int(stats.get("errors_total", 0)) + errors
             await self._save_unlocked()
 
-    # === Координаторская беседа (для эскалации) ===
     def get_coordination_chat_id(self) -> int:
         return int(self.state.get("coordination_chat_id") or 0)
 
@@ -455,7 +416,6 @@ class Storage:
                     by[specialist] = int(by.get(specialist, 0)) + 1
             await self._save_unlocked()
 
-    # === Учёт сделок ===
     def get_deals_group_id(self) -> int:
         return int(self.state.get("deals_group_id") or 0)
 
@@ -488,11 +448,6 @@ class Storage:
         fio: Optional[str] = None,
         bank: Optional[str] = None,
     ) -> list:
-        """Универсальный поиск сделок. Возвращает список совпавших dict (с deal_id внутри).
-
-        Все условия применяются как AND, но fio/bank сравниваются case-insensitive
-        и подстрокой. None — параметр игнорируется.
-        """
         out = []
         deals = self.state.get("deals") or {}
         for did, d in deals.items():
@@ -523,11 +478,6 @@ class Storage:
         status: str = "ПОПОЛНИТЬ",
         work_chat_id=None,
     ) -> bool:
-        """Создаёт новую запись сделки. Возвращает False если deal_id уже существует.
-
-        work_chat_id — chat_id рабочей беседы с клиентом (где была создана сделка).
-        Используется для прямого уведомления клиента при смене статуса.
-        """
         deal_id = _norm_deal_id(deal_id)
         if not deal_id:
             return False
@@ -546,8 +496,8 @@ class Storage:
                 "created_at": time.time(),
                 "history": [{"ts": time.time(), "status": status}],
                 "work_chat_id": work_chat_id,
-                # message_id поста в чате «Сделки и выплаты» — для редактирования
                 "deals_group_msg_id": None,
+                "accounts_group_msg_id": None,
             }
             stats = self.state.setdefault(
                 "deals_stats",
@@ -560,7 +510,6 @@ class Storage:
             return True
 
     async def update_deal_status(self, deal_id: str, new_status: str) -> bool:
-        """Меняет статус сделки + добавляет запись в history. Возвращает False если не найдена."""
         deal_id = _norm_deal_id(deal_id)
         new_status = (new_status or "").strip()
         if not deal_id or not new_status:
@@ -590,7 +539,6 @@ class Storage:
         return dict(self.state.get("deals_stats") or {})
 
     async def set_deals_group_msg_id(self, deal_id: str, msg_id):
-        """Запоминает message_id поста в чате 'Сделки и выплаты' для редактирования."""
         async with _lock:
             deals = self.state.get("deals") or {}
             d = deals.get(_norm_deal_id(deal_id))
@@ -599,6 +547,45 @@ class Storage:
             d["deals_group_msg_id"] = msg_id
             await self._save_unlocked()
             return True
+
+    async def set_accounts_group_msg_id(self, deal_id: str, msg_id):
+        """Запоминает message_id поста в чате 'Отработка аккаунтов' для редактирования."""
+        async with _lock:
+            deals = self.state.get("deals") or {}
+            d = deals.get(_norm_deal_id(deal_id))
+            if d is None:
+                return False
+            d["accounts_group_msg_id"] = msg_id
+            await self._save_unlocked()
+            return True
+
+    def get_pending_accounts_post(self, work_chat_id) -> Optional[int]:
+        key = _norm_chat_id(work_chat_id)
+        v = (self.state.get("pending_accounts_posts") or {}).get(key)
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    async def set_pending_accounts_post(self, work_chat_id, msg_id):
+        key = _norm_chat_id(work_chat_id)
+        async with _lock:
+            d = self.state.setdefault("pending_accounts_posts", {})
+            d[key] = int(msg_id)
+            await self._save_unlocked()
+
+    async def pop_pending_accounts_post(self, work_chat_id) -> Optional[int]:
+        """Атомарно достаёт и удаляет msg_id для work_chat_id. None если не было."""
+        key = _norm_chat_id(work_chat_id)
+        async with _lock:
+            d = self.state.setdefault("pending_accounts_posts", {})
+            v = d.pop(key, None)
+            if v is not None:
+                await self._save_unlocked()
+            try:
+                return int(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
 
 
 storage = Storage(config.STORAGE_PATH)
