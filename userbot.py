@@ -384,10 +384,32 @@ class UserbotService:
 
         idle_min = max(0, storage.get_client_idle_minutes())
         idle_sec = idle_min * 60
-        if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+        # Логика «не вмешиваться в живой диалог»:
+        # - last_worker_ts: когда worker последний раз писал в этом чате
+        # - prev_client_ts: когда клиент писал ДО текущего сообщения
+        # - now: текущее сообщение клиента
+        # AI молчит ТОЛЬКО если worker ответил на предыдущее сообщение клиента
+        # (worker_ts > prev_client_ts) И этот ответ был недавно (< idle_sec).
+        # Если worker не отписался после предыдущего сообщения клиента — AI
+        # подхватывает СРАЗУ, не дожидаясь idle_sec.
+        prev_client_ts = self._last_client_msg_ts.get(chat_key, 0)
+        last_worker_ts = self._last_worker_ts.get(chat_key, 0)
+        worker_replied_to_prev = last_worker_ts > prev_client_ts
+        # Обновляем штамп клиента (после фиксации prev_client_ts).
+        self._last_client_msg_ts[chat_key] = time.time()
+
+        if idle_sec > 0 and worker_replied_to_prev and time.time() - last_worker_ts < idle_sec:
             await storage.bump_ai_stats(skipped_worker_active=1)
-            logger.info("AI: skip chat=%s — worker active in last %dm", chat_id, idle_min)
+            logger.info(
+                "AI: skip chat=%s — worker active (replied to prev client msg) in last %dm",
+                chat_id, idle_min,
+            )
             return
+        if not worker_replied_to_prev and last_worker_ts > 0:
+            logger.info(
+                "AI: chat=%s — worker НЕ ответил на предыдущее сообщение клиента, AI подхватывает",
+                chat_id,
+            )
 
         lock = self._ai_locks.setdefault(chat_key, asyncio.Lock())
         if lock.locked():
@@ -474,7 +496,15 @@ class UserbotService:
         except Exception:
             await asyncio.sleep(delay)
 
-        if idle_sec > 0 and time.time() - self._last_worker_ts.get(chat_key, 0) < idle_sec:
+        # Повторная проверка: если worker написал пока мы «печатали» — отступаем,
+        # но только если его ответ свежий (last_worker_ts > last_client_msg_ts).
+        last_worker_ts = self._last_worker_ts.get(chat_key, 0)
+        last_client_ts = self._last_client_msg_ts.get(chat_key, 0)
+        if (
+            idle_sec > 0
+            and last_worker_ts > last_client_ts
+            and time.time() - last_worker_ts < idle_sec
+        ):
             await storage.bump_ai_stats(skipped_worker_active=1)
             logger.info("AI: chat=%s — worker came in during typing delay, skip", chat_id)
             return
