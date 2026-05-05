@@ -428,6 +428,71 @@ class UserbotService:
         async with lock:
             await self._do_ai_reply(event, chat_info, idle_sec, chat_key)
 
+    async def _handle_learn_command(self, event, text: str):
+        """Bulk-обучение из истории чатов. /learn [chat_id] [limit=N]."""
+        cmd = learn.parse_learn_command(text)
+        chat_id = cmd["chat_id"]
+        limit = cmd["limit"]
+
+        if not config.ANTHROPIC_API_KEY:
+            await event.reply("⚠️ ANTHROPIC_API_KEY не задан — обучение невозможно.")
+            return
+        if not config.GITHUB_TOKEN:
+            await event.reply("⚠️ GITHUB_TOKEN не задан — нечего сохранять.")
+            return
+
+        if chat_id:
+            await event.reply(
+                f"📚 Обучение: chat_id={chat_id}, limit={limit}.\n"
+                f"Это может занять несколько минут."
+            )
+            asyncio.create_task(self._learn_task(event, chat_id, limit))
+        else:
+            chats = storage.get_managed_chat_ids() or []
+            await event.reply(
+                f"📚 Обучение из {len(chats)} managed-чатов, "
+                f"limit={limit} пар на чат.\nОтчёт по завершении."
+            )
+            asyncio.create_task(self._learn_all_task(event, limit))
+
+    async def _learn_task(self, event, chat_id, limit):
+        try:
+            stats = await learn.learn_from_chat(self.client, chat_id, limit=limit)
+            text = (
+                f"✅ chat={chat_id} завершён.\n"
+                f"Сообщений: {stats.get('messages', 0)}, "
+                f"пар: {stats.get('pairs_count', 0)}\n"
+                f"{learn.format_stats_short(stats)}"
+            )
+            await event.reply(text)
+        except Exception as e:
+            logger.exception("learn_task failed for chat=%s", chat_id)
+            try:
+                await event.reply(f"⚠️ Ошибка: {e}")
+            except Exception:
+                pass
+
+    async def _learn_all_task(self, event, limit):
+        try:
+            overall = await learn.learn_from_all_chats(self.client, limit_per_chat=limit)
+            text = (
+                f"✅ Обучение завершено: {overall['chats_processed']}/"
+                f"{overall['chats_total']} чатов.\n"
+                f"Сообщений: {overall['messages']}, "
+                f"пар: {overall['pairs_count']}, "
+                f"обработано: {overall['processed']}\n"
+                f"💎 Сохранено: <b>{overall['saved']}</b> | "
+                f"пропущено: {overall['skipped']} | "
+                f"ошибок: {overall['errors']}"
+            )
+            await event.reply(text, parse_mode="html")
+        except Exception as e:
+            logger.exception("learn_all_task failed")
+            try:
+                await event.reply(f"⚠️ Ошибка: {e}")
+            except Exception:
+                pass
+
     async def _handle_brain_chat_writeback(self, event):
         if not event.message:
             return
@@ -437,6 +502,10 @@ class UserbotService:
         if self._me and event.sender_id == self._me.id:
             return
         if text.startswith("[AI-LOG]"):
+            return
+        # /learn — bulk-обучение из истории чатов
+        if text.lower().startswith("/learn"):
+            await self._handle_learn_command(event, text)
             return
         if text.startswith("/"):
             return
