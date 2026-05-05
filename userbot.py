@@ -1399,6 +1399,29 @@ class UserbotService:
                 pass
             return
 
+        # Сначала пробуем парсер формата «СТАРТ» (мульти-строка с ПРИЕМ/Вывод/Выплата)
+        if "\n" in text and ("заявка" in text.lower() or "прием" in text.lower() or "приём" in text.lower()):
+            app = accounting.parse_application(text)
+            if app:
+                try:
+                    date_str = accounting.today_str()
+                    # Сохраняем заявку через storage helper (с lock'ом)
+                    await storage.accounting_add_application(date_str, {**app, "ts": time.time()})
+                    report = accounting.format_application_report(app)
+                    await event.reply(report, parse_mode="html", link_preview=False)
+                    logger.info(
+                        "accounting_chat: parsed application id=%s margin=%.0f$",
+                        app.get("id"),
+                        accounting.compute_application(app)["margin_usdt"],
+                    )
+                except Exception as e:
+                    logger.exception("application save failed: %s", e)
+                    try:
+                        await event.reply(f"⚠️ Ошибка сохранения заявки: {e}")
+                    except Exception:
+                        pass
+                return
+
         cmd = accounting.parse_command(text)
         if not cmd:
             logger.info("accounting_chat: not a command: %r", text[:80])

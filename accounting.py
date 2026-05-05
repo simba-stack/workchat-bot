@@ -48,6 +48,9 @@ def empty_day_record() -> dict:
         "lk_costs": [],
         "courses": {"usdt_buy_rub": 0.0, "usdt_sell_rub": 0.0},
         "manual": [],
+        # Список заявок дня (формат «СТАРТ»):
+        # каждая заявка — отдельный обмен с приёмом + выводом + расчётом маржи.
+        "applications": [],
     }
 
 
@@ -57,6 +60,50 @@ def _f(x) -> float:
         return float(x or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def compute_application(app: dict) -> dict:
+    """Per-application расчёт. Возвращает USDT-числа.
+
+    our_usdt = (buy_amount_rub / course) * (1 - our_rate_pct/100)
+    client_usdt = (partner_amount_rub * (1 - client_pct/100)) / course
+    lk_total_usdt = сумма ЦЕНА ЛК (intake + output)
+    margin_usdt = our_usdt - client_usdt - lk_total_usdt
+    """
+    course = _f(app.get("course")) or 1.0
+    our_rate_pct = _f(app.get("our_rate_pct"))
+    client_pct = _f(app.get("client_pct"))
+    partner_rub = _f(app.get("partner_amount_rub"))
+    buy_rub = _f(app.get("buy_amount_rub")) or partner_rub
+
+    our_usdt_gross = buy_rub / course if course else 0.0
+    our_usdt = our_usdt_gross * (1 - our_rate_pct / 100.0)
+    client_usdt = (partner_rub * (1 - client_pct / 100.0)) / course if course else 0.0
+
+    intake = app.get("intake") or []
+    output = app.get("output") or []
+    # Приёмный ЛК (АЛЬФА) — рабочий счёт партнёра, не покупаем под каждую
+    # заявку. В маржу не включаем, только выводные ЛК (за каждый платим).
+    lk_intake = sum(_f(x.get("lk_cost_usdt")) for x in intake)
+    lk_output = sum(_f(x.get("lk_cost_usdt")) for x in output)
+    lk_total = lk_output
+
+    margin = our_usdt - client_usdt - lk_total
+    return {
+        "course": course,
+        "our_rate_pct": our_rate_pct,
+        "client_pct": client_pct,
+        "partner_amount_rub": partner_rub,
+        "buy_amount_rub": buy_rub,
+        "our_usdt_gross": our_usdt_gross,
+        "our_usdt": our_usdt,
+        "client_usdt": client_usdt,
+        "lk_intake_usdt": lk_intake,
+        "lk_output_usdt": lk_output,
+        "lk_total_usdt": lk_total,
+        "lk_count": len(intake) + len(output),
+        "margin_usdt": margin,
+    }
 
 
 def compute_day_summary(record: dict) -> dict:
@@ -102,6 +149,11 @@ def compute_day_summary(record: dict) -> dict:
     operator_salary = max(0.0, net_margin * OPERATOR_RATE)
     exchanger_salary = max(0.0, net_margin * EXCHANGER_RATE)
 
+    # Сумма margin USDT по всем заявкам (формат СТАРТ)
+    apps = record.get("applications") or []
+    apps_margin_usdt = sum(compute_application(a)["margin_usdt"] for a in apps)
+    apps_count = len(apps)
+
     return {
         "turnover_rub": turnover_rub,
         "partner_payout_usdt": partner_payout_usdt,
@@ -116,6 +168,8 @@ def compute_day_summary(record: dict) -> dict:
         "operator_salary": operator_salary,
         "exchanger_salary": exchanger_salary,
         "net_margin": net_margin,
+        "apps_margin_usdt": apps_margin_usdt,
+        "apps_count": apps_count,
         # счётчики
         "deals_count": len(record.get("turnovers") or []),
         "lk_count": len(record.get("lk_costs") or []),
@@ -204,6 +258,19 @@ def format_day_report(date_str: str, record: Optional[dict]) -> str:
     ]
     body = "\n".join(x for x in sections if x is not None)
     body += deals_block + payouts_block + lk_block + manual_block
+
+    # Заявки (формат СТАРТ)
+    apps = (record or {}).get("applications") or []
+    if apps:
+        apps_margin = sum(compute_application(a)["margin_usdt"] for a in apps)
+        body += "\n\n📋 <b>Заявки</b> (" + str(len(apps)) + "):\n"
+        for a in apps:
+            sa = compute_application(a)
+            body += (
+                f"  #{a.get('id', '?')} — заявка {_fmt_money(sa['partner_amount_rub'])}, "
+                f"маржа {sa['margin_usdt']:.0f}$\n"
+            )
+        body += f"<b>Сумма маржи по заявкам: {apps_margin:.0f}$</b>"
     return body
 
 
@@ -314,20 +381,302 @@ def parse_command(text: str) -> Optional[dict]:
     return None
 
 
+def format_application_report(app: dict) -> str:
+    """Форматирует одну заявку в HTML-сообщение для Telegram."""
+    s = compute_application(app)
+    lines = []
+    title = f"✅ <b>Заявка #{app.get('id', '?')}</b>"
+    lines.append(title)
+    lines.append("")
+    lines.append(
+        f"📥 Сумма заявки: <b>{_fmt_money(s['partner_amount_rub'])}</b>"
+        + (f" → откуп: {_fmt_money(s['buy_amount_rub'])}"
+           if s["buy_amount_rub"] != s["partner_amount_rub"] else "")
+    )
+    lines.append(
+        f"💱 Курс: <b>{s['course']:.2f} ₽/USDT</b>, "
+        f"наша ставка: <b>{s['our_rate_pct']:.1f}%</b>, "
+        f"клиент: <b>{s['client_pct']:.1f}%</b>"
+    )
+    lines.append("")
+
+    intake = app.get("intake") or []
+    if intake:
+        lines.append("🏦 <b>ПРИЁМ:</b>")
+        for it in intake:
+            row = f"  • {it.get('bank', '—')} — {it.get('fio', '—')}"
+            rem = _f(it.get("remainder_rub"))
+            if rem:
+                row += f" (остаток {_fmt_money(rem)})"
+            lk = _f(it.get("lk_cost_usdt"))
+            if lk:
+                row += f" — ЛК {lk:.0f}$"
+            lines.append(row)
+
+    output = app.get("output") or []
+    if output:
+        lines.append("")
+        lines.append("🏦 <b>Вывод:</b>")
+        for o in output:
+            row = f"  • {o.get('bank', '—')} {o.get('fio', '—')}"
+            amt = _f(o.get("amount_rub"))
+            if amt:
+                row += f" — {_fmt_money(amt)}"
+            note = o.get("note") or ""
+            if note:
+                row += f" ({note})"
+            lk = _f(o.get("lk_cost_usdt"))
+            if lk:
+                row += f" — ЛК {lk:.0f}$"
+            lines.append(row)
+
+    lines.append("")
+    lines.append(f"💸 Клиенту: <b>{s['client_usdt']:.0f}$</b>")
+    lines.append(f"✅ Нам: <b>{s['our_usdt']:.0f}$</b>")
+    lines.append(f"🛒 ЛК всего: <b>{s['lk_total_usdt']:.0f}$</b> ({s['lk_count']} шт)")
+    lines.append("")
+    margin_emoji = "📊" if s["margin_usdt"] >= 0 else "⚠️"
+    lines.append(f"{margin_emoji} <b>Маржа: {s['margin_usdt']:.0f}$</b>")
+    return "\n".join(lines)
+
+
+# === Парсер формата «СТАРТ» (мульти-строка) ===
+
+_RE_APP_HEADER = re.compile(
+    r"^\s*(\d+)[.)]\s*заявка\s+([\d\s.,]+?)(?:\s*[-—]\s*откуп\s+([\d\s.,]+?))?\s*$",
+    re.I | re.M,
+)
+_RE_INTAKE_LINE = re.compile(
+    r"^\s*при[её]м\s*[:\-]\s*(.+?)$",
+    re.I | re.M,
+)
+_RE_OUTPUT_HEADER = re.compile(r"^\s*вывод\s*[:\-]\s*$", re.I | re.M)
+_RE_PAYOUT_OUR = re.compile(
+    r"выплата\s+нам.*?курс\s*([\d.,]+).*?ставка\s*([\d.,]+)\s*%",
+    re.I | re.S,
+)
+_RE_PAYOUT_CLIENT = re.compile(
+    r"выплата\s+клиенту.*?\(\s*[\d\s.,]+\s*[-−]\s*([\d.,]+)\s*%",
+    re.I | re.S,
+)
+_RE_LK_PRICE = re.compile(r"цена\s*лк\s*([\d.,]+)\s*\$?", re.I)
+_RE_REMAINDER = re.compile(r"остаток\s+([\d][\d\s.,]*?)(?:\s*р|\s*к|\s*$|\)|\s+дебет)", re.I)
+_RE_BLOCK = re.compile(r"блок\s+([\d.,]+)\s*к?", re.I)
+
+
+def _parse_rub(s: str) -> float:
+    """'1.420р' → 1420; '227к' → 227000; '785.000' → 785000.
+
+    Дотчёт: «к» / «тыс» — множитель ×1000. Точка/запятая — разделители тысяч
+    или десятичной части (точка между группами цифр считается тысячным
+    разделителем; одиночная запятая в конце — десятичная).
+    """
+    if not s:
+        return 0.0
+    txt = str(s).lower().strip().replace(" ", "").replace("\u00a0", "")
+    # Удалить рубли
+    txt = txt.rstrip("р").rstrip("₽").rstrip("руб")
+    multiplier = 1.0
+    if txt.endswith("к") or txt.endswith("k") or txt.endswith("тыс"):
+        multiplier = 1000.0
+        txt = txt.rstrip("ктkk").rstrip("тыс")
+    if txt.endswith("млн"):
+        multiplier = 1_000_000.0
+        txt = txt[:-3]
+    # Заменим запятую на точку (десятичная), а потом убираем точки-разделители
+    # тысяч — кроме последней.
+    if "," in txt and "." not in txt:
+        # 1,5 → 1.5 (десятичная)
+        txt = txt.replace(",", ".")
+    elif "." in txt and "," not in txt:
+        # 785.000 — может быть и 785000 (тысячи) и 785.000 (десятичные)
+        # Если после последней точки 3 цифры — это разделитель тысяч.
+        parts = txt.split(".")
+        if all(len(p) == 3 for p in parts[1:]):
+            txt = "".join(parts)
+    digits = "".join(ch for ch in txt if ch.isdigit() or ch == ".")
+    if digits.count(".") > 1:
+        # многоточек → берём как тысячный
+        digits = digits.replace(".", "")
+    try:
+        return float(digits or 0) * multiplier
+    except ValueError:
+        return 0.0
+
+
+def _parse_usdt(s: str) -> float:
+    """'400$' → 400, '1.878$' → 1878 (точка как тысячный разделитель)."""
+    if not s:
+        return 0.0
+    txt = str(s).lower().strip().replace(" ", "").replace("\u00a0", "")
+    txt = txt.rstrip("$").rstrip("usdt").rstrip("usd")
+    if "," in txt:
+        txt = txt.replace(",", ".")
+    if txt.count(".") == 1 and len(txt.split(".")[1]) == 3:
+        # тысячный разделитель: 1.878 → 1878
+        txt = txt.replace(".", "")
+    try:
+        return float(txt or 0)
+    except ValueError:
+        return 0.0
+
+
+def parse_application(text: str) -> Optional[dict]:
+    """Парсит мультистрочный формат «СТАРТ»-заявки.
+
+    Минимум: «N. Заявка X» + «ПРИЕМ:» + «Выплата нам» с курсом и ставкой
+    + «Выплата клиенту» с %. Откуп опционально. Вывод секция опционально.
+
+    Возвращает dict приложения либо None если не похоже на заявку.
+    """
+    if not text:
+        return None
+
+    m_head = _RE_APP_HEADER.search(text)
+    if not m_head:
+        return None
+
+    app_id = m_head.group(1)
+    partner_rub = _parse_rub(m_head.group(2))
+    buy_rub = _parse_rub(m_head.group(3) or "") or partner_rub
+
+    # Курс и ставка (наша)
+    course = 0.0
+    our_rate_pct = 0.0
+    m_pay_our = _RE_PAYOUT_OUR.search(text)
+    if m_pay_our:
+        course = _f(m_pay_our.group(1).replace(",", "."))
+        our_rate_pct = _f(m_pay_our.group(2).replace(",", "."))
+
+    # Клиент % (например "(785000-40%)/82" → 40)
+    client_pct = 0.0
+    m_pay_cl = _RE_PAYOUT_CLIENT.search(text)
+    if m_pay_cl:
+        client_pct = _f(m_pay_cl.group(1).replace(",", "."))
+
+    # Парсим строки построчно
+    intake: list = []
+    output: list = []
+    in_output_section = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Секция «Вывод:»
+        if _RE_OUTPUT_HEADER.match(line):
+            in_output_section = True
+            continue
+
+        # Заголовок «Заявка» — пропускаем
+        if _RE_APP_HEADER.match(line):
+            in_output_section = False
+            continue
+
+        # Расчётные итоги — пропускаем
+        if any(k in line.lower() for k in (
+            "выплата клиенту", "выплата нам", "рассчёт мар", "расчёт мар", "маржа",
+            "курс ", "старт",
+        )):
+            in_output_section = False
+            continue
+
+        # ПРИЁМ
+        m = _RE_INTAKE_LINE.match(line)
+        if m:
+            in_output_section = False
+            body = m.group(1)
+            # Парсим: БАНК - ФИО (остаток X) - ЦЕНА ЛК Y$
+            parts = [p.strip() for p in re.split(r"\s*[-—]\s*", body)]
+            if len(parts) >= 2:
+                bank = parts[0]
+                fio_part = parts[1]
+                # Извлекаем (остаток X)
+                rem_m = _RE_REMAINDER.search(fio_part)
+                remainder = _parse_rub(rem_m.group(1)) if rem_m else 0.0
+                if rem_m:
+                    fio_part = fio_part[: rem_m.start()].strip("() ")
+                fio = fio_part.strip()
+                # ЦЕНА ЛК — может быть в любой из остальных частей
+                lk_cost = 0.0
+                for extra in parts[2:]:
+                    lk_m = _RE_LK_PRICE.search(extra)
+                    if lk_m:
+                        lk_cost = _parse_usdt(lk_m.group(1))
+                        break
+                intake.append({
+                    "bank": bank,
+                    "fio": fio,
+                    "remainder_rub": remainder,
+                    "lk_cost_usdt": lk_cost,
+                })
+            continue
+
+        # Строка вывода (только если внутри секции Вывод:)
+        if in_output_section:
+            # «ОЗОН Столярова - 227к - блок 1.5к - ЦЕНА ЛК 400$»
+            parts = [p.strip() for p in re.split(r"\s*[-—]\s*", line)]
+            if len(parts) < 2:
+                continue
+            bank_fio = parts[0]
+            # Разделить bank fio: первое слово = банк, остальное = фио
+            words = bank_fio.split(maxsplit=1)
+            if len(words) >= 2:
+                bank = words[0]
+                fio = words[1]
+            else:
+                bank = bank_fio
+                fio = ""
+            amount_rub = _parse_rub(parts[1]) if len(parts) >= 2 else 0.0
+            # Note и lk_cost из остальных частей
+            notes = []
+            lk_cost = 0.0
+            for extra in parts[2:]:
+                lk_m = _RE_LK_PRICE.search(extra)
+                if lk_m:
+                    lk_cost = _parse_usdt(lk_m.group(1))
+                else:
+                    notes.append(extra)
+            output.append({
+                "bank": bank,
+                "fio": fio,
+                "amount_rub": amount_rub,
+                "note": ", ".join(notes),
+                "lk_cost_usdt": lk_cost,
+            })
+
+    return {
+        "id": app_id,
+        "partner_amount_rub": partner_rub,
+        "buy_amount_rub": buy_rub,
+        "course": course,
+        "our_rate_pct": our_rate_pct,
+        "client_pct": client_pct,
+        "intake": intake,
+        "output": output,
+        "raw_text": text,
+    }
+
+
 HELP_TEXT = (
     "📊 <b>Бухгалтерия — команды</b>\n\n"
+    "<b>Заявка от операциониста</b> (формат СТАРТ — пиши в чат целиком):\n"
+    "<code>1. Заявка 785000 - откуп 771610\n"
+    "ПРИЕМ: АЛЬФА - Иванов Иван (остаток 1420р) - ЦЕНА ЛК 400$\n"
+    "Вывод:\n"
+    "ОЗОН Петров - 227к - блок 1.5к - ЦЕНА ЛК 400$\n"
+    "ТОЧКА Сидоров - 229к - ЦЕНА ЛК 400$\n"
+    "🟢 Выплата клиенту: (785000-40%)/82 = 5743$\n"
+    "✅ Выплата нам (курс 82-ставка 2%) = 9221$</code>\n\n"
+    "Бот сам вычислит маржу и сохранит заявку.\n\n"
     "<b>Просмотр:</b>\n"
-    "• <code>отчёт</code> — за сегодня\n"
+    "• <code>отчёт</code> — за сегодня (все заявки + дневная сумма)\n"
     "• <code>отчёт 2026-05-04</code> — за конкретную дату\n\n"
-    "<b>Ввод данных:</b>\n"
-    "• <code>курс 95 100</code> — закупочный/партнёрский курс USDT\n"
-    "• <code>сумма 50000 #95941 описание</code> — оборот по сделке\n"
-    "• <code>партнёр @client 400 #95941</code> — выплата партнёру в USDT\n"
-    "• <code>лк Альфа 400</code> — стоимость купленного ЛК в USDT\n\n"
-    "<b>Ручные правки</b> (приходы/расходы):\n"
+    "<b>Ручные правки</b>:\n"
     "• <code>приход 5000 название</code>\n"
     "• <code>расход 500 название</code>\n"
-    "• <code>удали правку 2</code> — удалить ручную правку #N\n\n"
-    "<i>Сделки и партнёрские выплаты записываются автоматически когда сделка</i>\n"
-    "<i>переходит в статус ЗАВЕРШЕНА. Курс задаётся раз в день.</i>"
+    "• <code>удали правку 2</code>\n"
+    "• <code>лк Альфа 400</code> — отдельный расход на ЛК\n"
+    "• <code>курс 95 100</code> — общий курс USDT (для не-СТАРТ-сделок)\n"
 )

@@ -680,6 +680,13 @@ class Storage:
             })
             await self._save_unlocked()
 
+    async def accounting_add_application(self, date_str, app_data: dict):
+        """Добавляет заявку (формат СТАРТ) в день."""
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day.setdefault("applications", []).append(app_data)
+            await self._save_unlocked()
+
     async def accounting_remove_manual(self, date_str, index):
         async with _lock:
             day = self._ensure_day(date_str)
