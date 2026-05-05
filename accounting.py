@@ -34,6 +34,27 @@ OPERATOR_RATE = 0.15   # операционист
 EXCHANGER_RATE = 0.02  # обменник/откупщик
 
 
+# Прайс банков в USDT (fallback если оператор не указал «ЦЕНА ЛК» в строке).
+# Согласован с knowledge/pricing.md — обновляется ВРУЧНУЮ при изменении прайса.
+PRICING_TABLE_USDT = {
+    "альфа": 400, "альфа-банк": 400, "alpha": 400,
+    "озон": 300, "ozon": 300,
+    "райф": 350, "райффайзен": 350, "raif": 350,
+    "точка": 300, "tochka": 300, "tinkoff": 300, "tochka-банк": 300,
+    "уралсиб": 250, "uralsib": 250,
+    "втб": 300, "vtb": 300,
+    "локо": 0, "loko": 0, "бкс": 0, "bks": 0, "дело": 0, "убрир": 0, "ubrir": 0,
+}
+
+
+def lookup_pricing(bank: str) -> float:
+    """Fallback цена ЛК для банка из встроенного прайса. 0 если банк неизвестен."""
+    if not bank:
+        return 0.0
+    key = bank.lower().strip().replace("-банк", "").replace("-bank", "").strip()
+    return float(PRICING_TABLE_USDT.get(key, 0.0))
+
+
 def today_str() -> str:
     """Текущая дата в формате YYYY-MM-DD (UTC+3, московское время)."""
     msk = timezone(timedelta(hours=3))

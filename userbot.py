@@ -1379,6 +1379,47 @@ class UserbotService:
         except ValueError:
             return 0.0
 
+    def _enrich_application_lk_prices(self, app: dict) -> None:
+        """Заполняет lk_cost_usdt из storage.deals и/или прайса если оператор
+        не указал «ЦЕНА ЛК» в строке заявки.
+
+        Приоритет:
+          1) Текст оператора (уже стоит lk_cost_usdt > 0 — не трогаем)
+          2) storage.find_deal_by(fio=, bank=) — берём parse_money_to_usdt(amount)
+          3) accounting.PRICING_TABLE_USDT[bank] — встроенный прайс
+        """
+        import accounting as acc
+
+        def resolve(item: dict) -> float:
+            if _f := acc._f:
+                cur = _f(item.get("lk_cost_usdt"))
+                if cur > 0:
+                    return cur
+            bank = (item.get("bank") or "").strip()
+            fio = (item.get("fio") or "").strip()
+            # 1) из deals (если AI записал при record_deal)
+            if bank and fio:
+                try:
+                    matches = storage.find_deal_by(fio=fio, bank=bank) or []
+                    for d in matches:
+                        # amount может быть в USDT (400$) либо в рублях
+                        amt_usdt = self._parse_money_to_usdt(d.get("amount"))
+                        if amt_usdt > 0:
+                            return amt_usdt
+                except Exception:
+                    pass
+            # 2) встроенный прайс
+            return acc.lookup_pricing(bank)
+
+        for item in (app.get("intake") or []):
+            v = resolve(item)
+            if v > 0:
+                item["lk_cost_usdt"] = v
+        for item in (app.get("output") or []):
+            v = resolve(item)
+            if v > 0:
+                item["lk_cost_usdt"] = v
+
     async def _handle_accounting_group_message(self, event):
         """Обработчик сообщений в чате «Бухгалтерия». Парсит команды через
         accounting.parse_command. Если не команда — игнорим (можно дописать
@@ -1404,8 +1445,11 @@ class UserbotService:
             app = accounting.parse_application(text)
             if app:
                 try:
+                    # Обогащаем цены ЛК если оператор не указал «ЦЕНА ЛК»:
+                    # 1) ищем в storage.deals по fio+bank → amount
+                    # 2) fallback в встроенный прайс accounting.PRICING_TABLE_USDT
+                    self._enrich_application_lk_prices(app)
                     date_str = accounting.today_str()
-                    # Сохраняем заявку через storage helper (с lock'ом)
                     await storage.accounting_add_application(date_str, {**app, "ts": time.time()})
                     report = accounting.format_application_report(app)
                     await event.reply(report, parse_mode="html", link_preview=False)
