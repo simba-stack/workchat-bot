@@ -49,6 +49,7 @@ from storage import storage
 import brain
 import memory
 import accounting
+import learn
 
 logger = logging.getLogger(__name__)
 
