@@ -224,6 +224,37 @@ POST_DEALS_GROUP_TOOL = {
     },
 }
 
+SET_PAYMENT_METHOD_TOOL = {
+    "name": "set_payment_method",
+    "description": (
+        "Сохраняет метод оплаты (USDT_TRC20 или GUARANTOR) для текущего "
+        "клиента в его рабочей беседе. Если USDT_TRC20 — обязательно "
+        "передай адрес кошелька (usdt_address), который дал клиент.\n\n"
+        "Вызывай этот инструмент СРАЗУ как только клиент выбрал способ "
+        "оплаты — это нужно чтобы при перевязке ЛК юзербот написал в "
+        "чат «Отработка аккаунтов» правильный шаблон с адресом "
+        "(\"Номер сделки: выплата на USDT TRC20: <адрес>\")."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "method": {
+                "type": "string",
+                "enum": ["USDT_TRC20", "GUARANTOR"],
+                "description": "Метод выплаты выбранный клиентом",
+            },
+            "usdt_address": {
+                "type": "string",
+                "description": (
+                    "USDT TRC20 адрес клиента (только если method=USDT_TRC20). "
+                    "TRX адрес начинается с T, длина ~34 символа."
+                ),
+            },
+        },
+        "required": ["method"],
+    },
+}
+
 ALL_TOOLS = [
     PARTNER_TOOL,
     ESCALATE_TOOL,
@@ -231,6 +262,7 @@ ALL_TOOLS = [
     UPDATE_DEAL_STATUS_TOOL,
     FIND_DEAL_TOOL,
     POST_DEALS_GROUP_TOOL,
+    SET_PAYMENT_METHOD_TOOL,
 ]
 
 # Strip Obsidian-style [[wiki links]] for cleaner Claude context.

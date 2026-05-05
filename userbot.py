@@ -1022,17 +1022,30 @@ class UserbotService:
         if self._me and event.sender_id == self._me.id:
             return
 
-        if "отработано" not in text.lower():
+        if "отработано" not in text.lower() and "отработан" not in text.lower():
             return
-        parts = re.split(r"\s*[—–\-]\s*", text)
-        if len(parts) < 3:
-            logger.info("accounts_chat: malformed (parts<3): %r", text[:120])
+        # Снимаем markdown маркеры (Telegram копипаста)
+        clean = re.sub(r"\*\*|__|~~|`+", "", text)
+        parts = re.split(r"\s*[—–\-]\s*", clean)
+        results = []
+        if len(parts) >= 3:
+            fio = parts[0].strip()
+            bank = parts[1].strip()
+            if fio and bank:
+                results = storage.find_deal_by(fio=fio, bank=bank)
+                # Fallback если по двум полям не нашли
+                if not results:
+                    results = storage.find_deal_by(fio=fio) or storage.find_deal_by(bank=fio)
+        elif len(parts) == 2:
+            # «X — отработано» — пробуем X как ФИО, либо как БАНК
+            x = parts[0].strip()
+            if x:
+                results = storage.find_deal_by(fio=x) or storage.find_deal_by(bank=x)
+                if not results:
+                    logger.info("accounts_chat: 2-part fallback nothing for %r", x)
+        else:
+            logger.info("accounts_chat: malformed (parts<2): %r", text[:120])
             return
-        fio = parts[0].strip()
-        bank = parts[1].strip()
-        if not fio or not bank:
-            return
-        results = storage.find_deal_by(fio=fio, bank=bank)
         active = [d for d in results if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")]
         if len(active) == 0:
             logger.warning("accounts_chat: no active deal for fio=%r bank=%r (total=%d)", fio, bank, len(results))
@@ -1267,8 +1280,16 @@ class UserbotService:
 
         bank = (deal or {}).get("bank") or lk or "—"
         deal_id = (deal or {}).get("deal_id", "")
-        method = (deal or {}).get("method", "")
-        client_uname = (deal or {}).get("client_username") or ""
+        # Метод: сначала из deal, иначе из chat_info (AI установил через
+        # set_payment_method ДО record_deal).
+        method = (deal or {}).get("method") or chat_info.get("payment_method", "")
+        # USDT адрес: из chat_info (для USDT_TRC20)
+        usdt_address = chat_info.get("usdt_address", "") if method == "USDT_TRC20" else ""
+        client_uname = (
+            (deal or {}).get("client_username")
+            or chat_info.get("client_username", "")
+            or ""
+        )
         status_internal = (deal or {}).get("status") or "В_РАБОТЕ"
         # ФИО берём из deal (там точно ФИО держателя ЛК), либо
         # из распарсенной из работ-чата строки «ФИО: …» (fallback).
@@ -1281,6 +1302,7 @@ class UserbotService:
             client_username=client_uname,
             status_internal=status_internal,
             fio=fio_value,
+            usdt_address=usdt_address,
         )
         sent = None
         try:
@@ -1599,35 +1621,4 @@ class UserbotService:
                 statuses[uname_or_id] = "флуд-лимит Telegram"
             except FloodWaitError as e:
                 logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
-                statuses[uname_or_id] = f"flood wait {e.seconds}s"
-                await asyncio.sleep(e.seconds + 1)
-            except Exception as e:
-                statuses[uname_or_id] = f"ошибка: {e}"
-
-        for u, s in statuses.items():
-            logger.info("invite chat=%s @%s -> %s", channel.id, u, s)
-
-        if config.USERBOT_AS_ADMIN and self._me:
-            try:
-                rights = ChatAdminRights(
-                    change_info=True, post_messages=True, edit_messages=True,
-                    delete_messages=True, ban_users=True, invite_users=True,
-                    pin_messages=True, add_admins=False, anonymous=False, manage_call=True,
-                )
-                await self.client(EditAdminRequest(
-                    channel=channel, user_id=self._me, admin_rights=rights, rank="Owner"
-                ))
-            except Exception as e:
-                logger.warning("Admin grant failed: %s", e)
-
-        invite = await self.client(ExportChatInviteRequest(channel))
-
-        if client_id:
-            asyncio.create_task(self._watch_for_client_join(channel, client_id))
-
-        return {
-            "chat_id": channel.id,
-            "title": title,
-            "invite_link": invite.link,
-            "statuses": statuses,
-        }
+                status

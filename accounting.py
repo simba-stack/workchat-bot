@@ -205,7 +205,97 @@ def _fmt_money(value: float, currency: str = "₽") -> str:
 
 
 def format_day_report(date_str: str, record: Optional[dict]) -> str:
-    """Многострочный отчёт за день для отправки в чат «Бухгалтерия»."""
+    """Многострочный отчёт за день для отправки в чат «Бухгалтерия».
+
+    Современный формат — фокус на заявках (СТАРТ), зарплаты считаются
+    от суммы маржи по заявкам. Старые блоки (turnovers, partner_payouts,
+    lk_costs) показываются ТОЛЬКО если в них есть данные.
+    """
+    s = compute_day_summary(record or {})
+    apps = (record or {}).get("applications") or []
+    apps_count = len(apps)
+    apps_margin_usdt = s.get("apps_margin_usdt", 0.0)
+
+    # Зарплаты от суммы маржи заявок (если заявки есть)
+    op_salary_usdt = max(0.0, apps_margin_usdt * OPERATOR_RATE)
+    ex_salary_usdt = max(0.0, apps_margin_usdt * EXCHANGER_RATE)
+    net_company_usdt = apps_margin_usdt - op_salary_usdt - ex_salary_usdt
+
+    lines = [f"📊 <b>Бухгалтерия за {date_str}</b>", ""]
+
+    # Заявки — главный блок
+    if apps:
+        lines.append(f"📋 Заявок: <b>{apps_count}</b>")
+        lines.append(f"💎 Сумма маржи (заявки): <b>{apps_margin_usdt:.0f}$</b>")
+        for a in apps:
+            sa = compute_application(a)
+            lines.append(
+                f"  #{a.get('id', '?')} — {_fmt_money(sa['partner_amount_rub'])} → "
+                f"маржа <b>{sa['margin_usdt']:.0f}$</b>"
+            )
+        lines.append("")
+    else:
+        lines.append("📋 Заявок сегодня нет")
+        lines.append("")
+
+    # Курс USDT (если задан)
+    if s["rate_buy"] or s["rate_sell"]:
+        lines.append(
+            f"💱 Курс USDT: закуп <b>{s['rate_buy']:.2f} ₽</b> / "
+            f"партнёру <b>{s['rate_sell']:.2f} ₽</b>"
+        )
+
+    # Ручные правки
+    if record and record.get("manual"):
+        lines.append("")
+        lines.append("📝 <b>Правки</b>:")
+        for i, m in enumerate(record["manual"], 1):
+            label = m.get("label") or "—"
+            lines.append(f"  [{i}] {label}: {_fmt_money(_f(m.get('amount_rub')))}")
+        lines.append(f"<i>Итого правки: {_fmt_money(s['manual_total'])}</i>")
+
+    # Старые сделки/выплаты/ЛК (если есть — показываем для аудита)
+    if record and record.get("turnovers"):
+        lines.append("")
+        lines.append("📥 <b>Доп. обороты по сделкам</b>:")
+        for t in record["turnovers"]:
+            did = t.get("deal_id") or ""
+            did_part = f"#{did} — " if did else ""
+            label = t.get("label") or ""
+            lines.append(f"  • {did_part}{_fmt_money(_f(t.get('amount_rub')))} {label}".rstrip())
+
+    if record and record.get("partner_payouts"):
+        lines.append("")
+        lines.append("💸 <b>Выплаты партнёрам</b>:")
+        for p in record["partner_payouts"]:
+            did = p.get("deal_id") or ""
+            did_part = f"#{did} " if did else ""
+            client = p.get("client") or ""
+            lines.append(
+                f"  • {did_part}{client} — {_f(p.get('amount_usdt')):.2f} USDT".rstrip()
+            )
+
+    if record and record.get("lk_costs"):
+        lines.append("")
+        lines.append("🛒 <b>Доп. покупки ЛК</b>:")
+        for lk in record["lk_costs"]:
+            bank = lk.get("bank") or "—"
+            label = lk.get("label") or ""
+            tail = f" {label}" if label else ""
+            lines.append(f"  • {bank} — {_f(lk.get('amount_usdt')):.2f} USDT{tail}")
+
+    # Зарплаты + чистая маржа компании
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append(f"🧾 Зарплата операциониста (15%): <b>{op_salary_usdt:.0f}$</b>")
+    lines.append(f"🧾 Зарплата откупщика (2%): <b>{ex_salary_usdt:.0f}$</b>")
+    lines.append(f"✅ <b>Чистая маржа компании</b>: <b>{net_company_usdt:.0f}$</b>")
+
+    return "\n".join(lines)
+
+
+def _format_day_report_LEGACY(date_str: str, record: Optional[dict]) -> str:
+    """Старая версия (для backward compat если потребуется). Не используется."""
     s = compute_day_summary(record or {})
 
     rate_part = ""

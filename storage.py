@@ -223,16 +223,42 @@ class Storage:
     def get_triggers(self):
         return list(self.state["trigger_phrases"])
 
-    async def register_chat(self, chat_id, client_id: int, client_name: str):
+    async def register_chat(self, chat_id, client_id: int, client_name: str, client_username: str = ""):
         key = _norm_chat_id(chat_id)
         async with _lock:
             self.state["managed_chats"][key] = {
                 "client_id": client_id,
                 "client_name": client_name,
+                "client_username": (client_username or "").lstrip("@"),
                 "created_at": time.time(),
                 "welcome_sent": False,
+                # Метод оплаты + USDT адрес — заполняются AI через
+                # tool set_payment_method, когда клиент сделал выбор.
+                "payment_method": "",
+                "usdt_address": "",
             }
             await self._save_unlocked()
+
+    async def set_chat_payment_info(
+        self, chat_id, method: str = "", usdt_address: str = "",
+        client_username: str = "",
+    ) -> bool:
+        """Запоминает метод оплаты (USDT_TRC20/GUARANTOR), USDT-адрес и
+        username клиента для managed-чата. Используется юзерботом в
+        перевяз-форварде когда сделки в storage ещё нет."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            if method:
+                info["payment_method"] = (method or "").upper()
+            if usdt_address:
+                info["usdt_address"] = usdt_address.strip()
+            if client_username:
+                info["client_username"] = client_username.lstrip("@").strip()
+            await self._save_unlocked()
+            return True
 
     def get_chat_info(self, chat_id) -> Optional[dict]:
         return self.state["managed_chats"].get(_norm_chat_id(chat_id))
