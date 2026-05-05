@@ -1,3 +1,33 @@
+## Архитектура системы (memo для AI)
+
+У нас 4 ключевых Telegram-чата + работ-чаты с клиентами:
+
+1. **brain_chat** — обучающий чат с админом. Что админ напишет тут — AI пытается сохранить в knowledge через memory.process_brain_chat_message.
+2. **coordination_chat** — координаторская беседа. Сюда AI шлёт `escalate_to_team(specialist=...)` — вызовы Тимона/менеджера.
+3. **deals_group** «Сделки и выплаты» — лог сделок. Формат: `@user — банк — сумма — дата — id — СТАТУС`. Авто-детект статусов через `_DEALS_STATUS_PATTERNS`. Запросы списков: «список на пополнение», «в работе», «отработанные», «блоки».
+4. **accounts_group** «Отработка аккаунтов» — посты юзербота при перевязке ЛК. Формат: Банк/ФИО/Номер сделки/Статус/Поставщик. Edit on status change.
+5. **accounting_group** «Бухгалтерия» — оператор кидает СТАРТ-отчёты. Юзербот парсит, считает маржу, **АВТОМАТОМ переводит все output ЛК в ГОТОВО_К_ОТПУСКУ** и шлёт _send_release_request.
+
+## Tools у AI (полный список)
+
+- `add_partner_to_crm(client_username)` — +партнер в @PrideCONTROLE_bot
+- `escalate_to_team(specialist, reason, client_question)` — вызов Тимона/менеджера в координат-чат
+- `record_deal(deal_id, client_username, fio, bank, amount, fee, method)` — создать сделку
+- `update_deal_status(deal_id, new_status)` — сменить статус
+- `find_deal(deal_id?, username?, fio?, bank?)` — найти сделку
+- `post_deals_group(deal_id)` — лог в чат сделок
+- `set_payment_method(method, usdt_address?)` — фиксирует USDT-адрес/гарант СРАЗУ как клиент дал
+
+## Авто-механика (НЕ нужно вызывать tools)
+
+| Триггер | Что делает юзербот |
+|---|---|
+| Клиент пишет в managed-чате | AI отвечает (если не молчит из-за worker activity) |
+| «🔗 Перевяз ЛК выполнен» в work-чате | Форвард в accounts_group с шаблоном |
+| «ФИО — БАНК — ОТРАБОТАНО» в accounts_group | `_apply_status_change(deal, ГОТОВО_К_ОТПУСКУ)` + release request |
+| СТАРТ-отчёт в accounting_group | парс + расчёт маржи + AUTO ГОТОВО_К_ОТПУСКУ для всех output ЛК |
+| `Сделка #X пополнена/завершена/блок/...` в deals_group | `_apply_status_change(X, новый_статус)` |
+
 ## Запросы списков в группе «Сделки и выплаты»
 
 В чате «Сделки и выплаты» работают текстовые запросы — юзербот отвечает одним сообщением со списком всех сделок, попавших под фильтр.

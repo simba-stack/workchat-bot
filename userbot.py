@@ -1442,6 +1442,66 @@ class UserbotService:
             if v > 0:
                 item["lk_cost_usdt"] = v
 
+    async def _auto_release_application_lks(self, app: dict) -> dict:
+        """Для каждого output ЛК заявки находит активную сделку (по fio+bank
+        либо только fio либо только bank) и переводит в ГОТОВО_К_ОТПУСКУ.
+
+        После смены статуса вызывается _send_release_request — запрос Тимону
+        отпустить выплату по методу.
+
+        Возвращает: {matched: int, missed: int, missed_names: [str]}.
+        """
+        matched = 0
+        missed = 0
+        missed_names: list = []
+
+        outputs = app.get("output") or []
+        for o in outputs:
+            fio = (o.get("fio") or "").strip()
+            bank = (o.get("bank") or "").strip()
+            if not fio:
+                continue
+            # Ищем сделку — сначала точное совпадение fio+bank, потом fallback
+            results = []
+            if bank:
+                results = storage.find_deal_by(fio=fio, bank=bank)
+            if not results:
+                results = storage.find_deal_by(fio=fio)
+            # Только активные (не уже завершённые)
+            active = [
+                d for d in results
+                if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")
+            ]
+            if not active:
+                missed += 1
+                label = f"{bank} {fio}".strip() or fio
+                missed_names.append(label)
+                continue
+            # Берём самую свежую (если несколько активных)
+            active.sort(key=lambda d: d.get("created_at", 0), reverse=True)
+            deal_id = active[0]["deal_id"]
+            try:
+                await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
+                await self._send_release_request(deal_id)
+                matched += 1
+                logger.info(
+                    "auto-release: app=%s lk=%s/%s -> deal=%s ГОТОВО_К_ОТПУСКУ",
+                    app.get("id"), bank, fio, deal_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "auto-release failed for deal=%s (lk=%s/%s): %s",
+                    deal_id, bank, fio, e,
+                )
+                missed += 1
+                missed_names.append(f"{bank} {fio} (ошибка)")
+
+        return {
+            "matched": matched,
+            "missed": missed,
+            "missed_names": missed_names,
+        }
+
     async def _handle_accounting_group_message(self, event):
         """Обработчик сообщений в чате «Бухгалтерия». Парсит команды через
         accounting.parse_command. Если не команда — игнорим (можно дописать
@@ -1477,11 +1537,40 @@ class UserbotService:
                     date_str = accounting.today_str()
                     await storage.accounting_add_application(date_str, {**app, "ts": time.time()})
                     report = accounting.format_application_report(app)
+
+                    # Автоматом меняем статус всех ЛК заявки на ГОТОВО_К_ОТПУСКУ.
+                    # Output ЛК = выводные счета поставщиков (наши клиенты-продавцы).
+                    # Каждое такое ЛК — отдельная сделка в storage.deals.
+                    # При смене статуса:
+                    #   - пост в чате «Отработка аккаунтов» меняется на УСПЕШНО ОТРАБОТАНО
+                    #   - в чат «Сделки и выплаты» уходит обновление статуса
+                    #   - клиенту-поставщику в work_chat уходит уведомление
+                    #   - + _send_release_request с тегом @TimonSkupCL.
+                    auto_results = await self._auto_release_application_lks(app)
+                    if auto_results["matched"]:
+                        report += (
+                            f"\n\n🔄 Автоматом переведено в ГОТОВО_К_ОТПУСКУ: "
+                            f"<b>{auto_results['matched']}</b> сделок"
+                        )
+                        if auto_results["missed"]:
+                            report += (
+                                f"\n⚠️ Не найдено в storage.deals: "
+                                f"{auto_results['missed']} ЛК "
+                                f"({', '.join(auto_results['missed_names'])})"
+                            )
+                    elif auto_results["missed"]:
+                        report += (
+                            f"\n\n⚠️ Сделки не найдены в storage для ЛК: "
+                            f"{', '.join(auto_results['missed_names'])}"
+                        )
+
                     await event.reply(report, parse_mode="html", link_preview=False)
                     logger.info(
-                        "accounting_chat: parsed application id=%s margin=%.0f$",
+                        "accounting_chat: parsed application id=%s margin=%.0f$ "
+                        "auto-released=%d missed=%d",
                         app.get("id"),
                         accounting.compute_application(app)["margin_usdt"],
+                        auto_results["matched"], auto_results["missed"],
                     )
                 except Exception as e:
                     logger.exception("application save failed: %s", e)
