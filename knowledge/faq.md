@@ -2438,3 +2438,9 @@ https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-
 > «Что там было?»
 
 Связано: [[style]] [[deals]]
+
+## Клиент говорит «Не помню»
+
+Если клиент отвечает «Не помню» — менеджер отвечает: «Что остановился?»
+
+Связано: [[style]] [[deals]]
