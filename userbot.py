@@ -1440,9 +1440,12 @@ class UserbotService:
                 pass
             return
 
-        # Сначала пробуем парсер формата «СТАРТ» (мульти-строка с ПРИЕМ/Вывод/Выплата)
-        if "\n" in text and ("заявка" in text.lower() or "прием" in text.lower() or "приём" in text.lower()):
-            app = accounting.parse_application(text)
+        # Сначала пробуем парсер формата «СТАРТ» (мульти-строка с ПРИЕМ/Вывод/Выплата).
+        # Telegram-копипаста содержит markdown-маркеры (**bold**, __italic__),
+        # снимаем их перед парсингом — иначе регулярки не находят «Заявка».
+        clean_text = re.sub(r"\*\*|__|~~|`+", "", text)
+        if "\n" in clean_text and ("заявка" in clean_text.lower() or "прием" in clean_text.lower() or "приём" in clean_text.lower()):
+            app = accounting.parse_application(clean_text)
             if app:
                 try:
                     # Обогащаем цены ЛК если оператор не указал «ЦЕНА ЛК»:
