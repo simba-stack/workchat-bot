@@ -48,6 +48,7 @@ import config
 from storage import storage
 import brain
 import memory
+import accounting
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,10 @@ class UserbotService:
         self._welcome_locks: dict[int, asyncio.Lock] = {}
         self._ai_locks: dict[int, asyncio.Lock] = {}
         self._last_worker_ts: dict[str, float] = {}
+        # Время последнего сообщения от клиента в managed-чате (нормализованный
+        # chat_id -> unix time). Используется в _handle_ai_message чтобы
+        # понимать «отвечал ли worker на ПРЕДЫДУЩЕЕ сообщение клиента».
+        self._last_client_msg_ts: dict[str, float] = {}
         self._chat_entity_cache: dict[int, object] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
@@ -339,6 +344,11 @@ class UserbotService:
         accounts_id = storage.get_accounts_group_id()
         if accounts_id and _norm_chat_id(chat_id) == _norm_chat_id(accounts_id):
             await self._handle_accounts_group_message(event)
+            return
+
+        accounting_id = storage.get_accounting_group_id()
+        if accounting_id and _norm_chat_id(chat_id) == _norm_chat_id(accounting_id):
+            await self._handle_accounting_group_message(event)
             return
 
         chat_info = storage.get_chat_info(chat_id)
@@ -1125,6 +1135,16 @@ class UserbotService:
         except Exception as e:
             logger.warning("refresh_accounts_post failed after status change: %s", e)
 
+        # Авто-запись в бухгалтерию при завершении сделки.
+        # turnover = amount сделки в рублях.
+        # partner_payout = USDT-эквивалент по прайсу банка (берём deal.amount как
+        # рублёвую сумму или fee если задано иначе — используем deal.amount как turnover).
+        if new_status == "ЗАВЕРШЕНА":
+            try:
+                await self._accounting_record_deal_completion(deal_id, deal)
+            except Exception as e:
+                logger.warning("accounting auto-record failed for deal=%s: %s", deal_id, e)
+
         work_chat = deal.get("work_chat_id")
         client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
         if not work_chat or not client_msg:
@@ -1283,6 +1303,185 @@ class UserbotService:
         if deal_id:
             await self._apply_status_change(deal_id, "В_РАБОТЕ")
         return True
+
+    # === Бухгалтерия ===
+
+    async def _accounting_record_deal_completion(self, deal_id: str, deal: dict):
+        """Авто-запись в storage.accounting при ЗАВЕРШЕНА.
+
+        turnover_rub = deal.amount (если строка с цифрами — парсим).
+        partner_payout_usdt = берётся из deal.fee если задано как USDT;
+        иначе пропускаем (менеджер заполнит вручную через accounting_group).
+        """
+        date_str = accounting.today_str()
+
+        # turnover (rub)
+        amount_rub = self._parse_money_to_rub(deal.get("amount"))
+        if amount_rub > 0:
+            await storage.accounting_add_turnover(
+                date_str=date_str,
+                deal_id=deal_id,
+                amount_rub=amount_rub,
+                label=deal.get("bank") or "",
+            )
+
+        # partner payout — если в fee указано «400$» / «400 USDT» — добавим в выплаты
+        fee_usdt = self._parse_money_to_usdt(deal.get("fee"))
+        if fee_usdt > 0:
+            client = deal.get("client_username") or ""
+            if client and not client.startswith("@"):
+                client = "@" + client.lstrip("@")
+            await storage.accounting_add_partner_payout(
+                date_str=date_str,
+                deal_id=deal_id,
+                amount_usdt=fee_usdt,
+                client=client,
+            )
+        logger.info(
+            "accounting auto-record: deal=%s rub=%s usdt=%s",
+            deal_id, amount_rub, fee_usdt,
+        )
+
+    @staticmethod
+    def _parse_money_to_rub(s) -> float:
+        """50 000₽ / 50000 / '50 000 руб' → 50000.0. USDT → 0 (не наша единица)."""
+        if not s:
+            return 0.0
+        txt = str(s).lower()
+        if any(x in txt for x in ("usdt", "$", "usd", "trc20")):
+            return 0.0
+        digits = "".join(ch for ch in txt if ch.isdigit() or ch in ".,")
+        digits = digits.replace(",", ".")
+        # многоточек → берём первое
+        if digits.count(".") > 1:
+            parts = digits.split(".")
+            digits = parts[0] + "." + "".join(parts[1:])
+        try:
+            return float(digits or 0)
+        except ValueError:
+            return 0.0
+
+    @staticmethod
+    def _parse_money_to_usdt(s) -> float:
+        """'400$' / '400 USDT' → 400.0. Без явного USDT/$ → 0."""
+        if not s:
+            return 0.0
+        txt = str(s).lower()
+        if not any(x in txt for x in ("usdt", "$", "usd", "trc20")):
+            return 0.0
+        digits = "".join(ch for ch in txt if ch.isdigit() or ch in ".,")
+        digits = digits.replace(",", ".")
+        if digits.count(".") > 1:
+            parts = digits.split(".")
+            digits = parts[0] + "." + "".join(parts[1:])
+        try:
+            return float(digits or 0)
+        except ValueError:
+            return 0.0
+
+    async def _handle_accounting_group_message(self, event):
+        """Обработчик сообщений в чате «Бухгалтерия». Парсит команды через
+        accounting.parse_command. Если не команда — игнорим (можно дописать
+        тегом @userbot help для справки)."""
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        if self._me and event.sender_id == self._me.id:
+            return  # своё сообщение
+
+        # Help / help
+        if text.lower() in ("/help", "help", "помощь", "?"):
+            try:
+                await event.reply(accounting.HELP_TEXT, parse_mode="html", link_preview=False)
+            except Exception:
+                pass
+            return
+
+        cmd = accounting.parse_command(text)
+        if not cmd:
+            logger.info("accounting_chat: not a command: %r", text[:80])
+            return
+
+        kind = cmd["cmd"]
+        date_str = cmd.get("date") or accounting.today_str()
+        ack = ""
+
+        try:
+            if kind == "report":
+                rec = storage.get_accounting_day(date_str)
+                report = accounting.format_day_report(date_str, rec)
+                await event.reply(report, parse_mode="html", link_preview=False)
+                return
+            elif kind == "courses":
+                await storage.accounting_set_courses(
+                    date_str, cmd["buy"], cmd["sell"]
+                )
+                ack = (
+                    f"💱 Курс USDT за {date_str}: "
+                    f"закуп {cmd['buy']:.2f} ₽ / партнёру {cmd['sell']:.2f} ₽"
+                )
+            elif kind == "manual":
+                await storage.accounting_add_manual(
+                    date_str, cmd["label"], cmd["amount_rub"]
+                )
+                sign = "📈 приход" if cmd["amount_rub"] >= 0 else "📉 расход"
+                ack = (
+                    f"{sign}: {cmd['label']} — "
+                    f"{abs(cmd['amount_rub']):.0f} ₽ ({date_str})"
+                )
+            elif kind == "lk":
+                await storage.accounting_add_lk_cost(
+                    date_str, cmd["bank"], cmd["amount_usdt"], cmd.get("label", "")
+                )
+                ack = (
+                    f"🛒 ЛК {cmd['bank']}: {cmd['amount_usdt']:.2f} USDT "
+                    f"({date_str})"
+                )
+            elif kind == "turnover":
+                await storage.accounting_add_turnover(
+                    date_str,
+                    cmd.get("deal_id", ""),
+                    cmd["amount_rub"],
+                    cmd.get("label", ""),
+                )
+                did = cmd.get("deal_id", "")
+                did_part = f" (#{did})" if did else ""
+                ack = f"💰 Оборот {cmd['amount_rub']:.0f} ₽{did_part} ({date_str})"
+            elif kind == "partner":
+                await storage.accounting_add_partner_payout(
+                    date_str,
+                    cmd.get("deal_id", ""),
+                    cmd["amount_usdt"],
+                    cmd["client"],
+                )
+                did = cmd.get("deal_id", "")
+                did_part = f" (#{did})" if did else ""
+                ack = (
+                    f"💸 Партнёру {cmd['client']}: {cmd['amount_usdt']:.2f} USDT"
+                    f"{did_part} ({date_str})"
+                )
+            elif kind == "remove_manual":
+                ok = await storage.accounting_remove_manual(date_str, cmd["index"])
+                ack = (
+                    f"🗑 Правка #{cmd['index']+1} удалена ({date_str})"
+                    if ok else
+                    f"⚠️ Правка #{cmd['index']+1} не найдена ({date_str})"
+                )
+            else:
+                return
+
+            try:
+                await event.reply(ack, link_preview=False)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception("accounting handler failed: %s", e)
+            try:
+                await event.reply(f"⚠️ Ошибка: {e}")
+            except Exception:
+                pass
 
     async def stop(self):
         await self.client.disconnect()

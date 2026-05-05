@@ -26,6 +26,7 @@ class AdminFSM(StatesGroup):
     set_coord_chat = State()
     set_deals_chat = State()
     set_accounts_chat = State()
+    set_accounting_chat = State()
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -133,6 +134,15 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
             reply_markup=back_kb(),
         )
         await state.set_state(AdminFSM.set_deals_chat)
+    elif action == "ai_set_accounting":
+        await call.message.edit_text(
+            "Пришлите ID чата «Бухгалтерия» (число или <code>0</code> чтобы отключить).\n\n"
+            "<i>Юзербот должен быть участником этой беседы. Туда будут приходить "
+            "ежедневные отчёты + менеджер вводит туда команды (приход/расход/курс/ЛК/etc).</i>\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_accounting_chat)
     elif action == "ai_set_accounts":
         await call.message.edit_text(
             "Пришлите ID чата «Отработка аккаунтов» (число или <code>0</code>).\n\n"
@@ -328,6 +338,7 @@ async def render_ai(call: CallbackQuery):
     # Система учёта сделок
     deals_id = storage.get_deals_group_id()
     accounts_id = storage.get_accounts_group_id()
+    accounting_id = storage.get_accounting_group_id()
     deals_stats = storage.get_deals_stats()
     by_status = deals_stats.get("by_status", {}) or {}
     by_status_str = ", ".join(f"{s}: {c}" for s, c in by_status.items()) if by_status else "—"
@@ -336,6 +347,7 @@ async def render_ai(call: CallbackQuery):
         f"💼 <b>Система учёта сделок</b>\n"
         f"Чат «Сделки и выплаты»: <code>{deals_id or '— не задан —'}</code>\n"
         f"Чат «Отработка аккаунтов»: <code>{accounts_id or '— не задан —'}</code>\n"
+        f"Чат «Бухгалтерия»: <code>{accounting_id or '— не задан —'}</code>\n"
         f"• Сделок создано: <b>{deals_stats.get('created_total', 0)}</b>\n"
         f"• По статусам: {by_status_str}"
     )
@@ -349,6 +361,7 @@ async def render_ai(call: CallbackQuery):
         [InlineKeyboardButton(text="🆘 Координат. чат ID", callback_data="adm:ai_set_coord")],
         [InlineKeyboardButton(text="💼 Чат сделок ID", callback_data="adm:ai_set_deals")],
         [InlineKeyboardButton(text="💼 Чат отработки ID", callback_data="adm:ai_set_accounts")],
+        [InlineKeyboardButton(text="📊 Бухгалтерия чат ID", callback_data="adm:ai_set_accounting")],
         [InlineKeyboardButton(text="🤖 Модель Claude", callback_data="adm:ai_set_model")],
         [InlineKeyboardButton(text="⏱ Тишина сотрудников", callback_data="adm:ai_set_idle")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
@@ -621,6 +634,29 @@ async def fsm_set_accounts_chat(message: Message, state: FSMContext):
     label = "очищен" if chat_id == 0 else f"<code>{chat_id}</code>"
     await message.answer(
         f"✅ Чат «Отработка аккаунтов»: {label}",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_accounting_chat)
+async def fsm_set_accounting_chat(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear(); return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        chat_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("Нужно целое число (chat_id). Пришлите ещё раз или /admin.")
+        return
+    await storage.set_accounting_group_id(chat_id)
+    await state.clear()
+    label = "очищен" if chat_id == 0 else f"<code>{chat_id}</code>"
+    await message.answer(
+        f"✅ Чат «Бухгалтерия»: {label}\n\n"
+        f"<i>Команды в чате — пришлите «помощь» / «?» / «/help».</i>",
         reply_markup=main_menu_kb(),
     )
 

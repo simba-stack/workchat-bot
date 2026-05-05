@@ -93,6 +93,12 @@ def _default_state() -> dict:
         # Перевяз-форварды в «Отработка аккаунтов» сделанные ДО record_deal.
         # Ключ — _norm_chat_id(work_chat_id), значение — msg_id.
         "pending_accounts_posts": {},
+        # === Бухгалтерия ===
+        # Чат «Бухгалтерия» (ежедневные отчёты + ручные команды).
+        "accounting_group_id": 0,
+        # Записи по дням. Ключ — date_str "YYYY-MM-DD".
+        # Структура одной записи — см. accounting.empty_day_record().
+        "accounting": {},
     }
 
 
@@ -586,6 +592,103 @@ class Storage:
                 return int(v) if v is not None else None
             except (TypeError, ValueError):
                 return None
+
+    # === Бухгалтерия ===
+
+    def get_accounting_group_id(self) -> int:
+        return int(self.state.get("accounting_group_id") or 0)
+
+    async def set_accounting_group_id(self, chat_id: int):
+        async with _lock:
+            self.state["accounting_group_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def _empty_day_record(self) -> dict:
+        return {
+            "turnovers": [],
+            "partner_payouts": [],
+            "lk_costs": [],
+            "courses": {"usdt_buy_rub": 0.0, "usdt_sell_rub": 0.0},
+            "manual": [],
+        }
+
+    def get_accounting_day(self, date_str: str) -> dict:
+        rec = (self.state.get("accounting") or {}).get(date_str)
+        if rec is None:
+            return self._empty_day_record()
+        return rec
+
+    def list_accounting_dates(self) -> list:
+        return sorted((self.state.get("accounting") or {}).keys())
+
+    def _ensure_day(self, date_str: str) -> dict:
+        acc = self.state.setdefault("accounting", {})
+        if date_str not in acc:
+            acc[date_str] = self._empty_day_record()
+        return acc[date_str]
+
+    async def accounting_add_turnover(self, date_str, deal_id, amount_rub, label=""):
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day["turnovers"].append({
+                "deal_id": (deal_id or "").lstrip("#"),
+                "amount_rub": float(amount_rub or 0),
+                "label": label or "",
+                "ts": time.time(),
+            })
+            await self._save_unlocked()
+
+    async def accounting_add_partner_payout(self, date_str, deal_id, amount_usdt, client=""):
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day["partner_payouts"].append({
+                "deal_id": (deal_id or "").lstrip("#"),
+                "amount_usdt": float(amount_usdt or 0),
+                "client": client or "",
+                "ts": time.time(),
+            })
+            await self._save_unlocked()
+
+    async def accounting_add_lk_cost(self, date_str, bank, amount_usdt, label=""):
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day["lk_costs"].append({
+                "bank": bank or "",
+                "amount_usdt": float(amount_usdt or 0),
+                "label": label or "",
+                "ts": time.time(),
+            })
+            await self._save_unlocked()
+
+    async def accounting_set_courses(self, date_str, usdt_buy_rub, usdt_sell_rub):
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day["courses"] = {
+                "usdt_buy_rub": float(usdt_buy_rub or 0),
+                "usdt_sell_rub": float(usdt_sell_rub or 0),
+            }
+            await self._save_unlocked()
+
+    async def accounting_add_manual(self, date_str, label, amount_rub):
+        """amount_rub: положительный = приход, отрицательный = расход."""
+        async with _lock:
+            day = self._ensure_day(date_str)
+            day["manual"].append({
+                "label": label or "—",
+                "amount_rub": float(amount_rub or 0),
+                "ts": time.time(),
+            })
+            await self._save_unlocked()
+
+    async def accounting_remove_manual(self, date_str, index):
+        async with _lock:
+            day = self._ensure_day(date_str)
+            arr = day.get("manual") or []
+            if index < 0 or index >= len(arr):
+                return False
+            arr.pop(index)
+            await self._save_unlocked()
+            return True
 
 
 storage = Storage(config.STORAGE_PATH)
