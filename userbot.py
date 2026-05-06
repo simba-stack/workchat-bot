@@ -1730,4 +1730,32 @@ class UserbotService:
                 logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
                 statuses[uname_or_id] = f"flood wait {e.seconds}s"
             except Exception as e:
-                statuses[uname_or_id] = f
+                statuses[uname_or_id] = f"ошибка: {e}"
+
+        for u, s in statuses.items():
+            logger.info("invite chat=%s @%s -> %s", channel.id, u, s)
+
+        if config.USERBOT_AS_ADMIN and self._me:
+            try:
+                rights = ChatAdminRights(
+                    change_info=True, post_messages=True, edit_messages=True,
+                    delete_messages=True, ban_users=True, invite_users=True,
+                    pin_messages=True, add_admins=False, anonymous=False, manage_call=True,
+                )
+                await self.client(EditAdminRequest(
+                    channel=channel, user_id=self._me, admin_rights=rights, rank="Owner"
+                ))
+            except Exception as e:
+                logger.warning("Admin grant failed: %s", e)
+
+        invite = await self.client(ExportChatInviteRequest(channel))
+
+        if client_id:
+            asyncio.create_task(self._watch_for_client_join(channel, client_id))
+
+        return {
+            "chat_id": channel.id,
+            "title": title,
+            "invite_link": invite.link,
+            "statuses": statuses,
+        }
