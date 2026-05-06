@@ -3083,3 +3083,9 @@ https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-
 **Пример ответа:** «Привет, через минут 20-30 сделаем»
 
 Связано: [[deals]] [[style]]
+
+## Клиент пишет «жду»
+
+Если клиент пишет «жду» (ожидает чего-либо) — отвечать: **«400»**.
+
+Связано: [[style]] [[deals]]
