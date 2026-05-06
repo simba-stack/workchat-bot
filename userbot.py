@@ -49,7 +49,6 @@ import config
 from storage import storage
 import brain
 import memory
-import accounting
 import accounting2
 import learn
 
@@ -354,13 +353,6 @@ class UserbotService:
         accounting_id = storage.get_accounting_group_id()
         if accounting_id and _norm_chat_id(chat_id) == _norm_chat_id(accounting_id):
             await self._handle_accounting_v2_message(event)
-            return
-
-        # LEGACY: старая «Отработка аккаунтов» — оставлен на переходный период.
-        # Если accounts_group_id задан в state, обрабатываем как раньше.
-        accounts_id = storage.get_accounts_group_id()
-        if accounts_id and _norm_chat_id(chat_id) == _norm_chat_id(accounts_id):
-            await self._handle_accounts_group_message(event)
             return
 
         chat_info = storage.get_chat_info(chat_id)
@@ -904,20 +896,42 @@ class UserbotService:
             return {"status": "error", "error": "add_failed"}
         logger.info("deal recorded: %s | @%s | %s | %s", deal_id, client_username, bank, amount)
 
-        # Если перевяз случился ДО record_deal — accounts_group уже содержит
-        # пост с «Номер сделки: выплата после отработки» (или USDT_TRC20).
-        # Подменяем deal_id на актуальный, обновляем статус.
+        # V2: если в этом же work_chat есть карточка ЛК со статусом ОТРАБОТАН и
+        # методом GUARANTOR_AFTER_WORK — это значит юзербот ранее попросил
+        # клиента создать сделку Conte после отработки. Получив номер сделки —
+        # переводим карточку в ПОПОЛНИТЬ_И_ОТПУСТИТЬ, прокидываем deal_id.
+        moved_card_id = None
         if work_chat_id is not None:
-            pending_msg_id = await storage.pop_pending_accounts_post(work_chat_id)
-            if pending_msg_id:
-                await storage.set_accounts_group_msg_id(deal_id, pending_msg_id)
-                await self._refresh_accounts_post(deal_id)
-                logger.info(
-                    "record_deal: linked PENDING accounts_msg=%s to deal=%s",
-                    pending_msg_id, deal_id,
-                )
+            try:
+                wc_norm = abs(int(work_chat_id))
+                for cid, c in (storage.list_lk_cards() or {}).items():
+                    if not c.get("work_chat_id"):
+                        continue
+                    if abs(int(c.get("work_chat_id"))) != wc_norm:
+                        continue
+                    if c.get("payment_method") != "GUARANTOR_AFTER_WORK":
+                        continue
+                    if c.get("status") != "ОТРАБОТАН":
+                        continue
+                    await storage.set_lk_card_status(
+                        cid, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                        deal_id=deal_id, by="record_deal",
+                    )
+                    await self._refresh_lk_card_post(cid)
+                    moved_card_id = cid
+                    logger.info(
+                        "record_deal: card=%s moved to ПОПОЛНИТЬ_И_ОТПУСТИТЬ for deal=%s",
+                        cid, deal_id,
+                    )
+                    break
+            except Exception as e:
+                logger.warning("record_deal: lk-card auto-move failed: %s", e)
 
-        return {"status": "ok", "deal_id": deal_id, "initial_status": "ПОПОЛНИТЬ"}
+        result = {"status": "ok", "deal_id": deal_id, "initial_status": "ПОПОЛНИТЬ"}
+        if moved_card_id:
+            result["lk_card_moved"] = moved_card_id
+            result["lk_new_status"] = "ПОПОЛНИТЬ_И_ОТПУСТИТЬ"
+        return result
 
     async def _tool_update_deal_status(self, deal_id: str = "", new_status: str = "") -> dict:
         ok = await storage.update_deal_status(deal_id, new_status)
@@ -1032,19 +1046,20 @@ class UserbotService:
         client_id = info.get("client_id") or ""
         client_username = info.get("client_username") or ""
 
-        card_id = await storage.add_lk_card({
-            "supplier": client_username or "—",
-            "bank": bank,
-            "fio": fio,
-            "price_usdt": float(price_usdt),
-            "payment_method": payment_method,
-            "deal_id": deal_id,
-            "usdt_address": usdt_address,
-            "status": "В_РАБОТЕ",
-            "client_id": client_id,
-            "client_username": client_username,
-            "work_chat_id": chat_id,
-        })
+        card_id = await storage.add_lk_card(
+            supplier=client_username or "—",
+            bank=bank,
+            fio=fio,
+            price_usdt=float(price_usdt),
+            payment_method=payment_method,
+            deal_id=deal_id,
+            usdt_address=usdt_address,
+            status="В_РАБОТЕ",
+            client_id=client_id,
+            client_username=client_username,
+            work_chat_id=chat_id,
+            created_by="ai_tool",
+        )
 
         try:
             await self._refresh_lk_card_post(card_id)
@@ -1175,125 +1190,10 @@ class UserbotService:
             return
         logger.info("deals_chat: no status pattern matched in %r", text[:120])
 
-    async def _handle_accounts_group_message(self, event):
-        if not event.message:
-            return
-        text = (event.message.text or "").strip()
-        if not text:
-            return
-        if self._me and event.sender_id == self._me.id:
-            return
-
-        if "отработано" not in text.lower() and "отработан" not in text.lower():
-            return
-        # Снимаем markdown маркеры (Telegram копипаста)
-        clean = re.sub(r"\*\*|__|~~|`+", "", text)
-        parts = re.split(r"\s*[—–\-]\s*", clean)
-        results = []
-        if len(parts) >= 3:
-            fio = parts[0].strip()
-            bank = parts[1].strip()
-            if fio and bank:
-                results = storage.find_deal_by(fio=fio, bank=bank)
-                # Fallback если по двум полям не нашли
-                if not results:
-                    results = storage.find_deal_by(fio=fio) or storage.find_deal_by(bank=fio)
-        elif len(parts) == 2:
-            # «X — отработано» — пробуем X как ФИО, либо как БАНК
-            x = parts[0].strip()
-            if x:
-                results = storage.find_deal_by(fio=x) or storage.find_deal_by(bank=x)
-                if not results:
-                    logger.info("accounts_chat: 2-part fallback nothing for %r", x)
-        else:
-            logger.info("accounts_chat: malformed (parts<2): %r", text[:120])
-            return
-        active = [d for d in results if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")]
-        if len(active) == 0:
-            logger.warning("accounts_chat: no active deal for fio=%r bank=%r (total=%d)", fio, bank, len(results))
-            return
-        if len(active) > 1:
-            logger.warning("accounts_chat: multiple active deals for fio=%r bank=%r (count=%d)", fio, bank, len(active))
-            active.sort(key=lambda d: d.get("created_at", 0), reverse=True)
-        deal_id = active[0]["deal_id"]
-        logger.info("accounts_chat ОТРАБОТАНО: deal=%s fio=%r bank=%r -> ГОТОВО_К_ОТПУСКУ", deal_id, fio, bank)
-        await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
-        # После «ОТРАБОТАНО» запрашиваем у Тимона отпуск/выплату по методу,
-        # который выбрал клиент при оформлении (GUARANTOR / USDT_TRC20).
-        try:
-            await self._send_release_request(deal_id)
-        except Exception as e:
-            logger.warning("send_release_request failed for deal=%s: %s", deal_id, e)
-
-    async def _send_release_request(self, deal_id: str) -> bool:
-        """После статуса ГОТОВО_К_ОТПУСКУ шлёт запрос в чат «Сделки и выплаты»
-        с тегом @TimonSkupCL — отпустить деньги в гаранте или отправить выплату
-        на USDT TRC20 (по методу из deal.method).
-
-        Если deals_group_id не задан — ничего не делает.
-        """
-        gid = storage.get_deals_group_id()
-        if not gid:
-            logger.info("release_request: deals_group_id не задан, пропуск")
-            return False
-        deal = storage.get_deal(deal_id) or {}
-        method = (deal.get("method") or "").upper()
-        bank = deal.get("bank") or "—"
-        fio = (deal.get("fio") or "").strip() or "—"
-        if method == "GUARANTOR":
-            ask = "отпустить деньги в гаранте"
-        elif method == "USDT_TRC20":
-            ask = "отправить выплату на USDT TRC20"
-        else:
-            ask = f"отпустить (метод: {method or 'не указан'})"
-        text = (
-            f"❓ Сделка #{deal_id} ({bank}, {fio}) отработана — {ask}? "
-            f"@TimonSkupCL"
-        )
-        try:
-            target = await self._resolve_chat_target(gid)
-            await self.client.send_message(target, text, link_preview=False)
-            logger.info(
-                "release request sent: deal=%s method=%s -> deals_group=%s",
-                deal_id, method, gid,
-            )
-            return True
-        except Exception as e:
-            logger.warning("release request send failed for deal=%s: %s", deal_id, e)
-            return False
-
-    async def _refresh_accounts_post(self, deal_id: str) -> bool:
-        """Перерисовывает пост в чате «Отработка аккаунтов» текущим состоянием
-        сделки. Используется после record_deal (когда подцепили pending пост)
-        и после смены статуса. Если у сделки нет accounts_group_msg_id —
-        ничего не делает."""
-        deal = storage.get_deal(deal_id) or {}
-        msg_id = deal.get("accounts_group_msg_id")
-        if not msg_id:
-            return False
-        accounts_id = storage.get_accounts_group_id()
-        if not accounts_id:
-            return False
-        text = self._build_accounts_msg(
-            bank=deal.get("bank") or "",
-            deal_id=deal_id,
-            method=deal.get("method") or "",
-            client_username=deal.get("client_username") or "",
-            status_internal=deal.get("status") or "В_РАБОТЕ",
-            fio=deal.get("fio") or "",
-        )
-        try:
-            target = await self._resolve_chat_target(accounts_id)
-            await self.client.edit_message(target, msg_id, text, link_preview=False)
-            logger.info("refreshed accounts_msg=%s for deal=%s status=%s", msg_id, deal_id, deal.get("status"))
-            return True
-        except Exception as e:
-            logger.warning("refresh accounts_msg=%s for deal=%s failed: %s", msg_id, deal_id, e)
-            return False
-
     async def _apply_status_change(self, deal_id: str, new_status: str):
         """Универсальная процедура: update_deal_status + post в deals_group +
-        обновление поста в accounts_group + notify клиента в его work_chat."""
+        notify клиента в его work_chat. (V2: accounts_group и V1-бухгалтерия
+        выпилены — статусы ЛК ведутся через storage.lk_cards в Группе 1.)"""
         ok = await storage.update_deal_status(deal_id, new_status)
         if not ok:
             logger.warning("apply_status_change: deal %s not found in storage", deal_id)
@@ -1304,21 +1204,6 @@ class UserbotService:
             await self._tool_post_deals_group(deal_id=deal_id)
         except Exception as e:
             logger.warning("post_deals_group failed after status change: %s", e)
-
-        try:
-            await self._refresh_accounts_post(deal_id)
-        except Exception as e:
-            logger.warning("refresh_accounts_post failed after status change: %s", e)
-
-        # Авто-запись в бухгалтерию при завершении сделки.
-        # turnover = amount сделки в рублях.
-        # partner_payout = USDT-эквивалент по прайсу банка (берём deal.amount как
-        # рублёвую сумму или fee если задано иначе — используем deal.amount как turnover).
-        if new_status == "ЗАВЕРШЕНА":
-            try:
-                await self._accounting_record_deal_completion(deal_id, deal)
-            except Exception as e:
-                logger.warning("accounting auto-record failed for deal=%s: %s", deal_id, e)
 
         work_chat = deal.get("work_chat_id")
         client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
@@ -1783,479 +1668,36 @@ class UserbotService:
         except Exception as e:
             logger.warning("post-work deal request failed for card=%s: %s", cid, e)
 
-    # === Перевяз ЛК — авто-форвард в Отработка аккаунтов ===
-
-    # Маппинг внутренних статусов → строки для шаблона accounts_group.
-    _ACCOUNTS_STATUS_MAP = {
-        "ПОПОЛНИТЬ": "В РАБОТЕ",
-        "ОЖИДАЕТ_ПОПОЛНЕНИЯ": "В РАБОТЕ",
-        "ПОПОЛНЕНО": "В РАБОТЕ",
-        "В_РАБОТЕ": "В РАБОТЕ",
-        "ГОТОВО_К_ОТПУСКУ": "В РАБОТЕ",
-        "ЗАВЕРШЕНА": "УСПЕШНО ОТРАБОТАНО",
-        "ОТМЕНА_СДЕЛКИ": "ОТМЕНА СДЕЛКИ",
-        "ЗАБЛОКИРОВАН": "БЛОК",
-    }
-
-    @classmethod
-    def _accounts_status_label(cls, internal_status: str) -> str:
-        return cls._ACCOUNTS_STATUS_MAP.get(internal_status, "В РАБОТЕ")
-
-    @classmethod
-    def _build_accounts_msg(
-        cls,
-        bank: str,
-        deal_id: str = "",
-        method: str = "",
-        client_username: str = "",
-        status_internal: str = "ПОПОЛНИТЬ",
-        fio: str = "",
-    ) -> str:
-        """Шаблон поста для чата «Отработка аккаунтов»:
-            Банк: ...
-            ФИО: ... (ЛК-ФИО клиента, держатель счёта)
-            Номер сделки: ...
-            Статус: ...
-            Поставщик: @...
-        """
-        if deal_id:
-            deal_line = f"Номер сделки: #{deal_id}"
-        elif method == "USDT_TRC20":
-            deal_line = "Номер сделки: выплата на USDT TRC20"
-        else:
-            deal_line = "Номер сделки: выплата после отработки"
-        status_label = cls._accounts_status_label(status_internal)
-        uname = (client_username or "").lstrip("@").strip() or "—"
-        fio_clean = (fio or "").strip() or "—"
-        return (
-            f"Банк: {bank or '—'}\n"
-            f"ФИО: {fio_clean}\n"
-            f"{deal_line}\n"
-            f"Статус: {status_label}\n"
-            f"Поставщик: @{uname}"
-        )
+    # === Перевяз ЛК — создание карточки в Группе 1 «Личные кабинеты» ===
 
     _PEREVYAZ_RE = re.compile(r"перевяз\s+лк\s+выполнен", re.I)
     _PEREVYAZ_FIO_RE = re.compile(r"фио\s*:?[\s]*(.+)", re.I)
     _PEREVYAZ_LK_RE = re.compile(r"лк\s*:?[\s]*(.+)", re.I)
 
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
+        """Триггер «Перевяз ЛК выполнен» — создаём карточку в Группе 1 ЛК.
+
+        Если все данные собраны (банк/ФИО/цена/метод и USDT-адрес или deal_id) —
+        анкета создаётся сразу. Иначе уходит запрос клиенту с reminder-loop.
+        """
         text = (event.message.text or "")
         if not self._PEREVYAZ_RE.search(text):
             return False
 
-        accounts_id = storage.get_accounts_group_id()
-        if not accounts_id:
-            logger.warning("perevyaz: accounts_group_id не задан, форвард пропущен")
-            return False
-
-        fio = ""
-        lk = ""
+        # Распарсим ФИО и ЛК из текста перевязки (опционально, fallback)
+        lk_text = ""
         for line in text.splitlines():
-            m = self._PEREVYAZ_FIO_RE.match(line.strip())
-            if m and not fio:
-                fio = m.group(1).strip()
-                continue
             m = self._PEREVYAZ_LK_RE.match(line.strip())
-            if m and not lk:
-                lk = m.group(1).strip()
-        logger.info("perevyaz detected: fio=%r lk=%r chat=%s", fio, lk, event.chat_id)
+            if m:
+                lk_text = m.group(1).strip()
+                break
+        logger.info("perevyaz detected: lk=%r chat=%s", lk_text, event.chat_id)
 
-        client_id = chat_info.get("client_id")
-        deal = None
-        if client_id:
-            for did, d in (storage.list_deals() or {}).items():
-                if d.get("work_chat_id") and abs(int(d["work_chat_id"])) == abs(int(event.chat_id)):
-                    if d.get("status") not in ("ЗАВЕРШЕНА", "ОТМЕНА_СДЕЛКИ"):
-                        deal = {"deal_id": did, **d}
-                        break
-
-        bank = (deal or {}).get("bank") or lk or "—"
-        deal_id = (deal or {}).get("deal_id", "")
-        # Метод: сначала из deal, иначе из chat_info (AI установил через
-        # set_payment_method ДО record_deal).
-        method = (deal or {}).get("method") or chat_info.get("payment_method", "")
-        # USDT адрес: из chat_info (для USDT_TRC20)
-        usdt_address = chat_info.get("usdt_address", "") if method == "USDT_TRC20" else ""
-        client_uname = (
-            (deal or {}).get("client_username")
-            or chat_info.get("client_username", "")
-            or ""
-        )
-        status_internal = (deal or {}).get("status") or "В_РАБОТЕ"
-        # ФИО берём из deal (там точно ФИО держателя ЛК), либо
-        # из распарсенной из работ-чата строки «ФИО: …» (fallback).
-        fio_value = (deal or {}).get("fio") or fio or ""
-
-        msg = self._build_accounts_msg(
-            bank=bank,
-            deal_id=deal_id,
-            method=method,
-            client_username=client_uname,
-            status_internal=status_internal,
-            fio=fio_value,
-            usdt_address=usdt_address,
-        )
-        sent = None
         try:
-            target = await self._resolve_chat_target(accounts_id)
-            sent = await self.client.send_message(target, msg, link_preview=False)
-            logger.info("perevyaz forwarded to accounts_group=%s deal=%s", accounts_id, deal_id)
+            await self._create_lk_card_from_perevyaz(event, chat_info, lk_text=lk_text)
         except Exception as e:
-            logger.warning("perevyaz forward failed: %s", e)
-            return True
-
-        sent_msg_id = getattr(sent, "id", None)
-        if sent_msg_id:
-            if deal_id:
-                await storage.set_accounts_group_msg_id(deal_id, sent_msg_id)
-                logger.info("perevyaz: linked accounts_msg=%s to deal=%s", sent_msg_id, deal_id)
-            else:
-                await storage.set_pending_accounts_post(event.chat_id, sent_msg_id)
-                logger.info("perevyaz: stashed accounts_msg=%s as PENDING for chat=%s", sent_msg_id, event.chat_id)
-
-        if deal_id:
-            await self._apply_status_change(deal_id, "В_РАБОТЕ")
+            logger.warning("perevyaz: lk-card creation failed: %s", e)
         return True
-
-    # === Бухгалтерия ===
-
-    async def _accounting_record_deal_completion(self, deal_id: str, deal: dict):
-        """Авто-запись в storage.accounting при ЗАВЕРШЕНА.
-
-        turnover_rub = deal.amount (если строка с цифрами — парсим).
-        partner_payout_usdt = берётся из deal.fee если задано как USDT;
-        иначе пропускаем (менеджер заполнит вручную через accounting_group).
-        """
-        date_str = accounting.today_str()
-
-        # turnover (rub)
-        amount_rub = self._parse_money_to_rub(deal.get("amount"))
-        if amount_rub > 0:
-            await storage.accounting_add_turnover(
-                date_str=date_str,
-                deal_id=deal_id,
-                amount_rub=amount_rub,
-                label=deal.get("bank") or "",
-            )
-
-        # partner payout — если в fee указано «400$» / «400 USDT» — добавим в выплаты
-        fee_usdt = self._parse_money_to_usdt(deal.get("fee"))
-        if fee_usdt > 0:
-            client = deal.get("client_username") or ""
-            if client and not client.startswith("@"):
-                client = "@" + client.lstrip("@")
-            await storage.accounting_add_partner_payout(
-                date_str=date_str,
-                deal_id=deal_id,
-                amount_usdt=fee_usdt,
-                client=client,
-            )
-        logger.info(
-            "accounting auto-record: deal=%s rub=%s usdt=%s",
-            deal_id, amount_rub, fee_usdt,
-        )
-
-    @staticmethod
-    def _parse_money_to_rub(s) -> float:
-        """50 000₽ / 50000 / '50 000 руб' → 50000.0. USDT → 0 (не наша единица)."""
-        if not s:
-            return 0.0
-        txt = str(s).lower()
-        if any(x in txt for x in ("usdt", "$", "usd", "trc20")):
-            return 0.0
-        digits = "".join(ch for ch in txt if ch.isdigit() or ch in ".,")
-        digits = digits.replace(",", ".")
-        # многоточек → берём первое
-        if digits.count(".") > 1:
-            parts = digits.split(".")
-            digits = parts[0] + "." + "".join(parts[1:])
-        try:
-            return float(digits or 0)
-        except ValueError:
-            return 0.0
-
-    @staticmethod
-    def _parse_money_to_usdt(s) -> float:
-        """'400$' / '400 USDT' → 400.0. Без явного USDT/$ → 0."""
-        if not s:
-            return 0.0
-        txt = str(s).lower()
-        if not any(x in txt for x in ("usdt", "$", "usd", "trc20")):
-            return 0.0
-        digits = "".join(ch for ch in txt if ch.isdigit() or ch in ".,")
-        digits = digits.replace(",", ".")
-        if digits.count(".") > 1:
-            parts = digits.split(".")
-            digits = parts[0] + "." + "".join(parts[1:])
-        try:
-            return float(digits or 0)
-        except ValueError:
-            return 0.0
-
-    def _enrich_application_lk_prices(self, app: dict) -> None:
-        """Заполняет lk_cost_usdt из storage.deals и/или прайса если оператор
-        не указал «ЦЕНА ЛК» в строке заявки.
-
-        Приоритет:
-          1) Текст оператора (уже стоит lk_cost_usdt > 0 — не трогаем)
-          2) storage.find_deal_by(fio=, bank=) — берём parse_money_to_usdt(amount)
-          3) accounting.PRICING_TABLE_USDT[bank] — встроенный прайс
-        """
-        import accounting as acc
-
-        def resolve(item: dict) -> float:
-            if _f := acc._f:
-                cur = _f(item.get("lk_cost_usdt"))
-                if cur > 0:
-                    return cur
-            bank = (item.get("bank") or "").strip()
-            fio = (item.get("fio") or "").strip()
-            # 1) из deals (если AI записал при record_deal)
-            if bank and fio:
-                try:
-                    matches = storage.find_deal_by(fio=fio, bank=bank) or []
-                    for d in matches:
-                        # amount может быть в USDT (400$) либо в рублях
-                        amt_usdt = self._parse_money_to_usdt(d.get("amount"))
-                        if amt_usdt > 0:
-                            return amt_usdt
-                except Exception:
-                    pass
-            # 2) встроенный прайс
-            return acc.lookup_pricing(bank)
-
-        for item in (app.get("intake") or []):
-            v = resolve(item)
-            if v > 0:
-                item["lk_cost_usdt"] = v
-        for item in (app.get("output") or []):
-            v = resolve(item)
-            if v > 0:
-                item["lk_cost_usdt"] = v
-
-    async def _auto_release_application_lks(self, app: dict) -> dict:
-        """Для каждого output ЛК заявки находит активную сделку (по fio+bank
-        либо только fio либо только bank) и переводит в ГОТОВО_К_ОТПУСКУ.
-
-        После смены статуса вызывается _send_release_request — запрос Тимону
-        отпустить выплату по методу.
-
-        Возвращает: {matched: int, missed: int, missed_names: [str]}.
-        """
-        matched = 0
-        missed = 0
-        missed_names: list = []
-
-        outputs = app.get("output") or []
-        for o in outputs:
-            fio = (o.get("fio") or "").strip()
-            bank = (o.get("bank") or "").strip()
-            if not fio:
-                continue
-            # Ищем сделку — сначала точное совпадение fio+bank, потом fallback
-            results = []
-            if bank:
-                results = storage.find_deal_by(fio=fio, bank=bank)
-            if not results:
-                results = storage.find_deal_by(fio=fio)
-            # Только активные (не уже завершённые)
-            active = [
-                d for d in results
-                if d.get("status") not in ("ЗАВЕРШЕНА", "ГОТОВО_К_ОТПУСКУ")
-            ]
-            if not active:
-                missed += 1
-                label = f"{bank} {fio}".strip() or fio
-                missed_names.append(label)
-                continue
-            # Берём самую свежую (если несколько активных)
-            active.sort(key=lambda d: d.get("created_at", 0), reverse=True)
-            deal_id = active[0]["deal_id"]
-            try:
-                await self._apply_status_change(deal_id, "ГОТОВО_К_ОТПУСКУ")
-                await self._send_release_request(deal_id)
-                matched += 1
-                logger.info(
-                    "auto-release: app=%s lk=%s/%s -> deal=%s ГОТОВО_К_ОТПУСКУ",
-                    app.get("id"), bank, fio, deal_id,
-                )
-            except Exception as e:
-                logger.warning(
-                    "auto-release failed for deal=%s (lk=%s/%s): %s",
-                    deal_id, bank, fio, e,
-                )
-                missed += 1
-                missed_names.append(f"{bank} {fio} (ошибка)")
-
-        return {
-            "matched": matched,
-            "missed": missed,
-            "missed_names": missed_names,
-        }
-
-    async def _handle_accounting_group_message(self, event):
-        """Обработчик сообщений в чате «Бухгалтерия». Парсит команды через
-        accounting.parse_command. Если не команда — игнорим (можно дописать
-        тегом @userbot help для справки)."""
-        if not event.message:
-            return
-        text = (event.message.text or "").strip()
-        if not text:
-            return
-        if self._me and event.sender_id == self._me.id:
-            return  # своё сообщение
-
-        # Help / help
-        if text.lower() in ("/help", "help", "помощь", "?"):
-            try:
-                await event.reply(accounting.HELP_TEXT, parse_mode="html", link_preview=False)
-            except Exception:
-                pass
-            return
-
-        # Сначала пробуем парсер формата «СТАРТ» (мульти-строка с ПРИЕМ/Вывод/Выплата).
-        # Telegram-копипаста содержит markdown-маркеры (**bold**, __italic__),
-        # снимаем их перед парсингом — иначе регулярки не находят «Заявка».
-        clean_text = re.sub(r"\*\*|__|~~|`+", "", text)
-        if "\n" in clean_text and ("заявка" in clean_text.lower() or "прием" in clean_text.lower() or "приём" in clean_text.lower()):
-            app = accounting.parse_application(clean_text)
-            if app:
-                try:
-                    # Обогащаем цены ЛК если оператор не указал «ЦЕНА ЛК»:
-                    # 1) ищем в storage.deals по fio+bank → amount
-                    # 2) fallback в встроенный прайс accounting.PRICING_TABLE_USDT
-                    self._enrich_application_lk_prices(app)
-                    date_str = accounting.today_str()
-                    await storage.accounting_add_application(date_str, {**app, "ts": time.time()})
-                    report = accounting.format_application_report(app)
-
-                    # Автоматом меняем статус всех ЛК заявки на ГОТОВО_К_ОТПУСКУ.
-                    # Output ЛК = выводные счета поставщиков (наши клиенты-продавцы).
-                    # Каждое такое ЛК — отдельная сделка в storage.deals.
-                    # При смене статуса:
-                    #   - пост в чате «Отработка аккаунтов» меняется на УСПЕШНО ОТРАБОТАНО
-                    #   - в чат «Сделки и выплаты» уходит обновление статуса
-                    #   - клиенту-поставщику в work_chat уходит уведомление
-                    #   - + _send_release_request с тегом @TimonSkupCL.
-                    auto_results = await self._auto_release_application_lks(app)
-                    if auto_results["matched"]:
-                        report += (
-                            f"\n\n🔄 Автоматом переведено в ГОТОВО_К_ОТПУСКУ: "
-                            f"<b>{auto_results['matched']}</b> сделок"
-                        )
-                        if auto_results["missed"]:
-                            report += (
-                                f"\n⚠️ Не найдено в storage.deals: "
-                                f"{auto_results['missed']} ЛК "
-                                f"({', '.join(auto_results['missed_names'])})"
-                            )
-                    elif auto_results["missed"]:
-                        report += (
-                            f"\n\n⚠️ Сделки не найдены в storage для ЛК: "
-                            f"{', '.join(auto_results['missed_names'])}"
-                        )
-
-                    await event.reply(report, parse_mode="html", link_preview=False)
-                    logger.info(
-                        "accounting_chat: parsed application id=%s margin=%.0f$ "
-                        "auto-released=%d missed=%d",
-                        app.get("id"),
-                        accounting.compute_application(app)["margin_usdt"],
-                        auto_results["matched"], auto_results["missed"],
-                    )
-                except Exception as e:
-                    logger.exception("application save failed: %s", e)
-                    try:
-                        await event.reply(f"⚠️ Ошибка сохранения заявки: {e}")
-                    except Exception:
-                        pass
-                return
-
-        cmd = accounting.parse_command(text)
-        if not cmd:
-            logger.info("accounting_chat: not a command: %r", text[:80])
-            return
-
-        kind = cmd["cmd"]
-        date_str = cmd.get("date") or accounting.today_str()
-        ack = ""
-
-        try:
-            if kind == "report":
-                rec = storage.get_accounting_day(date_str)
-                report = accounting.format_day_report(date_str, rec)
-                await event.reply(report, parse_mode="html", link_preview=False)
-                return
-            elif kind == "courses":
-                await storage.accounting_set_courses(
-                    date_str, cmd["buy"], cmd["sell"]
-                )
-                ack = (
-                    f"💱 Курс USDT за {date_str}: "
-                    f"закуп {cmd['buy']:.2f} ₽ / партнёру {cmd['sell']:.2f} ₽"
-                )
-            elif kind == "manual":
-                await storage.accounting_add_manual(
-                    date_str, cmd["label"], cmd["amount_rub"]
-                )
-                sign = "📈 приход" if cmd["amount_rub"] >= 0 else "📉 расход"
-                ack = (
-                    f"{sign}: {cmd['label']} — "
-                    f"{abs(cmd['amount_rub']):.0f} ₽ ({date_str})"
-                )
-            elif kind == "lk":
-                await storage.accounting_add_lk_cost(
-                    date_str, cmd["bank"], cmd["amount_usdt"], cmd.get("label", "")
-                )
-                ack = (
-                    f"🛒 ЛК {cmd['bank']}: {cmd['amount_usdt']:.2f} USDT "
-                    f"({date_str})"
-                )
-            elif kind == "turnover":
-                await storage.accounting_add_turnover(
-                    date_str,
-                    cmd.get("deal_id", ""),
-                    cmd["amount_rub"],
-                    cmd.get("label", ""),
-                )
-                did = cmd.get("deal_id", "")
-                did_part = f" (#{did})" if did else ""
-                ack = f"💰 Оборот {cmd['amount_rub']:.0f} ₽{did_part} ({date_str})"
-            elif kind == "partner":
-                await storage.accounting_add_partner_payout(
-                    date_str,
-                    cmd.get("deal_id", ""),
-                    cmd["amount_usdt"],
-                    cmd["client"],
-                )
-                did = cmd.get("deal_id", "")
-                did = cmd.get("deal_id", "")
-                did_part = f" (#{did})" if did else ""
-                ack = (
-                    f"💸 Партнёру {cmd['client']}: {cmd['amount_usdt']:.2f} USDT"
-                    f"{did_part} ({date_str})"
-                )
-            elif kind == "remove_manual":
-                ok = await storage.accounting_remove_manual(date_str, cmd["index"])
-                ack = (
-                    f"🗑 Правка #{cmd['index']+1} удалена ({date_str})"
-                    if ok else
-                    f"⚠️ Правка #{cmd['index']+1} не найдена ({date_str})"
-                )
-            else:
-                return
-
-            try:
-                await event.reply(ack, link_preview=False)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.exception("accounting handler failed: %s", e)
-            try:
-                await event.reply(f"⚠️ Ошибка: {e}")
-            except Exception:
-                pass
 
     async def stop(self):
         await self.client.disconnect()
@@ -2305,4 +1747,4 @@ class UserbotService:
                 logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
                 statuses[uname_or_id] = f"flood wait {e.seconds}s"
             except Exception as e:
-                statuses[uname_or_id] = f
+                statuses[uname_or_id] = f                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       

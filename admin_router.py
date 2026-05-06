@@ -25,8 +25,8 @@ class AdminFSM(StatesGroup):
     set_idle_minutes = State()
     set_coord_chat = State()
     set_deals_chat = State()
-    set_accounts_chat = State()
     set_accounting_chat = State()
+    set_lk_chat = State()
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -143,15 +143,15 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
             reply_markup=back_kb(),
         )
         await state.set_state(AdminFSM.set_accounting_chat)
-    elif action == "ai_set_accounts":
+    elif action == "ai_set_lk":
         await call.message.edit_text(
-            "Пришлите ID чата «Отработка аккаунтов» (число или <code>0</code>).\n\n"
-            "<i>Юзербот должен быть участником. AI будет читать оттуда сообщения "
-            "формата «[ФИО] — [БАНК] — ОТРАБОТАНО» и обновлять статусы сделок.</i>\n\n"
+            "Пришлите ID Группы 1 «Личные кабинеты» (число или <code>0</code>).\n\n"
+            "<i>Юзербот должен быть участником. Туда бот будет постить и обновлять "
+            "карточки ЛК (анкеты), а команды БРАК/БЛОК — отслеживать.</i>\n\n"
             "Или /admin для отмены.",
             reply_markup=back_kb(),
         )
-        await state.set_state(AdminFSM.set_accounts_chat)
+        await state.set_state(AdminFSM.set_lk_chat)
     elif action == "ai_set_idle":
         await call.message.edit_text(
             "Пришлите значение «тишины сотрудников» в минутах "
@@ -335,19 +335,19 @@ async def render_ai(call: CallbackQuery):
         f"• Ошибок: {esc_stats.get('errors_total', 0)}"
     )
 
-    # Система учёта сделок
+    # Система учёта сделок (V2)
     deals_id = storage.get_deals_group_id()
-    accounts_id = storage.get_accounts_group_id()
+    lk_id = storage.get_lk_group_id()
     accounting_id = storage.get_accounting_group_id()
     deals_stats = storage.get_deals_stats()
     by_status = deals_stats.get("by_status", {}) or {}
     by_status_str = ", ".join(f"{s}: {c}" for s, c in by_status.items()) if by_status else "—"
     text += (
         f"\n\n━━━━━━━━━━━━━━\n"
-        f"💼 <b>Система учёта сделок</b>\n"
+        f"💼 <b>Система учёта сделок V2</b>\n"
         f"Чат «Сделки и выплаты»: <code>{deals_id or '— не задан —'}</code>\n"
-        f"Чат «Отработка аккаунтов»: <code>{accounts_id or '— не задан —'}</code>\n"
-        f"Чат «Бухгалтерия»: <code>{accounting_id or '— не задан —'}</code>\n"
+        f"Группа 1 «Личные кабинеты»: <code>{lk_id or '— не задана —'}</code>\n"
+        f"Группа 2 «Бухгалтерия»: <code>{accounting_id or '— не задана —'}</code>\n"
         f"• Сделок создано: <b>{deals_stats.get('created_total', 0)}</b>\n"
         f"• По статусам: {by_status_str}"
     )
@@ -360,7 +360,7 @@ async def render_ai(call: CallbackQuery):
         [InlineKeyboardButton(text="🆔 Brain chat ID", callback_data="adm:ai_set_chat")],
         [InlineKeyboardButton(text="🆘 Координат. чат ID", callback_data="adm:ai_set_coord")],
         [InlineKeyboardButton(text="💼 Чат сделок ID", callback_data="adm:ai_set_deals")],
-        [InlineKeyboardButton(text="💼 Чат отработки ID", callback_data="adm:ai_set_accounts")],
+        [InlineKeyboardButton(text="📊 ЛК-Группа ID", callback_data="adm:ai_set_lk")],
         [InlineKeyboardButton(text="📊 Бухгалтерия чат ID", callback_data="adm:ai_set_accounting")],
         [InlineKeyboardButton(text="🤖 Модель Claude", callback_data="adm:ai_set_model")],
         [InlineKeyboardButton(text="⏱ Тишина сотрудников", callback_data="adm:ai_set_idle")],
@@ -616,8 +616,8 @@ async def fsm_set_deals_chat(message: Message, state: FSMContext):
     )
 
 
-@router.message(AdminFSM.set_accounts_chat)
-async def fsm_set_accounts_chat(message: Message, state: FSMContext):
+@router.message(AdminFSM.set_lk_chat)
+async def fsm_set_lk_chat(message: Message, state: FSMContext):
     if not storage.is_admin(message.from_user.id):
         await state.clear(); return
     if message.text == "/admin":
@@ -629,11 +629,13 @@ async def fsm_set_accounts_chat(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Нужно целое число (chat_id). Пришлите ещё раз или /admin.")
         return
-    await storage.set_accounts_group_id(chat_id)
+    await storage.set_lk_group_id(chat_id)
     await state.clear()
-    label = "очищен" if chat_id == 0 else f"<code>{chat_id}</code>"
+    label = "очищена" if chat_id == 0 else f"<code>{chat_id}</code>"
     await message.answer(
-        f"✅ Чат «Отработка аккаунтов»: {label}",
+        f"✅ Группа 1 «Личные кабинеты»: {label}\n\n"
+        f"<i>Юзербот будет постить туда карточки ЛК и читать команды "
+        f"БРАК/БЛОК.</i>",
         reply_markup=main_menu_kb(),
     )
 

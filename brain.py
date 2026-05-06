@@ -224,6 +224,57 @@ POST_DEALS_GROUP_TOOL = {
     },
 }
 
+CREATE_LK_CARD_TOOL = {
+    "name": "create_lk_card",
+    "description": (
+        "Создаёт анкету ЛК в Группе 1 «Личные кабинеты» для текущего "
+        "клиента. ВЫЗЫВАЙ ТОЛЬКО когда:\n"
+        "1) Перевяз ЛК подтверждён (сообщение «Перевяз ЛК выполнен» либо "
+        "от @sys01/@sys02 в работ-чате).\n"
+        "2) Все данные собраны: банк, ФИО держателя, цена, метод оплаты "
+        "(USDT_TRC20 или гарант). Если USDT_TRC20 — нужен usdt_address. "
+        "Если гарант — нужен deal_id (если уже есть).\n\n"
+        "Если данных не хватает — НЕ вызывай. Спроси клиента и подожди ответ.\n"
+        "После create_lk_card статус анкеты автоматом В_РАБОТЕ."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "bank": {"type": "string", "description": "Банк (ОЗОН, Альфа, ...)"},
+            "fio": {"type": "string", "description": "ФИО держателя счёта"},
+            "price_usdt": {
+                "type": "number",
+                "description": "Цена ЛК в USDT (по прайсу или согласованная)",
+            },
+            "payment_method": {
+                "type": "string",
+                "enum": [
+                    "USDT_TRC20",
+                    "GUARANTOR_BEFORE",
+                    "GUARANTOR_AFTER",
+                    "GUARANTOR_AFTER_WORK",
+                ],
+                "description": (
+                    "Метод оплаты: USDT_TRC20 — выплата в USDT после отработки. "
+                    "GUARANTOR_BEFORE — сделка в конте ДО перевязки. "
+                    "GUARANTOR_AFTER — сделка в конте ПОСЛЕ перевязки. "
+                    "GUARANTOR_AFTER_WORK — сделка в конте ПОСЛЕ ОТРАБОТКИ "
+                    "(юзербот сам инициирует диалог)."
+                ),
+            },
+            "deal_id": {
+                "type": "string",
+                "description": "Номер гарант-сделки (если метод GUARANTOR_*)",
+            },
+            "usdt_address": {
+                "type": "string",
+                "description": "USDT TRC20 адрес (если метод USDT_TRC20)",
+            },
+        },
+        "required": ["bank", "fio", "price_usdt", "payment_method"],
+    },
+}
+
 SET_PAYMENT_METHOD_TOOL = {
     "name": "set_payment_method",
     "description": (
@@ -263,6 +314,7 @@ ALL_TOOLS = [
     FIND_DEAL_TOOL,
     POST_DEALS_GROUP_TOOL,
     SET_PAYMENT_METHOD_TOOL,
+    CREATE_LK_CARD_TOOL,
 ]
 
 # Strip Obsidian-style [[wiki links]] for cleaner Claude context.

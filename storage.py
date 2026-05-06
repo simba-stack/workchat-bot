@@ -80,25 +80,31 @@ def _default_state() -> dict:
             "errors_total": 0,
         },
         "deals_group_id": 0,
-        "accounts_group_id": 0,
         # deals: deal_id -> {client_username, fio, bank, amount, fee, method,
-        # status, created_at, history, work_chat_id, deals_group_msg_id,
-        # accounts_group_msg_id}
+        # status, created_at, history, work_chat_id, deals_group_msg_id}
         "deals": {},
         "deals_stats": {
             "created_total": 0,
             "by_status": {},
             "errors_total": 0,
         },
-        # Перевяз-форварды в «Отработка аккаунтов» сделанные ДО record_deal.
-        # Ключ — _norm_chat_id(work_chat_id), значение — msg_id.
-        "pending_accounts_posts": {},
-        # === Бухгалтерия ===
-        # Чат «Бухгалтерия» (ежедневные отчёты + ручные команды).
+        # Чат «Бухгалтерия» (Группа 2 V2 — заявки + расчёт маржи).
         "accounting_group_id": 0,
-        # Записи по дням. Ключ — date_str "YYYY-MM-DD".
-        # Структура одной записи — см. accounting.empty_day_record().
-        "accounting": {},
+        # Группа 1 «Личные кабинеты» V2 — анкеты ЛК.
+        "lk_group_id": 0,
+        # Анкеты ЛК. Ключ — card_id ("lk001"...). Структура:
+        # {card_id, supplier (@username), bank, fio, price_usdt,
+        #  payment_method (USDT_TRC20/GUARANTOR_BEFORE/_AFTER/_AFTER_WORK),
+        #  deal_id, usdt_address, status (В_РАБОТЕ/ОТРАБОТАН/ПОПОЛНИТЬ_И_ОТПУСТИТЬ
+        #  /БРАК/БЛОК/ЗАВЕРШЁН), block_amount_rub, block_note, brak_reason,
+        #  client_id, client_username, work_chat_id, lk_group_msg_id,
+        #  created_at, history}.
+        "lk_cards": {},
+        # Sequence для генерации card_id
+        "lk_cards_seq": 0,
+        # Заявки V2: {date_str: [{id, intake, outputs, course_withdrawal,
+        # course_payout, partner_pct, computed, ts}, ...]}
+        "applications_v2": {},
     }
 
 
@@ -115,6 +121,18 @@ class Storage:
                 try:
                     with open(self.path, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
+                    # Миграция V2: дропаем ключи старой схемы
+                    # (accounts_group_id, pending_accounts_posts, accounting V1)
+                    for legacy_key in (
+                        "accounts_group_id",
+                        "pending_accounts_posts",
+                        "accounting",
+                    ):
+                        loaded.pop(legacy_key, None)
+                    # Из каждой сделки убираем accounts_group_msg_id (V1)
+                    for d in (loaded.get("deals") or {}).values():
+                        if isinstance(d, dict):
+                            d.pop("accounts_group_msg_id", None)
                     defaults = _default_state()
                     for k, v in defaults.items():
                         if k not in loaded:
@@ -456,14 +474,6 @@ class Storage:
             self.state["deals_group_id"] = int(chat_id)
             await self._save_unlocked()
 
-    def get_accounts_group_id(self) -> int:
-        return int(self.state.get("accounts_group_id") or 0)
-
-    async def set_accounts_group_id(self, chat_id: int):
-        async with _lock:
-            self.state["accounts_group_id"] = int(chat_id)
-            await self._save_unlocked()
-
     def get_deal(self, deal_id: str) -> Optional[dict]:
         return (self.state.get("deals") or {}).get(_norm_deal_id(deal_id))
 
@@ -529,7 +539,6 @@ class Storage:
                 "history": [{"ts": time.time(), "status": status}],
                 "work_chat_id": work_chat_id,
                 "deals_group_msg_id": None,
-                "accounts_group_msg_id": None,
             }
             stats = self.state.setdefault(
                 "deals_stats",
@@ -580,46 +589,7 @@ class Storage:
             await self._save_unlocked()
             return True
 
-    async def set_accounts_group_msg_id(self, deal_id: str, msg_id):
-        """Запоминает message_id поста в чате 'Отработка аккаунтов' для редактирования."""
-        async with _lock:
-            deals = self.state.get("deals") or {}
-            d = deals.get(_norm_deal_id(deal_id))
-            if d is None:
-                return False
-            d["accounts_group_msg_id"] = msg_id
-            await self._save_unlocked()
-            return True
-
-    def get_pending_accounts_post(self, work_chat_id) -> Optional[int]:
-        key = _norm_chat_id(work_chat_id)
-        v = (self.state.get("pending_accounts_posts") or {}).get(key)
-        try:
-            return int(v) if v is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    async def set_pending_accounts_post(self, work_chat_id, msg_id):
-        key = _norm_chat_id(work_chat_id)
-        async with _lock:
-            d = self.state.setdefault("pending_accounts_posts", {})
-            d[key] = int(msg_id)
-            await self._save_unlocked()
-
-    async def pop_pending_accounts_post(self, work_chat_id) -> Optional[int]:
-        """Атомарно достаёт и удаляет msg_id для work_chat_id. None если не было."""
-        key = _norm_chat_id(work_chat_id)
-        async with _lock:
-            d = self.state.setdefault("pending_accounts_posts", {})
-            v = d.pop(key, None)
-            if v is not None:
-                await self._save_unlocked()
-            try:
-                return int(v) if v is not None else None
-            except (TypeError, ValueError):
-                return None
-
-    # === Бухгалтерия ===
+    # === Бухгалтерия V2: Группа 2 «Бухгалтерия» (заявки v2) ===
 
     def get_accounting_group_id(self) -> int:
         return int(self.state.get("accounting_group_id") or 0)
@@ -629,99 +599,163 @@ class Storage:
             self.state["accounting_group_id"] = int(chat_id)
             await self._save_unlocked()
 
-    def _empty_day_record(self) -> dict:
-        return {
-            "turnovers": [],
-            "partner_payouts": [],
-            "lk_costs": [],
-            "courses": {"usdt_buy_rub": 0.0, "usdt_sell_rub": 0.0},
-            "manual": [],
-        }
+    # === ЛК-карточки (Группа 1) ===
 
-    def get_accounting_day(self, date_str: str) -> dict:
-        rec = (self.state.get("accounting") or {}).get(date_str)
-        if rec is None:
-            return self._empty_day_record()
-        return rec
+    def get_lk_group_id(self) -> int:
+        return int(self.state.get("lk_group_id") or 0)
 
-    def list_accounting_dates(self) -> list:
-        return sorted((self.state.get("accounting") or {}).keys())
-
-    def _ensure_day(self, date_str: str) -> dict:
-        acc = self.state.setdefault("accounting", {})
-        if date_str not in acc:
-            acc[date_str] = self._empty_day_record()
-        return acc[date_str]
-
-    async def accounting_add_turnover(self, date_str, deal_id, amount_rub, label=""):
+    async def set_lk_group_id(self, chat_id: int):
         async with _lock:
-            day = self._ensure_day(date_str)
-            day["turnovers"].append({
-                "deal_id": (deal_id or "").lstrip("#"),
-                "amount_rub": float(amount_rub or 0),
-                "label": label or "",
-                "ts": time.time(),
-            })
+            self.state["lk_group_id"] = int(chat_id)
             await self._save_unlocked()
 
-    async def accounting_add_partner_payout(self, date_str, deal_id, amount_usdt, client=""):
-        async with _lock:
-            day = self._ensure_day(date_str)
-            day["partner_payouts"].append({
-                "deal_id": (deal_id or "").lstrip("#"),
-                "amount_usdt": float(amount_usdt or 0),
-                "client": client or "",
-                "ts": time.time(),
-            })
-            await self._save_unlocked()
+    def get_lk_card(self, card_id: str) -> Optional[dict]:
+        return (self.state.get("lk_cards") or {}).get(str(card_id))
 
-    async def accounting_add_lk_cost(self, date_str, bank, amount_usdt, label=""):
-        async with _lock:
-            day = self._ensure_day(date_str)
-            day["lk_costs"].append({
-                "bank": bank or "",
-                "amount_usdt": float(amount_usdt or 0),
-                "label": label or "",
-                "ts": time.time(),
-            })
-            await self._save_unlocked()
+    def list_lk_cards(self, status: Optional[str] = None) -> dict:
+        all_cards = self.state.get("lk_cards") or {}
+        if status is None:
+            return dict(all_cards)
+        return {k: v for k, v in all_cards.items() if v.get("status") == status}
 
-    async def accounting_set_courses(self, date_str, usdt_buy_rub, usdt_sell_rub):
+    def find_lk_card(
+        self,
+        bank: Optional[str] = None,
+        fio: Optional[str] = None,
+        supplier: Optional[str] = None,
+        work_chat_id=None,
+    ) -> list:
+        """Поиск карточек по любому набору полей. AND-логика, case-insensitive
+        substring для bank/fio/supplier."""
+        out = []
+        cards = self.state.get("lk_cards") or {}
+        wc = _norm_chat_id(work_chat_id) if work_chat_id else None
+        for cid, c in cards.items():
+            if bank and bank.lower() not in (c.get("bank") or "").lower():
+                continue
+            if fio and fio.lower() not in (c.get("fio") or "").lower():
+                continue
+            if supplier:
+                s = (c.get("supplier") or "").lstrip("@").lower()
+                if supplier.lstrip("@").lower() not in s:
+                    continue
+            if wc and _norm_chat_id(c.get("work_chat_id") or 0) != wc:
+                continue
+            out.append({"card_id": cid, **c})
+        return out
+
+    async def add_lk_card(self, **fields) -> str:
+        """Создаёт новую карточку. Возвращает card_id ("lk001"...).
+
+        Обязательные: bank, fio, price_usdt, payment_method.
+        """
         async with _lock:
-            day = self._ensure_day(date_str)
-            day["courses"] = {
-                "usdt_buy_rub": float(usdt_buy_rub or 0),
-                "usdt_sell_rub": float(usdt_sell_rub or 0),
+            seq = int(self.state.get("lk_cards_seq", 0)) + 1
+            card_id = f"lk{seq:03d}"
+            self.state["lk_cards_seq"] = seq
+            cards = self.state.setdefault("lk_cards", {})
+            base = {
+                "card_id": card_id,
+                "supplier": (fields.get("supplier") or "").lstrip("@"),
+                "bank": fields.get("bank") or "",
+                "fio": fields.get("fio") or "",
+                "price_usdt": float(fields.get("price_usdt") or 0),
+                "payment_method": fields.get("payment_method") or "",
+                "deal_id": fields.get("deal_id") or "",
+                "usdt_address": fields.get("usdt_address") or "",
+                "status": fields.get("status") or "В_РАБОТЕ",
+                "block_amount_rub": 0.0,
+                "block_note": "",
+                "brak_reason": "",
+                "client_id": int(fields.get("client_id") or 0),
+                "client_username": (fields.get("client_username") or "").lstrip("@"),
+                "work_chat_id": fields.get("work_chat_id") or 0,
+                "lk_group_msg_id": 0,
+                "created_at": time.time(),
+                "history": [{
+                    "ts": time.time(),
+                    "status": fields.get("status") or "В_РАБОТЕ",
+                    "by": fields.get("created_by") or "system",
+                }],
             }
+            cards[card_id] = base
             await self._save_unlocked()
+            return card_id
 
-    async def accounting_add_manual(self, date_str, label, amount_rub):
-        """amount_rub: положительный = приход, отрицательный = расход."""
+    async def update_lk_card(self, card_id: str, **fields) -> bool:
         async with _lock:
-            day = self._ensure_day(date_str)
-            day["manual"].append({
-                "label": label or "—",
-                "amount_rub": float(amount_rub or 0),
-                "ts": time.time(),
-            })
-            await self._save_unlocked()
-
-    async def accounting_add_application(self, date_str, app_data: dict):
-        """Добавляет заявку (формат СТАРТ) в день."""
-        async with _lock:
-            day = self._ensure_day(date_str)
-            day.setdefault("applications", []).append(app_data)
-            await self._save_unlocked()
-
-    async def accounting_remove_manual(self, date_str, index):
-        async with _lock:
-            day = self._ensure_day(date_str)
-            arr = day.get("manual") or []
-            if index < 0 or index >= len(arr):
+            cards = self.state.get("lk_cards") or {}
+            c = cards.get(str(card_id))
+            if c is None:
                 return False
-            arr.pop(index)
+            for k, v in fields.items():
+                if k == "history":
+                    continue
+                c[k] = v
             await self._save_unlocked()
             return True
+
+    async def set_lk_card_status(
+        self, card_id: str, status: str, **extra
+    ) -> bool:
+        """Меняет статус + добавляет запись в history. Дополнительные
+        поля (block_amount_rub, block_note, brak_reason, deal_id) — в extra."""
+        async with _lock:
+            cards = self.state.get("lk_cards") or {}
+            c = cards.get(str(card_id))
+            if c is None:
+                return False
+            c["status"] = status
+            for k, v in extra.items():
+                c[k] = v
+            c.setdefault("history", []).append({
+                "ts": time.time(),
+                "status": status,
+                "by": extra.get("by") or "system",
+                "extra": {k: v for k, v in extra.items() if k != "by"},
+            })
+            await self._save_unlocked()
+            return True
+
+    async def set_lk_card_msg_id(self, card_id: str, msg_id) -> bool:
+        async with _lock:
+            cards = self.state.get("lk_cards") or {}
+            c = cards.get(str(card_id))
+            if c is None:
+                return False
+            c["lk_group_msg_id"] = int(msg_id or 0)
+            await self._save_unlocked()
+            return True
+
+    # === Заявки V2 (Группа 2 «Бухгалтерия») ===
+
+    def get_applications_v2(self, date_str: str) -> list:
+        return list((self.state.get("applications_v2") or {}).get(date_str) or [])
+
+    def list_applications_v2_dates(self) -> list:
+        return sorted((self.state.get("applications_v2") or {}).keys())
+
+    async def add_application_v2(self, date_str: str, app_data: dict) -> int:
+        """Добавляет заявку. Возвращает её sequence id (1, 2, ... в рамках дня)."""
+        async with _lock:
+            apps_by_date = self.state.setdefault("applications_v2", {})
+            day = apps_by_date.setdefault(date_str, [])
+            new_id = len(day) + 1
+            entry = {**app_data, "id": new_id, "ts": time.time()}
+            day.append(entry)
+            await self._save_unlocked()
+            return new_id
+
+    async def remove_application_v2(self, date_str: str, app_id: int) -> bool:
+        async with _lock:
+            apps_by_date = self.state.setdefault("applications_v2", {})
+            day = apps_by_date.get(date_str) or []
+            for i, app in enumerate(day):
+                if int(app.get("id", 0)) == int(app_id):
+                    day.pop(i)
+                    await self._save_unlocked()
+                    return True
+            return False
 
 
 storage = Storage(config.STORAGE_PATH)
