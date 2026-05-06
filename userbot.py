@@ -14,6 +14,7 @@ import asyncio
 import random
 import re
 import time
+from typing import Optional, Tuple
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -2304,4 +2305,4 @@ class UserbotService:
                 logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
                 statuses[uname_or_id] = f"flood wait {e.seconds}s"
             except Exception as e:
-                statuses[uname_or_id] = f"ошибка резолва: {e}"
+                statuses[uname_or_id] = f
