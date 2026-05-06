@@ -49,6 +49,7 @@ from storage import storage
 import brain
 import memory
 import accounting
+import accounting2
 import learn
 
 logger = logging.getLogger(__name__)
@@ -342,14 +343,23 @@ class UserbotService:
             await self._handle_deals_group_message(event)
             return
 
+        # Группа 1 «Личные кабинеты» — анкеты ЛК + БРАК/БЛОК
+        lk_id = storage.get_lk_group_id()
+        if lk_id and _norm_chat_id(chat_id) == _norm_chat_id(lk_id):
+            await self._handle_lk_group_message(event)
+            return
+
+        # Группа 2 «Бухгалтерия» — заявки v2
+        accounting_id = storage.get_accounting_group_id()
+        if accounting_id and _norm_chat_id(chat_id) == _norm_chat_id(accounting_id):
+            await self._handle_accounting_v2_message(event)
+            return
+
+        # LEGACY: старая «Отработка аккаунтов» — оставлен на переходный период.
+        # Если accounts_group_id задан в state, обрабатываем как раньше.
         accounts_id = storage.get_accounts_group_id()
         if accounts_id and _norm_chat_id(chat_id) == _norm_chat_id(accounts_id):
             await self._handle_accounts_group_message(event)
-            return
-
-        accounting_id = storage.get_accounting_group_id()
-        if accounting_id and _norm_chat_id(chat_id) == _norm_chat_id(accounting_id):
-            await self._handle_accounting_group_message(event)
             return
 
         chat_info = storage.get_chat_info(chat_id)
@@ -756,6 +766,16 @@ class UserbotService:
             return await self._tool_find_deal(**tool_input)
         if tool_name == "post_deals_group":
             return await self._tool_post_deals_group(**tool_input)
+        if tool_name == "create_lk_card":
+            return await self._tool_create_lk_card(
+                chat_id=chat_id,
+                bank=tool_input.get("bank", ""),
+                fio=tool_input.get("fio", ""),
+                price_usdt=float(tool_input.get("price_usdt", 0) or 0),
+                payment_method=tool_input.get("payment_method", ""),
+                deal_id=tool_input.get("deal_id", ""),
+                usdt_address=tool_input.get("usdt_address", ""),
+            )
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
 
     async def _tool_add_partner_to_crm(self, chat_id, client_username: str) -> dict:
@@ -968,6 +988,77 @@ class UserbotService:
             await storage.set_deals_group_msg_id(deal_id_norm, new_msg_id)
         logger.info("posted to deals_group: chat=%s msg_id=%s len=%d", gid, new_msg_id, len(text))
         return {"status": "ok", "deals_group": gid, "mode": "sent", "msg_id": new_msg_id}
+
+    async def _tool_create_lk_card(
+        self,
+        chat_id,
+        bank: str = "",
+        fio: str = "",
+        price_usdt: float = 0.0,
+        payment_method: str = "",
+        deal_id: str = "",
+        usdt_address: str = "",
+    ) -> dict:
+        """Создаёт карточку ЛК (анкету) в Группе 1 'Личные кабинеты'."""
+        bank = (bank or "").strip()
+        fio = (fio or "").strip()
+        payment_method = (payment_method or "").strip().upper()
+        deal_id = (deal_id or "").strip()
+        usdt_address = (usdt_address or "").strip()
+
+        if not bank:
+            return {"status": "error", "error": "bank_required"}
+        if not fio:
+            return {"status": "error", "error": "fio_required"}
+        if price_usdt <= 0:
+            return {"status": "error", "error": "price_invalid"}
+        if payment_method not in accounting2.PAYMENT_METHODS:
+            return {
+                "status": "error",
+                "error": "payment_method_invalid",
+                "allowed": list(accounting2.PAYMENT_METHODS),
+            }
+        if payment_method == "USDT_TRC20" and not usdt_address:
+            return {"status": "error", "error": "usdt_address_required_for_usdt"}
+        if payment_method.startswith("GUARANTOR") and not deal_id:
+            return {"status": "error", "error": "deal_id_required_for_guarantor"}
+
+        lk_group = storage.get_lk_group_id()
+        if not lk_group:
+            return {"status": "error", "error": "lk_group_not_set"}
+
+        info = storage.get_chat_info(chat_id) or {}
+        client_id = info.get("client_id") or ""
+        client_username = info.get("client_username") or ""
+
+        card_id = await storage.add_lk_card({
+            "supplier": client_username or "—",
+            "bank": bank,
+            "fio": fio,
+            "price_usdt": float(price_usdt),
+            "payment_method": payment_method,
+            "deal_id": deal_id,
+            "usdt_address": usdt_address,
+            "status": "В_РАБОТЕ",
+            "client_id": client_id,
+            "client_username": client_username,
+            "work_chat_id": chat_id,
+        })
+
+        try:
+            await self._refresh_lk_card_post(card_id)
+        except Exception as e:
+            logger.warning("refresh_lk_card_post failed for card=%s: %s", card_id, e)
+
+        return {
+            "status": "ok",
+            "card_id": card_id,
+            "lk_group_id": lk_group,
+            "bank": bank,
+            "fio": fio,
+            "price_usdt": price_usdt,
+            "payment_method": payment_method,
+        }
 
     # === Авто-детект статусов в deals/accounts чатах ===
 
@@ -1260,6 +1351,436 @@ class UserbotService:
         if status == "ОТМЕНА_СДЕЛКИ":
             return f"Сделка {did} ({bank}) приостановлена. Менеджер свяжется."
         return ""
+
+    # === V2: Группа 1 «Личные кабинеты» (анкеты + БРАК/БЛОК) ===
+
+    async def _handle_lk_group_message(self, event):
+        """Анкета ЛК / команды БРАК / БЛОК в Группе 1."""
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        if self._me and event.sender_id == self._me.id:
+            return  # своё сообщение
+
+        low = text.lower()
+
+        # БРАК / БЛОК — короткие команды
+        if low.startswith("брак"):
+            cmd = accounting2.parse_brak_command(text)
+            if cmd:
+                await self._apply_brak_command(event, cmd)
+            return
+        if low.startswith("блок"):
+            cmd = accounting2.parse_blok_command(text)
+            if cmd:
+                await self._apply_blok_command(event, cmd)
+            return
+
+        # Анкета (мульти-строка с банком/ценой/методом)
+        if "\n" in text and ("банк" in low or "поставщик" in low):
+            card_data = accounting2.parse_lk_card(text)
+            if card_data:
+                await self._apply_manual_lk_card(event, card_data)
+            return
+
+    async def _apply_brak_command(self, event, cmd: dict):
+        """БРАК — найти карточку → статус БРАК → уведомить клиента → если
+        был гарант-deal, попросить отменить + написать в чат сделок."""
+        cards = storage.find_lk_card(bank=cmd["bank"], fio=cmd["fio"])
+        active = [c for c in cards if c.get("status") not in ("БРАК", "ЗАВЕРШЁН")]
+        if not active:
+            await event.reply(
+                f"⚠️ Не нашёл активную карточку: <b>{cmd['bank']} {cmd['fio']}</b>.",
+                parse_mode="html",
+            )
+            return
+        card = active[0]
+        cid = card["card_id"]
+        await storage.set_lk_card_status(
+            cid, "БРАК",
+            brak_reason=cmd.get("reason", ""),
+            by="lk_group",
+        )
+        await self._refresh_lk_card_post(cid)
+
+        # Уведомить клиента в work_chat
+        wc = card.get("work_chat_id")
+        msg_to_client = (
+            f"⚠️ К сожалению, ваш ЛК <b>{card.get('bank')}</b> "
+            f"({card.get('fio')}) не подошёл."
+        )
+        if cmd.get("reason"):
+            msg_to_client += f"\n\n<b>Причина:</b> {cmd['reason']}"
+        # Если был гарант-deal → попросить отменить
+        deal_id = card.get("deal_id")
+        method = card.get("payment_method", "")
+        if deal_id and method.startswith("GUARANTOR"):
+            msg_to_client += (
+                f"\n\nПо вашей сделке #{deal_id} нужно отменить — "
+                f"пришлите, пожалуйста, подтверждение из бота гаранта."
+            )
+        if wc:
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target, msg_to_client, parse_mode="html", link_preview=False,
+                )
+            except Exception as e:
+                logger.warning("brak notify client failed: %s", e)
+
+        # В чат сделок — отмена + забрать деньги (если был гарант)
+        if deal_id and method.startswith("GUARANTOR"):
+            gid = storage.get_deals_group_id()
+            if gid:
+                try:
+                    target = await self._resolve_chat_target(gid)
+                    await self.client.send_message(
+                        target,
+                        f"❌ <b>Сделка #{deal_id} ОТМЕНЕНА</b> "
+                        f"(БРАК ЛК {card.get('bank')} {card.get('fio')})\n"
+                        f"⚠️ Нужно ЗАБРАТЬ ДЕНЬГИ с этой сделки. @TimonSkupCL",
+                        parse_mode="html",
+                    )
+                except Exception as e:
+                    logger.warning("brak deal-cancel notify failed: %s", e)
+
+        await event.reply(
+            f"✅ ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) → <b>БРАК</b>.\n"
+            f"Клиент уведомлён.",
+            parse_mode="html",
+        )
+
+    async def _apply_blok_command(self, event, cmd: dict):
+        """БЛОК — найти карточку → статус БЛОК + сумма + примечание →
+        уведомить клиента + тэг Тимона."""
+        cards = storage.find_lk_card(bank=cmd["bank"], fio=cmd["fio"])
+        active = [c for c in cards if c.get("status") not in ("БРАК", "ЗАВЕРШЁН")]
+        if not active:
+            await event.reply(
+                f"⚠️ Не нашёл активную карточку: <b>{cmd['bank']} {cmd['fio']}</b>.",
+                parse_mode="html",
+            )
+            return
+        card = active[0]
+        cid = card["card_id"]
+        await storage.set_lk_card_status(
+            cid, "БЛОК",
+            block_amount_rub=cmd.get("amount_rub", 0),
+            block_note=cmd.get("note", ""),
+            by="lk_group",
+        )
+        await self._refresh_lk_card_post(cid)
+
+        wc = card.get("work_chat_id")
+        msg = (
+            f"🚫 На ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) "
+            f"возник <b>БЛОК</b> на {accounting2._fmt_rub(cmd.get('amount_rub', 0))}."
+        )
+        if cmd.get("note"):
+            msg += f"\n\n<b>Что нужно сделать:</b> {cmd['note']}"
+        msg += "\n\n@TimonSkupCL — посмотри пожалуйста."
+        if wc:
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target, msg, parse_mode="html", link_preview=False,
+                )
+            except Exception as e:
+                logger.warning("blok notify client failed: %s", e)
+
+        await event.reply(
+            f"✅ ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) → <b>БЛОК</b> "
+            f"{accounting2._fmt_rub(cmd.get('amount_rub', 0))}.",
+            parse_mode="html",
+        )
+
+    async def _apply_manual_lk_card(self, event, card_data: dict):
+        """Менеджер вручную создал анкету — сохраняем в storage."""
+        card_id = await storage.add_lk_card(**card_data, created_by="manual")
+        # Edit message с card_id (если возможно) — иначе reply
+        try:
+            await event.reply(
+                f"✅ Карточка <b>#{card_id}</b> создана.",
+                parse_mode="html",
+            )
+        except Exception:
+            pass
+        # Зафиксировать lk_group_msg_id
+        await storage.set_lk_card_msg_id(card_id, event.message.id)
+
+    async def _refresh_lk_card_post(self, card_id: str) -> bool:
+        """Edit/post карточки в Группе 1 актуальным состоянием."""
+        card = storage.get_lk_card(card_id)
+        if not card:
+            return False
+        gid = storage.get_lk_group_id()
+        if not gid:
+            return False
+        text = accounting2.format_lk_card(card)
+        msg_id = card.get("lk_group_msg_id") or 0
+        try:
+            target = await self._resolve_chat_target(gid)
+            if msg_id:
+                try:
+                    await self.client.edit_message(
+                        target, msg_id, text, parse_mode="html", link_preview=False,
+                    )
+                    return True
+                except Exception:
+                    pass
+            sent = await self.client.send_message(
+                target, text, parse_mode="html", link_preview=False,
+            )
+            new_id = getattr(sent, "id", None)
+            if new_id:
+                await storage.set_lk_card_msg_id(card_id, new_id)
+            return True
+        except Exception as e:
+            logger.warning("refresh_lk_card_post card=%s: %s", card_id, e)
+            return False
+
+    async def _create_lk_card_from_perevyaz(
+        self, event, chat_info: dict, lk_text: str = "",
+    ) -> Optional[str]:
+        """Триггер «Перевяз ЛК выполнен» (или sys01/sys02) — создаём карточку
+        в Группе 1 на основе данных в managed_chats[chat_id] (что AI собрал
+        через set_payment_method) + storage.deals если есть. Возвращает card_id."""
+        wc = event.chat_id
+        # Проверяем что данных достаточно: bank, fio, метод, цена
+        method = chat_info.get("payment_method", "")
+        client_uname = chat_info.get("client_username") or ""
+        # Ищем сделку для этого work_chat
+        deal = None
+        for did, d in (storage.list_deals() or {}).items():
+            if d.get("work_chat_id") and abs(int(d["work_chat_id"])) == abs(int(wc)):
+                if d.get("status") not in ("ЗАВЕРШЕНА", "ОТМЕНА_СДЕЛКИ"):
+                    deal = {"deal_id": did, **d}
+                    break
+
+        bank = (deal or {}).get("bank") or ""
+        fio = (deal or {}).get("fio") or ""
+        price = float((deal or {}).get("amount") or 0)
+        if not price and bank:
+            price = accounting2.lookup_pricing(bank)
+
+        deal_id = (deal or {}).get("deal_id") or ""
+        usdt_addr = chat_info.get("usdt_address") or ""
+
+        # Минимум: bank + (price ИЛИ method)
+        if not bank or (not method and not price):
+            # Запросить недостающее у клиента + reminder
+            await self._request_lk_data_from_client(event, chat_info, deal)
+            return None
+
+        if not method:
+            method = "USDT_TRC20"  # default
+
+        card_id = await storage.add_lk_card(
+            supplier=client_uname,
+            bank=bank,
+            fio=fio,
+            price_usdt=price,
+            payment_method=method,
+            deal_id=deal_id,
+            usdt_address=usdt_addr,
+            status="В_РАБОТЕ",
+            client_id=chat_info.get("client_id") or 0,
+            client_username=client_uname,
+            work_chat_id=wc,
+            created_by="perevyaz",
+        )
+        await self._refresh_lk_card_post(card_id)
+        logger.info("LK card created from perevyaz: %s for chat=%s", card_id, wc)
+        return card_id
+
+    async def _request_lk_data_from_client(
+        self, event, chat_info: dict, deal: Optional[dict],
+    ):
+        """Перевяз есть, но данных не хватает — спросить у клиента + reminder."""
+        wc = event.chat_id
+        missing = []
+        if not (deal or {}).get("bank"):
+            missing.append("банк")
+        if not (deal or {}).get("fio"):
+            missing.append("ФИО держателя счёта")
+        if not chat_info.get("payment_method"):
+            missing.append("метод оплаты (USDT TRC20 или сделка в гаранте)")
+        if not missing:
+            return
+        msg = (
+            f"✅ Перевяз ЛК зафиксирован. Чтобы продолжить, уточните:\n"
+            + "\n".join(f"• {x}" for x in missing)
+        )
+        try:
+            target = await self._resolve_chat_target(wc)
+            await self.client.send_message(target, msg, link_preview=False)
+        except Exception as e:
+            logger.warning("request_lk_data send failed: %s", e)
+        # Запоминаем что нужны данные — reminder loop
+        from storage import _norm_chat_id
+        key = _norm_chat_id(wc)
+        # Простой механизм: pending dict, проверяется фоновой задачей.
+        # Здесь — отдельный launcher, без бесконечного создания тасок.
+        if not hasattr(self, "_lk_pending"):
+            self._lk_pending = {}
+        if key not in self._lk_pending:
+            self._lk_pending[key] = {"chat_id": wc, "reminder_count": 0}
+            asyncio.create_task(self._lk_reminder_loop(wc, key))
+
+    async def _lk_reminder_loop(self, wc, key: str):
+        """Раз в 5 минут пинаем клиента, пока данные не появятся (или 6 раз)."""
+        for _ in range(6):
+            await asyncio.sleep(300)  # 5 минут
+            chat_info = storage.get_chat_info(wc) or {}
+            # Перепроверим: может уже всё собрано → создадим карточку
+            method = chat_info.get("payment_method")
+            if method:
+                # Триггерим creation
+                fake_event = type("E", (), {"chat_id": wc, "message": None})()
+                try:
+                    await self._create_lk_card_from_perevyaz(fake_event, chat_info)
+                except Exception:
+                    pass
+                self._lk_pending.pop(key, None)
+                return
+            # Напомним
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target,
+                    "⏰ Напоминаю — без указания метода оплаты и реквизитов "
+                    "мы не сможем работать с вашим ЛК. Ответьте, пожалуйста.",
+                    link_preview=False,
+                )
+            except Exception as e:
+                logger.warning("lk reminder send failed: %s", e)
+        self._lk_pending.pop(key, None)
+
+    # === V2: Группа 2 «Бухгалтерия» (заявки v2 + расчёт + auto-update ЛК) ===
+
+    async def _handle_accounting_v2_message(self, event):
+        """Заявки V2 + старые ручные команды (приход/расход/курс/отчёт/help)."""
+        if not event.message:
+            return
+        text = (event.message.text or "").strip()
+        if not text:
+            return
+        if self._me and event.sender_id == self._me.id:
+            return
+
+        low = text.lower()
+
+        # Заявка V2 (мульти-строка с «ЗАЯВКА N»)
+        if "\n" in text and "заявка" in low:
+            app = accounting2.parse_application_v2(text)
+            if app:
+                await self._apply_application_v2(event, app)
+                return
+
+        # Help
+        if low in ("/help", "help", "помощь", "?"):
+            await event.reply(
+                "📊 <b>Бухгалтерия V2</b>\n\n"
+                "Шли отчёт по заявке в формате:\n"
+                "<code>ЗАЯВКА 1\n"
+                "ПРИЕМ:\n"
+                "ОЗОН - Иванов - 1000000\n"
+                "ВЫВЕДЕНО — 800000\n\n"
+                "ВЫВОД СУММА:\n"
+                "ОЗОН - Петров - 300000\n"
+                "ТОЧКА - Сидоров - 500000\n\n"
+                "Курс ВЫВОДА — 90\n"
+                "Курс ВЫПЛАТЫ — 92\n"
+                "ПРОЦЕНТ ВЫПЛАТЫ ПАРТНЕРУ: 40</code>\n\n"
+                "Юзербот посчитает маржу и автоматом переведёт ВСЕ ЛК "
+                "из ВЫВОД-секции в ОТРАБОТАН (анкеты в Группе 1).",
+                parse_mode="html",
+            )
+            return
+
+    async def _apply_application_v2(self, event, app: dict):
+        """Сохранить заявку, посчитать, ответить отчётом, авто-перевести ЛК."""
+        date_str = app.get("date") or accounting2.today_str()
+        lk_cards = storage.list_lk_cards() or {}
+
+        computed = accounting2.compute_application_v2(app, lk_cards)
+
+        full_app = {**app, "date": date_str, "computed": computed}
+        new_id = await storage.add_application_v2(date_str, full_app)
+        full_app["id"] = new_id
+
+        report = accounting2.format_application_report_v2(full_app, computed)
+
+        # Auto-update ЛК → ОТРАБОТАН (для каждого output)
+        moved = 0
+        for o in app.get("outputs", []):
+            cards = storage.find_lk_card(
+                bank=o.get("bank") or "", fio=o.get("fio") or ""
+            )
+            active = [
+                c for c in cards
+                if c.get("status") not in ("ОТРАБОТАН", "БРАК", "ЗАВЕРШЁН",
+                                           "ПОПОЛНИТЬ_И_ОТПУСТИТЬ")
+            ]
+            if not active:
+                continue
+            card = active[0]
+            cid = card["card_id"]
+            method = card.get("payment_method", "")
+            if method == "GUARANTOR_AFTER_WORK":
+                # Особый случай — сделка после отработки.
+                # Идём в work_chat клиента, тегаем, просим создать сделку.
+                await storage.set_lk_card_status(
+                    cid, "ОТРАБОТАН", by="accounting_v2",
+                )
+                await self._refresh_lk_card_post(cid)
+                asyncio.create_task(
+                    self._request_post_work_deal(card)
+                )
+            else:
+                await storage.set_lk_card_status(
+                    cid, "ОТРАБОТАН", by="accounting_v2",
+                )
+                await self._refresh_lk_card_post(cid)
+            moved += 1
+
+        if moved:
+            report += f"\n\n🔄 Автоматом → ОТРАБОТАН: <b>{moved}</b> карточек."
+
+        await event.reply(report, parse_mode="html", link_preview=False)
+        logger.info(
+            "applied app_v2 id=%s date=%s margin=%.0f$ moved=%d",
+            new_id, date_str, computed.get("margin_usdt", 0), moved,
+        )
+
+    async def _request_post_work_deal(self, card: dict):
+        """ЛК отработан, метод = GUARANTOR_AFTER_WORK → теги клиента в work_chat,
+        просим создать сделку. Дальше AI получит номер и обновит карточку."""
+        wc = card.get("work_chat_id")
+        client_uname = card.get("client_username") or ""
+        cid = card.get("card_id", "?")
+        if not wc:
+            return
+        msg = (
+            f"✅ Ваш ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) "
+            f"<b>отработан</b>.\n\n"
+        )
+        if client_uname:
+            msg += f"@{client_uname.lstrip('@')} "
+        msg += (
+            f"создайте, пожалуйста, гарант-сделку в Conte и пришлите номер — "
+            f"оформим вашу выплату ({accounting2._fmt_usdt(card.get('price_usdt', 0))})."
+        )
+        try:
+            target = await self._resolve_chat_target(wc)
+            await self.client.send_message(
+                target, msg, parse_mode="html", link_preview=False,
+            )
+            logger.info("post-work deal request sent for card=%s chat=%s", cid, wc)
+        except Exception as e:
+            logger.warning("post-work deal request failed for card=%s: %s", cid, e)
 
     # === Перевяз ЛК — авто-форвард в Отработка аккаунтов ===
 
@@ -1708,6 +2229,7 @@ class UserbotService:
                     cmd["client"],
                 )
                 did = cmd.get("deal_id", "")
+                did = cmd.get("deal_id", "")
                 did_part = f" (#{did})" if did else ""
                 ack = (
                     f"💸 Партнёру {cmd['client']}: {cmd['amount_usdt']:.2f} USDT"
@@ -1780,4 +2302,6 @@ class UserbotService:
                 statuses[uname_or_id] = "флуд-лимит Telegram"
             except FloodWaitError as e:
                 logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
-                status
+                statuses[uname_or_id] = f"flood wait {e.seconds}s"
+            except Exception as e:
+                statuses[uname_or_id] = f"ошибка резолва: {e}"
