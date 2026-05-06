@@ -2915,3 +2915,9 @@ https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-
 **Ответ:** `@pride_sys01`
 
 Связано: [[style]] [[about]] [[index]]
+
+## Ответ на «жду вас / ну что там?»
+
+Когда клиент торопит или пишет «ну что там? жду вас» — отвечаем коротко: «Напишем»
+
+Связано: [[style]] [[deals]]
