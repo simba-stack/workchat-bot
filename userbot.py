@@ -1057,6 +1057,18 @@ class UserbotService:
         info = storage.get_chat_info(chat_id) or {}
         client_id = info.get("client_id") or ""
         client_username = info.get("client_username") or ""
+        # Если username пуст в managed_chats — попробуем получить через Telethon
+        if not client_username and client_id:
+            try:
+                ent = await self.client.get_entity(int(client_id))
+                if getattr(ent, "username", None):
+                    client_username = ent.username
+                    # Заодно сохраним в managed_chats для будущего
+                    await storage.set_chat_payment_info(
+                        chat_id, client_username=client_username
+                    )
+            except Exception as e:
+                logger.warning("create_lk_card: resolve username failed: %s", e)
 
         card_id = await storage.add_lk_card(
             supplier=client_username or "—",
@@ -1282,6 +1294,13 @@ class UserbotService:
                 await self._apply_manual_lk_card(event, card_data)
             return
 
+        # Компактный однострочный формат: БАНК ФИО ЦЕНА МЕТОД [@username] [#deal_id|USDT]
+        if "\n" not in text:
+            compact = accounting2.parse_lk_card_compact(text)
+            if compact:
+                await self._apply_manual_lk_card(event, compact)
+                return
+
     async def _apply_brak_command(self, event, cmd: dict):
         """БРАК — найти карточку → статус БРАК → уведомить клиента → если
         был гарант-deal, попросить отменить + написать в чат сделок."""
@@ -1448,6 +1467,19 @@ class UserbotService:
         # Проверяем что данных достаточно: bank, fio, метод, цена
         method = chat_info.get("payment_method", "")
         client_uname = chat_info.get("client_username") or ""
+        # Если username не сохранён — резолвим через Telethon
+        if not client_uname:
+            client_id = chat_info.get("client_id")
+            if client_id:
+                try:
+                    ent = await self.client.get_entity(int(client_id))
+                    if getattr(ent, "username", None):
+                        client_uname = ent.username
+                        await storage.set_chat_payment_info(
+                            wc, client_username=client_uname
+                        )
+                except Exception as e:
+                    logger.warning("perevyaz: resolve username failed: %s", e)
         # Ищем сделку для этого work_chat
         deal = None
         for did, d in (storage.list_deals() or {}).items():
@@ -1692,9 +1724,15 @@ class UserbotService:
                     parse_mode="html",
                 )
                 return
-            # Пересчитать
+            # Пересчитать с учётом предыдущих заявок дня (без самой target)
             lk_cards = storage.list_lk_cards() or {}
-            new_computed = accounting2.compute_application_v2(target, lk_cards)
+            all_apps = storage.get_applications_v2(date_str) or []
+            prev_apps = [
+                p for p in all_apps if int(p.get("id", 0)) < int(app_id)
+            ]
+            new_computed = accounting2.compute_application_v2(
+                target, lk_cards, prev_apps=prev_apps,
+            )
             target["computed"] = new_computed
             await storage.update_application_v2(
                 date_str, app_id,
@@ -1790,8 +1828,13 @@ class UserbotService:
         """
         date_str = app.get("date") or accounting2.today_str()
         lk_cards = storage.list_lk_cards() or {}
-
-        computed = accounting2.compute_application_v2(app, lk_cards)
+        # prev_apps — все заявки за этот день, кроме той которую заменяем (если режим)
+        prev_apps_all = storage.get_applications_v2(date_str) or []
+        replaced_id = replaced[1] if replaced else None
+        prev_apps = [
+            p for p in prev_apps_all if int(p.get("id", 0)) != int(replaced_id or 0)
+        ]
+        computed = accounting2.compute_application_v2(app, lk_cards, prev_apps=prev_apps)
 
         full_app = {**app, "date": date_str, "computed": computed}
         new_id = await storage.add_application_v2(date_str, full_app)

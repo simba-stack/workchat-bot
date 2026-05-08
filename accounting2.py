@@ -259,6 +259,99 @@ _RE_BRAK = re.compile(r"^\s*брак\b\s*(.*)$", re.I | re.S)
 _RE_BLOK = re.compile(r"^\s*блок\b\s*(.*)$", re.I | re.S)
 
 
+_KNOWN_BANKS_LC = {
+    "альфа", "альфабанк", "альфа-банк", "alpha", "alfa",
+    "озон", "ozon",
+    "райф", "райффайзен", "raif",
+    "точка", "tochka", "tinkoff", "тинькофф",
+    "втб", "vtb",
+    "уралсиб", "uralsib",
+    "локо", "loko", "бкс", "bks", "дело", "delo",
+    "убрир", "ubrir",
+}
+
+_PAYMENT_METHODS_LC = {
+    "usdt_trc20", "usdt", "trc20",
+    "guarantor_before", "guarantor_after", "guarantor_after_work", "guarantor",
+}
+
+
+def parse_lk_card_compact(text: str) -> Optional[dict]:
+    """Однострочный формат добавления ЛК в Группу 1:
+
+      БАНК ФИО... ЦЕНА МЕТОД [@username] [#deal_id или USDT-адрес]
+
+    Примеры:
+      АЛЬФА Иванов Иван Иванович 400 USDT_TRC20 @ivanov_user T...
+      ОЗОН Петров 300 GUARANTOR_AFTER #12345 @petrov
+    """
+    if not text or "\n" in text:
+        return None
+    txt = _strip_markdown(text).strip()
+    tokens = txt.split()
+    if len(tokens) < 4:
+        return None
+
+    # 1) Банк — первое слово (должен быть из списка известных)
+    bank_raw = tokens[0]
+    if bank_raw.lower() not in _KNOWN_BANKS_LC and not bank_raw.lower().startswith("райф"):
+        return None
+    rest = tokens[1:]
+
+    # 2) Метод оплаты — ищем токен из _PAYMENT_METHODS_LC
+    method = None
+    method_idx = -1
+    for i, t in enumerate(rest):
+        if t.lower() in _PAYMENT_METHODS_LC or t.upper() in (
+            "USDT_TRC20", "GUARANTOR_BEFORE", "GUARANTOR_AFTER",
+            "GUARANTOR_AFTER_WORK", "GUARANTOR",
+        ):
+            method = t.upper()
+            method_idx = i
+            break
+    if method is None or method_idx == 0:
+        return None
+    if method == "USDT":
+        method = "USDT_TRC20"
+    if method == "GUARANTOR":
+        method = "GUARANTOR_AFTER"  # default flavor
+
+    # 3) Цена — токен ПЕРЕД методом, должна быть числом
+    price_token = rest[method_idx - 1].rstrip("$").replace(",", ".")
+    try:
+        price = float(price_token)
+    except ValueError:
+        return None
+
+    # 4) ФИО — всё между банком и ценой
+    fio = " ".join(rest[: method_idx - 1]).strip()
+    if not fio:
+        return None
+
+    # 5) Опционально после метода: @username, #deal_id, USDT-адрес
+    after = rest[method_idx + 1:]
+    supplier = ""
+    deal_id = ""
+    usdt_address = ""
+    for t in after:
+        if t.startswith("@"):
+            supplier = t.lstrip("@")
+        elif t.startswith("#"):
+            deal_id = t.lstrip("#")
+        elif t.startswith("T") and len(t) >= 30:
+            usdt_address = t
+
+    return {
+        "bank": bank_raw,
+        "fio": fio,
+        "price_usdt": price,
+        "payment_method": method,
+        "supplier": supplier,
+        "deal_id": deal_id,
+        "usdt_address": usdt_address,
+    }
+
+
 def parse_brak_command(text: str) -> Optional[dict]:
     """«БРАК ОЗОН Иванов причина» → {bank, fio, reason}."""
     if not text:
@@ -416,11 +509,29 @@ def parse_application_v2(text: str) -> Optional[dict]:
 
 # === Расчёт по заявке (с учётом БЛОК) ===
 
-def compute_application_v2(app: dict, lk_cards: dict) -> dict:
+def compute_application_v2(app: dict, lk_cards: dict, prev_apps=None) -> dict:
     """Считает заявку. lk_cards — все карточки storage.lk_cards.
+    prev_apps — список заявок ЗА ЭТОТ ЖЕ ДЕНЬ ДО ТЕКУЩЕЙ. Если ЛК (bank+fio)
+    фигурировал в одной из них — effective_usdt=0 (уже списан тогда).
 
-    Возвращает dict с числами + lk_breakdown (по каждому output ЛК).
+    Возвращает dict с числами + lk_breakdown (по каждому ЛК).
     """
+    prev_apps = prev_apps or []
+
+    def _was_in_prev(bank: str, fio: str) -> bool:
+        bank_l = (bank or "").lower()
+        fio_l = (fio or "").lower()
+        for prev in prev_apps:
+            items = [prev.get("intake") or {}] + (prev.get("outputs") or [])
+            for it in items:
+                if not it:
+                    continue
+                if (it.get("bank") or "").lower() != bank_l:
+                    continue
+                if fio_l and fio_l not in (it.get("fio") or "").lower():
+                    continue
+                return True
+        return False
     intake = app.get("intake") or {}
     outputs = app.get("outputs") or []
     course_w = _f(app.get("course_withdrawal")) or 1.0
@@ -467,6 +578,17 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
         if card is None:
             # Карточки нет — fallback: override → встроенный прайс
             price = override or lookup_pricing(bank)
+            # Та же проверка для fallback — если был в предыдущей заявке, не списываем
+            if _was_in_prev(bank, fio):
+                lk_breakdown.append({
+                    "role": role,
+                    "bank": bank, "fio": fio,
+                    "price_usdt": price,
+                    "effective_usdt": 0.0,
+                    "card_status": "—",
+                    "note": "уже учтён в предыдущей заявке",
+                })
+                continue
             lk_costs_total += price
             lk_breakdown.append({
                 "role": role,
@@ -482,16 +604,16 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
             continue
         price = override or _f(card.get("price_usdt")) or lookup_pricing(bank)
         status = card.get("status", "")
-        # Если карточка УЖЕ отработана/завершена — за неё списали ранее
-        # (в предыдущей заявке). Повторно в маржу не вычитаем.
-        if status in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", "ЗАВЕРШЁН"):
+        # Если ЭТОТ ЖЕ ЛК уже фигурировал в более ранней заявке за день —
+        # повторно из маржи не списываем (уже списан тогда).
+        if _was_in_prev(bank, fio):
             lk_breakdown.append({
                 "role": role,
                 "bank": bank, "fio": fio,
                 "price_usdt": price,
                 "effective_usdt": 0.0,
                 "card_status": status,
-                "note": f"уже учтён ранее (статус {status})",
+                "note": "уже учтён в предыдущей заявке",
             })
             continue
         if status == "БЛОК":
@@ -578,7 +700,8 @@ STATUS_LABELS = {
 def format_lk_card(card: dict) -> str:
     """Шаблон анкеты ЛК для Группы 1 (Telegram HTML)."""
     cid = card.get("card_id", "?")
-    supplier = (card.get("supplier") or "").lstrip("@") or "—"
+    supplier_raw = (card.get("supplier") or "").lstrip("@").strip()
+    supplier = f"@{supplier_raw}" if supplier_raw else "не указан"
     bank = card.get("bank") or "—"
     fio = card.get("fio") or "—"
     price = _f(card.get("price_usdt"))
@@ -591,7 +714,7 @@ def format_lk_card(card: dict) -> str:
 
     lines = [
         f"🆔 <b>ЛК #{cid}</b>",
-        f"1. Поставщик: @{supplier}",
+        f"1. Поставщик: {supplier}",
         f"2. Банк: <b>{bank}</b>",
         f"3. ФИО: {fio}",
         f"4. Цена: <b>{price:.0f}$</b>",
