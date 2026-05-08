@@ -1629,6 +1629,108 @@ class UserbotService:
             )
             return
 
+        # Команда: правка цены ЛК в заявке.
+        # Формат: "заявка N <банк/ФИО любые слова> <цена>$"
+        # Примеры:
+        #   заявка 1 Альфа Иванов 350
+        #   заявка 1 Иванов Иван Иванович Альфа 400$
+        m = re.match(
+            r"^\s*заявка\s+#?(\d+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s*\$?\s*$",
+            text, re.I,
+        )
+        if m and "\n" not in text:
+            app_id = int(m.group(1))
+            middle = m.group(2).strip()
+            new_price = float(m.group(3))
+            date_str = accounting2.today_str()
+            apps = storage.get_applications_v2(date_str) or []
+            target = next(
+                (a for a in apps if int(a.get("id", 0)) == app_id), None
+            )
+            if not target:
+                await event.reply(
+                    f"⚠️ Заявка #{app_id} за {date_str} не найдена.",
+                    parse_mode="html",
+                )
+                return
+            # В middle ищем известный банк, остальное — ФИО
+            BANKS = ("альфа", "озон", "точка", "втб", "райф", "райффайзен",
+                     "уралсиб", "локо", "бкс", "дело", "убрир", "тинькофф")
+            words = middle.split()
+            bank_word = None
+            fio_words = []
+            for w in words:
+                if w.lower() in BANKS or w.lower().startswith("райф"):
+                    bank_word = w
+                else:
+                    fio_words.append(w)
+            if not bank_word:
+                await event.reply(
+                    "⚠️ Не нашёл банк в команде. Формат: "
+                    "<code>заявка N БАНК ФИО ЦЕНА</code>",
+                    parse_mode="html",
+                )
+                return
+            fio_q = " ".join(fio_words).strip()
+            # Найти ЛК в заявке (intake или outputs) по банку+ФИО
+            intake = target.get("intake") or {}
+            outputs = target.get("outputs") or []
+            updated_item = None
+            for item in [intake] + outputs:
+                if not item:
+                    continue
+                if (item.get("bank") or "").lower() != bank_word.lower():
+                    continue
+                if fio_q and fio_q.lower() not in (item.get("fio") or "").lower():
+                    continue
+                item["price_usdt_override"] = new_price
+                updated_item = item
+                break
+            if not updated_item:
+                await event.reply(
+                    f"⚠️ ЛК <b>{bank_word} {fio_q}</b> в заявке #{app_id} не найден.",
+                    parse_mode="html",
+                )
+                return
+            # Пересчитать
+            lk_cards = storage.list_lk_cards() or {}
+            new_computed = accounting2.compute_application_v2(target, lk_cards)
+            target["computed"] = new_computed
+            await storage.update_application_v2(
+                date_str, app_id,
+                intake=intake,
+                outputs=outputs,
+                computed=new_computed,
+            )
+            # Перерисовать отчёт (edit) если знаем msg_id
+            new_report = accounting2.format_application_report_v2(target, new_computed)
+            new_report = (
+                f"♻️ <i>Цена ЛК {bank_word} {fio_q} обновлена → "
+                f"{new_price:.0f}$</i>\n\n" + new_report
+            )
+            report_msg_id = target.get("report_msg_id")
+            edited = False
+            if report_msg_id:
+                try:
+                    target_chat = await self._resolve_chat_target(event.chat_id)
+                    await self.client.edit_message(
+                        target_chat, int(report_msg_id), new_report,
+                        parse_mode="html", link_preview=False,
+                    )
+                    edited = True
+                except Exception as e:
+                    logger.warning("edit report msg failed: %s", e)
+            if not edited:
+                await event.reply(new_report, parse_mode="html", link_preview=False)
+            else:
+                # Подтверждение оператору
+                await event.reply(
+                    f"✏️ Цена ЛК <b>{bank_word} {fio_q}</b> в заявке #{app_id} "
+                    f"обновлена → <b>{new_price:.0f}$</b>. Отчёт пересчитан.",
+                    parse_mode="html",
+                )
+            return
+
         # Команда: отмена редактирования
         if low in ("отмена", "cancel", "отменить") and event.chat_id in self._editing_app:
             ed_date, ed_id = self._editing_app.pop(event.chat_id)
@@ -1673,6 +1775,8 @@ class UserbotService:
                 "• <code>удалить заявку N</code> — удалить заявку № N за сегодня\n"
                 "• <code>редактировать заявку N</code> — заменить заявку № N "
                 "(пришлите новый текст в полном формате)\n"
+                "• <code>заявка N БАНК ФИО ЦЕНА</code> — изменить цену ЛК "
+                "в заявке № N. Пример: <code>заявка 1 Альфа Иванов 350</code>\n"
                 "• <code>отмена</code> — отменить ожидание редактирования",
                 parse_mode="html",
             )
@@ -1742,7 +1846,12 @@ class UserbotService:
         if moved:
             report += f"\n\n🔄 Автоматом → ОТРАБОТАН: <b>{moved}</b> карточек."
 
-        await event.reply(report, parse_mode="html", link_preview=False)
+        sent = await event.reply(report, parse_mode="html", link_preview=False)
+        sent_id = getattr(sent, "id", None)
+        if sent_id:
+            await storage.update_application_v2(
+                date_str, new_id, report_msg_id=int(sent_id)
+            )
         logger.info(
             "applied app_v2 id=%s date=%s margin=%.0f$ moved=%d",
             new_id, date_str, computed.get("margin_usdt", 0), moved,

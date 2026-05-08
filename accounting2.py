@@ -462,9 +462,11 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
                     and fio.lower() in (c.get("fio") or "").lower()):
                 card = c
                 break
+        # Override-цена с самой заявки (если оператор задал явно)
+        override = _f(o.get("price_usdt_override"))
         if card is None:
-            # Карточки нет — fallback по прайсу, считаем как обычно
-            price = lookup_pricing(bank)
+            # Карточки нет — fallback: override → встроенный прайс
+            price = override or lookup_pricing(bank)
             lk_costs_total += price
             lk_breakdown.append({
                 "role": role,
@@ -472,11 +474,26 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
                 "price_usdt": price,
                 "effective_usdt": price,
                 "card_status": "—",
-                "note": "анкета не найдена" if price == 0 else "",
+                "note": (
+                    "по override" if override
+                    else ("анкета не найдена" if price == 0 else "")
+                ),
             })
             continue
-        price = _f(card.get("price_usdt")) or lookup_pricing(bank)
+        price = override or _f(card.get("price_usdt")) or lookup_pricing(bank)
         status = card.get("status", "")
+        # Если карточка УЖЕ отработана/завершена — за неё списали ранее
+        # (в предыдущей заявке). Повторно в маржу не вычитаем.
+        if status in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", "ЗАВЕРШЁН"):
+            lk_breakdown.append({
+                "role": role,
+                "bank": bank, "fio": fio,
+                "price_usdt": price,
+                "effective_usdt": 0.0,
+                "card_status": status,
+                "note": f"уже учтён ранее (статус {status})",
+            })
+            continue
         if status == "БЛОК":
             block_rub = _f(card.get("block_amount_rub"))
             block_usdt = (block_rub / course_p) if course_p else 0.0

@@ -746,6 +746,22 @@ class Storage:
             await self._save_unlocked()
             return new_id
 
+    async def update_application_v2(
+        self, date_str: str, app_id: int, **fields
+    ) -> bool:
+        """Обновляет произвольные поля заявки на месте. Возвращает True если
+        нашли и обновили."""
+        async with _lock:
+            apps_by_date = self.state.setdefault("applications_v2", {})
+            day = apps_by_date.get(date_str) or []
+            for app in day:
+                if int(app.get("id", 0)) == int(app_id):
+                    for k, v in fields.items():
+                        app[k] = v
+                    await self._save_unlocked()
+                    return True
+            return False
+
     async def remove_application_v2(self, date_str: str, app_id: int) -> bool:
         async with _lock:
             apps_by_date = self.state.setdefault("applications_v2", {})
