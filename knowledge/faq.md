@@ -3095,3 +3095,10 @@ https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-
 **Ответ:** «400»
 
 Связано: [[pricing]] [[deals]]
+
+## Инструкция по открытию ИП
+
+Если клиент просит инструкцию / мануал или задаёт вопрос «как открыть ИП» — отправляй ссылку:
+https://teletype.in/@rfc_manager_1/q55-sRUjgrs
+
+Связано: [[policy]] [[about]] [[index]]
