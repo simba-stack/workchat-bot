@@ -1681,16 +1681,25 @@ class UserbotService:
         if not hasattr(self, "_lk_pending"):
             self._lk_pending = {}
         if key not in self._lk_pending:
-            self._lk_pending[key] = {"chat_id": wc, "reminder_count": 0}
+            self._lk_pending[key] = {
+                "chat_id": wc,
+                "reminder_count": 0,
+                "started_at": time.time(),
+            }
             asyncio.create_task(self._lk_reminder_loop(wc, key))
 
     async def _lk_reminder_loop(self, wc, key: str):
         """Раз в 5 минут пинаем клиента, пока данные не появятся (или 6 раз).
 
-        Выходим если для этого work_chat УЖЕ существует карточка ЛК (значит
-        AI успел вызвать create_lk_card сам или перевяз отработал) — иначе
-        будем спамить клиента когда всё уже готово.
+        Условия выхода (НЕ шлём напоминалку):
+          1) Карточка ЛК уже существует.
+          2) Метод оплаты собран → триггерим создание карточки и выходим.
+          3) Клиент пишет в чате после старта pending — значит он не застрял,
+             AI ведёт диалог сам, спамить ⏰-напоминаниями не нужно.
         """
+        started_at = (self._lk_pending.get(key) or {}).get("started_at", time.time())
+        from storage import _norm_chat_id  # noqa
+        norm_key = _norm_chat_id(wc)
         for _ in range(6):
             await asyncio.sleep(300)  # 5 минут
             # 1) Карточка уже есть → нечего напоминать
@@ -1706,12 +1715,21 @@ class UserbotService:
             # 2) Все данные собраны → триггерим creation
             method = chat_info.get("payment_method")
             if method:
-                # Триггерим creation
                 fake_event = type("E", (), {"chat_id": wc, "message": None})()
                 try:
                     await self._create_lk_card_from_perevyaz(fake_event, chat_info)
                 except Exception:
                     pass
+                self._lk_pending.pop(key, None)
+                return
+            # 3) Клиент уже общался после запроса — AI ведёт диалог сам
+            last_client = (self._last_client_msg_ts or {}).get(norm_key, 0)
+            if last_client > started_at:
+                logger.info(
+                    "lk_reminder: chat=%s — клиент активен (last_client_msg > started_at), "
+                    "AI сам ведёт диалог, выходим без напоминания",
+                    wc,
+                )
                 self._lk_pending.pop(key, None)
                 return
             # Напомним
