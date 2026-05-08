@@ -514,12 +514,12 @@ def parse_application_v2(text: str) -> Optional[dict]:
 
 def compute_application_v2(app: dict, lk_cards: dict, prev_apps=None) -> dict:
     """Считает заявку. lk_cards — все карточки storage.lk_cards.
-    prev_apps — список заявок ЗА ЭТОТ ЖЕ ДЕНЬ ДО ТЕКУЩЕЙ. Если ЛК (bank+fio)
-    фигурировал в одной из них — effective_usdt=0 (уже списан тогда).
-
-    Возвращает dict с числами + lk_breakdown (по каждому ЛК).
+    prev_apps — заявки за день ДО текущей; ЛК из них → effective=0.
+    Также: ЛК со статусом ОТРАБОТАН/ПОПОЛНИТЬ_И_ОТПУСТИТЬ/ЗАВЕРШЁН чьи
+    last_application_id != app.id → отработан в ДРУГОЙ заявке → effective=0.
     """
     prev_apps = prev_apps or []
+    current_app_id = app.get("id")
 
     def _was_in_prev(bank: str, fio: str) -> bool:
         bank_l = (bank or "").lower()
@@ -607,8 +607,35 @@ def compute_application_v2(app: dict, lk_cards: dict, prev_apps=None) -> dict:
             continue
         price = override or _f(card.get("price_usdt")) or lookup_pricing(bank)
         status = card.get("status", "")
-        # Если ЭТОТ ЖЕ ЛК уже фигурировал в более ранней заявке за день —
-        # повторно из маржи не списываем (уже списан тогда).
+        last_app_id = card.get("last_application_id")
+        # Если карточка УЖЕ отработана/завершена и это сделала ДРУГАЯ заявка
+        # (не текущая) — значит её цена УЖЕ была списана в той заявке.
+        already_done = status in (
+            "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", "ЗАВЕРШЁН",
+        )
+        if already_done and last_app_id and last_app_id != current_app_id:
+            lk_breakdown.append({
+                "role": role,
+                "bank": bank, "fio": fio,
+                "price_usdt": price,
+                "effective_usdt": 0.0,
+                "card_status": status,
+                "note": f"уже учтён в заявке #{last_app_id}",
+            })
+            continue
+        # Если карточка отработана но last_application_id не записан —
+        # значит обработка прошла до фикса. Тогда смотрим prev_apps по дню.
+        if already_done and not last_app_id:
+            lk_breakdown.append({
+                "role": role,
+                "bank": bank, "fio": fio,
+                "price_usdt": price,
+                "effective_usdt": 0.0,
+                "card_status": status,
+                "note": f"уже учтён ранее (статус {status})",
+            })
+            continue
+        # Также — был ли ЛК в более ранней заявке этого же дня
         if _was_in_prev(bank, fio):
             lk_breakdown.append({
                 "role": role,

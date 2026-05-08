@@ -1839,17 +1839,25 @@ class UserbotService:
         """
         date_str = app.get("date") or accounting2.today_str()
         lk_cards = storage.list_lk_cards() or {}
-        # prev_apps — все заявки за этот день, кроме той которую заменяем (если режим)
+        # Сначала сохраняем заявку чтобы получить id (нужен compute для current_app_id)
+        full_app = {**app, "date": date_str}
+        new_id = await storage.add_application_v2(date_str, full_app)
+        full_app["id"] = new_id
+
+        # prev_apps — все заявки за этот день, кроме текущей и заменяемой
         prev_apps_all = storage.get_applications_v2(date_str) or []
         replaced_id = replaced[1] if replaced else None
         prev_apps = [
-            p for p in prev_apps_all if int(p.get("id", 0)) != int(replaced_id or 0)
+            p for p in prev_apps_all
+            if int(p.get("id", 0)) != int(new_id)
+            and int(p.get("id", 0)) != int(replaced_id or 0)
         ]
-        computed = accounting2.compute_application_v2(app, lk_cards, prev_apps=prev_apps)
-
-        full_app = {**app, "date": date_str, "computed": computed}
-        new_id = await storage.add_application_v2(date_str, full_app)
-        full_app["id"] = new_id
+        computed = accounting2.compute_application_v2(
+            full_app, lk_cards, prev_apps=prev_apps,
+        )
+        full_app["computed"] = computed
+        # Обновляем заявку с computed
+        await storage.update_application_v2(date_str, new_id, computed=computed)
 
         report = accounting2.format_application_report_v2(full_app, computed)
         if replaced:
@@ -1884,7 +1892,9 @@ class UserbotService:
                 # Особый случай — сделка после отработки.
                 # Идём в work_chat клиента, тегаем, просим создать сделку.
                 await storage.set_lk_card_status(
-                    cid, "ОТРАБОТАН", by="accounting_v2",
+                    cid, "ОТРАБОТАН",
+                    by="accounting_v2",
+                    last_application_id=new_id,
                 )
                 await self._refresh_lk_card_post(cid)
                 asyncio.create_task(
@@ -1892,7 +1902,9 @@ class UserbotService:
                 )
             else:
                 await storage.set_lk_card_status(
-                    cid, "ОТРАБОТАН", by="accounting_v2",
+                    cid, "ОТРАБОТАН",
+                    by="accounting_v2",
+                    last_application_id=new_id,
                 )
                 await self._refresh_lk_card_post(cid)
             moved += 1
