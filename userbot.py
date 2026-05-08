@@ -1047,7 +1047,13 @@ class UserbotService:
             }
         if payment_method == "USDT_TRC20" and not usdt_address:
             return {"status": "error", "error": "usdt_address_required_for_usdt"}
-        if payment_method.startswith("GUARANTOR") and not deal_id:
+        # GUARANTOR_AFTER_WORK — сделка создаётся ПОСЛЕ отработки клиентом,
+        # на момент создания карточки её ещё нет, deal_id опционален.
+        if (
+            payment_method.startswith("GUARANTOR")
+            and payment_method != "GUARANTOR_AFTER_WORK"
+            and not deal_id
+        ):
             return {"status": "error", "error": "deal_id_required_for_guarantor"}
 
         lk_group = storage.get_lk_group_id()

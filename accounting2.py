@@ -334,6 +334,9 @@ def parse_lk_card_compact(text: str) -> Optional[dict]:
     deal_id = ""
     usdt_address = ""
     for t in after:
+        if t == "-":
+            # Прочерк = "сделки нет (для GUARANTOR_AFTER_WORK она появится после отработки)"
+            continue
         if t.startswith("@"):
             supplier = t.lstrip("@")
         elif t.startswith("#"):
@@ -722,6 +725,8 @@ def format_lk_card(card: dict) -> str:
     ]
     if deal_id:
         lines.append(f"   Номер сделки: #{deal_id}")
+    elif method == "GUARANTOR_AFTER_WORK":
+        lines.append("   Номер сделки: — (создастся после отработки)")
     if usdt_addr and method == "USDT_TRC20":
         lines.append(f"   USDT TRC20: <code>{usdt_addr}</code>")
     lines.append(f"🔄 Статус: {status_label}")
