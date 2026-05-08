@@ -1281,6 +1281,11 @@ class UserbotService:
 
         low = text.lower()
 
+        # Массовый импорт существующих ЛК
+        if low.startswith("/import_lk") or low.startswith("импорт лк"):
+            await self._apply_import_lk(event, text)
+            return
+
         # БРАК / БЛОК — короткие команды
         if low.startswith("брак"):
             cmd = accounting2.parse_brak_command(text)
@@ -1418,9 +1423,52 @@ class UserbotService:
             parse_mode="html",
         )
 
+    def _resolve_work_chat_by_supplier(self, supplier: str) -> dict:
+        """Ищет work_chat по @username поставщика (= username клиента в managed_chats).
+        Возвращает {work_chat_id, client_id, client_username} или {}.
+
+        Нужно чтобы при ручном добавлении/импорте ЛК автомат знал, в какой
+        рабочий чат клиента писать после отработки (для GUARANTOR_AFTER_WORK)."""
+        if not supplier:
+            return {}
+        target = supplier.lstrip("@").lower().strip()
+        if not target:
+            return {}
+        for chat_key in storage.get_managed_chat_ids():
+            info = storage.get_chat_info(chat_key) or {}
+            uname = (info.get("client_username") or "").lstrip("@").lower().strip()
+            if uname and uname == target:
+                try:
+                    wc_id = int(chat_key)
+                except (TypeError, ValueError):
+                    wc_id = chat_key
+                return {
+                    "work_chat_id": wc_id,
+                    "client_id": int(info.get("client_id") or 0),
+                    "client_username": info.get("client_username") or target,
+                }
+        return {}
+
     async def _apply_manual_lk_card(self, event, card_data: dict):
         """Менеджер вручную создал анкету — сохраняем в storage и сразу
         публикуем сам шаблон анкеты (а не короткое подтверждение)."""
+        # Если в карточке указан @поставщик — попробуем привязать
+        # её к work_chat клиента (нужно для авто-тегания при отработке).
+        supplier = (card_data.get("supplier") or "").lstrip("@")
+        if supplier and not card_data.get("work_chat_id"):
+            resolved = self._resolve_work_chat_by_supplier(supplier)
+            if resolved:
+                card_data = {**card_data, **resolved}
+                logger.info(
+                    "manual_lk_card: linked work_chat=%s for supplier=@%s",
+                    resolved.get("work_chat_id"), supplier,
+                )
+            else:
+                logger.warning(
+                    "manual_lk_card: no work_chat for supplier=@%s — "
+                    "auto-tag on отработка будет недоступен",
+                    supplier,
+                )
         card_id = await storage.add_lk_card(**card_data, created_by="manual")
         # Получаем готовый рендер анкеты
         card = storage.get_lk_card(card_id) or {}
@@ -1436,6 +1484,91 @@ class UserbotService:
         sent_id = getattr(sent, "id", None)
         if sent_id:
             await storage.set_lk_card_msg_id(card_id, int(sent_id))
+
+    async def _apply_import_lk(self, event, text: str):
+        """Массовый импорт существующих ЛК.
+
+        Формат сообщения:
+            /import_lk
+            АЛЬФА Иванов 400 USDT_TRC20 @ivanov TX...
+            ОЗОН Петров 300 GUARANTOR_AFTER_WORK - @petrov
+
+        Каждая строка после команды парсится как compact-формат и подвязывается
+        к work_chat по @поставщику (через managed_chats).
+        """
+        lines = [ln.strip() for ln in (text or "").splitlines()]
+        rows = [ln for ln in lines[1:] if ln]
+        if not rows:
+            usage = (
+                "ℹ️ <b>Массовый импорт ЛК</b>\n\n"
+                "Формат:\n"
+                "<pre>/import_lk\n"
+                "АЛЬФА Иванов Иван 400 USDT_TRC20 @ivanov TXxxx\n"
+                "ОЗОН Петров 300 GUARANTOR_AFTER_WORK - @petrov\n"
+                "ТОЧКА Сидоров 250 GUARANTOR_AFTER #12345 @sidorov</pre>\n"
+                "Каждая строка = одна карточка ЛК.\n"
+                "@поставщик нужен чтобы привязать карточку к рабочей беседе клиента."
+            )
+            try:
+                await event.reply(usage, parse_mode="html", link_preview=False)
+            except Exception:
+                pass
+            return
+
+        ok_lines: list = []
+        skip_lines: list = []
+        for raw in rows:
+            parsed = accounting2.parse_lk_card_compact(raw)
+            if not parsed:
+                skip_lines.append(f"❌ <code>{raw[:80]}</code> — формат не распознан")
+                continue
+            supplier = (parsed.get("supplier") or "").lstrip("@")
+            resolved = (
+                self._resolve_work_chat_by_supplier(supplier) if supplier else {}
+            )
+            if resolved:
+                parsed.update(resolved)
+            try:
+                card_id = await storage.add_lk_card(**parsed, created_by="import")
+            except Exception as e:
+                skip_lines.append(f"❌ <code>{raw[:80]}</code> — ошибка: {e}")
+                continue
+            # Постим анкету в Группу 1
+            try:
+                card = storage.get_lk_card(card_id) or {}
+                rendered = accounting2.format_lk_card(card)
+                sent = await event.reply(
+                    rendered, parse_mode="html", link_preview=False,
+                )
+                sent_id = getattr(sent, "id", None)
+                if sent_id:
+                    await storage.set_lk_card_msg_id(card_id, int(sent_id))
+            except Exception as e:
+                logger.warning("import_lk reply failed for %s: %s", card_id, e)
+            mark = "🔗" if resolved else "⚠️"
+            note = "" if resolved else " <i>(work_chat не найден)</i>"
+            ok_lines.append(
+                f"{mark} <code>#{card_id}</code> {parsed.get('bank')} "
+                f"{parsed.get('fio')} → @{supplier or '—'}{note}"
+            )
+
+        report = "📦 <b>Импорт ЛК завершён</b>\n\n"
+        if ok_lines:
+            report += f"✅ Добавлено: <b>{len(ok_lines)}</b>\n"
+            report += "\n".join(ok_lines[:30])
+            if len(ok_lines) > 30:
+                report += f"\n<i>… и ещё {len(ok_lines) - 30}</i>"
+        if skip_lines:
+            if ok_lines:
+                report += "\n\n"
+            report += f"⚠️ Пропущено: <b>{len(skip_lines)}</b>\n"
+            report += "\n".join(skip_lines[:10])
+            if len(skip_lines) > 10:
+                report += f"\n<i>… и ещё {len(skip_lines) - 10}</i>"
+        try:
+            await event.reply(report, parse_mode="html", link_preview=False)
+        except Exception as e:
+            logger.warning("import_lk summary failed: %s", e)
 
     async def _refresh_lk_card_post(self, card_id: str) -> bool:
         """Edit/post карточки в Группе 1 актуальным состоянием."""
@@ -1929,8 +2062,38 @@ class UserbotService:
         wc = card.get("work_chat_id")
         client_uname = card.get("client_username") or ""
         cid = card.get("card_id", "?")
+        supplier = card.get("supplier") or ""
         if not wc:
-            return
+            # Пытаемся резолвить work_chat прямо сейчас по @supplier —
+            # если карточка создавалась вручную ДО регистрации клиента в managed_chats.
+            resolved = self._resolve_work_chat_by_supplier(supplier)
+            if resolved.get("work_chat_id"):
+                wc = resolved["work_chat_id"]
+                if not client_uname:
+                    client_uname = resolved.get("client_username") or ""
+                # Сохраним привязку чтобы в следующий раз сразу нашлось.
+                try:
+                    await storage.update_lk_card(
+                        cid,
+                        work_chat_id=wc,
+                        client_id=resolved.get("client_id", 0),
+                        client_username=client_uname,
+                    )
+                    logger.info(
+                        "post-work deal: late-resolved work_chat=%s for card=%s "
+                        "supplier=@%s", wc, cid, supplier,
+                    )
+                except Exception as e:
+                    logger.warning("post-work deal: late-resolve save failed: %s", e)
+            else:
+                logger.warning(
+                    "post-work deal SKIPPED for card=%s: no work_chat_id "
+                    "(supplier=@%s — клиент с таким @username не зарегистрирован "
+                    "в managed_chats; добавьте его через /start или используйте "
+                    "/import_lk после того как клиент создаст рабочую беседу)",
+                    cid, supplier or "—",
+                )
+                return
         msg = (
             f"✅ Ваш ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) "
             f"<b>отработан</b>.\n\n"
