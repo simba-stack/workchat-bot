@@ -107,6 +107,18 @@ def _entities_to_telethon(items: list) -> list:
     return out
 
 
+def _fmt_username(uname: Optional[str], fallback: str = "не указан") -> str:
+    """Единый формат @username для постов/уведомлений.
+    Гарантирует ровно один префикс @, обрезает пробелы.
+    Если username пустой — возвращает fallback."""
+    if not uname:
+        return fallback
+    clean = str(uname).strip().lstrip("@")
+    if not clean:
+        return fallback
+    return f"@{clean}"
+
+
 class UserbotService:
     def __init__(self):
         if config.STRING_SESSION:
@@ -415,6 +427,21 @@ class UserbotService:
         client_id = chat_info.get("client_id")
         if client_id and sender_id != client_id:
             return
+
+        # Авто-фиксация @username клиента: если в managed_chats нет username
+        # или он устарел — подтягиваем из event.sender и обновляем индекс.
+        # Это «лечит» legacy-беседы, созданные до сохранения username.
+        if sender_username:
+            stored_uname = (chat_info.get("client_username") or "").lower().strip()
+            if stored_uname != sender_username:
+                try:
+                    await storage.update_client_username(chat_id, sender_username)
+                    logger.info(
+                        "managed_chat=%s: client_username updated → @%s",
+                        chat_id, sender_username,
+                    )
+                except Exception as e:
+                    logger.warning("auto-update username failed for chat=%s: %s", chat_id, e)
 
         idle_min = max(0, storage.get_client_idle_minutes())
         idle_sec = idle_min * 60
@@ -988,9 +1015,9 @@ class UserbotService:
 
         from datetime import datetime
         ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
-        uname = d.get("client_username") or "?"
+        uname_disp = _fmt_username(d.get("client_username"), fallback="@?")
         text = (
-            f"@{uname} — {d.get('bank','?')} — {d.get('amount','?')} — "
+            f"{uname_disp} — {d.get('bank','?')} — {d.get('amount','?')} — "
             f"{ts} — {deal_id_norm} — {d.get('status','?')}"
         )
 
@@ -1286,6 +1313,16 @@ class UserbotService:
             await self._apply_import_lk(event, text)
             return
 
+        # Синхронизация клиентов: проходим по managed_chats, наполняем индекс
+        # @username -> work_chat. Чините legacy-беседы где client_username пустой.
+        if (
+            low.startswith("/sync_clients")
+            or low.startswith("/checkupidgroup")
+            or low.startswith("синхронизация клиентов")
+        ):
+            await self._apply_sync_clients(event)
+            return
+
         # БРАК / БЛОК — короткие команды
         if low.startswith("брак"):
             cmd = accounting2.parse_brak_command(text)
@@ -1427,26 +1464,39 @@ class UserbotService:
         """Ищет work_chat по @username поставщика (= username клиента в managed_chats).
         Возвращает {work_chat_id, client_id, client_username} или {}.
 
-        Нужно чтобы при ручном добавлении/импорте ЛК автомат знал, в какой
-        рабочий чат клиента писать после отработки (для GUARANTOR_AFTER_WORK)."""
+        Сначала через обратный индекс client_username_index (O(1)),
+        затем fallback линейным проходом по managed_chats — на случай,
+        если индекс ещё не наполнен (старые беседы до /sync_clients)."""
         if not supplier:
             return {}
         target = supplier.lstrip("@").lower().strip()
         if not target:
             return {}
+
+        def _build(chat_key, info):
+            try:
+                wc_id = int(chat_key)
+            except (TypeError, ValueError):
+                wc_id = chat_key
+            return {
+                "work_chat_id": wc_id,
+                "client_id": int(info.get("client_id") or 0),
+                "client_username": info.get("client_username") or target,
+            }
+
+        # 1) Быстрый путь: обратный индекс
+        idx_key = storage.find_chat_by_client_username(target)
+        if idx_key:
+            info = storage.get_chat_info(idx_key) or {}
+            if info:
+                return _build(idx_key, info)
+
+        # 2) Fallback: линейный поиск (на случай если индекс пуст)
         for chat_key in storage.get_managed_chat_ids():
             info = storage.get_chat_info(chat_key) or {}
             uname = (info.get("client_username") or "").lstrip("@").lower().strip()
             if uname and uname == target:
-                try:
-                    wc_id = int(chat_key)
-                except (TypeError, ValueError):
-                    wc_id = chat_key
-                return {
-                    "work_chat_id": wc_id,
-                    "client_id": int(info.get("client_id") or 0),
-                    "client_username": info.get("client_username") or target,
-                }
+                return _build(chat_key, info)
         return {}
 
     async def _apply_manual_lk_card(self, event, card_data: dict):
@@ -1547,9 +1597,10 @@ class UserbotService:
                 logger.warning("import_lk reply failed for %s: %s", card_id, e)
             mark = "🔗" if resolved else "⚠️"
             note = "" if resolved else " <i>(work_chat не найден)</i>"
+            sup_disp = _fmt_username(supplier, fallback="—")
             ok_lines.append(
                 f"{mark} <code>#{card_id}</code> {parsed.get('bank')} "
-                f"{parsed.get('fio')} → @{supplier or '—'}{note}"
+                f"{parsed.get('fio')} → {sup_disp}{note}"
             )
 
         report = "📦 <b>Импорт ЛК завершён</b>\n\n"
@@ -1569,6 +1620,75 @@ class UserbotService:
             await event.reply(report, parse_mode="html", link_preview=False)
         except Exception as e:
             logger.warning("import_lk summary failed: %s", e)
+
+    async def _apply_sync_clients(self, event):
+        """Синхронизация client_username по всем managed_chats:
+          1. Если client_username пустой — резолвим через get_entity(client_id).
+          2. Наполняем обратный индекс client_username -> chat_id.
+          3. Идём от старых бесед к новым (по created_at), чтобы у клиентов
+             с несколькими беседами в индексе осталась самая свежая.
+        """
+        chat_ids = storage.get_managed_chat_ids()
+        # Сортируем по created_at ASC — самая свежая беседа окажется в индексе последней.
+        items = []
+        for key in chat_ids:
+            info = storage.get_chat_info(key) or {}
+            items.append((info.get("created_at", 0), key, info))
+        items.sort(key=lambda t: t[0])
+
+        try:
+            await event.reply(
+                f"🔄 Синхронизирую <b>{len(items)}</b> рабочих чатов…",
+                parse_mode="html", link_preview=False,
+            )
+        except Exception:
+            pass
+
+        resolved_n = 0
+        already_n = 0
+        no_username_n = 0
+        errors_n = 0
+        bullets: list = []
+        for _, key, info in items:
+            client_id = int(info.get("client_id") or 0)
+            current = (info.get("client_username") or "").lstrip("@").strip()
+            uname = current
+            if not uname and client_id:
+                try:
+                    ent = await self.client.get_entity(client_id)
+                    uname = (getattr(ent, "username", None) or "").lstrip("@").strip()
+                except Exception as e:
+                    errors_n += 1
+                    logger.warning("sync_clients: get_entity %s failed: %s", client_id, e)
+                    continue
+            if not uname:
+                no_username_n += 1
+                continue
+            ok = await storage.update_client_username(key, uname)
+            if ok and not current:
+                resolved_n += 1
+                bullets.append(f"🆕 <code>{key}</code> → @{uname}")
+            elif ok:
+                resolved_n += 1
+            else:
+                already_n += 1
+
+        report = (
+            "✅ <b>Синхронизация завершена</b>\n\n"
+            f"Всего чатов: <b>{len(items)}</b>\n"
+            f"Привязано/обновлено: <b>{resolved_n}</b>\n"
+            f"Уже актуальны: <b>{already_n}</b>\n"
+            f"Без username: <b>{no_username_n}</b>\n"
+            f"Ошибок резолва: <b>{errors_n}</b>"
+        )
+        if bullets:
+            report += "\n\n<b>Резолвлено впервые:</b>\n" + "\n".join(bullets[:30])
+            if len(bullets) > 30:
+                report += f"\n<i>… и ещё {len(bullets) - 30}</i>"
+        try:
+            await event.reply(report, parse_mode="html", link_preview=False)
+        except Exception as e:
+            logger.warning("sync_clients summary failed: %s", e)
 
     async def _refresh_lk_card_post(self, card_id: str) -> bool:
         """Edit/post карточки в Группе 1 актуальным состоянием."""
@@ -2098,8 +2218,9 @@ class UserbotService:
             f"✅ Ваш ЛК <b>{card.get('bank')}</b> ({card.get('fio')}) "
             f"<b>отработан</b>.\n\n"
         )
-        if client_uname:
-            msg += f"@{client_uname.lstrip('@')} "
+        client_tag = _fmt_username(client_uname, fallback="")
+        if client_tag:
+            msg += f"{client_tag} "
         msg += (
             f"создайте, пожалуйста, гарант-сделку в Conte и пришлите номер — "
             f"оформим вашу выплату ({accounting2._fmt_usdt(card.get('price_usdt', 0))})."

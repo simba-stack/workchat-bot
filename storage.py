@@ -105,6 +105,9 @@ def _default_state() -> dict:
         # Заявки V2: {date_str: [{id, intake, outputs, course_withdrawal,
         # course_payout, partner_pct, computed, ts}, ...]}
         "applications_v2": {},
+        # Обратный индекс client_username -> chat_id (последний по created_at).
+        # Telegram username case-insensitive, ключи храним в lowercase, без @.
+        "client_username_index": {},
     }
 
 
@@ -241,13 +244,77 @@ class Storage:
     def get_triggers(self):
         return list(self.state["trigger_phrases"])
 
+    def _username_index_set_unlocked(self, username: str, chat_id) -> bool:
+        """Кладёт chat_id в обратный индекс client_username_index по lower-key.
+        Если запись уже была — побеждает та, у которой managed_chat свежее
+        (по created_at). Возвращает True если индекс обновился."""
+        if not username:
+            return False
+        key_uname = username.lstrip("@").lower().strip()
+        if not key_uname:
+            return False
+        index = self.state.setdefault("client_username_index", {})
+        new_key = _norm_chat_id(chat_id)
+        if not new_key:
+            return False
+        existing = index.get(key_uname)
+        if existing == new_key:
+            return False
+        # Сравниваем created_at — оставляем самую свежую беседу.
+        managed = self.state.get("managed_chats", {})
+        new_at = (managed.get(new_key) or {}).get("created_at", 0)
+        old_at = (managed.get(existing) or {}).get("created_at", 0) if existing else -1
+        if new_at >= old_at:
+            index[key_uname] = new_key
+            return True
+        return False
+
+    async def update_client_username(self, chat_id, username: str) -> bool:
+        """Обновляет client_username в managed_chats[chat_id] и обратный индекс.
+        Используется юзерботом при /sync_clients и при первом сообщении
+        клиента в managed_chat (если username пустой/устарел)."""
+        if not username:
+            return False
+        clean = username.lstrip("@").strip()
+        if not clean:
+            return False
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            changed = False
+            if (info.get("client_username") or "") != clean:
+                info["client_username"] = clean
+                changed = True
+            if self._username_index_set_unlocked(clean, key):
+                changed = True
+            if changed:
+                await self._save_unlocked()
+            return changed
+
+    def find_chat_by_client_username(self, username: str):
+        """Возвращает chat_id (нормализованный ключ managed_chats) клиента
+        по @username, либо None. Поиск через обратный индекс."""
+        if not username:
+            return None
+        key_uname = username.lstrip("@").lower().strip()
+        if not key_uname:
+            return None
+        index = self.state.get("client_username_index") or {}
+        return index.get(key_uname)
+
+    def get_client_username_index(self) -> dict:
+        return dict(self.state.get("client_username_index") or {})
+
     async def register_chat(self, chat_id, client_id: int, client_name: str, client_username: str = ""):
         key = _norm_chat_id(chat_id)
+        clean_uname = (client_username or "").lstrip("@").strip()
         async with _lock:
             self.state["managed_chats"][key] = {
                 "client_id": client_id,
                 "client_name": client_name,
-                "client_username": (client_username or "").lstrip("@"),
+                "client_username": clean_uname,
                 "created_at": time.time(),
                 "welcome_sent": False,
                 # Метод оплаты + USDT адрес — заполняются AI через
@@ -255,6 +322,8 @@ class Storage:
                 "payment_method": "",
                 "usdt_address": "",
             }
+            if clean_uname:
+                self._username_index_set_unlocked(clean_uname, key)
             await self._save_unlocked()
 
     async def set_chat_payment_info(
@@ -274,7 +343,10 @@ class Storage:
             if usdt_address:
                 info["usdt_address"] = usdt_address.strip()
             if client_username:
-                info["client_username"] = client_username.lstrip("@").strip()
+                clean = client_username.lstrip("@").strip()
+                info["client_username"] = clean
+                if clean:
+                    self._username_index_set_unlocked(clean, key)
             await self._save_unlocked()
             return True
 
