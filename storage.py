@@ -79,9 +79,10 @@ def _default_state() -> dict:
             "by_specialist": {},
             "errors_total": 0,
         },
-        "deals_group_id": 0,
         # deals: deal_id -> {client_username, fio, bank, amount, fee, method,
-        # status, created_at, history, work_chat_id, deals_group_msg_id}
+        # status, created_at, history, work_chat_id}
+        # Видимость для команды — через карточку ЛК в Группе 1 (lk_group_id),
+        # отдельной публикации в чате сделок больше нет.
         "deals": {},
         "deals_stats": {
             "created_total": 0,
@@ -125,17 +126,20 @@ class Storage:
                     with open(self.path, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
                     # Миграция V2: дропаем ключи старой схемы
-                    # (accounts_group_id, pending_accounts_posts, accounting V1)
+                    # (accounts_group_id, pending_accounts_posts, accounting V1,
+                    # deals_group_id — устарела, видимость теперь через Группу 1 ЛК)
                     for legacy_key in (
                         "accounts_group_id",
                         "pending_accounts_posts",
                         "accounting",
+                        "deals_group_id",
                     ):
                         loaded.pop(legacy_key, None)
-                    # Из каждой сделки убираем accounts_group_msg_id (V1)
+                    # Из каждой сделки убираем поля устаревших публикаций.
                     for d in (loaded.get("deals") or {}).values():
                         if isinstance(d, dict):
                             d.pop("accounts_group_msg_id", None)
+                            d.pop("deals_group_msg_id", None)
                     defaults = _default_state()
                     for k, v in defaults.items():
                         if k not in loaded:
@@ -538,14 +542,6 @@ class Storage:
                     by[specialist] = int(by.get(specialist, 0)) + 1
             await self._save_unlocked()
 
-    def get_deals_group_id(self) -> int:
-        return int(self.state.get("deals_group_id") or 0)
-
-    async def set_deals_group_id(self, chat_id: int):
-        async with _lock:
-            self.state["deals_group_id"] = int(chat_id)
-            await self._save_unlocked()
-
     def get_deal(self, deal_id: str) -> Optional[dict]:
         return (self.state.get("deals") or {}).get(_norm_deal_id(deal_id))
 
@@ -610,7 +606,6 @@ class Storage:
                 "created_at": time.time(),
                 "history": [{"ts": time.time(), "status": status}],
                 "work_chat_id": work_chat_id,
-                "deals_group_msg_id": None,
             }
             stats = self.state.setdefault(
                 "deals_stats",
@@ -650,16 +645,6 @@ class Storage:
 
     def get_deals_stats(self) -> dict:
         return dict(self.state.get("deals_stats") or {})
-
-    async def set_deals_group_msg_id(self, deal_id: str, msg_id):
-        async with _lock:
-            deals = self.state.get("deals") or {}
-            d = deals.get(_norm_deal_id(deal_id))
-            if d is None:
-                return False
-            d["deals_group_msg_id"] = msg_id
-            await self._save_unlocked()
-            return True
 
     # === Бухгалтерия V2: Группа 2 «Бухгалтерия» (заявки v2) ===
 

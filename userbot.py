@@ -371,11 +371,6 @@ class UserbotService:
             await self._handle_brain_chat_writeback(event)
             return
 
-        deals_id = storage.get_deals_group_id()
-        if deals_id and _norm_chat_id(chat_id) == _norm_chat_id(deals_id):
-            await self._handle_deals_group_message(event)
-            return
-
         # Группа 1 «Личные кабинеты» — анкеты ЛК + БРАК/БЛОК
         lk_id = storage.get_lk_group_id()
         if lk_id and _norm_chat_id(chat_id) == _norm_chat_id(lk_id):
@@ -804,8 +799,6 @@ class UserbotService:
             return await self._tool_update_deal_status(**tool_input)
         if tool_name == "find_deal":
             return await self._tool_find_deal(**tool_input)
-        if tool_name == "post_deals_group":
-            return await self._tool_post_deals_group(**tool_input)
         if tool_name == "create_lk_card":
             return await self._tool_create_lk_card(
                 chat_id=chat_id,
@@ -1002,47 +995,6 @@ class UserbotService:
             clean.append(cd)
         return {"status": "ok", "found": len(clean), "deals": clean}
 
-    async def _tool_post_deals_group(self, deal_id: str = "", custom_text: str = "", **_kwargs) -> dict:
-        gid = storage.get_deals_group_id()
-        if not gid:
-            return {"status": "error", "error": "deals_group_not_set"}
-
-        from storage import _norm_deal_id
-        deal_id_norm = _norm_deal_id(deal_id)
-        d = storage.get_deal(deal_id_norm)
-        if not d:
-            return {"status": "error", "error": "deal_not_found", "deal_id": deal_id_norm}
-
-        from datetime import datetime
-        ts = datetime.fromtimestamp(d.get("created_at", 0)).strftime("%d.%m.%Y")
-        uname_disp = _fmt_username(d.get("client_username"), fallback="@?")
-        text = (
-            f"{uname_disp} — {d.get('bank','?')} — {d.get('amount','?')} — "
-            f"{ts} — {deal_id_norm} — {d.get('status','?')}"
-        )
-
-        existing_msg_id = d.get("deals_group_msg_id")
-        target = await self._resolve_chat_target(gid)
-
-        if existing_msg_id:
-            try:
-                await self.client.edit_message(target, existing_msg_id, text, link_preview=False)
-                logger.info("edited deals_group msg=%s for deal=%s", existing_msg_id, deal_id_norm)
-                return {"status": "ok", "deals_group": gid, "mode": "edited", "msg_id": existing_msg_id}
-            except Exception as e:
-                logger.warning("edit deals_group msg=%s failed (%s) — fallback to send", existing_msg_id, e)
-
-        try:
-            sent = await self.client.send_message(target, text, link_preview=False)
-        except Exception as e:
-            logger.warning("post_deals_group send failed: %s", e)
-            return {"status": "error", "step": "send", "error": str(e)}
-        new_msg_id = getattr(sent, "id", None)
-        if new_msg_id:
-            await storage.set_deals_group_msg_id(deal_id_norm, new_msg_id)
-        logger.info("posted to deals_group: chat=%s msg_id=%s len=%d", gid, new_msg_id, len(text))
-        return {"status": "ok", "deals_group": gid, "mode": "sent", "msg_id": new_msg_id}
-
     async def _tool_create_lk_card(
         self,
         chat_id,
@@ -1133,133 +1085,16 @@ class UserbotService:
             "payment_method": payment_method,
         }
 
-    # === Авто-детект статусов в deals/accounts чатах ===
-
-    _DEALS_QUERY_PATTERNS = [
-        (
-            re.compile(
-                r"(?:список|дай|что|какие|покажи).{0,40}?"
-                r"(?:для\s+|на\s+|нужно\s+)?попол(?:нен|нить|нения)",
-                re.I | re.S,
-            ),
-            ("ПОПОЛНИТЬ", "ОЖИДАЕТ_ПОПОЛНЕНИЯ"),
-            "📋 Сделки на пополнение",
-        ),
-        (
-            re.compile(
-                r"(?:список|дай|что|какие|покажи|\bлк\b).{0,40}?в\s+работе",
-                re.I | re.S,
-            ),
-            ("ПОПОЛНЕНО", "В_РАБОТЕ", "ГОТОВО_К_ОТПУСКУ"),
-            "🔧 ЛК в работе",
-        ),
-        (
-            re.compile(
-                r"(?:список|дай|что|какие|покажи).{0,40}?отработан"
-                r"|^\s*отработанн",
-                re.I | re.S | re.M,
-            ),
-            ("ЗАВЕРШЕНА",),
-            "✅ Отработанные ЛК",
-        ),
-        (
-            re.compile(
-                r"(?:список|дай|что|какие|покажи).{0,40}?блок"
-                r"|заблокирован"
-                r"|^\s*блок(?:и|ов|ах)?\s*\??\s*$",
-                re.I | re.S | re.M,
-            ),
-            ("ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"),
-            "🚫 Блоки и отмены",
-        ),
-    ]
-
-    _DEALS_STATUS_PATTERNS = [
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?завершен", re.I | re.S), "ЗАВЕРШЕНА"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?отпущен", re.I | re.S), "ЗАВЕРШЕНА"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?(успешно\s+)?отработан", re.I | re.S), "ЗАВЕРШЕНА"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?(отмен|отказ)", re.I | re.S), "ОТМЕНА_СДЕЛКИ"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?блок", re.I | re.S), "ЗАБЛОКИРОВАН"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?готов[ао]?\s+к\s+отпуск", re.I | re.S), "ГОТОВО_К_ОТПУСКУ"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?в\s+работе", re.I | re.S), "В_РАБОТЕ"),
-        (re.compile(r"сделк[ауи]\s+#?(\S+).*?пополнен", re.I | re.S), "ПОПОЛНЕНО"),
-    ]
-
-    @staticmethod
-    def _format_deals_list(statuses: tuple, header: str) -> str:
-        all_deals = storage.list_deals() or {}
-        target = set(statuses)
-        matching = [(did, d) for did, d in all_deals.items() if d.get("status") in target]
-        if not matching:
-            return f"{header}: пусто"
-        matching.sort(key=lambda x: x[1].get("created_at", 0), reverse=True)
-        lines = [f"{header} ({len(matching)}):", ""]
-        for did, d in matching:
-            fio = (d.get("fio") or "").strip() or "—"
-            bank = (d.get("bank") or "").strip() or "—"
-            amount = str(d.get("amount") or "").strip() or "—"
-            status = d.get("status") or "—"
-            uname_raw = (d.get("client_username") or "").lstrip("@").strip()
-            uname_part = f" — @{uname_raw}" if uname_raw else ""
-            lines.append(f"• {fio}{uname_part} — #{did} — {bank} — {amount} — {status}")
-        return "\n".join(lines)
-
-    async def _handle_deals_query(self, event, statuses: tuple, header: str) -> None:
-        msg = self._format_deals_list(statuses, header)
-        chunks = _split_text(msg, 3900)
-        try:
-            await event.reply(chunks[0], link_preview=False)
-            if len(chunks) > 1:
-                target = await self._resolve_chat_target(event.chat_id)
-                for extra in chunks[1:]:
-                    await asyncio.sleep(0.3)
-                    await self.client.send_message(target, extra, link_preview=False)
-            logger.info(
-                "deals_chat list query: header=%r, statuses=%s, parts=%d, len=%d",
-                header, statuses, len(chunks), len(msg),
-            )
-        except Exception as e:
-            logger.warning("deals list reply failed: %s", e)
-
-    async def _handle_deals_group_message(self, event):
-        if not event.message:
-            return
-        text = (event.message.text or "").strip()
-        if not text:
-            return
-        if self._me and event.sender_id == self._me.id:
-            return
-        logger.info("deals_chat msg from sender=%s, len=%d", event.sender_id, len(text))
-
-        for rx, statuses, header in self._DEALS_QUERY_PATTERNS:
-            if rx.search(text):
-                logger.info("deals_chat query matched: header=%r statuses=%s", header, statuses)
-                await self._handle_deals_query(event, statuses, header)
-                return
-
-        for rx, new_status in self._DEALS_STATUS_PATTERNS:
-            m = rx.search(text)
-            if not m:
-                continue
-            deal_id = m.group(1).lstrip("#").strip(".,;:!?")
-            logger.info("deals_chat pattern matched: deal=%s -> status=%s", deal_id, new_status)
-            await self._apply_status_change(deal_id, new_status)
-            return
-        logger.info("deals_chat: no status pattern matched in %r", text[:120])
-
     async def _apply_status_change(self, deal_id: str, new_status: str):
-        """Универсальная процедура: update_deal_status + post в deals_group +
-        обновление поста в accounts_group + notify клиента в его work_chat."""
+        """Внутренняя процедура: смена статуса сделки в storage и уведомление
+        клиента в его work_chat. Видимость для команды теперь — через
+        Группу 1 ЛК (карточки): deal_id хранится в карточке, статус меняет
+        accounting_v2 при отчёте."""
         ok = await storage.update_deal_status(deal_id, new_status)
         if not ok:
             logger.warning("apply_status_change: deal %s not found in storage", deal_id)
             return
         deal = storage.get_deal(deal_id) or {}
-
-        try:
-            await self._tool_post_deals_group(deal_id=deal_id)
-        except Exception as e:
-            logger.warning("post_deals_group failed after status change: %s", e)
 
         work_chat = deal.get("work_chat_id")
         client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
@@ -1394,12 +1229,13 @@ class UserbotService:
             except Exception as e:
                 logger.warning("brak notify client failed: %s", e)
 
-        # В чат сделок — отмена + забрать деньги (если был гарант)
+        # В Группу 1 ЛК — уведомление об отмене сделки (если был гарант).
+        # Тимон в этой группе участник — увидит и заберёт деньги в Conte.
         if deal_id and method.startswith("GUARANTOR"):
-            gid = storage.get_deals_group_id()
-            if gid:
+            lk_gid = storage.get_lk_group_id()
+            if lk_gid:
                 try:
-                    target = await self._resolve_chat_target(gid)
+                    target = await self._resolve_chat_target(lk_gid)
                     await self.client.send_message(
                         target,
                         f"❌ <b>Сделка #{deal_id} ОТМЕНЕНА</b> "
@@ -1722,16 +1558,25 @@ class UserbotService:
             return False
 
     async def _create_lk_card_from_perevyaz(
-        self, event, chat_info: dict, lk_text: str = "",
+        self, event, chat_info: dict, lk_text: str = "", fio_text: str = "",
     ) -> Optional[str]:
-        """Триггер «Перевяз ЛК выполнен» (или sys01/sys02) — создаём карточку
-        в Группе 1 на основе данных в managed_chats[chat_id] (что AI собрал
-        через set_payment_method) + storage.deals если есть. Возвращает card_id."""
+        """Триггер «Перевяз ЛК выполнен» — создаём карточку в Группе 1.
+
+        Источники данных по приоритету:
+          - bank: lk_text (из 'ЛК:' в перевязке) → deal.bank
+          - fio:  fio_text (из 'ФИО:' в перевязке) → deal.fio
+          - method, usdt_address: chat_info (что AI собрал через set_payment_method)
+          - price: deal.amount → прайс по банку
+          - deal_id: deal.deal_id (если уже создан до перевязки)
+          - supplier/client_username: chat_info.client_username → resolve по client_id
+
+        Если не хватает только метода — запрашиваем у клиента ТОЛЬКО метод.
+        Банк/ФИО уже в самом сообщении CRM-бота, спрашивать их повторно нельзя.
+        """
         wc = event.chat_id
-        # Проверяем что данных достаточно: bank, fio, метод, цена
         method = chat_info.get("payment_method", "")
         client_uname = chat_info.get("client_username") or ""
-        # Если username не сохранён — резолвим через Telethon
+        # Резолв username через Telethon если в managed_chats пусто
         if not client_uname:
             client_id = chat_info.get("client_id")
             if client_id:
@@ -1739,12 +1584,10 @@ class UserbotService:
                     ent = await self.client.get_entity(int(client_id))
                     if getattr(ent, "username", None):
                         client_uname = ent.username
-                        await storage.set_chat_payment_info(
-                            wc, client_username=client_uname
-                        )
+                        await storage.update_client_username(wc, client_uname)
                 except Exception as e:
                     logger.warning("perevyaz: resolve username failed: %s", e)
-        # Ищем сделку для этого work_chat
+        # Сделка для этого work_chat (для GUARANTOR_BEFORE/_AFTER уже создана)
         deal = None
         for did, d in (storage.list_deals() or {}).items():
             if d.get("work_chat_id") and abs(int(d["work_chat_id"])) == abs(int(wc)):
@@ -1752,8 +1595,11 @@ class UserbotService:
                     deal = {"deal_id": did, **d}
                     break
 
-        bank = (deal or {}).get("bank") or ""
-        fio = (deal or {}).get("fio") or ""
+        # Bank: предпочитаем то что прислал CRM в перевязке
+        bank = (lk_text or "").strip() or ((deal or {}).get("bank") or "")
+        # FIO: то же самое
+        fio = (fio_text or "").strip() or ((deal or {}).get("fio") or "")
+        # Цена: deal.amount → прайс по банку
         price = float((deal or {}).get("amount") or 0)
         if not price and bank:
             price = accounting2.lookup_pricing(bank)
@@ -1761,14 +1607,19 @@ class UserbotService:
         deal_id = (deal or {}).get("deal_id") or ""
         usdt_addr = chat_info.get("usdt_address") or ""
 
-        # Минимум: bank + (price ИЛИ method)
-        if not bank or (not method and not price):
-            # Запросить недостающее у клиента + reminder
-            await self._request_lk_data_from_client(event, chat_info, deal)
+        # Минимум для создания карточки: bank + method.
+        # Если есть только bank — спрашиваем у клиента только метод.
+        if not bank:
+            logger.warning(
+                "perevyaz: bank не определён (lk_text=%r, deal=%s) — пропускаем",
+                lk_text, bool(deal),
+            )
             return None
-
         if not method:
-            method = "USDT_TRC20"  # default
+            await self._request_lk_data_from_client(
+                event, chat_info, deal, bank=bank, fio=fio,
+            )
+            return None
 
         card_id = await storage.add_lk_card(
             supplier=client_uname,
@@ -1785,18 +1636,29 @@ class UserbotService:
             created_by="perevyaz",
         )
         await self._refresh_lk_card_post(card_id)
-        logger.info("LK card created from perevyaz: %s for chat=%s", card_id, wc)
+        logger.info(
+            "LK card created from perevyaz: %s for chat=%s bank=%s fio=%s method=%s",
+            card_id, wc, bank, fio, method,
+        )
         return card_id
 
     async def _request_lk_data_from_client(
         self, event, chat_info: dict, deal: Optional[dict],
+        bank: str = "", fio: str = "",
     ):
-        """Перевяз есть, но данных не хватает — спросить у клиента + reminder."""
+        """Перевяз есть, но данных не хватает — спросить у клиента + reminder.
+
+        ВАЖНО: банк и ФИО CRM-бот присылает прямо в тексте перевязки
+        (`ЛК:` и `ФИО:`), повторно их спрашивать не нужно. Спрашиваем
+        только реально недостающие поля (обычно — метод оплаты)."""
         wc = event.chat_id
         missing = []
-        if not (deal or {}).get("bank"):
+        # bank/fio проверяем с учётом того что было распарсено из перевязки
+        eff_bank = bank or (deal or {}).get("bank") or ""
+        eff_fio = fio or (deal or {}).get("fio") or ""
+        if not eff_bank:
             missing.append("банк")
-        if not (deal or {}).get("fio"):
+        if not eff_fio:
             missing.append("ФИО держателя счёта")
         if not chat_info.get("payment_method"):
             missing.append("метод оплаты (USDT TRC20 или сделка в гаранте)")
@@ -2241,19 +2103,39 @@ class UserbotService:
     _PEREVYAZ_LK_RE = re.compile(r"лк\s*:?[\s]*(.+)", re.I)
 
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
-        """Триггер Перевяз ЛК выполнен — создаём карточку в Группе 1 ЛК."""
+        """Триггер Перевяз ЛК выполнен — парсим банк и ФИО прямо из текста
+        CRM-бота и создаём карточку в Группе 1 ЛК."""
         text = (event.message.text or "")
         if not self._PEREVYAZ_RE.search(text):
             return False
         lk_text = ""
+        fio_text = ""
         for line in text.splitlines():
-            mm = self._PEREVYAZ_LK_RE.match(line.strip())
-            if mm:
-                lk_text = mm.group(1).strip()
-                break
-        logger.info("perevyaz detected: lk=%r chat=%s", lk_text, event.chat_id)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not lk_text:
+                m_lk = self._PEREVYAZ_LK_RE.match(stripped)
+                if m_lk:
+                    lk_text = m_lk.group(1).strip()
+                    continue
+            if not fio_text:
+                m_fio = self._PEREVYAZ_FIO_RE.match(stripped)
+                if m_fio:
+                    fio_text = m_fio.group(1).strip()
+                    continue
+        # Подчищаем lk_text — берём только первое слово (название банка),
+        # вдруг CRM-бот в одной строке написал «Озон Альфа Точка» (мульти-LK).
+        if lk_text:
+            lk_text = lk_text.split()[0]
+        logger.info(
+            "perevyaz detected: lk=%r fio=%r chat=%s",
+            lk_text, fio_text, event.chat_id,
+        )
         try:
-            await self._create_lk_card_from_perevyaz(event, chat_info, lk_text=lk_text)
+            await self._create_lk_card_from_perevyaz(
+                event, chat_info, lk_text=lk_text, fio_text=fio_text,
+            )
         except Exception as e:
             logger.warning("perevyaz: lk-card creation failed: %s", e)
         return True
