@@ -308,13 +308,30 @@ class UserbotService:
             return chat_id
         if cid_int in self._chat_entity_cache:
             return self._chat_entity_cache[cid_int]
-        try:
-            ent = await self.client.get_entity(cid_int)
-            self._chat_entity_cache[cid_int] = ent
-            return ent
-        except Exception as e:
-            logger.warning("resolve_chat_target failed for %s: %s", cid_int, e)
-            return cid_int
+        # Если ID положительный — это либо user, либо нормализованный channel/megagroup
+        # без -100 префикса (что хранится в storage после _norm_chat_id).
+        # Сначала пробуем как PeerChannel (для группового чата) — это покрывает
+        # 99% наших чатов: рабочие беседы, ЛК-группа, бухгалтерия, сделки.
+        # Если падает — fallback на обычный get_entity (вдруг это user).
+        candidates = []
+        if cid_int > 0:
+            try:
+                from telethon.tl.types import PeerChannel
+                candidates.append(PeerChannel(cid_int))
+            except Exception:
+                pass
+        candidates.append(cid_int)
+        last_err = None
+        for cand in candidates:
+            try:
+                ent = await self.client.get_entity(cand)
+                self._chat_entity_cache[cid_int] = ent
+                return ent
+            except Exception as e:
+                last_err = e
+                continue
+        logger.warning("resolve_chat_target failed for %s: %s", cid_int, last_err)
+        return cid_int
 
     # === AI brain handlers ===
 
