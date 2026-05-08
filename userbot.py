@@ -1413,18 +1413,23 @@ class UserbotService:
         )
 
     async def _apply_manual_lk_card(self, event, card_data: dict):
-        """Менеджер вручную создал анкету — сохраняем в storage."""
+        """Менеджер вручную создал анкету — сохраняем в storage и сразу
+        публикуем сам шаблон анкеты (а не короткое подтверждение)."""
         card_id = await storage.add_lk_card(**card_data, created_by="manual")
-        # Edit message с card_id (если возможно) — иначе reply
+        # Получаем готовый рендер анкеты
+        card = storage.get_lk_card(card_id) or {}
+        text = accounting2.format_lk_card(card)
+        # Публикуем анкету как reply на исходное сообщение оператора
+        sent = None
         try:
-            await event.reply(
-                f"✅ Карточка <b>#{card_id}</b> создана.",
-                parse_mode="html",
-            )
-        except Exception:
-            pass
-        # Зафиксировать lk_group_msg_id
-        await storage.set_lk_card_msg_id(card_id, event.message.id)
+            sent = await event.reply(text, parse_mode="html", link_preview=False)
+        except Exception as e:
+            logger.warning("manual_lk_card reply failed: %s", e)
+        # Сохраняем msg_id шаблона (а НЕ исходной команды) — чтобы
+        # _refresh_lk_card_post мог редактировать ту же анкету.
+        sent_id = getattr(sent, "id", None)
+        if sent_id:
+            await storage.set_lk_card_msg_id(card_id, int(sent_id))
 
     async def _refresh_lk_card_post(self, card_id: str) -> bool:
         """Edit/post карточки в Группе 1 актуальным состоянием."""
