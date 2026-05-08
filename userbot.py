@@ -1523,11 +1523,25 @@ class UserbotService:
             asyncio.create_task(self._lk_reminder_loop(wc, key))
 
     async def _lk_reminder_loop(self, wc, key: str):
-        """Раз в 5 минут пинаем клиента, пока данные не появятся (или 6 раз)."""
+        """Раз в 5 минут пинаем клиента, пока данные не появятся (или 6 раз).
+
+        Выходим если для этого work_chat УЖЕ существует карточка ЛК (значит
+        AI успел вызвать create_lk_card сам или перевяз отработал) — иначе
+        будем спамить клиента когда всё уже готово.
+        """
         for _ in range(6):
             await asyncio.sleep(300)  # 5 минут
+            # 1) Карточка уже есть → нечего напоминать
+            existing = storage.find_lk_card(work_chat_id=wc) or []
+            if existing:
+                logger.info(
+                    "lk_reminder: chat=%s — карточка(и) уже есть (%d), выходим",
+                    wc, len(existing),
+                )
+                self._lk_pending.pop(key, None)
+                return
             chat_info = storage.get_chat_info(wc) or {}
-            # Перепроверим: может уже всё собрано → создадим карточку
+            # 2) Все данные собраны → триггерим creation
             method = chat_info.get("payment_method")
             if method:
                 # Триггерим creation
