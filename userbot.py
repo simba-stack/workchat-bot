@@ -123,6 +123,10 @@ class UserbotService:
         # понимать «отвечал ли worker на ПРЕДЫДУЩЕЕ сообщение клиента».
         self._last_client_msg_ts: dict[str, float] = {}
         self._chat_entity_cache: dict[int, object] = {}
+        # Накладной режим редактирования заявки V2: chat_id -> (date_str, app_id).
+        # Когда оператор пишет "редактировать заявку N" в Группе 2, мы запоминаем
+        # пару, и при следующей валидной заявке от него — удаляем старую и применяем новую.
+        self._editing_app: dict[int, tuple] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._welcome_locks:
@@ -1568,7 +1572,7 @@ class UserbotService:
     # === V2: Группа 2 «Бухгалтерия» (заявки v2 + расчёт + auto-update ЛК) ===
 
     async def _handle_accounting_v2_message(self, event):
-        """Заявки V2 + старые ручные команды (приход/расход/курс/отчёт/help)."""
+        """Заявки V2 + команды управления (удалить/редактировать/help)."""
         if not event.message:
             return
         text = (event.message.text or "").strip()
@@ -1579,18 +1583,80 @@ class UserbotService:
 
         low = text.lower()
 
+        # Команда: удалить заявку N
+        m = re.match(r"^\s*удалить\s+заявку\s+#?(\d+)\s*$", text, re.I)
+        if m:
+            app_id = int(m.group(1))
+            date_str = accounting2.today_str()
+            ok = await storage.remove_application_v2(date_str, app_id)
+            if ok:
+                await event.reply(
+                    f"🗑 Заявка #{app_id} за {date_str} удалена.",
+                    parse_mode="html",
+                )
+            else:
+                await event.reply(
+                    f"⚠️ Заявка #{app_id} за {date_str} не найдена.",
+                    parse_mode="html",
+                )
+            return
+
+        # Команда: редактировать/исправить/изменить заявку N
+        m = re.match(
+            r"^\s*(?:редактировать|исправить|изменить)\s+заявку\s+#?(\d+)\s*$",
+            text, re.I,
+        )
+        if m:
+            app_id = int(m.group(1))
+            date_str = accounting2.today_str()
+            apps = storage.get_applications_v2(date_str) or []
+            target = next(
+                (a for a in apps if int(a.get("id", 0)) == app_id), None
+            )
+            if not target:
+                await event.reply(
+                    f"⚠️ Заявка #{app_id} за {date_str} не найдена.",
+                    parse_mode="html",
+                )
+                return
+            self._editing_app[event.chat_id] = (date_str, app_id)
+            await event.reply(
+                f"✏️ Жду новый текст заявки <b>#{app_id}</b> за {date_str}.\n\n"
+                "Пришлите её в полном формате (<code>ЗАЯВКА N\nПРИЕМ: ...</code>).\n"
+                "Старая заявка будет удалена и заменена новой.\n\n"
+                "Чтобы отменить — напишите <code>отмена</code>.",
+                parse_mode="html",
+            )
+            return
+
+        # Команда: отмена редактирования
+        if low in ("отмена", "cancel", "отменить") and event.chat_id in self._editing_app:
+            ed_date, ed_id = self._editing_app.pop(event.chat_id)
+            await event.reply(
+                f"❎ Редактирование заявки #{ed_id} ({ed_date}) отменено.",
+                parse_mode="html",
+            )
+            return
+
         # Заявка V2 (мульти-строка с «ЗАЯВКА N»)
         if "\n" in text and "заявка" in low:
             app = accounting2.parse_application_v2(text)
             if app:
-                await self._apply_application_v2(event, app)
+                # Если был режим редактирования — удаляем старую перед применением
+                editing = self._editing_app.pop(event.chat_id, None)
+                replaced_info = None
+                if editing:
+                    ed_date, ed_id = editing
+                    await storage.remove_application_v2(ed_date, ed_id)
+                    replaced_info = (ed_date, ed_id)
+                await self._apply_application_v2(event, app, replaced=replaced_info)
                 return
 
         # Help
         if low in ("/help", "help", "помощь", "?"):
             await event.reply(
                 "📊 <b>Бухгалтерия V2</b>\n\n"
-                "Шли отчёт по заявке в формате:\n"
+                "<b>Заявка</b> — формат:\n"
                 "<code>ЗАЯВКА 1\n"
                 "ПРИЕМ:\n"
                 "ОЗОН - Иванов - 1000000\n"
@@ -1601,14 +1667,23 @@ class UserbotService:
                 "Курс ВЫВОДА — 90\n"
                 "Курс ВЫПЛАТЫ — 92\n"
                 "ПРОЦЕНТ ВЫПЛАТЫ ПАРТНЕРУ: 40</code>\n\n"
-                "Юзербот посчитает маржу и автоматом переведёт ВСЕ ЛК "
-                "из ВЫВОД-секции в ОТРАБОТАН (анкеты в Группе 1).",
+                "После заявки юзербот посчитает маржу и автоматом переведёт "
+                "ВСЕ ЛК (приёмный + выводные) в ОТРАБОТАН в Группе 1.\n\n"
+                "<b>Команды управления:</b>\n"
+                "• <code>удалить заявку N</code> — удалить заявку № N за сегодня\n"
+                "• <code>редактировать заявку N</code> — заменить заявку № N "
+                "(пришлите новый текст в полном формате)\n"
+                "• <code>отмена</code> — отменить ожидание редактирования",
                 parse_mode="html",
             )
             return
 
-    async def _apply_application_v2(self, event, app: dict):
-        """Сохранить заявку, посчитать, ответить отчётом, авто-перевести ЛК."""
+    async def _apply_application_v2(self, event, app: dict, replaced=None):
+        """Сохранить заявку, посчитать, ответить отчётом, авто-перевести ЛК.
+
+        replaced: (date_str, app_id) если новая заявка заменяет старую (режим
+        редактирования). Используется только для пометки в отчёте.
+        """
         date_str = app.get("date") or accounting2.today_str()
         lk_cards = storage.list_lk_cards() or {}
 
@@ -1619,6 +1694,11 @@ class UserbotService:
         full_app["id"] = new_id
 
         report = accounting2.format_application_report_v2(full_app, computed)
+        if replaced:
+            ed_date, ed_id = replaced
+            report = (
+                f"♻️ <i>Заменена заявка #{ed_id} ({ed_date}).</i>\n\n" + report
+            )
 
         # Auto-update ЛК → ОТРАБОТАН.
         # Учитываем И приёмный ЛК (intake), И выводные (outputs) — все они
