@@ -443,10 +443,16 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
     client_part_rub = intake_rub * (1 - partner_pct / 100.0)
     client_payout_usdt = (client_part_rub / course_p) if course_p else 0.0
 
-    # Оплата за ЛК с учётом БЛОК
+    # Оплата за ЛК с учётом БЛОК.
+    # Учитываем И приёмный ЛК (intake — наш закупленный счёт куда зашли деньги),
+    # И выводные ЛК (outputs — куда откупились). У всех своя цена в анкетах.
     lk_breakdown = []
     lk_costs_total = 0.0
-    for o in outputs:
+    intake_for_calc = []
+    if intake.get("bank") and intake.get("fio"):
+        intake_for_calc.append({**intake, "_role": "intake"})
+    for o_idx, o in enumerate([*intake_for_calc, *outputs]):
+        role = o.get("_role") or "output"
         bank = (o.get("bank") or "").strip()
         fio = (o.get("fio") or "").strip()
         # Найти карточку
@@ -461,6 +467,7 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
             price = lookup_pricing(bank)
             lk_costs_total += price
             lk_breakdown.append({
+                "role": role,
                 "bank": bank, "fio": fio,
                 "price_usdt": price,
                 "effective_usdt": price,
@@ -485,6 +492,7 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
                 )
             lk_costs_total += effective
             lk_breakdown.append({
+                "role": role,
                 "bank": bank, "fio": fio,
                 "price_usdt": price,
                 "effective_usdt": effective,
@@ -495,6 +503,7 @@ def compute_application_v2(app: dict, lk_cards: dict) -> dict:
         else:
             lk_costs_total += price
             lk_breakdown.append({
+                "role": role,
                 "bank": bank, "fio": fio,
                 "price_usdt": price,
                 "effective_usdt": price,

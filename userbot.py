@@ -1606,9 +1606,15 @@ class UserbotService:
 
         report = accounting2.format_application_report_v2(full_app, computed)
 
-        # Auto-update ЛК → ОТРАБОТАН (для каждого output)
+        # Auto-update ЛК → ОТРАБОТАН.
+        # Учитываем И приёмный ЛК (intake), И выводные (outputs) — все они
+        # реально отработали когда заявка закрыта.
         moved = 0
-        for o in app.get("outputs", []):
+        intake = app.get("intake") or {}
+        intake_list = []
+        if intake.get("bank") and intake.get("fio"):
+            intake_list.append(intake)
+        for o in [*intake_list, *app.get("outputs", [])]:
             cards = storage.find_lk_card(
                 bank=o.get("bank") or "", fio=o.get("fio") or ""
             )
