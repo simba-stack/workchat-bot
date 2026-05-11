@@ -401,17 +401,41 @@ async def generate_reply(
     system = _build_system_prompt(brain_notes, client_context=client_context)
     use_model = model or storage.get_ai_model() or config.DEFAULT_AI_MODEL
 
+    # PROMPT CACHING: system prompt и tools повторяются на каждый запрос —
+    # помечаем их cache_control: ephemeral, чтобы Anthropic кешировал
+    # префикс на ~5 минут. Цена закешированного префикса — 10% от обычного.
+    # Это снижает стоимость одного запроса с ~$0.26 до ~$0.03 при стабильном
+    # knowledge размером 305KB / ~76K токенов.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
     api_kwargs = {
         "model": use_model,
         "max_tokens": config.AI_MAX_TOKENS,
-        "system": system,
+        "system": system_blocks,
         "messages": list(history),  # копия — будем мутировать в tool-use loop
     }
     if tools_executor is not None:
-        api_kwargs["tools"] = ALL_TOOLS
+        # Tools тоже кешируем — schemas стабильны.
+        cached_tools = []
+        for i, t in enumerate(ALL_TOOLS):
+            tool_copy = dict(t)
+            # cache_control ставится только на ПОСЛЕДНИЙ tool в списке —
+            # Anthropic кеширует весь блок tools при таком маркере.
+            if i == len(ALL_TOOLS) - 1:
+                tool_copy["cache_control"] = {"type": "ephemeral"}
+            cached_tools.append(tool_copy)
+        api_kwargs["tools"] = cached_tools
 
     total_in = 0
     total_out = 0
+    total_cache_read = 0
+    total_cache_write = 0
     # Защита от бесконечного цикла tool-use
     for iteration in range(5):
         try:
@@ -425,6 +449,11 @@ async def generate_reply(
 
         total_in += getattr(msg.usage, "input_tokens", 0)
         total_out += getattr(msg.usage, "output_tokens", 0)
+        # Anthropic возвращает cache_creation_input_tokens (первая запись в кеш —
+        # стоит 125% от обычной цены) и cache_read_input_tokens (чтение из кеша —
+        # 10% от обычной). Считаем для видимости в логах.
+        total_cache_read += getattr(msg.usage, "cache_read_input_tokens", 0) or 0
+        total_cache_write += getattr(msg.usage, "cache_creation_input_tokens", 0) or 0
 
         if msg.stop_reason != "tool_use":
             # Финальный ответ — собираем text из блоков
@@ -437,7 +466,19 @@ async def generate_reply(
                 # Возможно AI ответил только tool_use'ом без текста — не баг,
                 # но в чат отправлять нечего. Возвращаем пустой ответ как пропуск.
                 return None, None
-            return text, {"input_tokens": total_in, "output_tokens": total_out}
+            if total_cache_read or total_cache_write:
+                logger.info(
+                    "AI usage: input=%d output=%d cache_read=%d cache_write=%d "
+                    "(cache savings: %d токенов читали из кеша вместо $$$ inference)",
+                    total_in, total_out, total_cache_read, total_cache_write,
+                    total_cache_read,
+                )
+            return text, {
+                "input_tokens": total_in,
+                "output_tokens": total_out,
+                "cache_read_tokens": total_cache_read,
+                "cache_creation_tokens": total_cache_write,
+            }
 
         # stop_reason == "tool_use" → исполняем все tool_use блоки в этом ответе
         if tools_executor is None:

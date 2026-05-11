@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -165,7 +166,13 @@ async def classify_fact(text: str) -> Optional[dict]:
     if not cli:
         logger.warning("classify_fact: no Anthropic client (API key missing)")
         return None
-    model = storage.get_ai_model() or config.DEFAULT_AI_MODEL
+    # Используем Haiku для классификации — он в ~5 раз дешевле Sonnet,
+    # а задача (classify is_fact + написать markdown-блок) ему по силам.
+    # Можно переопределить через env CLAUDE_CLASSIFIER_MODEL.
+    model = (
+        os.getenv("CLAUDE_CLASSIFIER_MODEL")
+        or "claude-haiku-4-5-20251001"
+    )
     # Длинный мануал может потребовать большой output (markdown-блок + commit msg).
     # 600 раньше обрезало JSON и парсер падал — поднимаем до 4096.
     try:
@@ -175,7 +182,7 @@ async def classify_fact(text: str) -> Optional[dict]:
             messages=[{"role": "user", "content": _classifier_prompt(text)}],
         )
     except Exception as e:
-        logger.warning("classify_fact API error (text_len=%d): %s", len(text), e)
+        logger.warning("classify_fact API error (text_len=%d, model=%s): %s", len(text), model, e)
         return None
     raw = "".join(b.text for b in msg.content if hasattr(b, "text"))
     raw = _strip_code_fences(raw)
