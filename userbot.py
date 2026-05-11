@@ -1245,14 +1245,61 @@ class UserbotService:
         # Анкета (мульти-строка с банком/ценой/методом)
         if "\n" in text and ("банк" in low or "поставщик" in low):
             card_data = accounting2.parse_lk_card(text)
-            if card_data:
-                await self._apply_manual_lk_card(event, card_data)
+            if not card_data:
+                await self._reply_lk_template_hint(
+                    event,
+                    "⚠️ Не понял формат карточки. Нужен минимум банк + цена/метод.",
+                )
+                return
+            # ФИО обязательно — иначе автомат в Группе 2 не свяжет
+            # output ЛК с этой карточкой (там оператор пишет банк + ФИО).
+            if not (card_data.get("fio") or "").strip():
+                await self._reply_lk_template_hint(
+                    event,
+                    "⚠️ Не нашёл ФИО держателя счёта.",
+                    extra_hint=(
+                        "Добавь строку:\n<pre>ФИО: Иванов Иван Иванович</pre>\n\n"
+                        "Без ФИО автомат в Группе 2 не сможет связать заявку "
+                        "с этой карточкой."
+                    ),
+                )
+                return
+            # GUARANTOR_BEFORE/AFTER требуют номер сделки (она уже создана)
+            method = (card_data.get("payment_method") or "").upper()
+            if method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER"):
+                deal_id = (card_data.get("deal_id") or "").strip().lstrip("-").strip()
+                if not deal_id or deal_id in ("-", "—"):
+                    await self._reply_lk_template_hint(
+                        event,
+                        f"⚠️ Для метода <b>{method}</b> нужен номер сделки.",
+                        extra_hint=(
+                            "Добавь строку:\n<pre>Номер сделки: 12345</pre>\n\n"
+                            "Если сделка создаётся ПОСЛЕ отработки — используй "
+                            "метод <code>Сделка в конте (после отработки)</code> "
+                            "и поставь <code>Номер сделки: -</code>"
+                        ),
+                    )
+                    return
+            # USDT_TRC20 требует адрес
+            if method == "USDT_TRC20":
+                addr = (card_data.get("usdt_address") or "").strip()
+                if not addr:
+                    await self._reply_lk_template_hint(
+                        event,
+                        "⚠️ Для метода <b>USDT TRC20</b> нужен адрес кошелька.",
+                        extra_hint="Добавь строку:\n<pre>Адрес: TXxxxxxxxxxxxxxxxxx</pre>",
+                    )
+                    return
+            # created_by: помечаем автора карточки (Тимон / админ / worker / …)
+            card_data["_created_by"] = self._resolve_created_by_tag(event)
+            await self._apply_manual_lk_card(event, card_data)
             return
 
         # Компактный однострочный формат: БАНК ФИО ЦЕНА МЕТОД [@username] [#deal_id|USDT]
         if "\n" not in text:
             compact = accounting2.parse_lk_card_compact(text)
             if compact:
+                compact["_created_by"] = self._resolve_created_by_tag(event)
                 await self._apply_manual_lk_card(event, compact)
                 return
 
@@ -1407,6 +1454,51 @@ class UserbotService:
                 return _build(chat_key, info)
         return {}
 
+    # ID Тимона для определения created_by при ручном создании карточек.
+    TIMON_USER_ID = 397572312
+
+    def _resolve_created_by_tag(self, event) -> str:
+        """Кто создал карточку — для history в storage и для аудита.
+        Возвращает 'manual:tymon' / 'manual:admin' / 'manual:<sid>' / 'manual'."""
+        try:
+            sid = int(event.sender_id) if event.sender_id else 0
+        except Exception:
+            sid = 0
+        if sid == self.TIMON_USER_ID:
+            return "manual:tymon"
+        if sid and sid in (storage.get_admins() or []):
+            return "manual:admin"
+        if sid:
+            return f"manual:{sid}"
+        return "manual"
+
+    async def _reply_lk_template_hint(self, event, header: str, extra_hint: str = ""):
+        """Отвечает на сообщение с подсказкой формата анкеты ЛК.
+        Используется когда parse_lk_card вернул None или нашлась мелкая ошибка."""
+        template = (
+            "<pre>Поставщик: @nickname\n"
+            "Банк: Альфа\n"
+            "ФИО: Иванов Иван Иванович\n"
+            "Цена: 400\n"
+            "Метод оплаты: Сделка в конте (после отработки)\n"
+            "Номер сделки: -</pre>\n\n"
+            "<i>Варианты метода:</i>\n"
+            "• <code>Сделка в конте (после отработки)</code> — сделка создаётся "
+            "ПОСЛЕ отработки счёта, в номере сделки ставится <code>-</code>\n"
+            "• <code>Сделка в конте (до отработки)</code> — сделка уже создана "
+            "ДО перевязки, нужен номер\n"
+            "• <code>USDT TRC20</code> — выплата на адрес после отработки, "
+            "нужна строка <code>Адрес: T...</code>"
+        )
+        body = f"{header}\n\n"
+        if extra_hint:
+            body += extra_hint + "\n\n"
+        body += "Шаблон карточки:\n\n" + template
+        try:
+            await event.reply(body, parse_mode="html", link_preview=False)
+        except Exception as e:
+            logger.warning("template hint reply failed: %s", e)
+
     async def _apply_manual_lk_card(self, event, card_data: dict):
         """Менеджер вручную создал анкету — сохраняем в storage и сразу
         публикуем сам шаблон анкеты (а не короткое подтверждение)."""
@@ -1427,7 +1519,10 @@ class UserbotService:
                     "auto-tag on отработка будет недоступен",
                     supplier,
                 )
-        card_id = await storage.add_lk_card(**card_data, created_by="manual")
+        # Извлекаем _created_by (внутреннее поле — кто создал карточку),
+        # чтобы не передавать его в add_lk_card как поле модели.
+        created_by = card_data.pop("_created_by", None) or "manual"
+        card_id = await storage.add_lk_card(**card_data, created_by=created_by)
         # Получаем готовый рендер анкеты
         card = storage.get_lk_card(card_id) or {}
         text = accounting2.format_lk_card(card)
