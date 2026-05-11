@@ -139,6 +139,14 @@ class UserbotService:
         # Когда оператор пишет "редактировать заявку N" в Группе 2, мы запоминаем
         # пару, и при следующей валидной заявке от него — удаляем старую и применяем новую.
         self._editing_app: dict[int, tuple] = {}
+        # SILENT MODE: chat_key -> unix_time_until.
+        # После add_partner_to_crm AI замолкает на 30 минут — клиент общается
+        # с @PrideCONTROLE_bot, AI не должен комментировать каждое нажатие
+        # кнопки и каждый шаг анкеты. Снимается:
+        #   - явным запросом помощи от клиента (?/помог/не получ/сколько/когда)
+        #   - перевязкой ЛК ('🔗 Перевяз ЛК выполнен')
+        #   - истечением TTL.
+        self._ai_silent_until: dict[str, float] = {}
 
     def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._welcome_locks:
@@ -388,6 +396,14 @@ class UserbotService:
         if not event.message or not (event.message.text or "").strip():
             return
 
+        # Снимаем silent mode если пришёл сигнал готовности от CRM-бота:
+        # «Отдать в работу» / «отправлено на обработку» / «принят в работу».
+        # Это значит клиент завершил заполнение анкеты — AI снова может писать.
+        try:
+            await self._maybe_release_silent_on_crm_ready(event, chat_id)
+        except Exception as e:
+            logger.warning("silent release check failed: %s", e)
+
         if await self._maybe_handle_perevyaz(event, chat_info):
             return
 
@@ -423,6 +439,34 @@ class UserbotService:
         if client_id and sender_id != client_id:
             return
 
+        # SILENT MODE: после add_partner_to_crm AI молчит 30 минут пока
+        # клиент заполняет анкету в @PrideCONTROLE_bot. Снимается явным
+        # запросом помощи или истечением TTL.
+        silent_until = self._ai_silent_until.get(chat_key, 0)
+        if silent_until and time.time() < silent_until:
+            text_lc = ((event.message.text or "") if event.message else "").lower()
+            HELP_MARKERS = (
+                "?", "помог", "помощ", "не получ", "не работ", "не пойм",
+                "не понимаю", "сколько", "когда", "куда", "что дальше",
+                "застр", "ошибк", "не приходит", "не вижу",
+                "привет", "здравств", "есть кто",
+            )
+            looks_like_help = any(m in text_lc for m in HELP_MARKERS)
+            if not looks_like_help:
+                logger.info(
+                    "AI: silent mode active for chat=%s (CRM-флоу), пропускаю клиентское сообщение len=%d",
+                    chat_id, len(text_lc),
+                )
+                # Обновим штамп клиента — но не отвечаем
+                self._last_client_msg_ts[chat_key] = time.time()
+                return
+            # Клиент просит помощь → снимаем silent
+            logger.info(
+                "AI: silent mode lifted for chat=%s — клиент задал вопрос/помощь",
+                chat_id,
+            )
+            self._ai_silent_until.pop(chat_key, None)
+
         # Авто-фиксация @username клиента: если в managed_chats нет username
         # или он устарел — подтягиваем из event.sender и обновляем индекс.
         # Это «лечит» legacy-беседы, созданные до сохранения username.
@@ -440,33 +484,44 @@ class UserbotService:
 
         idle_min = max(0, storage.get_client_idle_minutes())
         idle_sec = idle_min * 60
-        # Логика «не вмешиваться в живой диалог»:
-        # - last_worker_ts: когда worker последний раз писал в этом чате
-        # - prev_client_ts: когда клиент писал ДО текущего сообщения
-        # - now: текущее сообщение клиента
-        # AI молчит ТОЛЬКО если worker ответил на предыдущее сообщение клиента
-        # (worker_ts > prev_client_ts) И этот ответ был недавно (< idle_sec).
-        # Если worker не отписался после предыдущего сообщения клиента — AI
-        # подхватывает СРАЗУ, не дожидаясь idle_sec.
-        prev_client_ts = self._last_client_msg_ts.get(chat_key, 0)
-        last_worker_ts = self._last_worker_ts.get(chat_key, 0)
-        worker_replied_to_prev = last_worker_ts > prev_client_ts
-        # Обновляем штамп клиента (после фиксации prev_client_ts).
+        # Обновляем штамп последнего сообщения клиента.
         self._last_client_msg_ts[chat_key] = time.time()
 
-        if idle_sec > 0 and worker_replied_to_prev and time.time() - last_worker_ts < idle_sec:
-            await storage.bump_ai_stats(skipped_worker_active=1)
-            logger.info(
-                "AI: skip chat=%s — worker active (replied to prev client msg) in last %dm",
-                chat_id, idle_min,
-            )
-            return
-        if not worker_replied_to_prev and last_worker_ts > 0:
-            logger.info(
-                "AI: chat=%s — worker НЕ ответил на предыдущее сообщение клиента, AI подхватывает",
-                chat_id,
-            )
+        # Логика «дать сотруднику ответить первым»:
+        # Если worker когда-то писал в чате и его последнее сообщение было
+        # недавно (< idle_sec назад) — AI ждёт ОСТАТОК паузы. Если за это
+        # время worker ответит клиенту — AI молчит. Если нет — AI отвечает.
+        last_worker_ts = self._last_worker_ts.get(chat_key, 0)
+        if idle_sec > 0 and last_worker_ts > 0:
+            since_worker = time.time() - last_worker_ts
+            if since_worker < idle_sec:
+                delay = max(1, int(idle_sec - since_worker))
+                logger.info(
+                    "AI: chat=%s — worker недавно был активен (%ds назад), "
+                    "ждём паузу %ds перед ответом",
+                    chat_id, int(since_worker), delay,
+                )
+                # Берём lock сразу — чтобы другие сообщения клиента в эту
+                # паузу не запустили параллельную обработку.
+                lock = self._ai_locks.setdefault(chat_key, asyncio.Lock())
+                if lock.locked():
+                    logger.info("AI: chat=%s already processing — skip", chat_id)
+                    return
+                async with lock:
+                    await asyncio.sleep(delay)
+                    new_last_worker = self._last_worker_ts.get(chat_key, 0)
+                    if new_last_worker > last_worker_ts:
+                        await storage.bump_ai_stats(skipped_worker_active=1)
+                        logger.info(
+                            "AI: chat=%s — worker написал во время паузы, "
+                            "AI не вмешивается",
+                            chat_id,
+                        )
+                        return
+                    await self._do_ai_reply(event, chat_info, idle_sec, chat_key)
+                return
 
+        # Worker не активен (никогда не писал, либо давно) — отвечаем сразу.
         lock = self._ai_locks.setdefault(chat_key, asyncio.Lock())
         if lock.locked():
             logger.info("AI: chat=%s already processing — skip", chat_id)
@@ -856,6 +911,23 @@ class UserbotService:
             return {"status": "error", "step": "command", "error": f"flood_wait_{e.seconds}s"}
         except Exception as e:
             return {"status": "error", "step": "command", "error": str(e)}
+
+        # SILENT MODE: AI замолкает пока клиент заполняет анкету в
+        # @PrideCONTROLE_bot. TTL 2 часа — это safety net на случай если
+        # клиент бросит флоу. Снимется раньше:
+        #   - явным запросом помощи от клиента (?/помог/не получ/etc)
+        #   - сигналом CRM-бота «Отдать в работу» / «отправлено на обработку»
+        #   - перевязкой ЛК.
+        from storage import _norm_chat_id  # noqa
+        try:
+            silent_key = _norm_chat_id(chat_id)
+            self._ai_silent_until[silent_key] = time.time() + 2 * 60 * 60
+            logger.info(
+                "AI silent mode ON for chat=%s (until CRM ready / 2h max) — клиент заполняет ЦРМ",
+                chat_id,
+            )
+        except Exception as e:
+            logger.warning("silent mode set failed: %s", e)
 
         return {
             "status": "ok",
@@ -2120,6 +2192,34 @@ class UserbotService:
     _PEREVYAZ_FIO_RE = re.compile(r"фио\s*:?[\s]*(.+)", re.I)
     _PEREVYAZ_LK_RE = re.compile(r"лк\s*:?[\s]*(.+)", re.I)
 
+    # Маркеры что клиент завершил заполнение анкеты в @PrideCONTROLE_bot —
+    # анкета отправлена операционистам, AI снова может вести диалог.
+    _CRM_READY_MARKERS = (
+        "отдать в работу",
+        "отправлено на обработку",
+        "отправлена на обработку",
+        "принят в работу",
+        "принята в работу",
+        "приняты в работу",
+    )
+
+    async def _maybe_release_silent_on_crm_ready(self, event, chat_id):
+        """Если в managed-чате пришло сообщение с маркером «анкета готова»,
+        снимаем AI silent mode для этого чата."""
+        from storage import _norm_chat_id  # noqa
+        key = _norm_chat_id(chat_id)
+        if key not in self._ai_silent_until:
+            return
+        text = ((event.message and event.message.text) or "").lower()
+        if not text:
+            return
+        if any(m in text for m in self._CRM_READY_MARKERS):
+            self._ai_silent_until.pop(key, None)
+            logger.info(
+                "AI silent mode lifted for chat=%s — CRM ready marker detected",
+                chat_id,
+            )
+
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
         """Триггер Перевяз ЛК выполнен — парсим банк и ФИО прямо из текста
         CRM-бота и создаём карточку в Группе 1 ЛК."""
@@ -2150,6 +2250,12 @@ class UserbotService:
             "perevyaz detected: lk=%r fio=%r chat=%s",
             lk_text, fio_text, event.chat_id,
         )
+        # Перевязка = безусловный конец CRM-флоу, снимаем silent.
+        try:
+            from storage import _norm_chat_id  # noqa
+            self._ai_silent_until.pop(_norm_chat_id(event.chat_id), None)
+        except Exception:
+            pass
         try:
             await self._create_lk_card_from_perevyaz(
                 event, chat_info, lk_text=lk_text, fio_text=fio_text,
