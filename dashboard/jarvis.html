@@ -1076,7 +1076,7 @@
         <template x-if="cmdLog.length === 0">
           <div class="cmd-chat-msg lion">
             <span class="who">LEO</span>
-            <span class="body">Я готов выполнять команды. Примеры: <code>stats</code>, <code>pause ai</code>, <code>рассылка работчатам: текст</code>, <code>рассылка боту: текст</code>, <code>рассылка незарегистрированным: текст</code>.</span>
+            <span class="body">🧠 Я подключён к knowledge graph + знаю состояние системы. Спрашивай на свободном языке: «маржа сегодня», «сколько ЛК в работе», «сделай аудит», «разошли всем клиентам что мы временно не работаем по Точке», «дай отчёт по @timonskupc1», «найди карточки Альфы», «очисти маржу», «синхронизируй ЛК».</span>
           </div>
         </template>
         <template x-for="(m, i) in cmdLog" :key="i">
@@ -2033,26 +2033,40 @@ function jarvis() {
       if (!text) return;
       this.cmdLog.push({ who: 'YOU', body: text, cls: 'you' });
       this.cmdInput = '';
+      this.lionStatus = 'THINKING';
       try {
-        const r = await fetch('/api/commands', {
+        // LEO — умный AI агент: Claude API + tool-use + knowledge graph.
+        // Отвечает текстом и при необходимости автоматически ставит команды
+        // в очередь юзербота. Стоит немного токенов на каждый запрос.
+        const r = await fetch('/api/leo/ask', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, auto_execute: true }),
         });
         if (r.ok) {
           const data = await r.json();
-          const cid = data.command && data.command.id;
-          if (cid) this.knownCmds.add(cid);
-          this.cmdLog.push({ who: 'LEO', body: '⏳ принял, исполняю...', cls: 'lion' });
-          this.playBeep(800);
-          this.lionSay('Принято');
+          const reply = (data.reply || '').trim() || '(пусто)';
+          this.cmdLog.push({ who: 'LEO', body: reply, cls: 'lion' });
+          this.lionSay(reply);
+          if (data.executed && data.executed.length) {
+            for (const e of data.executed) {
+              this.cmdLog.push({
+                who: 'EXEC',
+                body: `⚙ ${e.tool} → ${e.cmd}`,
+                cls: 'result',
+              });
+              if (e.id) this.knownCmds.add(e.id);
+            }
+          }
+          this.playBeep(820);
         } else {
           this.cmdLog.push({ who: 'ERR', body: 'HTTP ' + r.status, cls: 'err' });
         }
       } catch (e) {
         this.cmdLog.push({ who: 'ERR', body: String(e), cls: 'err' });
       }
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
       this.scrollCmdLog();
     },
     scrollCmdLog() {

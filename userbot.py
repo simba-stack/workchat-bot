@@ -5174,7 +5174,183 @@ class UserbotService:
             msg = m.group(1).strip()
             return await self._broadcast_bot_users(msg, only_inactive=True)
 
+        # ===== AUDIT =====
+        if low in ("/audit", "audit", "аудит", "/аудит"):
+            return self._do_audit()
+
+        # ===== DAILY REPORT =====
+        if low in ("/daily_report", "/daily", "сводка", "/сводка"):
+            return self._do_daily_report()
+
+        # ===== OPERATOR REPORT =====
+        m = re.match(r"^/operator\s+@?(\S+)\s*$", text, re.I)
+        if m:
+            return self._do_operator_report(m.group(1))
+
+        # ===== FIND CARD =====
+        m = re.match(r"^/find_card\s+(.+)$", text, re.I)
+        if m:
+            return self._do_find_card(m.group(1))
+
+        # ===== CHANGE LK STATUS via command =====
+        m = re.match(r"^#?(lk\d+)\s+статус\s+(.+)$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            new_status = m.group(2).strip().upper()
+            allowed = {"В_РАБОТЕ", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                       "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК"}
+            if new_status not in allowed:
+                return f"⚠️ статус {new_status} не разрешён. Допустимы: {sorted(allowed)}"
+            ok = await storage.set_lk_card_status(cid, new_status, by="leo")
+            if not ok:
+                return f"⚠️ карточка #{cid} не найдена"
+            try:
+                await self._refresh_lk_card_post(cid)
+            except Exception:
+                pass
+            return f"✅ #{cid} → {new_status}"
+
+        # ===== DELETE LK via command =====
+        m = re.match(r"^(?:удалить|delete)\s+#?(lk\d+)\s*$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            ok = await storage.delete_lk_card(cid)
+            return f"🗑 удалена #{cid}" if ok else f"⚠️ #{cid} не найдена"
+
+        # ===== PRICING =====
+        if low in ("прайс показать", "/прайс", "show pricing"):
+            prices = dict(storage.state.get("pricing") or {})
+            if not prices:
+                return "прайс пуст"
+            return "💰 " + " · ".join(f"{k}={v}$" for k, v in sorted(prices.items()))
+        m = re.match(r"^прайс\s+(\S+)\s+(\d+(?:\.\d+)?)\s*$", text, re.I)
+        if m:
+            bank = m.group(1).upper()
+            price = float(m.group(2))
+            await storage.set_pricing(bank, price)
+            return f"💰 {bank} = {price}$"
+
         return f"unknown command: {text[:80]}"
+
+    def _do_audit(self) -> str:
+        """Поиск аномалий: карточки в БЛОК > 24ч, AI errors > 20%,
+        неактивные клиенты > 7 дней, и т.д."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        issues = []
+        cards = storage.list_lk_cards() or {}
+        blocks = [c for c in cards.values() if (c.get("status") or "").upper() == "БЛОК"]
+        if blocks:
+            issues.append(f"🚫 в БЛОКе: {len(blocks)} карточек")
+        brak = [c for c in cards.values() if (c.get("status") or "").upper() == "БРАК"]
+        if brak:
+            issues.append(f"❌ в БРАКе: {len(brak)} карточек")
+        # Долго в работе (> 7 дней)
+        cutoff = time.time() - 7 * 86400
+        stale = [
+            c for c in cards.values()
+            if (c.get("status") or "").upper() == "В_РАБОТЕ"
+            and float(c.get("created_at") or 0) < cutoff
+        ]
+        if stale:
+            issues.append(f"⏰ в работе > 7 дней: {len(stale)} карточек")
+        ai_stats = storage.state.get("ai_stats") or {}
+        replies = int(ai_stats.get("replies_total") or 0)
+        errors = int(ai_stats.get("errors_total") or 0)
+        if replies + errors > 0 and errors / max(1, replies + errors) > 0.2:
+            issues.append(f"⚠️ AI error rate: {errors}/{replies + errors}")
+        inactive = storage.list_inactive_bot_users() or []
+        if len(inactive) > 5:
+            issues.append(f"😴 не вошли в work-чат: {len(inactive)} юзеров")
+        if not issues:
+            return "✅ всё чисто — аномалий не найдено"
+        return "🔍 АУДИТ:\n• " + "\n• ".join(issues)
+
+    def _do_daily_report(self) -> str:
+        """Сводка за сегодня."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        today = time.strftime("%Y-%m-%d")
+        funnel = storage.get_funnel(today)
+        apps = storage.get_applications_v2(today) or []
+        margin = sum(float(a.get("computed", {}).get("margin_usdt", 0) or 0) for a in apps)
+        cards = storage.list_lk_cards() or {}
+        new_today = [
+            c for c in cards.values()
+            if float(c.get("created_at") or 0) > time.time() - 86400
+        ]
+        ai_stats = storage.state.get("ai_stats") or {}
+        return (
+            f"📊 СВОДКА ЗА {today}\n"
+            f"  💸 Маржа: ${margin:.2f}\n"
+            f"  📨 Заявки V2: {len(apps)}\n"
+            f"  ✨ Новых ЛК: {len(new_today)}\n"
+            f"  🆕 /start нажали: {int(funnel.get('starts', 0))}\n"
+            f"  💬 Беседы созданы: {int(funnel.get('chats_created', 0))}\n"
+            f"  📋 РС сдали: {int(funnel.get('rs_handed', 0))}\n"
+            f"  🤖 AI replies: {ai_stats.get('replies_total', 0)}"
+        )
+
+    def _do_operator_report(self, username: str) -> str:
+        """Стата конкретного оператора."""
+        uname = (username or "").lstrip("@").lower().strip()
+        if not uname:
+            return "укажи @username"
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        stat = storage.get_manager_stat(uname)
+        if not stat:
+            return f"@{uname} — нет данных"
+        roles = storage.state.get("worker_roles") or {}
+        role = (roles.get(uname) or {}).get("role") or "—"
+        last = float(stat.get("last_active_ts") or 0)
+        ago = int(time.time() - last) if last else None
+        ago_s = (f"{ago//60} мин" if ago and ago < 3600 else
+                 (f"{ago//3600} ч" if ago and ago < 86400 else
+                  (f"{ago//86400} дн" if ago else "—")))
+        return (
+            f"👤 @{uname} ({role})\n"
+            f"  💬 сообщений: {int(stat.get('messages') or 0)}\n"
+            f"  📋 чатов: {int(stat.get('chats_touched') or 0)}\n"
+            f"  💸 выплат: {int(stat.get('payments_made') or 0)}\n"
+            f"  ✅ закрытых ЛК: {int(stat.get('lk_completed') or 0)}\n"
+            f"  🕐 активен: {ago_s} назад"
+        )
+
+    def _do_find_card(self, query: str) -> str:
+        """Поиск карточек по любым полям."""
+        q = (query or "").lower().strip()
+        if not q:
+            return "что искать?"
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        cards = storage.list_lk_cards() or {}
+        found = []
+        for cid, c in cards.items():
+            hay = " ".join(str(c.get(k, "")) for k in (
+                "bank", "fio", "supplier", "status", "card_id",
+            )).lower()
+            if all(part in hay for part in q.split()):
+                found.append((cid, c))
+        if not found:
+            return f"🔍 по '{query}' ничего не найдено"
+        out = [f"🔍 найдено {len(found)}:"]
+        for cid, c in found[:10]:
+            out.append(
+                f"  • #{cid} · {c.get('bank') or '—'} · "
+                f"{c.get('fio') or '—'} · {c.get('status') or '—'}"
+            )
+        if len(found) > 10:
+            out.append(f"  ...ещё {len(found) - 10}")
+        return "\n".join(out)
 
     async def _broadcast_workchats(self, msg: str) -> str:
         """Рассылка в managed_chats через userbot (Telethon)."""

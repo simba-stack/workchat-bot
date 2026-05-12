@@ -952,6 +952,46 @@ class CommandReq(BaseModel):
     text: str
 
 
+class LeoAskReq(BaseModel):
+    text: str
+    auto_execute: bool = True
+
+
+@app.post("/api/leo/ask")
+async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth)):
+    """LEO — умный AI агент. Принимает свободный текст, отвечает + при
+    необходимости автоматически ставит команды в очередь userbot для
+    выполнения."""
+    try:
+        import leo
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"leo not available: {e}")
+    res = await leo.ask(req.text)
+    executed = []
+    if req.auto_execute and res.get("actions"):
+        for act in res["actions"]:
+            cmd_text = leo.tool_to_command_text(act["tool"], act.get("args", {}))
+            if cmd_text:
+                entry = await storage.enqueue_dashboard_command(cmd_text, source="leo")
+                executed.append({"tool": act["tool"], "cmd": cmd_text, "id": entry.get("id")})
+    try:
+        event_bus.emit_event(
+            "leo-ask",
+            {"text": req.text[:120], "reply": res.get("reply", "")[:200],
+             "actions": len(res.get("actions") or [])},
+            character="leo",
+            severity="info",
+        )
+    except Exception:
+        pass
+    return {
+        "reply": res.get("reply", ""),
+        "actions": res.get("actions") or [],
+        "executed": executed,
+        "usage": res.get("usage") or {},
+    }
+
+
 @app.post("/api/commands")
 async def api_command_enqueue(req: CommandReq, _: None = Depends(_auth)):
     """Очередь команд для userbot. Дашборд отправляет сюда команды
