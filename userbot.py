@@ -438,6 +438,16 @@ class UserbotService:
 
         if is_worker:
             self._last_worker_ts[chat_key] = time.time()
+            # Команды админу: 'Ассистент добавь @x' / 'Ассистент выдай админку @x'.
+            # Работают только в managed_chats (рабочие беседы клиентов).
+            try:
+                msg_text = ((event.message and event.message.text) or "")
+                if msg_text and await self._maybe_handle_ai_admin_command(
+                    event, msg_text, chat_id,
+                ):
+                    return
+            except Exception as e:
+                logger.warning("ai admin cmd handler error: %s", e)
             logger.info("AI: worker activity in chat=%s by @%s", chat_id, sender_username)
             return
 
@@ -1467,6 +1477,131 @@ class UserbotService:
 
     # ID Тимона для определения created_by при ручном создании карточек.
     TIMON_USER_ID = 397572312
+
+    # Команды AI от админов: 'Ассистент добавь @user' / 'Ассистент выдай админку @user'
+    _AI_CMD_ADD_RE = re.compile(
+        r"^\s*ассистент[,\s]+добавь\s+@?(\w+)\s*$",
+        re.I | re.M,
+    )
+    _AI_CMD_GRANT_ADMIN_RE = re.compile(
+        r"^\s*ассистент[,\s]+(?:выдай|дай|сделай)\s+админ(?:ку|а|ом|ину)?\s+@?(\w+)\s*$",
+        re.I | re.M,
+    )
+
+    async def _maybe_handle_ai_admin_command(
+        self, event, text: str, chat_id,
+    ) -> bool:
+        """Команды админов в managed-чате клиента (work_chat):
+          'Ассистент добавь @nick'        — пригласить пользователя в чат
+          'Ассистент выдай админку @nick' — выдать админ-права в чате
+
+        Работает только в managed_chats (рабочие беседы клиентов) — чтобы не
+        случилось что админ напишет такое в Группе 1 ЛК и юзербот добавит
+        туда левого пользователя. Возвращает True если команда обработана."""
+        if not storage.get_chat_info(chat_id):
+            # Не managed-чат — команды AI не действуют.
+            return False
+        m = self._AI_CMD_ADD_RE.search(text)
+        if m:
+            await self._cmd_invite_user(event, chat_id, m.group(1))
+            return True
+        m = self._AI_CMD_GRANT_ADMIN_RE.search(text)
+        if m:
+            await self._cmd_grant_admin(event, chat_id, m.group(1))
+            return True
+        return False
+
+    async def _cmd_invite_user(self, event, chat_id, username: str):
+        """Приглашение пользователя в чат по @username (от админа)."""
+        uname = (username or "").lstrip("@").strip()
+        if not uname:
+            await event.reply(
+                "⚠️ Не понял ник. Используй: <code>Ассистент добавь @username</code>",
+                parse_mode="html",
+            )
+            return
+        try:
+            user = await self.client.get_entity(uname)
+        except UsernameNotOccupiedError:
+            await event.reply(f"⚠️ Пользователь @{uname} не существует в Telegram.")
+            return
+        except Exception as e:
+            await event.reply(f"⚠️ Не нашёл @{uname}: <code>{e}</code>", parse_mode="html")
+            return
+        try:
+            await self.client(InviteToChannelRequest(chat_id, [user]))
+            await event.reply(
+                f"✅ Пригласил <b>@{uname}</b> в этот чат.",
+                parse_mode="html",
+            )
+            logger.info("ai cmd: invited @%s into chat=%s by sender=%s",
+                        uname, chat_id, event.sender_id)
+        except UserAlreadyParticipantError:
+            await event.reply(f"ℹ️ @{uname} уже в этом чате.")
+        except UserPrivacyRestrictedError:
+            await event.reply(
+                f"⚠️ У <b>@{uname}</b> настройки приватности не позволяют его пригласить. "
+                f"Попроси его сначала написать боту/в этот чат, потом повтори команду.",
+                parse_mode="html",
+            )
+        except FloodWaitError as e:
+            await event.reply(f"⚠️ FloodWait {e.seconds}s — попробуй позже.")
+        except Exception as e:
+            await event.reply(
+                f"⚠️ Не смог пригласить @{uname}: <code>{e}</code>",
+                parse_mode="html",
+            )
+            logger.warning("ai cmd invite failed: chat=%s user=%s err=%s",
+                           chat_id, uname, e)
+
+    async def _cmd_grant_admin(self, event, chat_id, username: str):
+        """Выдача админ-прав пользователю в чате (от админа)."""
+        uname = (username or "").lstrip("@").strip()
+        if not uname:
+            await event.reply(
+                "⚠️ Не понял ник. Используй: <code>Ассистент выдай админку @username</code>",
+                parse_mode="html",
+            )
+            return
+        try:
+            user = await self.client.get_entity(uname)
+        except UsernameNotOccupiedError:
+            await event.reply(f"⚠️ Пользователь @{uname} не существует в Telegram.")
+            return
+        except Exception as e:
+            await event.reply(f"⚠️ Не нашёл @{uname}: <code>{e}</code>", parse_mode="html")
+            return
+        try:
+            rights = ChatAdminRights(
+                change_info=True,
+                post_messages=False,
+                edit_messages=True,
+                delete_messages=True,
+                ban_users=True,
+                invite_users=True,
+                pin_messages=True,
+                add_admins=False,
+                anonymous=False,
+                manage_call=True,
+            )
+            await self.client(EditAdminRequest(
+                channel=chat_id, user_id=user, admin_rights=rights, rank="Admin",
+            ))
+            await event.reply(
+                f"✅ Выдал админку <b>@{uname}</b>.",
+                parse_mode="html",
+            )
+            logger.info("ai cmd: granted admin to @%s in chat=%s by sender=%s",
+                        uname, chat_id, event.sender_id)
+        except FloodWaitError as e:
+            await event.reply(f"⚠️ FloodWait {e.seconds}s — попробуй позже.")
+        except Exception as e:
+            await event.reply(
+                f"⚠️ Не смог выдать админку @{uname}: <code>{e}</code>",
+                parse_mode="html",
+            )
+            logger.warning("ai cmd grant_admin failed: chat=%s user=%s err=%s",
+                           chat_id, uname, e)
 
     def _resolve_created_by_tag(self, event) -> str:
         """Кто создал карточку — для history в storage и для аудита.
