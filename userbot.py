@@ -1270,6 +1270,8 @@ class UserbotService:
     async def _tool_find_deal(self, deal_id: str = "", username: str = "", fio: str = "", bank: str = "") -> dict:
         if not any([deal_id, username, fio, bank]):
             return {"status": "error", "error": "no_query_params"}
+
+        # 1) Ищем в реестре сделок (storage.deals)
         results = storage.find_deal_by(
             deal_id=deal_id or None,
             username=username or None,
@@ -1279,8 +1281,55 @@ class UserbotService:
         clean = []
         for d in results:
             cd = {k: v for k, v in d.items() if k not in ("history", "created_at")}
+            cd["source"] = "deal"
             clean.append(cd)
-        return {"status": "ok", "found": len(clean), "deals": clean}
+
+        # 2) ВСЕГДА также ищем в lk_cards — там сделки которые ещё не получили
+        # номер (например GUARANTOR_AFTER_WORK до отработки) или вообще без сделки.
+        # Без этого AI отвечает «не найдена» хотя карточка есть в системе.
+        lk_results = []
+        try:
+            lk_results = storage.find_lk_card(
+                bank=bank or None,
+                fio=fio or None,
+                supplier=username or None,
+            ) or []
+        except Exception as e:
+            logger.warning("_tool_find_deal lk search failed: %s", e)
+
+        # Если ищем по конкретному deal_id — фильтруем lk-карточки по deal_id внутри
+        if deal_id and lk_results:
+            did = (deal_id or "").lstrip("#").strip()
+            lk_results = [
+                c for c in lk_results
+                if did and did in ((c.get("deal_id") or "").lstrip("#"))
+            ]
+
+        for c in lk_results:
+            clean.append({
+                "source": "lk_card",
+                "card_id": c.get("card_id"),
+                "deal_id": c.get("deal_id") or "",
+                "fio": c.get("fio") or "",
+                "bank": c.get("bank") or "",
+                "client_username": c.get("supplier") or "",
+                "amount_usdt": c.get("price_usdt") or 0,
+                "payment_method": c.get("payment_method") or "",
+                "status": c.get("status") or "",
+            })
+
+        return {
+            "status": "ok",
+            "found": len(clean),
+            "deals": clean,
+            "hint": (
+                "Если найдена карточка (source=lk_card) — сделка УЖЕ в системе. "
+                "Не говори клиенту «не найдена». Подтверди и при необходимости "
+                "уточни номер сделки если payment_method это требует."
+                if clean else
+                "Ни в реестре сделок, ни в карточках ЛК ничего не нашлось."
+            ),
+        }
 
     async def _tool_create_lk_card(
         self,
