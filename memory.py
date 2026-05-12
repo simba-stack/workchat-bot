@@ -270,9 +270,10 @@ async def _gh_put(
 
 
 async def commit_to_knowledge(
-    file: str, append_block: str, commit_msg: str
+    file: str, append_block: str, commit_msg: str, overwrite: bool = False,
 ) -> Optional[str]:
-    """Append a markdown block to knowledge/<file> on GitHub. Creates if missing.
+    """Append (default) или полностью перезаписать (overwrite=True)
+    markdown-блок в knowledge/<file> на GitHub. Creates if missing.
 
     Returns commit html_url on success, None on failure.
     Retries once on 409 conflict (stale SHA).
@@ -293,10 +294,15 @@ async def commit_to_knowledge(
             sha, existing = await _gh_get(client, repo_path, branch, headers)
             if existing is None:
                 return None  # network/api failure (not 404)
-            # Compose new content: existing + separator + new block
-            if existing and not existing.endswith("\n"):
-                existing += "\n"
-            new_content = (existing + "\n" + append_block.strip() + "\n") if existing else append_block.strip() + "\n"
+            if overwrite:
+                # Полная перезапись (нужно для pricing.md и подобных
+                # «single source of truth» файлов).
+                new_content = append_block.rstrip("\n") + "\n"
+            else:
+                # Compose new content: existing + separator + new block
+                if existing and not existing.endswith("\n"):
+                    existing += "\n"
+                new_content = (existing + "\n" + append_block.strip() + "\n") if existing else append_block.strip() + "\n"
             url = await _gh_put(
                 client, repo_path, new_content, commit_msg, branch, headers, sha=sha
             )

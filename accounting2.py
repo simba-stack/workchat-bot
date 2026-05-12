@@ -62,8 +62,23 @@ PRICING_TABLE_USDT = {
 
 
 def lookup_pricing(bank: str) -> float:
+    """Цена ЛК банка в USDT.
+
+    Источник #1 — storage.pricing (управляется командой «прайс БАНК ЦЕНА»
+    в брейн-чате; единственный источник правды для AI и бухгалтерии).
+    Источник #2 (fallback) — встроенная PRICING_TABLE_USDT.
+    """
     if not bank:
         return 0.0
+    # 1) Storage — приоритет
+    try:
+        from storage import storage as _storage  # lazy import чтоб не было циклов
+        price = _storage.get_pricing(bank)
+        if price is not None:
+            return float(price)
+    except Exception:
+        pass
+    # 2) Fallback: hardcoded таблица
     key = bank.lower().strip().replace("-банк", "").replace("-bank", "").strip()
     return float(PRICING_TABLE_USDT.get(key, 0.0))
 

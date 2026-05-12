@@ -654,6 +654,137 @@ class UserbotService:
             except Exception:
                 pass
 
+    async def _handle_pricing_command(self, event, text: str) -> bool:
+        """Управление прайсом ЛК — единый источник цен. Только в брейн-чате.
+
+        Команды:
+          • «прайс» / «прайс показать» — текущий список цен
+          • «прайс БАНК ЦЕНА» — задать/обновить цену банка
+          • «прайс удали БАНК» / «прайс delete БАНК» — снять цену
+        Возвращает True если команда обработана."""
+        clean = text.strip()
+
+        # Удаление
+        m_del = re.match(
+            r"^\s*(?:прайс|price|цены|цена)\s+(?:удали(?:ть)?|delete|remove|"
+            r"снять|снеси)\s+([\wа-яА-Я\-]+)\s*$",
+            clean, re.I,
+        )
+        if m_del:
+            bank = m_del.group(1)
+            ok = await storage.remove_pricing(bank)
+            if ok:
+                await event.reply(
+                    f"🗑 Цена банка <b>{bank.upper()}</b> снята.",
+                    parse_mode="html",
+                )
+                await self._sync_pricing_to_knowledge()
+            else:
+                await event.reply(
+                    f"ℹ️ Цена банка <b>{bank.upper()}</b> и так не задана.",
+                    parse_mode="html",
+                )
+            return True
+
+        # Показать
+        if re.match(
+            r"^\s*(?:прайс|price|цены|цена)\s*(?:показать|показ|list|"
+            r"список|таблица)?\s*$",
+            clean, re.I,
+        ):
+            prices = storage.list_pricing()
+            if not prices:
+                await event.reply(
+                    "📋 <b>Прайс ЛК</b> пуст.\n\n"
+                    "Задай цену командой:\n"
+                    "<code>прайс АЛЬФА 400</code>\n"
+                    "<code>прайс ОЗОН 300</code>",
+                    parse_mode="html",
+                )
+                return True
+            lines = ["📋 <b>Прайс ЛК</b> (USDT за один ЛК):", ""]
+            for bank, price in sorted(prices.items()):
+                lines.append(f"• <b>{bank}</b> — <code>{price:g}$</code>")
+            lines.append("")
+            lines.append(
+                "<i>Изменить:</i> <code>прайс БАНК ЦЕНА</code>\n"
+                "<i>Удалить:</i> <code>прайс удали БАНК</code>"
+            )
+            await event.reply(
+                "\n".join(lines), parse_mode="html", link_preview=False,
+            )
+            return True
+
+        # Установить цену
+        m_set = re.match(
+            r"^\s*(?:прайс|price|цены|цена)\s+([\wа-яА-Я\-]+)\s+"
+            r"([\d.,]+)\s*\$?\s*$",
+            clean, re.I,
+        )
+        if m_set:
+            bank = m_set.group(1)
+            try:
+                price = float(m_set.group(2).replace(",", "."))
+            except ValueError:
+                await event.reply(
+                    f"⚠️ Не понял цену: <code>{m_set.group(2)}</code>",
+                    parse_mode="html",
+                )
+                return True
+            ok = await storage.set_pricing(bank, price)
+            if not ok:
+                await event.reply("⚠️ Не смог сохранить.")
+                return True
+            await event.reply(
+                f"✅ Прайс обновлён: <b>{bank.upper()}</b> = "
+                f"<code>{price:g}$</code>",
+                parse_mode="html",
+            )
+            await self._sync_pricing_to_knowledge()
+            return True
+
+        return False
+
+    async def _sync_pricing_to_knowledge(self):
+        """Переписывает knowledge/pricing.md шаблоном из storage — чтобы
+        AI читал актуальные цены. Использует GitHub Contents API."""
+        prices = storage.list_pricing()
+        if not config.GITHUB_TOKEN:
+            logger.info("pricing sync: GITHUB_TOKEN не задан — пропускаю")
+            return
+        lines = [
+            "# Прайс ЛК",
+            "",
+            "> 🔴 **Единый источник цен.** Этот файл переписывается",
+            "> юзерботом автоматически при команде «прайс БАНК ЦЕНА»",
+            "> в брейн-чате. Любые другие упоминания цен в knowledge —",
+            "> **устарели**. AI должен использовать ТОЛЬКО эти значения.",
+            "",
+            "Цена — сколько мы платим поставщику за один ЛК (в USDT).",
+            "",
+        ]
+        if not prices:
+            lines.append("_Прайс пуст — задайте цены через `прайс БАНК ЦЕНА`._")
+        else:
+            lines.append("| Банк | Цена ЛК |")
+            lines.append("|---|---|")
+            for bank, price in sorted(prices.items()):
+                lines.append(f"| {bank} | {price:g}$ |")
+        new_md = "\n".join(lines) + "\n"
+        try:
+            url = await memory.commit_to_knowledge(
+                file="pricing.md",
+                append_block=new_md,
+                commit_msg="pricing: обновление через команду «прайс» в брейн-чате",
+                overwrite=True,
+            )
+            if url:
+                logger.info("pricing.md synced to knowledge: %s", url)
+            else:
+                logger.warning("pricing.md sync to knowledge failed (no url)")
+        except Exception as e:
+            logger.warning("pricing.md sync failed: %s", e)
+
     async def _handle_brain_chat_writeback(self, event):
         if not event.message:
             return
@@ -668,6 +799,11 @@ class UserbotService:
         if text.lower().startswith("/learn"):
             await self._handle_learn_command(event, text)
             return
+        # Команда «прайс» — управление прайсом ЛК (единый источник цен).
+        if re.match(r"^\s*(?:прайс|price|цены|цена)\b", text, re.I):
+            handled = await self._handle_pricing_command(event, text)
+            if handled:
+                return
         if text.startswith("/"):
             return
         if not storage.is_writeback_enabled():

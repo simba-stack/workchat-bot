@@ -117,6 +117,10 @@ def _default_state() -> dict:
         # При удалении карточки из такого импорта — юзербот находит msg по
         # ключу и редактирует html (зачёркивает строку этой карточки).
         "import_summaries": {},
+        # Прайс ЛК: {bank_upper: price_usdt}. Единый источник цен для
+        # accounting2.lookup_pricing и AI (через knowledge/pricing.md).
+        # Менятся через команду «прайс БАНК ЦЕНА» в брейн-чате.
+        "pricing": {},
     }
 
 
@@ -850,6 +854,53 @@ class Storage:
             if entry is None:
                 return False
             entry["html"] = new_html or ""
+            await self._save_unlocked()
+            return True
+
+    # === Прайс ЛК ===
+    # Единый источник цен. Меняется через команду «прайс БАНК ЦЕНА» в
+    # брейн-чате. accounting2.lookup_pricing использует это в первую очередь.
+
+    @staticmethod
+    def _norm_bank_key(bank: str) -> str:
+        return (bank or "").strip().upper()
+
+    def get_pricing(self, bank: str):
+        """Возвращает цену из storage или None если не задана."""
+        if not bank:
+            return None
+        prices = self.state.get("pricing") or {}
+        return prices.get(self._norm_bank_key(bank))
+
+    def list_pricing(self) -> dict:
+        """Копия всего прайса {BANK_UPPER: price_usdt}."""
+        return dict(self.state.get("pricing") or {})
+
+    async def set_pricing(self, bank: str, price: float) -> bool:
+        if not bank:
+            return False
+        key = self._norm_bank_key(bank)
+        if not key:
+            return False
+        try:
+            price_f = float(price)
+        except (TypeError, ValueError):
+            return False
+        async with _lock:
+            prices = self.state.setdefault("pricing", {})
+            prices[key] = price_f
+            await self._save_unlocked()
+            return True
+
+    async def remove_pricing(self, bank: str) -> bool:
+        if not bank:
+            return False
+        key = self._norm_bank_key(bank)
+        async with _lock:
+            prices = self.state.setdefault("pricing", {})
+            if key not in prices:
+                return False
+            prices.pop(key, None)
             await self._save_unlocked()
             return True
 
