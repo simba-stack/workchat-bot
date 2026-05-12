@@ -490,6 +490,16 @@ class UserbotService:
         except Exception:
             sender = None
         sender_username = (getattr(sender, "username", "") or "").lower()
+
+        # Параллельный триггер: @pride_sys01/@pride_sys02 пишет в work-чат
+        # «Иванов — Альфа — перевяз успешен» → создаём карточку как от CRM-бота.
+        try:
+            if await self._maybe_handle_perevyaz_by_worker(
+                event, chat_info, sender_username,
+            ):
+                return
+        except Exception as e:
+            logger.warning("perevyaz-by-worker dispatch failed: %s", e)
         workers_lc = {w.lower() for w in storage.get_workers()}
         is_worker = (
             (sender_username and sender_username in workers_lc)
@@ -4469,6 +4479,174 @@ class UserbotService:
                     "auto-detect: create card failed for chat=%s: %s",
                     chat_id, e,
                 )
+        return True
+
+    # Параллельный триггер: операционист @pride_sys01/@pride_sys02 пишет
+    # в клиентский work-чат сообщение вида «Иванов Иван — Альфа — перевяз
+    # успешен» (без участия CRM-бота). Равноценно маркеру от CRM-бота.
+    _WORKER_USERNAMES_FOR_PEREVYAZ = ("pride_sys01", "pride_sys02")
+
+    # Регексы для распознавания позитивного маркера перевязки в свободном
+    # тексте от sys01/sys02. Любого из них достаточно.
+    _PEREVYAZ_TRIGGER_WORDS_RE = re.compile(
+        r"\b(перевяз\w*\s+(успешн\w+|выполнен\w*|готов\w*|заверш\w+|сделан\w*)|"
+        r"(успешн\w+|готов\w*|заверш\w+|сделан\w*)\s+перевяз\w*|"
+        r"перевязал\w*|перепривяз\w+\s+(успешн\w+|готов\w*)|"
+        r"бинд\s+(успешн\w+|готов\w*|выполнен\w*))",
+        re.I,
+    )
+
+    # Известные банки — берём через словари алиасов из accounting2, плюс
+    # дополнительные русские формы.
+    _KNOWN_BANK_TOKENS = (
+        "альфа", "альфа-банк", "alfa", "alpha",
+        "озон", "ozon",
+        "райф", "райффайзен", "raif",
+        "точка", "tochka",
+        "уралсиб", "uralsib",
+        "локо", "loko", "локо-банк",
+        "втб", "vtb",
+        "русский стандарт", "rus_standard",
+        "бкс", "bks", "дело", "delo", "убрир", "ubrir",
+        "сбер", "sber",
+        "тинькофф", "тиньк", "tinkoff",
+    )
+
+    def _extract_bank_token(self, text: str) -> str:
+        """Найти первое упоминание банка из _KNOWN_BANK_TOKENS в тексте.
+        Возвращает каноничное имя или пустую строку."""
+        if not text:
+            return ""
+        tl = text.lower()
+        # Сортируем по длине (длинные сначала чтоб «альфа-банк» не подменился «альфа»).
+        for tok in sorted(self._KNOWN_BANK_TOKENS, key=len, reverse=True):
+            if tok in tl:
+                # Канонизируем
+                if tok in ("альфа", "альфа-банк", "alfa", "alpha"):
+                    return "Альфа"
+                if tok in ("озон", "ozon"):
+                    return "ОЗОН"
+                if tok in ("райф", "райффайзен", "raif"):
+                    return "Райффайзен"
+                if tok in ("точка", "tochka"):
+                    return "Точка"
+                if tok in ("уралсиб", "uralsib"):
+                    return "Уралсиб"
+                if tok in ("локо", "loko", "локо-банк"):
+                    return "Локо"
+                if tok in ("втб", "vtb"):
+                    return "ВТБ"
+                if tok in ("русский стандарт", "rus_standard"):
+                    return "Русский стандарт"
+                if tok in ("бкс", "bks"):
+                    return "БКС"
+                if tok in ("дело", "delo"):
+                    return "Дело"
+                if tok in ("убрир", "ubrir"):
+                    return "УБРИР"
+                if tok in ("сбер", "sber"):
+                    return "Сбер"
+                if tok in ("тинькофф", "тиньк", "tinkoff"):
+                    return "Тинькофф"
+        return ""
+
+    # ФИО — последовательность из 2-4 русских/латинских слов с заглавных букв,
+    # каждое >=2 букв. Жадно ловим, потом валидируем.
+    _FIO_RE = re.compile(
+        r"\b([А-ЯЁA-Z][а-яёa-z]{1,}(?:\s+[А-ЯЁA-Z][а-яёa-z]{1,}){1,3})\b"
+    )
+
+    def _extract_fio(self, text: str) -> str:
+        """Достать ФИО из текста (2-4 слова с заглавных)."""
+        if not text:
+            return ""
+        # Чистим разделители «—», «-», «:» которые могут слипнуться
+        cleaned = re.sub(r"[—–\-:]+", " ", text)
+        m = self._FIO_RE.search(cleaned)
+        if not m:
+            return ""
+        fio = m.group(1).strip()
+        # Отбрасываем явные служебные сочетания
+        bad_lc = {"перевяз успешен", "перевяз выполнен", "перевяз готов"}
+        if fio.lower() in bad_lc:
+            return ""
+        return fio
+
+    async def _maybe_handle_perevyaz_by_worker(
+        self, event, chat_info: dict, sender_username: str,
+    ) -> bool:
+        """Если @pride_sys01 / @pride_sys02 написал в work-чат сообщение типа
+        «Иванов Иван Иванович — Альфа — перевяз успешен» — это равноценно
+        маркеру от CRM-бота. Создаём карточку ЛК."""
+        if not sender_username:
+            return False
+        if sender_username.lower() not in self._WORKER_USERNAMES_FOR_PEREVYAZ:
+            return False
+
+        text = (event.message.text or "")
+        if not text:
+            return False
+
+        # 1) Должен быть позитивный маркер «перевяз успешен/готов/выполнен»
+        if not self._PEREVYAZ_TRIGGER_WORDS_RE.search(text):
+            return False
+
+        # 2) Должен быть распознаваемый банк
+        bank = self._extract_bank_token(text)
+        if not bank:
+            logger.info(
+                "perevyaz-by-worker: chat=%s, sender=%s — есть триггер но не нашёл банк, скип",
+                event.chat_id, sender_username,
+            )
+            return False
+
+        # 3) ФИО — желательно (но не обязательно: можно дозаполнить позже)
+        fio = self._extract_fio(text)
+
+        # 4) Дубликат? Если на этого клиента уже есть активная карточка с тем
+        # же банком — не создаём, только лог.
+        try:
+            chat_id = event.chat_id
+            existing = storage.find_lk_card(
+                bank=bank, work_chat_id=chat_id,
+            ) or []
+            active = [
+                c for c in existing
+                if (c.get("status") or "").upper() not in ("ЗАВЕРШЁН", "ЗАВЕРШЕН", "ОТМЕНЁН", "ОТМЕНЕН")
+            ]
+            if active:
+                logger.info(
+                    "perevyaz-by-worker: chat=%s — дубликат, активная карточка %s уже есть",
+                    chat_id, active[0].get("card_id"),
+                )
+                return True  # отдаём True чтоб не упасть в обычный AI-flow
+        except Exception as e:
+            logger.warning("perevyaz-by-worker: dup check failed: %s", e)
+
+        logger.info(
+            "perevyaz-by-worker detected: chat=%s, sender=@%s, bank=%r, fio=%r",
+            event.chat_id, sender_username, bank, fio,
+        )
+
+        # Снимаем silent mode (это явный сигнал что флоу прошёл дальше)
+        try:
+            from storage import _norm_chat_id  # noqa
+            self._ai_silent_until.pop(_norm_chat_id(event.chat_id), None)
+        except Exception:
+            pass
+
+        try:
+            await self._create_lk_card_from_perevyaz(
+                event, chat_info, lk_text=bank, fio_text=fio,
+            )
+            _e("lk-from-worker-perevyaz", {
+                "chat_id": event.chat_id,
+                "worker": sender_username,
+                "bank": bank,
+                "fio": fio,
+            }, severity="info")
+        except Exception as e:
+            logger.warning("perevyaz-by-worker: card creation failed: %s", e)
         return True
 
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
