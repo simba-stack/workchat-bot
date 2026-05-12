@@ -1171,6 +1171,11 @@
         <div class="value amber" x-text="state.stats.escalate.total || 0"></div>
         <div class="sub" x-text="'ошибок AI: ' + (state.stats.ai.errors_total || 0)"></div>
       </div>
+      <div class="metric">
+        <div class="label">💰 Расход API</div>
+        <div class="value emerald" x-text="'$' + ((state.stats.ai.cost_usd_total || 0)).toFixed(2)"></div>
+        <div class="sub" x-text="'ack пропущено: ' + (state.stats.ai.skipped_ack || 0) + ' · cache: ' + (state.stats.ai.cache_read_total || 0)"></div>
+      </div>
     </div>
 
     <div class="jarvis-panel">

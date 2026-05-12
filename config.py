@@ -14,14 +14,18 @@ STRING_SESSION = os.getenv("STRING_SESSION", "")
 
 # === AI brain (Anthropic Claude) ===
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-# Default model — admin can override at runtime via /admin → AI → model.
-DEFAULT_AI_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
-# Max output tokens per reply. Keeps responses short and predictable.
-AI_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "1024"))
-# How many recent chat messages to feed Claude as conversation history.
-AI_HISTORY_LIMIT = int(os.getenv("CLAUDE_HISTORY_LIMIT", "30"))
-# How many recent brain_chat messages to include as admin notes / extra context.
-AI_BRAIN_NOTES_LIMIT = int(os.getenv("CLAUDE_BRAIN_NOTES_LIMIT", "30"))
+# Default model — Haiku 4.5 (12× дешевле Sonnet, для 95% диалогов хватает).
+# Можно переопределить через env или /admin для конкретных чатов.
+DEFAULT_AI_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+# Sonnet включается через storage.ai_smart_routing — для сложных кейсов
+# (claim/escalation/деньги). По умолчанию выкл — экономим.
+SMART_ROUTING_MODEL = os.getenv("CLAUDE_SMART_MODEL", "claude-sonnet-4-6")
+# Max output tokens per reply — короткие реплики экономят. Сократил с 1024 до 512.
+AI_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "512"))
+# History limit — было 30, теперь 15 (хватает контекста, токенов вдвое меньше).
+AI_HISTORY_LIMIT = int(os.getenv("CLAUDE_HISTORY_LIMIT", "15"))
+# Brain notes — было 30, теперь 10.
+AI_BRAIN_NOTES_LIMIT = int(os.getenv("CLAUDE_BRAIN_NOTES_LIMIT", "10"))
 # Random typing delay before sending reply (seconds, min..max). Realism.
 AI_TYPING_DELAY_MIN = float(os.getenv("CLAUDE_TYPING_DELAY_MIN", "3"))
 AI_TYPING_DELAY_MAX = float(os.getenv("CLAUDE_TYPING_DELAY_MAX", "8"))

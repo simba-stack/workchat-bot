@@ -669,9 +669,29 @@ class Storage:
         replies: int = 0,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
         errors: int = 0,
         skipped_worker_active: int = 0,
+        skipped_ack: int = 0,
+        model: str = "",
     ):
+        """Стата + расчёт стоимости в USD.
+        Haiku 4.5: $1/1M input, $5/1M output, $0.10/1M cache-read, $1.25/1M cache-write.
+        Sonnet 4.6: $3/1M, $15/1M, $0.30/1M, $3.75/1M.
+        """
+        # Тарифы (USD per 1M tokens)
+        is_sonnet = "sonnet" in (model or "").lower()
+        price_in = 3.0 if is_sonnet else 1.0
+        price_out = 15.0 if is_sonnet else 5.0
+        price_cache_read = 0.30 if is_sonnet else 0.10
+        price_cache_write = 3.75 if is_sonnet else 1.25
+        delta_cost = (
+            input_tokens * price_in / 1_000_000
+            + output_tokens * price_out / 1_000_000
+            + cache_read_tokens * price_cache_read / 1_000_000
+            + cache_write_tokens * price_cache_write / 1_000_000
+        )
         async with _lock:
             stats = self.state.setdefault(
                 "ai_stats",
@@ -679,21 +699,25 @@ class Storage:
                     "replies_total": 0,
                     "input_tokens_total": 0,
                     "output_tokens_total": 0,
+                    "cache_read_total": 0,
+                    "cache_write_total": 0,
+                    "cost_usd_total": 0.0,
                     "errors_total": 0,
                     "skipped_worker_active": 0,
+                    "skipped_ack": 0,
                 },
             )
             stats["replies_total"] = int(stats.get("replies_total", 0)) + replies
-            stats["input_tokens_total"] = (
-                int(stats.get("input_tokens_total", 0)) + input_tokens
-            )
-            stats["output_tokens_total"] = (
-                int(stats.get("output_tokens_total", 0)) + output_tokens
-            )
+            stats["input_tokens_total"] = int(stats.get("input_tokens_total", 0)) + input_tokens
+            stats["output_tokens_total"] = int(stats.get("output_tokens_total", 0)) + output_tokens
+            stats["cache_read_total"] = int(stats.get("cache_read_total", 0)) + cache_read_tokens
+            stats["cache_write_total"] = int(stats.get("cache_write_total", 0)) + cache_write_tokens
+            stats["cost_usd_total"] = float(stats.get("cost_usd_total", 0.0)) + delta_cost
             stats["errors_total"] = int(stats.get("errors_total", 0)) + errors
             stats["skipped_worker_active"] = (
                 int(stats.get("skipped_worker_active", 0)) + skipped_worker_active
             )
+            stats["skipped_ack"] = int(stats.get("skipped_ack", 0)) + skipped_ack
             await self._save_unlocked()
 
     def is_writeback_enabled(self) -> bool:

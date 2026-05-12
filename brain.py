@@ -514,6 +514,7 @@ async def generate_reply(
                 "output_tokens": total_out,
                 "cache_read_tokens": total_cache_read,
                 "cache_creation_tokens": total_cache_write,
+                "model": use_model,
             }
 
         # stop_reason == "tool_use" → исполняем все tool_use блоки в этом ответе

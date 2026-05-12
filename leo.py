@@ -222,26 +222,55 @@ LEO_TOOLS = [
 ]
 
 
-def _load_knowledge_summary(max_chars: int = 20000) -> str:
-    """Загружает knowledge graph (knowledge/*.md) и склеивает в один блок."""
+_KNOWLEDGE_CACHE = {"text": "", "loaded_ts": 0.0}
+
+
+def _load_knowledge_summary(max_chars: int = 6000) -> str:
+    """Загружает knowledge graph. Кеш 5 минут чтоб не читать файлы каждый раз.
+    Урезано с 20K до 6K — Haiku не нужно всё, релевантные куски достаточны.
+    """
+    import time as _t
+    now = _t.time()
+    if _KNOWLEDGE_CACHE["text"] and (now - _KNOWLEDGE_CACHE["loaded_ts"]) < 300:
+        return _KNOWLEDGE_CACHE["text"]
     if not KNOWLEDGE_DIR.exists():
         return ""
+    # Приоритет — pricing, deals, faq (бизнес-критичные), потом остальные
+    priority_files = ["pricing.md", "deals.md", "faq.md", "policy.md"]
+    paths = list(KNOWLEDGE_DIR.rglob("*.md"))
+    paths.sort(key=lambda p: (0 if p.name in priority_files else 1, str(p)))
     parts = []
     total = 0
-    for p in sorted(KNOWLEDGE_DIR.rglob("*.md")):
+    for p in paths:
         try:
             txt = p.read_text(encoding="utf-8")
         except Exception:
             continue
         rel = p.relative_to(KNOWLEDGE_DIR)
-        block = f"\n# === FILE: {rel} ===\n{txt.strip()}\n"
+        block = f"\n# {rel}\n{txt.strip()[:1800]}\n"
         if total + len(block) > max_chars:
-            block = block[: max_chars - total] + "\n... (truncated)"
-            parts.append(block)
             break
         parts.append(block)
         total += len(block)
-    return "".join(parts)
+    result = "".join(parts)
+    _KNOWLEDGE_CACHE["text"] = result
+    _KNOWLEDGE_CACHE["loaded_ts"] = now
+    return result
+
+
+_SNAPSHOT_CACHE = {"data": None, "ts": 0.0}
+
+
+def _build_state_snapshot_cached() -> dict:
+    """Кеш снапшота на 30 сек — экономим reload_sync на каждый запрос."""
+    import time as _t
+    now = _t.time()
+    if _SNAPSHOT_CACHE["data"] is not None and (now - _SNAPSHOT_CACHE["ts"]) < 30:
+        return _SNAPSHOT_CACHE["data"]
+    data = _build_state_snapshot()
+    _SNAPSHOT_CACHE["data"] = data
+    _SNAPSHOT_CACHE["ts"] = now
+    return data
 
 
 def _build_state_snapshot() -> dict:
@@ -308,13 +337,8 @@ async def ask(user_text: str) -> dict:
     if not user_text:
         return {"reply": "Пустой запрос.", "actions": [], "usage": {}}
 
-    # Reload state на случай если что-то поменялось в другом процессе
-    try:
-        storage.reload_sync()
-    except Exception:
-        pass
-
-    state_snap = _build_state_snapshot()
+    # Кешируем — не дёргаем reload каждый запрос
+    state_snap = _build_state_snapshot_cached()
     knowledge = _load_knowledge_summary()
     system = _system_prompt(state_snap, knowledge)
 

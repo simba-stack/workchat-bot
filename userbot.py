@@ -959,8 +959,50 @@ class UserbotService:
             except Exception:
                 pass
 
+    # Короткие ack-сообщения — не дёргаем Claude вообще (экономия ~30% запросов)
+    _ACK_RE = re.compile(
+        r"^[\s+\-•·]*(ок|ok|оk|окей|okay|понял|поняла|понятно|"
+        r"спасибо|спс|thanks|thx|давай|давайте|"
+        r"хорошо|хор|good|готов|готова|"
+        r"да|нет|yes|no|ага|угу|ясно|ясн|"
+        r"\+|плюс|сек|секунду|минут\w*|"
+        r"подождите|подожди|жду|"
+        r"принял|принято|приму|"
+        r"👍|👌|✅|🙏|❤|♥|😊|🤝)[\s.!?)+\-]*$",
+        re.I,
+    )
+
+    def _is_ack_message(self, text: str) -> bool:
+        """True если это просто подтверждение/благодарность без вопроса."""
+        if not text:
+            return False
+        t = text.strip()
+        # Если длиннее 30 символов — точно не ack
+        if len(t) > 30:
+            return False
+        # Если есть знак вопроса — нужен ответ
+        if "?" in t:
+            return False
+        return bool(self._ACK_RE.match(t))
+
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
         chat_id = event.chat_id
+
+        # === ECONOMY GUARD: пропуск ack-сообщений ===
+        try:
+            text_now = ((event.message and event.message.text) or "").strip()
+            if self._is_ack_message(text_now):
+                logger.info(
+                    "AI: chat=%s — ack '%s', пропуск (экономия токенов)",
+                    chat_id, text_now[:40],
+                )
+                await storage.bump_ai_stats(skipped_ack=1)
+                _e("ai-skip-ack", {
+                    "chat_id": chat_id, "text": text_now[:60],
+                }, severity="info")
+                return
+        except Exception as e:
+            logger.warning("ack check failed: %s", e)
 
         delay = random.uniform(config.AI_TYPING_DELAY_MIN, config.AI_TYPING_DELAY_MAX)
         try:
@@ -1065,6 +1107,9 @@ class UserbotService:
             replies=1,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_tokens", 0),
+            cache_write_tokens=usage.get("cache_creation_tokens", 0),
+            model=usage.get("model") or config.DEFAULT_AI_MODEL,
         )
         logger.info(
             "AI: replied chat=%s in=%s out=%s",
