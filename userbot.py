@@ -1295,6 +1295,15 @@ class UserbotService:
 
         # Дневная сводка действий — работает и в Группе 1 ЛК (рядом с карточками)
         # и в Группе 2 Бухгалтерия. Один и тот же _handle_daily_summary.
+        # Раскрыть детали конкретного банка: «детали Альфа» / «раскрой ОЗОН».
+        m_bd = re.match(
+            r"^\s*(?:деталь|детали|раскрой|раскрыть|развернуть|развер[нт]и)\s+"
+            r"([\w\-]+)\s*$",
+            text, re.I,
+        )
+        if m_bd:
+            await self._handle_bank_details(event, m_bd.group(1))
+            return
         if re.search(
             r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
             r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
@@ -2834,8 +2843,16 @@ class UserbotService:
         except Exception as e:
             logger.warning("payment proof check failed: %s", e)
 
-        # Команда: дневная сводка действий (что оплатить/отпустить/etc).
-        # Не блокирующий мини-запрос к storage, без AI-вызовов.
+        # Команда: дневная сводка / раскрыть детали по банку.
+        # Не блокирующие мини-запросы к storage, без AI-вызовов.
+        m_bd = re.match(
+            r"^\s*(?:деталь|детали|раскрой|раскрыть|развернуть|развер[нт]и)\s+"
+            r"([\w\-]+)\s*$",
+            text, re.I,
+        )
+        if m_bd:
+            await self._handle_bank_details(event, m_bd.group(1))
+            return
         if re.search(
             r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
             r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
@@ -3150,6 +3167,100 @@ class UserbotService:
         except Exception as e:
             logger.warning("payment proof ack failed: %s", e)
         return True
+
+    async def _handle_bank_details(self, event, bank_query: str):
+        """Раскрыть детали по конкретному банку: все активные карточки
+        этого банка с поставщиком, ФИО, ценой, методом, статусом.
+        Используется когда из сводки нужно копнуть глубже."""
+        bank_q = (bank_query or "").strip()
+        if not bank_q:
+            return
+        bank_q_lc = bank_q.lower()
+        cards = storage.list_lk_cards() or {}
+        matches = []
+        for cid, c in cards.items():
+            bank = (c.get("bank") or "").strip()
+            status = c.get("status") or ""
+            if status in ("БРАК", "ЗАВЕРШЁН"):
+                continue
+            if not bank:
+                continue
+            # Совпадение по подстроке в любую сторону (АЛЬФА ↔ Альфа-Банк)
+            bl = bank.lower()
+            if bank_q_lc not in bl and bl not in bank_q_lc:
+                continue
+            matches.append((cid, c))
+
+        if not matches:
+            try:
+                await event.reply(
+                    f"📋 По банку <b>{bank_q}</b> активных карточек не найдено.",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+            return
+
+        # Группируем по статусу для читаемости
+        groups: dict = {}
+        for cid, c in matches:
+            st = c.get("status") or "—"
+            groups.setdefault(st, []).append((cid, c))
+
+        # Порядок секций
+        order = [
+            "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+            "ОТРАБОТАН",
+            "В_РАБОТЕ",
+        ]
+        # Эмодзи на статус
+        st_emoji = {
+            "В_РАБОТЕ": "🟢",
+            "ОТРАБОТАН": "✅",
+            "ПОПОЛНИТЬ_И_ОТПУСТИТЬ": "💎",
+            "БЛОК": "🚫",
+        }
+
+        lines = [
+            f"📋 <b>Детали по банку {bank_q.upper()}</b> — найдено: <b>{len(matches)}</b>",
+            "",
+        ]
+        seen_statuses = set()
+        for st in order + [s for s in groups if s not in order]:
+            if st not in groups:
+                continue
+            seen_statuses.add(st)
+            items = groups[st]
+            emoji = st_emoji.get(st, "•")
+            label = st.replace("_", " ")
+            lines.append(f"{emoji} <b>{label}</b> ({len(items)}):")
+            for cid, c in items:
+                sup = _fmt_username(
+                    c.get("supplier") or c.get("client_username"),
+                    fallback="—",
+                )
+                price = accounting2._fmt_usdt(c.get("price_usdt") or 0)
+                method = c.get("payment_method") or "—"
+                deal_id = (c.get("deal_id") or "").strip().lstrip("#")
+                usdt_addr = (c.get("usdt_address") or "").strip()
+                extra = ""
+                if deal_id:
+                    extra = f" · сделка <code>#{deal_id}</code>"
+                elif usdt_addr:
+                    extra = f" · <code>{usdt_addr[:14]}…</code>"
+                lines.append(
+                    f"  • <code>#{cid}</code> {c.get('fio') or '—'} — "
+                    f"{sup} — {price} — <i>{method}</i>{extra}"
+                )
+            lines.append("")
+
+        text = "\n".join(lines).rstrip()
+        try:
+            for chunk in _split_text(text, 3900):
+                await event.reply(chunk, parse_mode="html", link_preview=False)
+                await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning("bank_details reply failed: %s", e)
 
     async def _handle_daily_summary(self, event):
         """Команда «сводка/действия/что оплатить» в Группе 2.
