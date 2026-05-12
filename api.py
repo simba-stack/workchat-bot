@@ -28,9 +28,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import (
+    FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect,
+)
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from pydantic import BaseModel
 
 import event_bus
 from storage import storage
@@ -44,17 +47,19 @@ DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "")
 
 _HTML_PATH = Path(__file__).parent / "dashboard" / "index.html"
+_JARVIS_PATH = Path(__file__).parent / "dashboard" / "jarvis.html"
+DASHBOARD_DEFAULT = (os.getenv("DASHBOARD_DEFAULT", "jarvis") or "").lower()
 
 
-def _load_html() -> str:
-    """Читает HTML дашборда с диска (всегда свежий — удобно для горячих правок)."""
+def _load_html(which: str = "index") -> str:
+    """Читает HTML дашборда с диска."""
+    path = _JARVIS_PATH if which == "jarvis" else _HTML_PATH
     try:
-        return _HTML_PATH.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return (
-            "<!DOCTYPE html><html><head><title>Dashboard</title></head>"
-            "<body><h1>Dashboard файл не найден</h1>"
-            "<p>Ожидаемый путь: <code>dashboard/index.html</code></p></body></html>"
+            f"<!DOCTYPE html><html><head><title>Dashboard</title></head>"
+            f"<body><h1>{path.name} не найден</h1></body></html>"
         )
 
 
@@ -98,7 +103,19 @@ async def healthz():
 
 @app.get("/", response_class=HTMLResponse)
 async def root(_: None = Depends(_auth)):
-    return HTMLResponse(_load_html())
+    return HTMLResponse(_load_html(DASHBOARD_DEFAULT))
+
+
+@app.get("/classic", response_class=HTMLResponse)
+async def classic_dashboard(_: None = Depends(_auth)):
+    """Классический дашборд (старый дизайн)."""
+    return HTMLResponse(_load_html("index"))
+
+
+@app.get("/jarvis", response_class=HTMLResponse)
+async def jarvis_dashboard(_: None = Depends(_auth)):
+    """J.A.R.V.I.S. дашборд — 3 колонки + анимированный офис."""
+    return HTMLResponse(_load_html("jarvis"))
 
 
 # === API endpoints (READ-ONLY) ===
@@ -379,6 +396,244 @@ async def api_managers(_: None = Depends(_auth)):
     online_priority = {"online": 0, "idle": 1, "offline": 2}
     out.sort(key=lambda x: (online_priority[x["online"]], -x["messages"]))
     return {"managers": out, "total": len(out)}
+
+
+# === Sparklines (per-day series for any metric) ===
+
+@app.get("/api/sparkline")
+async def api_sparkline(
+    metric: str,
+    days: int = 7,
+    _: None = Depends(_auth),
+):
+    """Возвращает временной ряд по дням для метрики.
+    Поддерживаемые метрики:
+      funnel.starts, funnel.chats_created, funnel.rs_handed, ...
+      margin           — маржа V2 по дням
+      ai_replies       — приближённо (только сегодняшний total)
+    """
+    storage.reload_sync()
+    today = datetime.now()
+    out = []
+
+    if metric.startswith("funnel."):
+        key = metric.split(".", 1)[1]
+        rows = storage.get_funnel_range(max(1, min(days, 60)))
+        for r in reversed(rows):
+            out.append({"date": r["date"], "value": float(r.get(key, 0) or 0)})
+    elif metric == "margin":
+        for i in range(max(1, min(days, 60)) - 1, -1, -1):
+            d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            apps = storage.get_applications_v2(d) or []
+            day_margin = sum(
+                float(a.get("computed", {}).get("margin_usdt", 0) or 0)
+                for a in apps
+            )
+            out.append({"date": d, "value": day_margin})
+    elif metric == "lk_created":
+        # Аппроксимация: считаем карточки по created_at дню
+        from collections import defaultdict
+        by_day = defaultdict(int)
+        cards = storage.list_lk_cards() or {}
+        for c in cards.values():
+            ts = c.get("created_at") or 0
+            if ts:
+                d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                by_day[d] += 1
+        for i in range(max(1, min(days, 60)) - 1, -1, -1):
+            d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            out.append({"date": d, "value": float(by_day.get(d, 0))})
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown metric: {metric}")
+
+    return {"metric": metric, "points": out}
+
+
+# === Anomaly detection (простая эвристика) ===
+
+@app.get("/api/anomalies")
+async def api_anomalies(_: None = Depends(_auth)):
+    """Простой anomaly-детектор. Возвращает список аномалий с severity."""
+    storage.reload_sync()
+    anomalies = []
+    stats = storage.state.get("ai_stats", {}) or {}
+    err_total = int(stats.get("errors_total", 0) or 0)
+    rep_total = int(stats.get("replies_total", 0) or 0)
+    if rep_total > 0 and err_total / max(1, rep_total + err_total) > 0.2:
+        anomalies.append({
+            "code": "ai_error_rate",
+            "severity": "warning",
+            "message": f"AI error rate {err_total}/{rep_total + err_total} > 20%",
+        })
+    # Скоро будет: 1) AI silent suppressed бьёт > 10 в час → warning
+    cards = storage.list_lk_cards() or {}
+    blocks = sum(1 for c in cards.values() if (c.get("status") or "").upper() == "БЛОК")
+    if blocks >= 5:
+        anomalies.append({
+            "code": "lk_blocks",
+            "severity": "warning",
+            "message": f"{blocks} карточек в БЛОКЕ — требует внимания",
+        })
+    return {"anomalies": anomalies}
+
+
+# === Control endpoints (POST — изменения состояния) ===
+
+class ChatSilentReq(BaseModel):
+    chat_id: int
+    minutes: int = 30
+
+
+class AIToggleReq(BaseModel):
+    enabled: bool
+
+
+class LKStatusReq(BaseModel):
+    new_status: str
+
+
+@app.post("/api/control/ai_toggle")
+async def control_ai_toggle(req: AIToggleReq, _: None = Depends(_auth)):
+    """Включить/выключить AI глобально."""
+    storage.reload_sync()
+    try:
+        await storage.set_ai_enabled(bool(req.enabled))
+    except Exception as e:
+        logger.warning("ai_toggle save failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        event_bus.emit_event(
+            "dashboard-ai-toggle",
+            {"enabled": bool(req.enabled)},
+            severity="warning",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "ai_enabled": bool(req.enabled)}
+
+
+@app.post("/api/control/lk/{card_id}/status")
+async def control_lk_status(
+    card_id: str, req: LKStatusReq, _: None = Depends(_auth),
+):
+    """Сменить статус карточки ЛК."""
+    storage.reload_sync()
+    card_id = card_id.lower().lstrip("#")
+    allowed = {
+        "В_РАБОТЕ", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+        "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК",
+    }
+    new_status = (req.new_status or "").strip().upper()
+    if new_status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"new_status must be one of {sorted(allowed)}",
+        )
+    ok = await storage.set_lk_card_status(card_id, new_status, by="dashboard")
+    if not ok:
+        raise HTTPException(status_code=404, detail="card not found")
+    try:
+        event_bus.emit_event(
+            "lk-status-changed",
+            {"card_id": card_id, "new_status": new_status, "by": "dashboard"},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "card_id": card_id, "new_status": new_status}
+
+
+@app.post("/api/control/lk/{card_id}/delete")
+async def control_lk_delete(card_id: str, _: None = Depends(_auth)):
+    """Удалить карточку ЛК."""
+    storage.reload_sync()
+    card_id = card_id.lower().lstrip("#")
+    ok = await storage.delete_lk_card(card_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="card not found")
+    try:
+        event_bus.emit_event(
+            "lk-deleted",
+            {"card_id": card_id, "by": "dashboard"},
+            severity="warning",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "card_id": card_id}
+
+
+@app.get("/api/control/info")
+async def control_info(_: None = Depends(_auth)):
+    """Текущее состояние управления — чтоб дашборд знал в каком режиме."""
+    storage.reload_sync()
+    return {
+        "ai_enabled": storage.is_ai_enabled(),
+        "writeback_enabled": storage.is_writeback_enabled(),
+        "lk_group_id": storage.get_lk_group_id(),
+        "accounting_group_id": storage.get_accounting_group_id(),
+    }
+
+
+# === WebSocket bidirectional ===
+
+@app.websocket("/ws")
+async def websocket_events(ws: WebSocket):
+    """WebSocket для двусторонней связи.
+    Принимает: ping/команды от дашборда.
+    Шлёт: события из event_bus в реальном времени.
+    Auth: ?user=...&pass=... в query string (Basic auth не работает в WS browser API).
+    """
+    user = ws.query_params.get("user", "")
+    pwd = ws.query_params.get("pass", "")
+    if not DASHBOARD_PASS:
+        await ws.close(code=4503, reason="auth not configured")
+        return
+    if not (
+        secrets.compare_digest(user, DASHBOARD_USER)
+        and secrets.compare_digest(pwd, DASHBOARD_PASS)
+    ):
+        await ws.close(code=4401, reason="unauthorized")
+        return
+
+    await ws.accept()
+
+    stop_event = asyncio.Event()
+
+    async def broadcast_loop():
+        try:
+            async for event in event_bus.subscribe(replay_last=20):
+                if stop_event.is_set():
+                    break
+                try:
+                    await ws.send_json({"kind": "event", **event})
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    broadcast_task = asyncio.create_task(broadcast_loop())
+
+    try:
+        while True:
+            msg = await ws.receive_json()
+            cmd = msg.get("cmd", "")
+            if cmd == "ping":
+                await ws.send_json({"kind": "pong", "ts": datetime.now().isoformat()})
+            elif cmd == "state":
+                storage.reload_sync()
+                await ws.send_json({
+                    "kind": "state",
+                    "ai_enabled": storage.is_ai_enabled(),
+                    "subscribers": event_bus.subscriber_count(),
+                })
+            else:
+                await ws.send_json({"kind": "ack", "cmd": cmd})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("ws error: %s", e)
+    finally:
+        stop_event.set()
+        broadcast_task.cancel()
 
 
 # === SSE event stream ===

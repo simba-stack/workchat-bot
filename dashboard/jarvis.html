@@ -1,0 +1,1763 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRIDE · J.A.R.V.I.S.</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  /* ===========================
+     THEMES
+     =========================== */
+  :root,
+  [data-theme="jarvis"] {
+    --bg-deep: #050818;
+    --bg-card: rgba(8, 14, 30, 0.82);
+    --bg-soft: rgba(18, 28, 56, 0.6);
+    --hud-primary: #00e5ff;
+    --hud-secondary: #4f9fff;
+    --hud-accent: #b478ff;
+    --hud-emerald: #4ade80;
+    --hud-amber: #fbbf24;
+    --hud-rose: #fb7185;
+    --hud-dim: #4a6594;
+    --text: #d6e3ff;
+    --text-dim: #5b7299;
+    --grid: rgba(0, 229, 255, 0.06);
+    --primary-rgb: 0, 229, 255;
+  }
+  [data-theme="ironman"] {
+    --bg-deep: #1a0405;
+    --bg-card: rgba(28, 8, 14, 0.85);
+    --bg-soft: rgba(50, 14, 20, 0.6);
+    --hud-primary: #ff3344;
+    --hud-secondary: #ffaa55;
+    --hud-accent: #ff77aa;
+    --hud-emerald: #80ff80;
+    --hud-amber: #ffdd44;
+    --hud-rose: #ff5577;
+    --hud-dim: #6e2a35;
+    --text: #ffd9d9;
+    --text-dim: #a4595e;
+    --grid: rgba(255, 51, 68, 0.06);
+    --primary-rgb: 255, 51, 68;
+  }
+  [data-theme="stealth"] {
+    --bg-deep: #0a0a0a;
+    --bg-card: rgba(20, 20, 20, 0.85);
+    --bg-soft: rgba(30, 30, 30, 0.6);
+    --hud-primary: #c0c0c0;
+    --hud-secondary: #a0a0a0;
+    --hud-accent: #d0d0d0;
+    --hud-emerald: #80c080;
+    --hud-amber: #c0a040;
+    --hud-rose: #c08080;
+    --hud-dim: #404040;
+    --text: #e0e0e0;
+    --text-dim: #606060;
+    --grid: rgba(200, 200, 200, 0.04);
+    --primary-rgb: 192, 192, 192;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100vh; overflow-x: hidden; }
+  body {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    color: var(--text);
+    background:
+      radial-gradient(ellipse at 30% 10%, rgba(var(--primary-rgb), 0.10) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 90%, rgba(var(--primary-rgb), 0.06) 0%, transparent 50%),
+      linear-gradient(135deg, var(--bg-deep) 0%, #080b22 50%, var(--bg-deep) 100%);
+    transition: background 0.5s;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  }
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(255,255,255,0) 0px,
+      rgba(255,255,255,0) 2px,
+      rgba(var(--primary-rgb), 0.018) 3px,
+      rgba(var(--primary-rgb), 0.018) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+    mix-blend-mode: screen;
+  }
+
+  .jarvis-panel {
+    position: relative;
+    background: var(--bg-card);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(var(--primary-rgb), 0.18);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .jarvis-panel::before,
+  .jarvis-panel::after {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    border-color: var(--hud-primary);
+    border-style: solid;
+    border-width: 0;
+    pointer-events: none;
+  }
+  .jarvis-panel::before { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; }
+  .jarvis-panel::after  { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+
+  .panel-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: linear-gradient(90deg, rgba(var(--primary-rgb), 0.12) 0%, transparent 100%);
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.18);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2.5px;
+    color: var(--hud-primary);
+    font-weight: 700;
+  }
+  .panel-title::before {
+    content: '';
+    width: 8px; height: 8px;
+    background: var(--hud-primary);
+    box-shadow: 0 0 8px var(--hud-primary);
+    border-radius: 50%;
+    animation: hud-pulse 2s ease-in-out infinite;
+  }
+  @keyframes hud-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.7); }
+  }
+  .panel-title .badge-mini {
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 10px;
+    background: rgba(var(--primary-rgb), 0.1);
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    border-radius: 3px;
+    color: var(--hud-primary);
+    letter-spacing: 1px;
+  }
+
+  /* Header */
+  .jarvis-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 22px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.2);
+    background: linear-gradient(180deg, rgba(var(--primary-rgb), 0.08) 0%, transparent 100%);
+    backdrop-filter: blur(8px);
+    position: relative;
+    z-index: 5;
+  }
+  .jarvis-logo {
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 6px;
+    color: var(--hud-primary);
+    text-shadow: 0 0 12px var(--hud-primary), 0 0 4px rgba(var(--primary-rgb),0.6);
+  }
+  .jarvis-logo .small {
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+    font-weight: 400;
+    display: block;
+    margin-top: 2px;
+  }
+  .jarvis-status {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 11px;
+    flex-wrap: wrap;
+  }
+  .stat-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    background: rgba(var(--primary-rgb), 0.06);
+    border-radius: 3px;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s;
+  }
+  .stat-pill:hover { background: rgba(var(--primary-rgb), 0.15); }
+  .stat-pill.active { background: rgba(var(--primary-rgb), 0.25); border-color: var(--hud-primary); }
+  .stat-pill .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--hud-emerald);
+    box-shadow: 0 0 8px var(--hud-emerald);
+    animation: hud-pulse 1.5s ease-in-out infinite;
+  }
+  .stat-pill.offline .dot    { background: var(--hud-rose);  box-shadow: 0 0 8px var(--hud-rose); }
+  .stat-pill.connecting .dot { background: var(--hud-amber); box-shadow: 0 0 8px var(--hud-amber); }
+
+  /* Anomaly bar */
+  .anomaly-bar {
+    background: rgba(251, 113, 133, 0.12);
+    border: 1px solid var(--hud-rose);
+    border-radius: 4px;
+    margin: 6px 14px 0;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--hud-rose);
+    animation: anomaly-flash 2s ease-in-out infinite;
+  }
+  @keyframes anomaly-flash {
+    0%, 100% { box-shadow: 0 0 0 rgba(251, 113, 133, 0); }
+    50%      { box-shadow: 0 0 16px rgba(251, 113, 133, 0.5); }
+  }
+  .anomaly-icon {
+    width: 14px; height: 14px;
+    flex-shrink: 0;
+  }
+
+  /* Main grid */
+  .jarvis-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(450px, 1.6fr) minmax(280px, 1fr);
+    gap: 14px;
+    padding: 14px;
+    position: relative;
+    z-index: 2;
+  }
+  @media (max-width: 1100px) {
+    .jarvis-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Metrics */
+  .metric {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);
+    position: relative;
+  }
+  .metric:last-child { border-bottom: 0; }
+  .metric .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .metric .label .trend {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  .metric .label .trend.up   { color: var(--hud-emerald); }
+  .metric .label .trend.down { color: var(--hud-rose); }
+  .metric .label .trend.flat { color: var(--text-dim); }
+  .metric .value {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 2px;
+    line-height: 1;
+    font-feature-settings: "tnum";
+  }
+  .metric .sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 3px;
+    letter-spacing: 0.5px;
+  }
+  .metric .value.cyan    { color: var(--hud-primary);   text-shadow: 0 0 12px rgba(var(--primary-rgb),0.6); }
+  .metric .value.emerald { color: var(--hud-emerald);   text-shadow: 0 0 10px rgba(74,222,128,0.5); }
+  .metric .value.amber   { color: var(--hud-amber);     text-shadow: 0 0 10px rgba(251,191,36,0.5); }
+  .metric .value.rose    { color: var(--hud-rose);      text-shadow: 0 0 10px rgba(251,113,133,0.5); }
+  .metric .value.violet  { color: var(--hud-accent);    text-shadow: 0 0 10px rgba(180,120,255,0.5); }
+  .metric .spark {
+    margin-top: 6px;
+    height: 30px;
+    width: 100%;
+  }
+  .metric .spark path {
+    stroke: var(--hud-primary);
+    stroke-width: 1.5;
+    fill: none;
+    filter: drop-shadow(0 0 4px var(--hud-primary));
+  }
+  .metric .spark .fill {
+    fill: url(#sparkfill);
+    stroke: none;
+    opacity: 0.35;
+  }
+
+  /* Funnel bars */
+  .funnel-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px;
+    font-size: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .funnel-bar .name {
+    flex: 0 0 100px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .funnel-bar .track {
+    flex: 1;
+    height: 8px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+  .funnel-bar .fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--hud-primary) 0%, var(--hud-accent) 100%);
+    transform-origin: left;
+    transition: transform 0.6s ease;
+    box-shadow: 0 0 8px var(--hud-primary);
+  }
+  .funnel-bar .count {
+    flex: 0 0 36px;
+    text-align: right;
+    color: var(--hud-primary);
+    font-weight: 700;
+    font-feature-settings: "tnum";
+  }
+
+  /* ===== CENTRAL OFFICE ===== */
+  .central-office {
+    grid-column: span 1;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .office-stage {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    min-height: 380px;
+    background:
+      radial-gradient(ellipse at 50% 100%, rgba(var(--primary-rgb), 0.18) 0%, transparent 70%),
+      linear-gradient(180deg, rgba(8,14,30,0.4) 0%, rgba(8,14,30,0.95) 100%);
+    border-radius: 6px;
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    overflow: hidden;
+  }
+  .office-wall {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 55%;
+    background:
+      repeating-linear-gradient(
+        90deg, transparent 0px, transparent 40px,
+        rgba(var(--primary-rgb),0.04) 40px, rgba(var(--primary-rgb),0.04) 41px
+      ),
+      linear-gradient(180deg, rgba(var(--primary-rgb),0.04) 0%, transparent 80%);
+  }
+  .office-floor-3d {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 45%;
+    background:
+      repeating-linear-gradient(
+        90deg, transparent 0%, transparent 12%,
+        rgba(var(--primary-rgb),0.04) 12%, rgba(var(--primary-rgb),0.04) 12.5%,
+        transparent 12.5%, transparent 25%
+      ),
+      repeating-linear-gradient(
+        0deg, transparent 0%, transparent 18%,
+        rgba(var(--primary-rgb),0.05) 18%, rgba(var(--primary-rgb),0.05) 18.5%,
+        transparent 18.5%, transparent 36%
+      ),
+      linear-gradient(180deg, rgba(var(--primary-rgb),0.02) 0%, rgba(var(--primary-rgb),0.08) 100%);
+    transform: perspective(450px) rotateX(50deg);
+    transform-origin: bottom;
+    border-top: 1px solid rgba(var(--primary-rgb),0.25);
+    box-shadow: inset 0 6px 14px rgba(var(--primary-rgb),0.12);
+  }
+  .zone-label {
+    position: absolute;
+    top: 10px;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 2px 8px;
+    background: rgba(var(--primary-rgb),0.06);
+    border: 1px solid rgba(var(--primary-rgb),0.15);
+    border-radius: 2px;
+  }
+  .zone-label.left   { left: 6%;  color: var(--hud-secondary); }
+  .zone-label.center { left: 50%; transform: translateX(-50%); color: var(--hud-accent); }
+  .zone-label.right  { right: 6%; color: var(--hud-emerald); }
+  .zone-divider {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg, transparent 0%, rgba(var(--primary-rgb),0.2) 30%, rgba(var(--primary-rgb),0.2) 70%, transparent 100%);
+  }
+  .zone-divider.left  { left: 33.33%; }
+  .zone-divider.right { left: 66.66%; }
+
+  /* Walker */
+  .walker {
+    position: absolute;
+    bottom: 8%;
+    width: 56px; height: 80px;
+    transition: left 7s linear, transform 0.3s;
+    z-index: 5;
+    cursor: pointer;
+  }
+  .walker svg {
+    width: 100%; height: 100%;
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.6));
+  }
+  .walker.walking svg { animation: walk-bounce 0.5s ease-in-out infinite; }
+  .walker.idle svg    { animation: idle-breathe 4s ease-in-out infinite; }
+  .walker.working svg { animation: working-shake 0.4s ease-in-out infinite; }
+  @keyframes walk-bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  @keyframes idle-breathe { 0%,100% { transform: scale(1,1); } 50% { transform: scale(1.03,0.97); } }
+  @keyframes working-shake { 0%,100% { transform: rotate(-1deg); } 50% { transform: rotate(1deg); } }
+  .walker-shadow {
+    position: absolute;
+    bottom: 4px; left: 50%;
+    transform: translateX(-50%);
+    width: 32px; height: 6px;
+    border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(var(--primary-rgb),0.5) 0%, transparent 70%);
+    animation: shadow-throb 2s ease-in-out infinite;
+  }
+  @keyframes shadow-throb {
+    0%,100% { transform: translateX(-50%) scale(1); opacity: 0.6; }
+    50%     { transform: translateX(-50%) scale(0.7); opacity: 0.4; }
+  }
+  .walker-bubble {
+    position: absolute;
+    bottom: 105%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(8, 14, 30, 0.95);
+    border: 1px solid var(--hud-primary);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--hud-primary);
+    white-space: nowrap;
+    text-shadow: 0 0 6px currentColor;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .walker-bubble.visible { opacity: 1; }
+  .walker-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -5px; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--hud-primary);
+  }
+  .walker-name {
+    position: absolute;
+    top: -16px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: var(--hud-primary);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    text-shadow: 0 0 4px currentColor;
+  }
+
+  /* Mini-map dots — клиенты */
+  .client-dot {
+    position: absolute;
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--hud-amber);
+    box-shadow: 0 0 4px var(--hud-amber);
+    transition: all 0.4s;
+    z-index: 3;
+  }
+  .client-dot.active {
+    width: 6px; height: 6px;
+    background: var(--hud-primary);
+    box-shadow: 0 0 10px var(--hud-primary);
+    animation: dot-pulse 1.5s infinite;
+  }
+  @keyframes dot-pulse {
+    0%,100% { transform: scale(1); }
+    50%     { transform: scale(1.5); }
+  }
+
+  /* HUD pulse rings */
+  .hud-pulse-ring {
+    position: absolute;
+    width: 60px; height: 60px;
+    border: 2px solid var(--hud-primary);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .hud-pulse-ring.fire { animation: pulse-ring 1.5s ease-out forwards; }
+  @keyframes pulse-ring {
+    0%   { opacity: 0.8; transform: scale(0.3); }
+    100% { opacity: 0; transform: scale(2.5); }
+  }
+
+  /* Beam */
+  .beam {
+    position: absolute;
+    height: 1.5px;
+    background: linear-gradient(90deg, transparent 0%, var(--hud-primary) 50%, transparent 100%);
+    box-shadow: 0 0 8px var(--hud-primary);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .beam.active { animation: beam-fire 1.2s ease-out; }
+  @keyframes beam-fire {
+    0%   { opacity: 0; transform: scaleX(0); }
+    20%  { opacity: 1; transform: scaleX(1); }
+    100% { opacity: 0; transform: scaleX(1); }
+  }
+
+  /* Feed line */
+  .feed-line {
+    display: flex;
+    gap: 10px;
+    padding: 5px 14px;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    align-items: center;
+    animation: feed-in 0.4s ease-out;
+  }
+  @keyframes feed-in {
+    from { transform: translateX(-12px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+  .feed-line .ts {
+    font-size: 9px;
+    color: var(--text-dim);
+    width: 56px;
+    flex-shrink: 0;
+    letter-spacing: 0.5px;
+  }
+  .feed-line .tag {
+    font-size: 9px;
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+  .feed-line.severity-info    .tag { color: var(--hud-primary); }
+  .feed-line.severity-success .tag { color: var(--hud-emerald); }
+  .feed-line.severity-warning .tag { color: var(--hud-amber); }
+  .feed-line.severity-error   .tag { color: var(--hud-rose); }
+  .feed-line .msg {
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* LK Card chip */
+  .lk-chip {
+    display: grid;
+    grid-template-columns: 56px 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 6px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 11px;
+    transition: background 0.2s;
+  }
+  .lk-chip:hover { background: rgba(var(--primary-rgb),0.04); }
+  .lk-chip .cid {
+    color: var(--hud-primary);
+    font-weight: 700;
+  }
+  .lk-chip .info { overflow: hidden; }
+  .lk-chip .info .top { color: var(--text); font-weight: 600; }
+  .lk-chip .info .bot { color: var(--text-dim); font-size: 9px; letter-spacing: 0.5px; }
+  .lk-chip .badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border: 1px solid;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .lk-chip .badge.s-в_работе  { color: var(--hud-primary); border-color: var(--hud-primary); }
+  .lk-chip .badge.s-отработан { color: var(--hud-amber);   border-color: var(--hud-amber); }
+  .lk-chip .badge.s-завершён,
+  .lk-chip .badge.s-завершен,
+  .lk-chip .badge.s-пополнить_и_отпустить { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+  .lk-chip .badge.s-блок,
+  .lk-chip .badge.s-брак { color: var(--hud-rose); border-color: var(--hud-rose); }
+  .lk-actions {
+    display: flex;
+    gap: 4px;
+  }
+  .lk-actions button {
+    background: transparent;
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    color: var(--text-dim);
+    width: 22px; height: 22px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+  .lk-actions button:hover { color: var(--hud-primary); border-color: var(--hud-primary); background: rgba(var(--primary-rgb),0.1); }
+  .lk-actions button.danger:hover { color: var(--hud-rose); border-color: var(--hud-rose); background: rgba(251,113,133,0.1); }
+
+  /* Boot */
+  .boot-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--bg-deep);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--hud-primary);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 2px;
+    transition: opacity 0.6s, visibility 0.6s;
+  }
+  .boot-mask.gone { opacity: 0; visibility: hidden; }
+  .boot-mask .boot-logo {
+    font-size: 38px; font-weight: 900;
+    letter-spacing: 12px;
+    text-shadow: 0 0 18px var(--hud-primary);
+    margin-bottom: 14px;
+  }
+  .boot-mask .boot-bar {
+    width: 280px; height: 3px;
+    background: rgba(var(--primary-rgb),0.15);
+    border-radius: 2px;
+    margin: 18px auto 8px;
+    position: relative;
+    overflow: hidden;
+  }
+  .boot-mask .boot-bar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: -30%;
+    width: 30%; height: 100%;
+    background: var(--hud-primary);
+    box-shadow: 0 0 10px var(--hud-primary);
+    animation: boot-scan 1.2s ease-in-out infinite;
+  }
+  @keyframes boot-scan { 0%{left:-30%;} 100%{left:100%;} }
+
+  /* Command palette */
+  .cmd-palette-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 24, 0.75);
+    backdrop-filter: blur(6px);
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 80px;
+  }
+  .cmd-palette {
+    width: 520px;
+    max-width: 90vw;
+    background: var(--bg-card);
+    border: 1px solid var(--hud-primary);
+    border-radius: 6px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px rgba(var(--primary-rgb), 0.3);
+    overflow: hidden;
+  }
+  .cmd-input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    padding: 12px 16px;
+    outline: none;
+  }
+  .cmd-input::placeholder { color: var(--text-dim); }
+  .cmd-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .cmd-item {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .cmd-item.active,
+  .cmd-item:hover { background: rgba(var(--primary-rgb), 0.1); }
+  .cmd-item .icon {
+    width: 16px; height: 16px;
+    color: var(--hud-primary);
+  }
+  .cmd-item .hint {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-dim);
+    border: 1px solid var(--text-dim);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* Sound toggle */
+  .sound-toggle {
+    cursor: pointer;
+  }
+
+  /* Modal */
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 24, 0.85);
+    backdrop-filter: blur(6px);
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal {
+    background: var(--bg-card);
+    border: 1px solid var(--hud-primary);
+    border-radius: 6px;
+    padding: 22px;
+    min-width: 320px;
+    max-width: 90vw;
+    box-shadow: 0 0 40px rgba(var(--primary-rgb), 0.3);
+  }
+  .modal h3 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--hud-primary);
+    margin: 0 0 14px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+  .btn {
+    background: transparent;
+    border: 1px solid var(--hud-primary);
+    color: var(--hud-primary);
+    padding: 6px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.15s;
+  }
+  .btn:hover { background: rgba(var(--primary-rgb), 0.15); }
+  .btn.danger { color: var(--hud-rose); border-color: var(--hud-rose); }
+  .btn.danger:hover { background: rgba(251, 113, 133, 0.15); }
+  .btn.success { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+
+  /* Status select */
+  .status-select {
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(var(--primary-rgb),0.04); }
+  ::-webkit-scrollbar-thumb { background: rgba(var(--primary-rgb),0.3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(var(--primary-rgb),0.5); }
+
+  /* SVG sparkline gradient */
+  .sparkline-defs { display: none; }
+</style>
+</head>
+<body x-data="jarvis()" x-init="init()" :data-theme="theme">
+
+<!-- SVG defs for sparkline gradient -->
+<svg class="sparkline-defs"><defs>
+  <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%"  stop-color="currentColor" stop-opacity="0.6"/>
+    <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+  </linearGradient>
+</defs></svg>
+
+<!-- Boot -->
+<div class="boot-mask" :class="booted ? 'gone' : ''">
+  <div style="text-align: center;">
+    <div class="boot-logo">JARVIS</div>
+    <div>PRIDE OPERATIONS · INITIALIZING</div>
+    <div class="boot-bar"></div>
+    <div x-text="bootStatus"></div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header class="jarvis-header">
+  <div>
+    <div class="jarvis-logo">J.A.R.V.I.S.<span class="small">PRIDE OPERATIONS CENTER · v2.0</span></div>
+  </div>
+  <div class="jarvis-status">
+    <div class="stat-pill" :class="connState === 'online' ? '' : (connState === 'connecting' ? 'connecting' : 'offline')">
+      <span class="dot"></span><span x-text="connText"></span>
+    </div>
+    <div class="stat-pill sound-toggle" :class="soundOn ? 'active' : ''" @click="toggleSound()">
+      <span x-text="soundOn ? '🔊 SOUND' : '🔇 SOUND'"></span>
+    </div>
+    <div class="stat-pill" @click="cycleTheme()" :title="'Тема: ' + theme">
+      <span x-text="theme === 'jarvis' ? '🟦 JARVIS' : (theme === 'ironman' ? '🟥 IRON' : '⬜ STEALTH')"></span>
+    </div>
+    <div class="stat-pill" :class="state.stats.ai_enabled ? '' : 'offline'" @click="toggleAI()">
+      <span x-text="'AI ' + (state.stats.ai_enabled ? 'ON' : 'OFF')"></span>
+    </div>
+    <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
+    <div class="stat-pill"><span x-text="clockText"></span></div>
+  </div>
+</header>
+
+<!-- ANOMALY BAR -->
+<template x-for="a in anomalies" :key="a.code">
+  <div class="anomaly-bar">
+    <span>⚠</span>
+    <span x-text="a.message"></span>
+  </div>
+</template>
+
+<!-- MAIN GRID -->
+<main class="jarvis-grid">
+
+  <!-- LEFT -->
+  <aside class="space-y-4">
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Communications
+        <span class="badge-mini" x-text="state.stats.ai.replies_total || 0"></span>
+      </div>
+      <div class="metric">
+        <div class="label">Replies <span class="trend" :class="trendClass('ai_replies')" x-text="trendStr('ai_replies')"></span></div>
+        <div class="value cyan" x-text="state.stats.ai.replies_total || 0"></div>
+        <div class="sub" x-text="'токенов in: ' + (state.stats.ai.input_tokens_total || 0)"></div>
+        <svg class="spark" :viewBox="'0 0 100 30'" preserveAspectRatio="none">
+          <path :d="sparkPath('funnel.starts')" />
+        </svg>
+      </div>
+      <div class="metric">
+        <div class="label">Активных чатов</div>
+        <div class="value violet" x-text="state.stats.managed_chats_active || 0"></div>
+        <div class="sub" x-text="'клиентов сегодня: ' + (state.stats.funnel_today.starts || 0)"></div>
+      </div>
+      <div class="metric">
+        <div class="label">Эскалаций</div>
+        <div class="value amber" x-text="state.stats.escalate.total || 0"></div>
+        <div class="sub" x-text="'ошибок AI: ' + (state.stats.ai.errors_total || 0)"></div>
+      </div>
+    </div>
+
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Воронка · 7 дней
+        <span class="badge-mini">CONVERSION</span>
+      </div>
+      <template x-for="step in funnelSteps" :key="step.key">
+        <div class="funnel-bar">
+          <div class="name" x-text="step.label"></div>
+          <div class="track">
+            <div class="fill" :style="'transform: scaleX(' + funnelRatio(step.key) + ')'"></div>
+          </div>
+          <div class="count" x-text="state.stats.funnel_week_total[step.key] || 0"></div>
+        </div>
+      </template>
+    </div>
+
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Last AI reply
+        <span class="badge-mini" x-text="lastReply.ts ? fmtTime(lastReply.ts) : '—'"></span>
+      </div>
+      <div class="metric" style="padding: 8px 14px;">
+        <div class="text-xs" style="color: var(--text); line-height: 1.5;" x-text="lastReply.text || '(нет данных)'"></div>
+        <div class="sub mt-2" x-text="lastReply.chat ? '@' + lastReply.chat : ''"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CENTER -->
+  <section class="central-office">
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Operations Floor
+        <span class="badge-mini">REAL-TIME</span>
+      </div>
+      <div class="office-stage" x-ref="stage">
+        <div class="office-wall"></div>
+        <div class="office-floor-3d"></div>
+        <div class="zone-label left">CHAT</div>
+        <div class="zone-label center">LK</div>
+        <div class="zone-label right">FINANCE</div>
+        <div class="zone-divider left"></div>
+        <div class="zone-divider right"></div>
+
+        <!-- Client dots (mini-map) -->
+        <template x-for="(d, i) in clientDots" :key="i">
+          <div class="client-dot"
+               :class="d.active ? 'active' : ''"
+               :style="'left: ' + d.x + '%; top: ' + d.y + '%;'"
+               :title="d.label"></div>
+        </template>
+
+        <!-- Walker AI-CHAT -->
+        <div class="walker" :class="chars.chat.state" :style="'left: ' + chars.chat.x + '%;'" @click="characterClick('chat')">
+          <div class="walker-name">AI-CHAT</div>
+          <svg viewBox="0 0 60 80">
+            <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
+            <rect x="20" y="42" width="20" height="28" rx="6" fill="#4f9fff"/>
+            <circle cx="30" cy="26" r="13" fill="#fcd34d"/>
+            <path d="M 18 24 Q 30 8, 42 24" stroke="#0f172a" stroke-width="2.5" fill="none"/>
+            <circle cx="17" cy="26" r="3" fill="#0f172a"/>
+            <circle cx="43" cy="26" r="3" fill="#0f172a"/>
+            <circle cx="25" cy="25" r="1.6" fill="#0f172a"/>
+            <circle cx="35" cy="25" r="1.6" fill="#0f172a"/>
+            <path d="M 26 32 Q 30 35, 34 32" stroke="#0f172a" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+          <div class="walker-shadow"></div>
+          <div class="walker-bubble" :class="chars.chat.bubble ? 'visible' : ''" x-text="chars.chat.bubble"></div>
+        </div>
+
+        <!-- Walker AI-LK -->
+        <div class="walker" :class="chars.lk.state" :style="'left: ' + chars.lk.x + '%;'" @click="characterClick('lk')">
+          <div class="walker-name">AI-LK</div>
+          <svg viewBox="0 0 60 80">
+            <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
+            <rect x="20" y="42" width="20" height="28" rx="6" fill="#b478ff"/>
+            <circle cx="30" cy="26" r="13" fill="#fda4af"/>
+            <path d="M 17 22 Q 30 6, 43 22 L 43 14 Q 30 4, 17 14 Z" fill="#7c2d12"/>
+            <circle cx="25" cy="26" r="1.6" fill="#0f172a"/>
+            <circle cx="35" cy="26" r="1.6" fill="#0f172a"/>
+            <path d="M 26 32 Q 30 35, 34 32" stroke="#0f172a" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            <rect x="14" y="56" width="10" height="14" rx="1.5" fill="#fbbf24"/>
+            <rect x="14" y="56" width="10" height="3" fill="#d97706"/>
+          </svg>
+          <div class="walker-shadow"></div>
+          <div class="walker-bubble" :class="chars.lk.bubble ? 'visible' : ''" x-text="chars.lk.bubble"></div>
+        </div>
+
+        <!-- Walker AI-FIN -->
+        <div class="walker" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
+          <div class="walker-name">AI-FIN</div>
+          <svg viewBox="0 0 60 80">
+            <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
+            <rect x="20" y="42" width="20" height="28" rx="6" fill="#4ade80"/>
+            <polygon points="28,46 32,46 30,56" fill="#fcd34d"/>
+            <circle cx="30" cy="26" r="13" fill="#f5d0a9"/>
+            <circle cx="25" cy="25" r="4" fill="none" stroke="#0f172a" stroke-width="1.5"/>
+            <circle cx="35" cy="25" r="4" fill="none" stroke="#0f172a" stroke-width="1.5"/>
+            <line x1="29" y1="25" x2="31" y2="25" stroke="#0f172a" stroke-width="1.5"/>
+            <circle cx="25" cy="25" r="1" fill="#0f172a"/>
+            <circle cx="35" cy="25" r="1" fill="#0f172a"/>
+            <path d="M 27 33 Q 30 36, 33 33" stroke="#0f172a" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            <rect x="38" y="58" width="9" height="12" rx="1.5" fill="#0f172a"/>
+            <rect x="39" y="59" width="7" height="2" fill="#4ade80"/>
+          </svg>
+          <div class="walker-shadow"></div>
+          <div class="walker-bubble" :class="chars.accounting.bubble ? 'visible' : ''" x-text="chars.accounting.bubble"></div>
+        </div>
+
+        <template x-for="ring in pulseRings" :key="ring.id">
+          <div class="hud-pulse-ring fire"
+               :style="'left: ' + ring.x + '%; top: ' + ring.y + '%; transform: translate(-50%,-50%);'"></div>
+        </template>
+      </div>
+    </div>
+
+    <!-- LK Cards -->
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        LK Cards · live
+        <span class="badge-mini" x-text="filteredCards.length + ' / ' + (state.stats.lk_cards_total || 0)"></span>
+      </div>
+      <div style="padding: 6px 14px; border-bottom: 1px solid rgba(var(--primary-rgb),0.08);">
+        <input class="cmd-input" style="padding: 4px 8px; font-size: 11px;" placeholder="🔍 фильтр: банк / ФИО / статус..." x-model="cardFilter"/>
+      </div>
+      <div style="max-height: 320px; overflow-y: auto;">
+        <template x-if="filteredCards.length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            <span x-text="cards.length === 0 ? 'Карточек пока нет' : 'По фильтру ничего не найдено'"></span>
+          </div>
+        </template>
+        <template x-for="c in filteredCards.slice(0, 40)" :key="c.card_id">
+          <div class="lk-chip">
+            <div class="cid" x-text="'#' + c.card_id"></div>
+            <div class="info">
+              <div class="top" x-text="(c.bank || '—') + ' · ' + (c.fio || '—')"></div>
+              <div class="bot" x-text="(c.payment_method || '—') + ' · ' + (c.price_usdt || 0) + '$ · ' + (c.supplier ? '@' + c.supplier : '—')"></div>
+            </div>
+            <span class="badge" :class="'s-' + (c.status || '').toLowerCase()" x-text="(c.status || '—').replace(/_/g,' ')"></span>
+            <div class="lk-actions">
+              <button title="Сменить статус" @click="openStatusModal(c)">⚙</button>
+              <button title="Удалить" class="danger" @click="confirmDelete(c)">×</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT -->
+  <aside class="space-y-4">
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Финансы
+        <span class="badge-mini">MARGIN</span>
+      </div>
+      <div class="metric">
+        <div class="label">Маржа сегодня <span class="trend" :class="trendClass('margin')" x-text="trendStr('margin')"></span></div>
+        <div class="value" :class="(state.stats.margin_today_usdt || 0) >= 0 ? 'emerald' : 'rose'"
+             x-text="fmtUsd(state.stats.margin_today_usdt || 0)"></div>
+        <div class="sub" x-text="'неделя: ' + fmtUsd(state.stats.margin_week_usdt || 0)"></div>
+        <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <path :d="sparkPath('margin')" />
+        </svg>
+      </div>
+      <div class="metric">
+        <div class="label">Заявки V2 (7 дн)</div>
+        <div class="value cyan" x-text="state.recent_applications.length || 0"></div>
+        <div class="sub" x-text="'сделок всего: ' + (state.stats.deals_total || 0)"></div>
+      </div>
+      <div class="metric">
+        <div class="label">ЛК отработано</div>
+        <div class="value emerald" x-text="state.stats.lk_done || 0"></div>
+        <div class="sub" x-text="'в работе: ' + (state.stats.lk_in_work || 0)"></div>
+      </div>
+      <div class="metric">
+        <div class="label">Блоков</div>
+        <div class="value rose" x-text="state.stats.lk_blocks || 0"></div>
+        <div class="sub" x-text="'всего карточек: ' + (state.stats.lk_cards_total || 0)"></div>
+      </div>
+    </div>
+
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Operators
+        <span class="badge-mini" x-text="managers.length + ' active'"></span>
+      </div>
+      <div style="max-height: 320px; overflow-y: auto;">
+        <template x-if="managers.length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Активности работников пока нет
+          </div>
+        </template>
+        <template x-for="m in managers" :key="m.username">
+          <div class="metric" style="padding: 8px 14px;">
+            <div class="flex items-center gap-2">
+              <span style="display:inline-block; width: 6px; height: 6px; border-radius: 50%;"
+                    :style="'background: ' + managerColor(m.online) + '; box-shadow: 0 0 6px ' + managerColor(m.online) + ';'"></span>
+              <span class="text-xs font-bold" x-text="'@' + m.username"></span>
+              <span class="text-xs ml-auto" style="color: var(--text-dim)" x-text="m.role"></span>
+            </div>
+            <div class="text-xs mt-1 flex gap-3" style="color: var(--text-dim)">
+              <span>💬 <span x-text="m.messages"></span></span>
+              <span>📋 <span x-text="m.chats_touched"></span></span>
+              <span>💸 <span x-text="m.payments_made"></span></span>
+              <span class="ml-auto" x-text="formatIdle(m.idle_sec)"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- FEED -->
+<section class="jarvis-panel" style="margin: 0 14px 14px;">
+  <div class="panel-title">
+    Live Event Feed
+    <span class="badge-mini" x-text="logs.length + ' EVENTS'"></span>
+  </div>
+  <div style="max-height: 220px; overflow-y: auto;">
+    <template x-if="logs.length === 0">
+      <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+        Ждём первое событие из event_bus…
+      </div>
+    </template>
+    <template x-for="(log, i) in logs.slice(0, 100)" :key="i + ':' + log.ts">
+      <div class="feed-line" :class="'severity-' + (log.severity || 'info')">
+        <span class="ts" x-text="fmtTime(log.ts)"></span>
+        <span class="tag" x-text="(log.character || log.type || 'sys').substring(0, 12)"></span>
+        <span class="msg" x-text="formatEvent(log)"></span>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- ===== Command palette ===== -->
+<template x-if="paletteOpen">
+  <div class="cmd-palette-mask" @click="closePalette()">
+    <div class="cmd-palette" @click.stop>
+      <input class="cmd-input" placeholder="Команда / поиск..." x-model="paletteQuery" @keydown.escape="closePalette()" @keydown.enter="runActivePaletteItem()" @keydown.down.prevent="paletteIdx = Math.min(paletteIdx+1, filteredPalette.length-1)" @keydown.up.prevent="paletteIdx = Math.max(paletteIdx-1, 0)" x-init="$nextTick(() => $el.focus())"/>
+      <div class="cmd-list">
+        <template x-for="(it, i) in filteredPalette" :key="it.id">
+          <div class="cmd-item" :class="i === paletteIdx ? 'active' : ''" @click="runCmd(it)">
+            <span class="icon" x-text="it.icon || '·'"></span>
+            <span x-text="it.label"></span>
+            <span class="hint" x-text="it.hint" x-show="it.hint"></span>
+          </div>
+        </template>
+        <template x-if="filteredPalette.length === 0">
+          <div class="cmd-item" style="color: var(--text-dim);">Ничего не найдено</div>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Status modal ===== -->
+<template x-if="statusModal.open">
+  <div class="modal-mask" @click="closeStatusModal()">
+    <div class="modal" @click.stop>
+      <h3>Сменить статус карточки</h3>
+      <div class="text-sm" style="color: var(--text-dim)">
+        <span x-text="'#' + statusModal.card_id + ' · ' + (statusModal.card.bank || '')"></span>
+      </div>
+      <select class="status-select" x-model="statusModal.new_status">
+        <option>В_РАБОТЕ</option>
+        <option>ОТРАБОТАН</option>
+        <option>ПОПОЛНИТЬ_И_ОТПУСТИТЬ</option>
+        <option>ЗАВЕРШЁН</option>
+        <option>БРАК</option>
+        <option>БЛОК</option>
+      </select>
+      <div class="modal-actions">
+        <button class="btn" @click="closeStatusModal()">Отмена</button>
+        <button class="btn success" @click="applyStatusChange()">Применить</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Delete confirm ===== -->
+<template x-if="deleteModal.open">
+  <div class="modal-mask" @click="closeDeleteModal()">
+    <div class="modal" @click.stop>
+      <h3 style="color: var(--hud-rose);">Удалить карточку?</h3>
+      <div class="text-sm">
+        <span x-text="'#' + deleteModal.card_id + ' · ' + (deleteModal.card.bank || '') + ' · ' + (deleteModal.card.fio || '')"></span>
+      </div>
+      <div class="text-sm mt-2" style="color: var(--text-dim)">Операция необратима.</div>
+      <div class="modal-actions">
+        <button class="btn" @click="closeDeleteModal()">Отмена</button>
+        <button class="btn danger" @click="applyDelete()">Удалить</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+function jarvis() {
+  return {
+    booted: false,
+    bootStatus: 'CONNECTING',
+    theme: localStorage.getItem('jarvis-theme') || 'jarvis',
+    soundOn: localStorage.getItem('jarvis-sound') === '1',
+    state: {
+      stats: {
+        lk_cards_total: 0, lk_cards_by_status: {}, lk_cards_by_method: {},
+        lk_in_work: 0, lk_done: 0, lk_blocks: 0,
+        managed_chats_active: 0, deals_total: 0,
+        margin_today_usdt: 0, margin_week_usdt: 0,
+        ai: {}, escalate: {}, writeback: {}, deals_stats: {},
+        ai_enabled: false, subscribers: 0,
+        funnel_today: {}, funnel_week_total: {},
+      },
+      recent_applications: [],
+      server_ts: '',
+    },
+    cards: [],
+    cardFilter: '',
+    logs: [],
+    managers: [],
+    pulseRings: [],
+    anomalies: [],
+    clientDots: [],
+    nextId: 1,
+    clockText: '--:--:--',
+    sparklines: {},  // metric -> [{date, value}]
+    lastReply: { ts: 0, text: '', chat: '' },
+    funnelSteps: [
+      { key: 'starts',         label: 'Старт',      zone: 'left'   },
+      { key: 'chats_created',  label: 'Беседы',     zone: 'left'   },
+      { key: 'chats_active',   label: 'Початились', zone: 'left'   },
+      { key: 'chats_junk',     label: 'Мусор',      zone: 'left'   },
+      { key: 'ip_interest',    label: 'ИП',         zone: 'center' },
+      { key: 'bank_interest',  label: 'Банк',       zone: 'center' },
+      { key: 'rs_handed',      label: 'Сдали РС',   zone: 'center' },
+    ],
+    chars: {
+      chat:       { state: 'idle', bubble: '', x: 16 },
+      lk:         { state: 'idle', bubble: '', x: 50 },
+      accounting: { state: 'idle', bubble: '', x: 82 },
+    },
+    es: null,
+    ws: null,
+    connState: 'connecting',
+    connText: 'CONNECTING',
+    audioCtx: null,
+    ambientNode: null,
+
+    // === Command palette ===
+    paletteOpen: false,
+    paletteQuery: '',
+    paletteIdx: 0,
+    paletteItems: [
+      { id: 'theme_jarvis', icon: '🟦', label: 'Тема: JARVIS (cyan)',  hint: 'theme', action: () => this.setTheme('jarvis') },
+      { id: 'theme_ironman', icon: '🟥', label: 'Тема: IRON MAN (red)', hint: 'theme', action: () => this.setTheme('ironman') },
+      { id: 'theme_stealth', icon: '⬜', label: 'Тема: STEALTH (grey)', hint: 'theme', action: () => this.setTheme('stealth') },
+      { id: 'sound_toggle', icon: '🔊', label: 'Toggle sound on/off',   hint: 's', action: () => this.toggleSound() },
+      { id: 'ai_on',  icon: '✓', label: 'AI: ON (включить)',  hint: 'ctrl', action: () => this.setAI(true) },
+      { id: 'ai_off', icon: '✗', label: 'AI: OFF (выключить)', hint: 'ctrl', action: () => this.setAI(false) },
+      { id: 'refresh', icon: '↻', label: 'Refresh всё', hint: 'r', action: () => this.refreshAll() },
+      { id: 'classic', icon: '◧', label: 'Открыть классический дашборд', action: () => location.href = '/classic' },
+      { id: 'health', icon: '♥', label: 'Healthcheck', action: () => window.open('/healthz', '_blank') },
+    ],
+
+    // === Modals ===
+    statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
+    deleteModal: { open: false, card_id: '', card: {} },
+
+    async init() {
+      this.bootStatus = 'FETCHING STATE';
+      await this.refresh();
+      await this.refreshSparklines();
+      await this.refreshAnomalies();
+      this.bootStatus = 'CONNECTING STREAM';
+      this.connectSSE();
+      setTimeout(() => { this.booted = true; }, 1100);
+      this.startPolling();
+      this.startWalkerAI();
+      this.startClock();
+      this.setupHotkeys();
+      this.generateClientDots();
+      // init sound (если включён)
+      if (this.soundOn) this.initAudio();
+    },
+
+    startClock() {
+      const update = () => {
+        const d = new Date();
+        this.clockText = d.toTimeString().substring(0, 8);
+      };
+      update();
+      setInterval(update, 1000);
+    },
+
+    setupHotkeys() {
+      document.addEventListener('keydown', (e) => {
+        // Cmd+K or Ctrl+K — palette
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          this.openPalette();
+        }
+        // / — focus search
+        if (e.key === '/' && !this.paletteOpen && !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
+          e.preventDefault();
+          this.openPalette();
+        }
+        // Esc — close any modal
+        if (e.key === 'Escape') {
+          this.paletteOpen = false;
+          this.statusModal.open = false;
+          this.deleteModal.open = false;
+        }
+      });
+    },
+
+    openPalette() {
+      this.paletteOpen = true;
+      this.paletteQuery = '';
+      this.paletteIdx = 0;
+    },
+    closePalette() { this.paletteOpen = false; },
+    get filteredPalette() {
+      const q = (this.paletteQuery || '').toLowerCase().trim();
+      const items = this.paletteItems;
+      if (!q) return items;
+      return items.filter(it => it.label.toLowerCase().includes(q));
+    },
+    runActivePaletteItem() {
+      const it = this.filteredPalette[this.paletteIdx];
+      if (it) this.runCmd(it);
+    },
+    runCmd(it) {
+      try { it.action(); } catch (e) { console.warn('cmd failed', e); }
+      this.closePalette();
+    },
+
+    // === Theme ===
+    setTheme(t) {
+      this.theme = t;
+      localStorage.setItem('jarvis-theme', t);
+      this.playBeep(t === 'ironman' ? 1200 : t === 'stealth' ? 300 : 700);
+    },
+    cycleTheme() {
+      const order = ['jarvis', 'ironman', 'stealth'];
+      const next = order[(order.indexOf(this.theme) + 1) % order.length];
+      this.setTheme(next);
+    },
+
+    // === Audio ===
+    initAudio() {
+      if (this.audioCtx) return;
+      try {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {
+        console.warn('audio not available', e);
+      }
+    },
+    toggleSound() {
+      this.soundOn = !this.soundOn;
+      localStorage.setItem('jarvis-sound', this.soundOn ? '1' : '0');
+      if (this.soundOn) {
+        this.initAudio();
+        this.startAmbient();
+        this.playBeep(880);
+      } else {
+        this.stopAmbient();
+      }
+    },
+    playBeep(freq) {
+      if (!this.soundOn || !this.audioCtx) return;
+      try {
+        const o = this.audioCtx.createOscillator();
+        const g = this.audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = freq;
+        g.gain.value = 0.0001;
+        o.connect(g); g.connect(this.audioCtx.destination);
+        const now = this.audioCtx.currentTime;
+        g.gain.exponentialRampToValueAtTime(0.05, now + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        o.start(now);
+        o.stop(now + 0.22);
+      } catch (e) {}
+    },
+    startAmbient() {
+      if (!this.audioCtx) return;
+      try {
+        this.stopAmbient();
+        const o = this.audioCtx.createOscillator();
+        const g = this.audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 55;
+        g.gain.value = 0.012;
+        o.connect(g); g.connect(this.audioCtx.destination);
+        o.start();
+        this.ambientNode = { o, g };
+      } catch (e) {}
+    },
+    stopAmbient() {
+      if (this.ambientNode) {
+        try { this.ambientNode.o.stop(); } catch {}
+        this.ambientNode = null;
+      }
+    },
+
+    // === API ===
+    startPolling() {
+      setInterval(() => this.refresh(), 8000);
+      setInterval(() => this.refreshCards(), 12000);
+      setInterval(() => this.refreshManagers(), 15000);
+      setInterval(() => this.refreshSparklines(), 30000);
+      setInterval(() => this.refreshAnomalies(), 30000);
+    },
+
+    async refresh() {
+      try {
+        const r = await fetch('/api/state', { credentials: 'include' });
+        if (r.ok) this.state = await r.json();
+      } catch (e) {}
+      if (this.cards.length === 0) await this.refreshCards();
+      if (this.managers.length === 0) await this.refreshManagers();
+    },
+    async refreshAll() {
+      await Promise.all([this.refresh(), this.refreshCards(), this.refreshManagers(), this.refreshSparklines(), this.refreshAnomalies()]);
+      this.playBeep(660);
+    },
+    async refreshCards() {
+      try {
+        const r = await fetch('/api/lk_cards?limit=100', { credentials: 'include' });
+        if (r.ok) this.cards = (await r.json()).cards || [];
+      } catch (e) {}
+    },
+    async refreshManagers() {
+      try {
+        const r = await fetch('/api/managers', { credentials: 'include' });
+        if (r.ok) this.managers = (await r.json()).managers || [];
+      } catch (e) {}
+    },
+    async refreshSparklines() {
+      const metrics = ['funnel.starts', 'funnel.chats_created', 'funnel.rs_handed', 'margin', 'lk_created'];
+      for (const m of metrics) {
+        try {
+          const r = await fetch('/api/sparkline?metric=' + encodeURIComponent(m) + '&days=7', { credentials: 'include' });
+          if (r.ok) this.sparklines[m] = (await r.json()).points || [];
+        } catch (e) {}
+      }
+    },
+    async refreshAnomalies() {
+      try {
+        const r = await fetch('/api/anomalies', { credentials: 'include' });
+        if (r.ok) this.anomalies = (await r.json()).anomalies || [];
+      } catch (e) {}
+    },
+
+    // === SSE ===
+    connectSSE() {
+      this.connState = 'connecting'; this.connText = 'CONNECTING';
+      try {
+        this.es = new EventSource('/api/events/stream');
+        this.es.onopen = () => { this.connState = 'online'; this.connText = 'ONLINE'; };
+        this.es.onerror = () => { this.connState = 'offline'; this.connText = 'RECONNECT'; };
+        this.es.onmessage = (e) => {
+          try { this.handleEvent(JSON.parse(e.data)); } catch {}
+        };
+      } catch (e) {
+        this.connState = 'offline'; this.connText = 'OFFLINE';
+      }
+    },
+
+    handleEvent(ev) {
+      this.logs.unshift(ev);
+      if (this.logs.length > 400) this.logs.length = 400;
+
+      const t = ev.type || '';
+      const p = ev.payload || {};
+      let charKey = ev.character || null;
+      if (!charKey) {
+        if (t.startsWith('ai-')) charKey = 'chat';
+        else if (t.startsWith('lk-') || t.includes('lk_card')) charKey = 'lk';
+        else if (t.includes('application') || t.includes('deal') || t.includes('margin')) charKey = 'accounting';
+      }
+      if (charKey && this.chars[charKey]) {
+        this.flashWorking(charKey, this.shortMsg(ev));
+        this.firePulse(charKey);
+      }
+
+      // sound: severity-based
+      if (ev.severity === 'error')       this.playBeep(180);
+      else if (ev.severity === 'warning') this.playBeep(360);
+      else                                this.playBeep(720);
+
+      // last AI reply preview
+      if (t === 'ai-reply') {
+        this.lastReply = {
+          ts: ev.ts,
+          text: p.short || '',
+          chat: p.client_username || '',
+        };
+      }
+
+      // refresh cards on lk events
+      if (charKey === 'lk') setTimeout(() => this.refreshCards(), 700);
+      if (['ai-reply','application-processed','lk-created','lk-status-changed'].includes(t)) {
+        setTimeout(() => this.refresh(), 600);
+      }
+    },
+
+    shortMsg(ev) {
+      const t = ev.type || ''; const p = ev.payload || {};
+      if (t === 'ai-reply') return 'отвечает...';
+      if (t === 'lk-created') return '✨ #' + (p.card_id || '');
+      if (t === 'lk-status-changed') return (p.card_id || '') + ' → ' + (p.new_status || '');
+      if (t === 'application-processed') return '#' + (p.id || '') + ' · $' + (p.margin_usdt || 0);
+      if (t === 'lk-from-worker-perevyaz') return 'перевяз: ' + (p.bank || '');
+      return t.substring(0, 20);
+    },
+
+    formatEvent(ev) {
+      const t = ev.type || ''; const p = ev.payload || {};
+      const parts = [];
+      if (p.client_username) parts.push('@' + p.client_username);
+      if (p.card_id) parts.push('#' + p.card_id);
+      if (p.bank) parts.push(p.bank);
+      if (p.fio) parts.push(p.fio);
+      if (p.new_status) parts.push('→ ' + p.new_status);
+      if (p.margin_usdt !== undefined) parts.push('маржа $' + p.margin_usdt);
+      if (p.short) parts.push(p.short);
+      return parts.length ? parts.join(' · ') : t;
+    },
+
+    flashWorking(key, msg) {
+      const c = this.chars[key];
+      if (!c) return;
+      c.state = 'working';
+      c.bubble = msg || '';
+      const targetX = 8 + Math.random() * 84;
+      c.x = targetX;
+      setTimeout(() => { c.state = 'idle'; c.bubble = ''; }, 3500);
+    },
+
+    firePulse(key) {
+      const map = { chat: 16, lk: 50, accounting: 82 };
+      const x = map[key] || 50;
+      const id = this.nextId++;
+      this.pulseRings.push({ id, x, y: 65 });
+      setTimeout(() => {
+        this.pulseRings = this.pulseRings.filter(r => r.id !== id);
+      }, 1500);
+    },
+
+    startWalkerAI() {
+      const homes = { chat: 16, lk: 50, accounting: 82 };
+      setInterval(() => {
+        Object.keys(this.chars).forEach(key => {
+          const c = this.chars[key];
+          if (c.state === 'working') return;
+          if (Math.random() < 0.2) {
+            const home = homes[key];
+            const offset = (Math.random() - 0.5) * 16;
+            c.state = 'walking';
+            c.x = Math.max(4, Math.min(96, home + offset));
+            setTimeout(() => {
+              if (c.state === 'walking') c.state = 'idle';
+            }, 7500);
+          }
+        });
+      }, 4500);
+    },
+
+    characterClick(key) {
+      this.playBeep(900);
+      const messages = {
+        chat: ['готов помочь!', 'жду клиентов', 'AI online'],
+        lk:   ['слежу за ЛК', 'карточки в порядке', 'мониторю статусы'],
+        accounting: ['заявки в работе', 'считаю маржу', 'отчёты готовы'],
+      };
+      const c = this.chars[key];
+      const arr = messages[key] || [''];
+      c.bubble = arr[Math.floor(Math.random() * arr.length)];
+      setTimeout(() => { c.bubble = ''; }, 2500);
+    },
+
+    generateClientDots() {
+      // позиции для лёгких точек-клиентов (~12-20 на сцене)
+      this.clientDots = [];
+      const N = 14;
+      for (let i = 0; i < N; i++) {
+        this.clientDots.push({
+          x: 5 + Math.random() * 90,
+          y: 28 + Math.random() * 32,
+          active: Math.random() < 0.3,
+          label: 'client #' + (i+1),
+        });
+      }
+    },
+
+    funnelRatio(key) {
+      const total = this.state.stats.funnel_week_total || {};
+      const max = Math.max(1, ...Object.values(total).filter(v => typeof v === 'number'));
+      const v = total[key] || 0;
+      return Math.max(0.02, Math.min(1, v / max));
+    },
+
+    managerColor(state) {
+      if (state === 'online') return '#4ade80';
+      if (state === 'idle')   return '#fbbf24';
+      return '#64748b';
+    },
+
+    formatIdle(sec) {
+      if (sec == null) return '—';
+      if (sec < 60)    return Math.round(sec) + 's';
+      if (sec < 3600)  return Math.round(sec/60) + 'm';
+      if (sec < 86400) return Math.round(sec/3600) + 'h';
+      return Math.round(sec/86400) + 'd';
+    },
+
+    fmtTime(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        return d.toTimeString().substring(0, 8);
+      } catch { return '--:--'; }
+    },
+
+    fmtUsd(n) {
+      if (typeof n !== 'number') n = parseFloat(n) || 0;
+      const sign = n < 0 ? '-' : '';
+      return sign + '$' + Math.abs(n).toLocaleString('en-US', {maximumFractionDigits:2});
+    },
+
+    // === Sparkline ===
+    sparkPath(metric) {
+      const pts = this.sparklines[metric] || [];
+      if (pts.length < 2) return '';
+      const values = pts.map(p => p.value);
+      const max = Math.max(1, ...values);
+      const min = Math.min(0, ...values);
+      const range = max - min || 1;
+      const W = 100, H = 30, pad = 2;
+      const xs = pts.map((_, i) => pad + (i / (pts.length - 1)) * (W - 2*pad));
+      const ys = values.map(v => H - pad - ((v - min) / range) * (H - 2*pad));
+      let d = `M ${xs[0]},${ys[0]}`;
+      for (let i = 1; i < pts.length; i++) {
+        d += ` L ${xs[i]},${ys[i]}`;
+      }
+      return d;
+    },
+
+    trendStr(metric) {
+      const key = metric === 'margin' ? 'margin' : (metric === 'ai_replies' ? 'funnel.starts' : metric);
+      const pts = this.sparklines[key] || [];
+      if (pts.length < 2) return '—';
+      const last = pts[pts.length - 1].value;
+      const prev = pts[pts.length - 2].value;
+      const delta = last - prev;
+      if (Math.abs(delta) < 0.01) return '→ 0';
+      const sign = delta > 0 ? '↑' : '↓';
+      return `${sign} ${Math.abs(delta).toFixed(0)}`;
+    },
+    trendClass(metric) {
+      const key = metric === 'margin' ? 'margin' : (metric === 'ai_replies' ? 'funnel.starts' : metric);
+      const pts = this.sparklines[key] || [];
+      if (pts.length < 2) return 'flat';
+      const delta = pts[pts.length - 1].value - pts[pts.length - 2].value;
+      if (Math.abs(delta) < 0.01) return 'flat';
+      return delta > 0 ? 'up' : 'down';
+    },
+
+    get filteredCards() {
+      const q = (this.cardFilter || '').toLowerCase().trim();
+      if (!q) return this.cards;
+      return this.cards.filter(c =>
+        (c.bank || '').toLowerCase().includes(q) ||
+        (c.fio || '').toLowerCase().includes(q) ||
+        (c.status || '').toLowerCase().includes(q) ||
+        (c.supplier || '').toLowerCase().includes(q) ||
+        (c.card_id || '').toLowerCase().includes(q)
+      );
+    },
+
+    // === Control actions ===
+    async toggleAI() {
+      await this.setAI(!this.state.stats.ai_enabled);
+    },
+    async setAI(enabled) {
+      try {
+        const r = await fetch('/api/control/ai_toggle', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (r.ok) {
+          this.state.stats.ai_enabled = enabled;
+          this.playBeep(enabled ? 880 : 220);
+        }
+      } catch (e) { console.warn('ai_toggle failed', e); }
+    },
+
+    openStatusModal(c) {
+      this.statusModal = {
+        open: true, card_id: c.card_id, card: c,
+        new_status: c.status || 'В_РАБОТЕ',
+      };
+    },
+    closeStatusModal() { this.statusModal.open = false; },
+    async applyStatusChange() {
+      const { card_id, new_status } = this.statusModal;
+      try {
+        const r = await fetch(`/api/control/lk/${card_id}/status`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_status }),
+        });
+        if (r.ok) {
+          this.playBeep(660);
+          await this.refreshCards();
+          await this.refresh();
+        }
+      } catch (e) {}
+      this.closeStatusModal();
+    },
+
+    confirmDelete(c) {
+      this.deleteModal = { open: true, card_id: c.card_id, card: c };
+    },
+    closeDeleteModal() { this.deleteModal.open = false; },
+    async applyDelete() {
+      const { card_id } = this.deleteModal;
+      try {
+        const r = await fetch(`/api/control/lk/${card_id}/delete`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (r.ok) {
+          this.playBeep(220);
+          await this.refreshCards();
+          await this.refresh();
+        }
+      } catch (e) {}
+      this.closeDeleteModal();
+    },
+  };
+}
+</script>
+</body>
+</html>

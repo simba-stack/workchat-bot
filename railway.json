@@ -9,6 +9,7 @@
       "requirements.txt",
       "railway.json",
       "dashboard/index.html",
+      "dashboard/jarvis.html",
       ".env.example",
       ".gitattributes"
     ]

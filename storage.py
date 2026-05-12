@@ -144,6 +144,29 @@ class Storage:
         self.state = _default_state()
         d = os.path.dirname(path) or "."
         os.makedirs(d, exist_ok=True)
+        # Сразу проверяем что путь похож на persistent volume.
+        # На Railway по умолчанию /app/data, и если volume не настроен —
+        # данные пропадают при каждом редеплое.
+        try:
+            self._persistence_check()
+        except Exception as e:
+            print(f"[storage] persistence_check error: {e}")
+
+    def _persistence_check(self):
+        """Печатает предупреждение если storage не на persistent volume."""
+        suspicious = (
+            "/tmp/" in self.path
+            or self.path.startswith("./")
+            or self.path == "state.json"
+        )
+        if suspicious:
+            print(
+                "[storage] ⚠️  STORAGE_PATH=%s выглядит непостоянным. "
+                "На Railway данные пропадут при каждом редеплое! "
+                "Создайте Volume через Railway → Settings → Volumes, "
+                "смонтируйте его в /app/data и поставьте "
+                "STORAGE_PATH=/app/data/state.json в env." % self.path
+            )
 
     def reload_sync(self) -> bool:
         """Синхронный hot-reload state.json — для дашборд-API.
