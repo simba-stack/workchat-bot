@@ -121,6 +121,14 @@ def _default_state() -> dict:
         # accounting2.lookup_pricing и AI (через knowledge/pricing.md).
         # Менятся через команду «прайс БАНК ЦЕНА» в брейн-чате.
         "pricing": {},
+        # Воронка конверсии: ежедневные счётчики операций (для дашборда).
+        # Структура: {YYYY-MM-DD: {starts, chats_created, chats_active,
+        #   chats_junk, ip_interest, bank_interest, rs_handed, ...}}
+        "funnel_stats": {},
+        # Статистика по менеджерам/работникам.
+        # Структура: {uname_lower: {messages, chats_touched, last_active_ts,
+        #   payments_made, lk_completed, junk_handled, ...}}
+        "manager_stats": {},
     }
 
 
@@ -1101,6 +1109,73 @@ class Storage:
                     await self._save_unlocked()
                     return True
             return False
+
+    # === Воронка конверсии (funnel_stats) ===
+    # Каждый ключ — отдельный счётчик за день. Ключи:
+    #   starts          — нажатий /start в боте
+    #   chats_created   — создано work-чатов (бот пригласил клиента)
+    #   chats_active    — work-чаты где клиент написал хоть что-то
+    #   chats_junk      — work-чаты признанные мусором (ни о чём не спросили)
+    #   ip_interest     — клиенты выразившие интерес открыть ИП
+    #   bank_interest   — клиенты обсуждавшие конкретные банки
+    #   rs_handed       — клиенты сдали РС (карточка ЛК создана)
+    #   lk_done         — карточек ЛК переведено в ЗАВЕРШЁН
+    #   blocks          — карточек в статусе БЛОК
+    #   margin_usdt     — суммарная маржа за день (USDT)
+
+    async def bump_funnel(self, key: str, value: float = 1.0, date_str: str = None):
+        """Инкрементирует счётчик воронки на value (по умолчанию +1)."""
+        if not key:
+            return
+        if date_str is None:
+            date_str = time.strftime("%Y-%m-%d", time.localtime())
+        async with _lock:
+            f = self.state.setdefault("funnel_stats", {})
+            day = f.setdefault(date_str, {})
+            day[key] = float(day.get(key, 0)) + float(value)
+            await self._save_unlocked()
+
+    def get_funnel(self, date_str: str = None) -> dict:
+        if date_str is None:
+            date_str = time.strftime("%Y-%m-%d", time.localtime())
+        f = self.state.get("funnel_stats") or {}
+        return dict(f.get(date_str) or {})
+
+    def get_funnel_range(self, days: int = 7) -> list:
+        """Возвращает список словарей {date, ...counters} за N последних дней."""
+        f = self.state.get("funnel_stats") or {}
+        out = []
+        for i in range(max(1, days)):
+            d = time.strftime(
+                "%Y-%m-%d", time.localtime(time.time() - i * 86400),
+            )
+            entry = dict(f.get(d) or {})
+            entry["date"] = d
+            out.append(entry)
+        return out
+
+    # === Стата по менеджерам/работникам ===
+
+    async def bump_manager(self, username: str, key: str, value: float = 1.0):
+        """Инкрементирует счётчик активности менеджера/работника."""
+        uname = (username or "").lstrip("@").lower().strip()
+        if not uname or not key:
+            return
+        async with _lock:
+            ms = self.state.setdefault("manager_stats", {})
+            entry = ms.setdefault(uname, {})
+            entry[key] = float(entry.get(key, 0)) + float(value)
+            entry["last_active_ts"] = time.time()
+            await self._save_unlocked()
+
+    def list_manager_stats(self) -> dict:
+        """Полная статистика по всем работникам."""
+        return dict(self.state.get("manager_stats") or {})
+
+    def get_manager_stat(self, username: str) -> dict:
+        """Стата конкретного менеджера."""
+        uname = (username or "").lstrip("@").lower().strip()
+        return dict((self.state.get("manager_stats") or {}).get(uname) or {})
 
 
 storage = Storage(config.STORAGE_PATH)

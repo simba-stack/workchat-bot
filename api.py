@@ -167,11 +167,35 @@ async def api_state(_: None = Depends(_auth)):
         if i == 0:
             margin_today = day_margin
 
+    # Воронка — сегодня + 7 дней суммарно
+    funnel_today = storage.get_funnel()
+    funnel_week_rows = storage.get_funnel_range(7)
+    funnel_week_total: dict = {}
+    for row in funnel_week_rows:
+        for k, v in row.items():
+            if k == "date" or not isinstance(v, (int, float)):
+                continue
+            funnel_week_total[k] = funnel_week_total.get(k, 0) + float(v)
+
+    # БЛОК — карточки в статусе БЛОК
+    blocks_count = sum(1 for c in cards.values() if (c.get("status") or "").upper() == "БЛОК")
+    # ЛК отработанных (статус ОТРАБОТАН или ЗАВЕРШЁН)
+    lk_done_count = sum(
+        1 for c in cards.values()
+        if (c.get("status") or "").upper() in ("ОТРАБОТАН", "ЗАВЕРШЁН", "ЗАВЕРШЕН")
+    )
+    lk_in_work = sum(
+        1 for c in cards.values() if (c.get("status") or "").upper() == "В_РАБОТЕ"
+    )
+
     return {
         "stats": {
             "lk_cards_total": len(cards),
             "lk_cards_by_status": cards_by_status,
             "lk_cards_by_method": cards_by_method,
+            "lk_in_work": lk_in_work,
+            "lk_done": lk_done_count,
+            "lk_blocks": blocks_count,
             "managed_chats_active": len(managed),
             "deals_total": len(deals),
             "margin_today_usdt": margin_today,
@@ -184,6 +208,8 @@ async def api_state(_: None = Depends(_auth)):
             "writeback_enabled": storage.is_writeback_enabled(),
             "ai_model": storage.state.get("ai_model") or "",
             "subscribers": event_bus.subscriber_count(),
+            "funnel_today": funnel_today,
+            "funnel_week_total": funnel_week_total,
         },
         "recent_applications": sorted(
             apps_recent, key=lambda x: (x["date"], x["id"]), reverse=True
@@ -297,6 +323,62 @@ async def api_deals(
         })
     result.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
     return {"deals": result[:limit], "total": len(result)}
+
+
+@app.get("/api/funnel")
+async def api_funnel(days: int = 7, _: None = Depends(_auth)):
+    """Воронка конверсии — счётчики по дням."""
+    storage.reload_sync()
+    rows = storage.get_funnel_range(max(1, min(days, 60)))
+    # Суммарные значения за период
+    totals: dict = {}
+    for r in rows:
+        for k, v in r.items():
+            if k == "date" or not isinstance(v, (int, float)):
+                continue
+            totals[k] = totals.get(k, 0) + float(v)
+    return {"days": rows, "totals": totals}
+
+
+@app.get("/api/managers")
+async def api_managers(_: None = Depends(_auth)):
+    """Стата по менеджерам/работникам — для офис-панели."""
+    storage.reload_sync()
+    ms = storage.list_manager_stats()
+    roles = storage.state.get("worker_roles") or {}
+    # Объединяем roles + stats
+    all_users = set(ms.keys()) | set(roles.keys())
+    out = []
+    now_ts = datetime.now().timestamp()
+    for uname in all_users:
+        s = ms.get(uname) or {}
+        r = roles.get(uname) or {}
+        last = float(s.get("last_active_ts") or 0)
+        idle_sec = (now_ts - last) if last else None
+        if idle_sec is None:
+            online = "offline"
+        elif idle_sec < 300:
+            online = "online"
+        elif idle_sec < 3600:
+            online = "idle"
+        else:
+            online = "offline"
+        out.append({
+            "username": uname,
+            "role": r.get("role") or "—",
+            "is_admin": bool(r.get("is_admin")),
+            "messages": int(s.get("messages") or 0),
+            "chats_touched": int(s.get("chats_touched") or 0),
+            "payments_made": int(s.get("payments_made") or 0),
+            "lk_completed": int(s.get("lk_completed") or 0),
+            "last_active_ts": last,
+            "idle_sec": idle_sec,
+            "online": online,
+        })
+    # Сортируем: online → idle → offline; внутри — по messages убыв.
+    online_priority = {"online": 0, "idle": 1, "offline": 2}
+    out.sort(key=lambda x: (online_priority[x["online"]], -x["messages"]))
+    return {"managers": out, "total": len(out)}
 
 
 # === SSE event stream ===

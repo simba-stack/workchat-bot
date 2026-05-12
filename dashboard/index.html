@@ -48,6 +48,77 @@
     border-radius: 12px;
   }
 
+  /* ===== Funnel tiles ===== */
+  .funnel-tile {
+    transition: transform .25s ease, box-shadow .25s ease;
+  }
+  .funnel-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(139, 92, 246, 0.25);
+  }
+  .funnel-tile .value {
+    text-shadow: 0 0 16px currentColor;
+  }
+
+  /* ===== Manager (office) rows ===== */
+  .manager-row {
+    border-left: 3px solid transparent;
+  }
+  .manager-row.manager-online {
+    border-left-color: #10b981;
+    background: rgba(16, 185, 129, 0.05);
+  }
+  .manager-row.manager-idle {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.04);
+  }
+  .manager-row.manager-offline {
+    border-left-color: #64748b;
+    opacity: 0.7;
+  }
+  .manager-row:hover { transform: translateX(2px); }
+
+  .manager-avatar { width: 48px; height: 56px; flex-shrink: 0; }
+  .manager-svg { width: 100%; height: 100%; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.4)); }
+  .manager-online .manager-svg { animation: bobble 2.5s ease-in-out infinite; }
+  .manager-idle   .manager-svg { animation: tinybob 5s ease-in-out infinite; }
+  .manager-offline .manager-svg { filter: grayscale(0.7) drop-shadow(0 4px 8px rgba(0,0,0,0.4)); }
+
+  .manager-eye { animation: blink 4s infinite; transform-origin: center; }
+  @keyframes blink {
+    0%, 92%, 100% { transform: scaleY(1); }
+    94%, 96%      { transform: scaleY(0.1); }
+  }
+  @keyframes bobble {
+    0%, 100% { transform: translateY(0) rotate(-2deg); }
+    50%      { transform: translateY(-4px) rotate(2deg); }
+  }
+  @keyframes tinybob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-1.5px); }
+  }
+
+  .online-dot {
+    position: absolute;
+    bottom: 4px; right: 4px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-deep);
+  }
+  .dot-online  { background: #10b981; box-shadow: 0 0 8px #10b981; animation: pulse 2s infinite; }
+  .dot-idle    { background: #f59e0b; }
+  .dot-offline { background: #64748b; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.6; transform: scale(1.2); }
+  }
+  .online-label {
+    font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 6px;
+  }
+  .online-label-online  { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+  .online-label-idle    { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+  .online-label-offline { background: rgba(100, 116, 139, 0.2); color: #94a3b8; }
+
   /* ===== Office: 3D-ish ground + characters ===== */
   .office-scene {
     position: relative;
@@ -92,13 +163,47 @@
     margin: 0 auto;
     filter: drop-shadow(0 8px 16px rgba(139, 92, 246, 0.35));
   }
-  /* idle — медленное покачивание */
+  /* idle — медленное покачивание + дыхание */
   .character[data-state="idle"] .char-svg {
-    animation: idle 4s ease-in-out infinite;
+    animation: idle 4s ease-in-out infinite, breathing 5s ease-in-out infinite;
   }
   /* working — печатает / шевелится */
   .character[data-state="working"] .char-svg {
-    animation: working 0.6s ease-in-out infinite;
+    animation: working 0.6s ease-in-out infinite, breathing 2s ease-in-out infinite;
+  }
+  /* alert — резкое мерцание */
+  .character[data-state="alert"] .char-svg {
+    animation: alert 0.4s ease-in-out infinite;
+  }
+  /* анимации глаз — моргают периодически на всех персонажах */
+  .character .char-svg circle[fill="#0a0e1a"],
+  .character .char-svg ellipse[fill="#0a0e1a"] {
+    animation: blink 5.5s infinite;
+    transform-origin: center;
+  }
+  /* В разных персонажах глаза могут быть других цветов — добавим селекторы */
+  .character .char-svg .eye {
+    animation: blink 4.8s infinite;
+    transform-origin: center;
+  }
+  @keyframes breathing {
+    0%, 100% { transform: scale(1, 1); }
+    50%      { transform: scale(1.02, 0.98); }
+  }
+  @keyframes alert {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px) rotate(2deg); }
+  }
+  /* Тень под персонажем — пульсирует */
+  .char-shadow {
+    width: 70px; height: 8px; margin: -8px auto 0;
+    border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(0,0,0,0.6) 0%, transparent 70%);
+    animation: shadow-pulse 4s ease-in-out infinite;
+  }
+  @keyframes shadow-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.6; }
+    50%      { transform: scale(0.85); opacity: 0.4; }
   }
   .character[data-state="working"] .char-aura {
     opacity: 1;
@@ -609,6 +714,79 @@
     </div>
   </section>
 
+  <!-- ===== Воронка конверсии ===== -->
+  <section class="glass p-4 lg:col-span-7">
+    <div class="section-title">
+      <h2>🔻 Воронка конверсии</h2>
+      <span class="badge" x-text="'7 дней'"></span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+      <template x-for="step in funnelSteps" :key="step.key">
+        <div class="glass-soft p-3 funnel-tile" :style="'border-left: 3px solid ' + step.color">
+          <div class="text-xs text-slate-400 uppercase tracking-wide" x-text="step.label"></div>
+          <div class="value text-2xl font-bold mt-1" :style="'color: ' + step.color"
+               x-text="(state.stats.funnel_week_total[step.key] || 0) | 0"></div>
+          <div class="sub text-xs text-slate-500">
+            сегодня:
+            <span x-text="(state.stats.funnel_today[step.key] || 0) | 0"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ===== Менеджеры (офис) ===== -->
+  <section class="glass p-4 lg:col-span-5">
+    <div class="section-title">
+      <h2>👥 Офис · менеджеры</h2>
+      <span class="badge" x-text="managers.length"></span>
+    </div>
+    <div class="overflow-y-auto space-y-2" style="max-height: 360px;">
+      <template x-if="managers.length === 0">
+        <div class="text-center py-8 text-slate-500 text-sm">
+          Пока никто из работников не активничал.
+        </div>
+      </template>
+      <template x-for="m in managers" :key="m.username">
+        <div class="glass-soft p-3 manager-row flex items-center gap-3 transition" :class="'manager-' + m.online">
+          <!-- Аватар-человечек -->
+          <div class="manager-avatar relative" :class="'manager-' + m.online">
+            <svg viewBox="0 0 60 70" class="manager-svg">
+              <!-- голова -->
+              <circle cx="30" cy="20" r="11" fill="#fbbf24" />
+              <!-- глаза -->
+              <circle cx="26" cy="18" r="1.6" fill="#1f2937" class="manager-eye" />
+              <circle cx="34" cy="18" r="1.6" fill="#1f2937" class="manager-eye" />
+              <!-- улыбка -->
+              <path d="M 25 23 Q 30 27 35 23" stroke="#1f2937" stroke-width="1.5" fill="none" stroke-linecap="round" />
+              <!-- тело -->
+              <path d="M 18 36 Q 30 32 42 36 L 44 60 Q 30 64 16 60 Z" :fill="m.is_admin ? '#8b5cf6' : '#06b6d4'" />
+              <!-- бейдж роли -->
+              <circle cx="46" cy="40" r="5" :fill="m.is_admin ? '#fbbf24' : '#10b981'" stroke="#0a0e1a" stroke-width="1.5" />
+            </svg>
+            <span class="online-dot" :class="'dot-' + m.online"></span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate">
+              <span x-text="'@' + m.username"></span>
+              <span class="text-xs text-slate-500 ml-1" x-text="'· ' + m.role"></span>
+            </div>
+            <div class="text-xs text-slate-400 flex gap-3 mt-0.5">
+              <span>💬 <span x-text="m.messages"></span></span>
+              <span>📋 <span x-text="m.chats_touched"></span></span>
+              <span>💸 <span x-text="m.payments_made"></span></span>
+              <span>✅ <span x-text="m.lk_completed"></span></span>
+            </div>
+          </div>
+          <div class="text-right">
+            <span class="online-label" :class="'online-label-' + m.online" x-text="m.online === 'online' ? 'в сети' : (m.online === 'idle' ? 'idle' : 'offline')"></span>
+            <div class="text-[10px] text-slate-500 mt-0.5" x-text="formatIdle(m.idle_sec)"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
   <!-- ===== LK cards list ===== -->
   <section class="glass p-4 lg:col-span-5">
     <div class="section-title">
@@ -683,6 +861,9 @@ function dashboard() {
         lk_cards_total: 0,
         lk_cards_by_status: {},
         lk_cards_by_method: {},
+        lk_in_work: 0,
+        lk_done: 0,
+        lk_blocks: 0,
         managed_chats_active: 0,
         deals_total: 0,
         margin_today_usdt: 0,
@@ -694,10 +875,24 @@ function dashboard() {
         ai_enabled: false,
         writeback_enabled: false,
         subscribers: 0,
+        funnel_today: {},
+        funnel_week_total: {},
       },
       recent_applications: [],
     },
     cards: [],
+    managers: [],
+    funnelSteps: [
+      { key: 'starts',         label: 'Старт нажали',     color: '#06b6d4' },
+      { key: 'chats_created',  label: 'Создано бесед',    color: '#3b82f6' },
+      { key: 'chats_active',   label: 'Початились',       color: '#8b5cf6' },
+      { key: 'chats_junk',     label: 'Мусор (ни о чём)', color: '#94a3b8' },
+      { key: 'ip_interest',    label: 'Хотят ИП',         color: '#f59e0b' },
+      { key: 'bank_interest',  label: 'Обсуждали банк',   color: '#fb923c' },
+      { key: 'rs_handed',      label: 'Сдали РС',         color: '#10b981' },
+      { key: 'lk_done',        label: 'ЛК отработаны',    color: '#22c55e' },
+      { key: 'blocks',         label: 'Блоков',           color: '#ef4444' },
+    ],
     logs: [],
     autoscroll: true,
     chars: {
@@ -721,6 +916,7 @@ function dashboard() {
       setInterval(() => this.refresh(), 10000);
       // Cards чуть реже, чтобы не дёргать storage слишком часто
       setInterval(() => this.refreshCards(), 12000);
+      setInterval(() => this.refreshManagers(), 15000);
     },
 
     async refresh() {
@@ -732,6 +928,7 @@ function dashboard() {
         }
       } catch (e) { console.warn('refresh failed', e); }
       if (this.cards.length === 0) await this.refreshCards();
+      if (this.managers.length === 0) await this.refreshManagers();
     },
 
     async refreshCards() {
@@ -742,6 +939,24 @@ function dashboard() {
           this.cards = data.cards || [];
         }
       } catch (e) { console.warn('refreshCards failed', e); }
+    },
+
+    async refreshManagers() {
+      try {
+        const r = await fetch('/api/managers', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.managers = data.managers || [];
+        }
+      } catch (e) { console.warn('refreshManagers failed', e); }
+    },
+
+    formatIdle(sec) {
+      if (sec === null || sec === undefined) return '—';
+      if (sec < 60) return Math.round(sec) + ' сек';
+      if (sec < 3600) return Math.round(sec / 60) + ' мин';
+      if (sec < 86400) return Math.round(sec / 3600) + ' ч';
+      return Math.round(sec / 86400) + ' дн';
     },
 
     // ----- SSE -----

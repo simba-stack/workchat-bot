@@ -511,6 +511,12 @@ class UserbotService:
 
         if is_worker:
             self._last_worker_ts[chat_key] = time.time()
+            # Менеджер-стата: сообщение работника в work-чате
+            try:
+                if sender_username:
+                    await storage.bump_manager(sender_username, "messages")
+            except Exception:
+                pass
             # Команды админу: 'Ассистент добавь @x' / 'Ассистент выдай админку @x'.
             # Работают только в managed_chats (рабочие беседы клиентов).
             try:
@@ -3325,6 +3331,11 @@ class UserbotService:
             )
             return None
 
+        # Воронка: РС сдан (анкета ЛК создана = клиент реально отдал счёт)
+        try:
+            await storage.bump_funnel("rs_handed")
+        except Exception:
+            pass
         card_id = await storage.add_lk_card(
             supplier=client_uname,
             bank=bank,
@@ -4824,6 +4835,11 @@ class UserbotService:
 
         if client_id:
             await storage.register_chat(channel.id, client_id, client_name)
+        # Воронка: создан work-чат
+        try:
+            await storage.bump_funnel("chats_created")
+        except Exception:
+            pass
 
         workers = storage.get_workers()
         statuses: dict = {}

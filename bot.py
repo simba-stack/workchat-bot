@@ -179,6 +179,11 @@ async def _send_post_survey(message_or_call, state: FSMContext):
 @main_router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
     await state.clear()
+    # Воронка: считаем нажатия /start
+    try:
+        await storage.bump_funnel("starts")
+    except Exception:
+        pass
     # Если пользователь уже был атрибутирован — пропускаем опрос,
     # сразу даём кнопку «Получить рабочую беседу».
     if storage.get_user_source(message.from_user.id):
