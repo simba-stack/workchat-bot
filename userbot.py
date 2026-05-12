@@ -1293,6 +1293,18 @@ class UserbotService:
 
         low = text.lower()
 
+        # Дневная сводка действий — работает и в Группе 1 ЛК (рядом с карточками)
+        # и в Группе 2 Бухгалтерия. Один и тот же _handle_daily_summary.
+        if re.search(
+            r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
+            r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
+            r"дневн(?:ой|ая)\s+(?:отч[её]т|свод)|"
+            r"кому\s+оплат)\b",
+            text, re.I,
+        ):
+            await self._handle_daily_summary(event)
+            return
+
         # Массовый импорт существующих ЛК
         if low.startswith("/import_lk") or low.startswith("импорт лк"):
             await self._apply_import_lk(event, text)
