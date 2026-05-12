@@ -1430,6 +1430,23 @@ class UserbotService:
 
         low = text.lower()
 
+        # Reply работника-выплат на анкету ЛК (или на наш action-reply)
+        # с любым текстом-пруфом («оплачено», скрин, «отпустил», и т.п.) →
+        # карточка → ЗАВЕРШЁН + уведомить клиента в его work_chat.
+        try:
+            reply_to_id = None
+            if getattr(event.message, "reply_to", None):
+                reply_to_id = getattr(
+                    event.message.reply_to, "reply_to_msg_id", None,
+                )
+            if reply_to_id:
+                if await self._maybe_handle_lk_payment_proof(
+                    event, int(reply_to_id), text,
+                ):
+                    return
+        except Exception as e:
+            logger.warning("lk payment proof check failed: %s", e)
+
         # Помощь — полный список команд Группы 1 ЛК
         if re.match(r"^\s*(?:помощь|справка|/help|/?\?|help)\s*$", text, re.I):
             await self._send_help_lk_group(event)
@@ -2985,10 +3002,22 @@ class UserbotService:
             return False
         try:
             target = await self._resolve_chat_target(lk_gid)
-            await self.client.send_message(
+            sent = await self.client.send_message(
                 target, text, reply_to=msg_id,
                 parse_mode="html", link_preview=False,
             )
+            # Сохраняем msg_id action-reply в карточку — чтобы пруф от работника
+            # (reply «оплачено» на наш action-reply) тоже находил карточку.
+            sent_id = getattr(sent, "id", None)
+            if sent_id:
+                try:
+                    await storage.update_lk_card(
+                        card_id, post_action_reply_msg_id=int(sent_id),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "save post_action_reply_msg_id failed: %s", e,
+                    )
             logger.info(
                 "post action reply to lk_card=%s status=%s method=%s",
                 card_id, status, method,
@@ -3246,52 +3275,10 @@ class UserbotService:
 
         low = text.lower()
 
-        # Reply работника-выплат на сообщение юзербота с инструкциями —
-        # это пруф что действие выполнено. Снимаем карточку → ЗАВЕРШЁН,
-        # уведомляем клиента в его work_chat.
-        try:
-            reply_to_id = None
-            if event.message and getattr(event.message, "reply_to", None):
-                reply_to_id = getattr(event.message.reply_to, "reply_to_msg_id", None)
-            if reply_to_id:
-                if await self._maybe_handle_payment_proof(event, int(reply_to_id), text):
-                    return
-        except Exception as e:
-            logger.warning("payment proof check failed: %s", e)
-
-        # Команда: дневная сводка / раскрыть детали по банку.
-        # Не блокирующие мини-запросы к storage, без AI-вызовов.
-        m_bd = re.match(
-            r"^\s*"
-            r"(?:детал(?:ь|и|ьно)?|раскрой|раскрыть|раскрывай|"
-            r"разверни|развернуть|разверн[иуь]\w*|"
-            r"подробн(?:о|ее|ости))"
-            r"\W*([\wа-яА-Я\-]*)",
-            text, re.I,
-        )
-        if m_bd:
-            bank_arg = (m_bd.group(1) or "").strip()
-            if not bank_arg:
-                try:
-                    await event.reply(
-                        "ℹ️ Нужно указать банк. Пример: <code>детали ОЗОН</code> "
-                        "или <code>раскрой Альфа</code>.",
-                        parse_mode="html",
-                    )
-                except Exception:
-                    pass
-                return
-            await self._handle_bank_details(event, bank_arg)
-            return
-        if re.search(
-            r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
-            r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
-            r"дневн(?:ой|ая)\s+(?:отч[её]т|свод)|"
-            r"кому\s+оплат)\b",
-            text, re.I,
-        ):
-            await self._handle_daily_summary(event)
-            return
+        # Команды сводки / деталей / payment-proof ПЕРЕНЕСЕНЫ в Группу 1 ЛК.
+        # В бухгалтерии остаются только команды заявок (СТАРТ-отчёт,
+        # удалить/редактировать заявку, правка цены) — это инструменты
+        # оператора, не работника-выплат.
 
         # Команда: удалить заявку N
         m = re.match(r"^\s*удалить\s+заявку\s+#?(\d+)\s*$", text, re.I)
@@ -3475,6 +3462,114 @@ class UserbotService:
             await self._send_help_accounting_group(event)
             return
 
+    async def _maybe_handle_lk_payment_proof(
+        self, event, reply_to_msg_id: int, proof_text: str,
+    ) -> bool:
+        """Reply работника-выплат В Группе 1 ЛК на анкету (или на наш
+        action-reply на анкету) — пруф оплаты/отпуска. Юзербот:
+          1. Карточка → ЗАВЕРШЁН.
+          2. Refresh анкеты в Группе 1.
+          3. Уведомление клиенту в его work_chat.
+
+        Чтобы случайные сообщения не триггерили — проверяем что текст НЕ
+        парсится как edit карточки (field=value)."""
+        # Сначала найдём карточку по reply_to_msg_id (анкета или наш reply).
+        cards = storage.list_lk_cards() or {}
+        target_card = None
+        target_cid = None
+        for cid, c in cards.items():
+            anketa = int(c.get("lk_group_msg_id") or 0)
+            action_msg = int(c.get("post_action_reply_msg_id") or 0)
+            if reply_to_msg_id in (anketa, action_msg) and anketa or action_msg:
+                target_card = c
+                target_cid = cid
+                break
+        if not target_card:
+            return False
+        # Если текст — это edit-команда (поле/значение), не трактуем как пруф.
+        if self._parse_lk_field_update(proof_text):
+            return False
+        # Если это команда удаления — тоже не пруф.
+        if self._AI_CMD_DELETE_REPLY_RE.match(proof_text or ""):
+            return False
+        status = target_card.get("status") or ""
+        if status in ("ЗАВЕРШЁН", "БРАК"):
+            return False
+
+        # Меняем статус → ЗАВЕРШЁН
+        try:
+            await storage.set_lk_card_status(
+                target_cid, "ЗАВЕРШЁН", by="lk_payment_proof",
+            )
+            await self._refresh_lk_card_post(target_cid)
+        except Exception as e:
+            logger.warning(
+                "lk_payment_proof: set ЗАВЕРШЁН failed for %s: %s",
+                target_cid, e,
+            )
+
+        # Уведомить клиента в work_chat
+        wc = target_card.get("work_chat_id")
+        method = (target_card.get("payment_method") or "").upper()
+        bank = target_card.get("bank") or "—"
+        fio = target_card.get("fio") or "—"
+        deal_id = (target_card.get("deal_id") or "").strip().lstrip("#")
+        usdt_addr = (target_card.get("usdt_address") or "").strip()
+        notified = False
+        if wc:
+            if method == "USDT_TRC20":
+                msg = (
+                    f"✅ Оплата за ЛК <b>{bank}</b> ({fio}) "
+                    f"на ваш USDT TRC20 <b>переведена</b>.\n\n"
+                    f"Сумма: <b>{accounting2._fmt_usdt(target_card.get('price_usdt', 0))}</b>\n"
+                )
+                if usdt_addr:
+                    msg += f"Адрес: <code>{usdt_addr}</code>\n"
+                msg += "Проверьте поступление 🙏"
+            elif method in (
+                "GUARANTOR_BEFORE", "GUARANTOR_AFTER", "GUARANTOR_AFTER_WORK",
+            ):
+                if deal_id:
+                    msg = (
+                        f"✅ Сделка <code>#{deal_id}</code> по ЛК "
+                        f"<b>{bank}</b> ({fio}) <b>пополнена и отпущена "
+                        f"в вашу сторону</b>.\n\nПроверьте Conte 🙏"
+                    )
+                else:
+                    msg = (
+                        f"✅ ЛК <b>{bank}</b> ({fio}) обработан, выплата ушла."
+                    )
+            else:
+                msg = f"✅ ЛК <b>{bank}</b> ({fio}) обработан, выплата ушла."
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target, msg, parse_mode="html", link_preview=False,
+                )
+                notified = True
+                logger.info(
+                    "lk_payment_proof: notified client work_chat=%s card=%s",
+                    wc, target_cid,
+                )
+            except Exception as e:
+                logger.warning(
+                    "lk_payment_proof notify failed for card=%s: %s",
+                    target_cid, e,
+                )
+
+        # Подтверждение в Группе 1 ЛК
+        try:
+            await event.reply(
+                f"✅ <code>#{target_cid}</code> {bank} {fio} → "
+                f"<b>ЗАВЕРШЁН</b>. "
+                + ("Клиент уведомлён." if notified else
+                   "<i>Клиент НЕ уведомлён (нет work_chat)</i>"),
+                parse_mode="html",
+            )
+        except Exception as e:
+            logger.warning("lk_payment_proof ack failed: %s", e)
+        return True
+
     async def _maybe_handle_payment_proof(
         self, event, reply_to_msg_id: int, proof_text: str,
     ) -> bool:
@@ -3639,6 +3734,12 @@ class UserbotService:
             "<code>детали ОЗОН</code> / <code>раскрой Альфа</code> / "
             "<code>подробно Точка</code>\n"
             "\n"
+            "<b>✅ Подтверждение оплаты / отпуска</b>\n"
+            "Reply на анкету ЛК (или на наш «💸 ОПЛАТИТЕ» / «🔓 ОТПУСТИТЕ»):\n"
+            "любой текст-пруф («оплачено», «отпустил», скрин) →\n"
+            "карточка → <b>🏁 ЗАВЕРШЁН</b>, клиент в work_chat получает уведомление\n"
+            "(«Оплата за ЛК … переведена» / «Сделка #N пополнена и отпущена»).\n"
+            "\n"
             "<b>ℹ️ Эта помощь</b>\n"
             "<code>помощь</code> / <code>/help</code> / <code>справка</code> / "
             "<code>?</code>"
@@ -3669,7 +3770,8 @@ class UserbotService:
             "Юзербот:\n"
             "• Посчитает маржу (МЫ_ПОЛУЧИЛИ × 0.98 − ВЫПЛАТА_ПАРТНЁРУ − ОПЛАТА_ЗА_ЛК)\n"
             "• Переведёт все ЛК заявки в <b>ОТРАБОТАН</b> (карточки в Группе 1)\n"
-            "• Шлёт <b>reply с действиями</b> для работника-выплат (USDT/гарант)\n"
+            "• Сделает <b>reply на анкеты ЛК в Группе 1</b> с конкретными "
+            "действиями для работника-выплат (USDT-адрес / номер сделки).\n"
             "\n"
             "<b>✏️ Удалить / редактировать заявку</b>\n"
             "<code>удалить заявку 1</code>\n"
@@ -3679,16 +3781,8 @@ class UserbotService:
             "<code>заявка 1 АЛЬФА Иванов 350</code>\n"
             "→ юзербот пересчитает маржу и отредактирует свой исходный отчёт.\n"
             "\n"
-            "<b>📋 Сводка действий</b>\n"
-            "<code>сводка</code> / <code>действия</code> / <code>что оплатить</code>\n"
-            "Разбивка: 💸 USDT · 🔓 отпустить · 💎 пополнить+отпустить · ⏳ ждать · 🟢 в работе.\n"
-            "\n"
-            "<b>🔍 Детали по банку</b>\n"
-            "<code>детали ОЗОН</code> / <code>раскрой Альфа</code>\n"
-            "\n"
-            "<b>✅ Подтверждение оплаты</b>\n"
-            "Reply на сообщение юзербота с инструкциями (любым текстом — «оплачено», скрин и т.п.)\n"
-            "→ карточка → <b>ЗАВЕРШЁН</b>, клиент уведомлён в work_chat.\n"
+            "<i>Сводка действий / детали по банку / подтверждение оплаты — "
+            "теперь в Группе 1 ЛК (рядом с карточками).</i>\n"
             "\n"
             "<b>ℹ️ Эта помощь</b>\n"
             "<code>помощь</code> / <code>/help</code> / <code>справка</code> / "
@@ -4000,13 +4094,10 @@ class UserbotService:
             "moved": moved,
         }, character="accounting", severity="success")
 
-        # Reply с инструкциями для работника-выплат — по каждому ЛК заявки
-        # отдельная строка действия. Сохраняет msg_id в карточку для
-        # последующего распознавания reply-пруфа от Тимона (Коммит 4).
-        try:
-            await self._send_post_application_actions(event, app, sent_id)
-        except Exception as e:
-            logger.warning("post-app actions send failed: %s", e)
+        # Раньше тут шёл reply со списком действий в Группе 2.
+        # Сейчас reply делается на анкету КАЖДОЙ карточки в Группе 1
+        # через _post_action_reply_to_lk_card (вызывается выше при смене
+        # статуса). Группа 2 — только отчёты, никаких действий-инструкций.
 
     async def _send_post_application_actions(
         self, event, app: dict, parent_msg_id: Optional[int],
