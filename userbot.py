@@ -67,6 +67,46 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+# Шаблоны «AI вслух заявляет что молчит» — ловим и не отправляем.
+# AI должен МОЛЧАТЬ а не АНОНСИРОВАТЬ молчание. Каждое такое сообщение —
+# выкинутые кредиты + мусор в клиентском чате.
+_SILENCE_ANNOUNCEMENT_PATTERNS = [
+    r"\bвнутренн\w*\s+диалог\b",
+    r"\bвнутренн\w*\s+обмен\b",
+    r"\bобмен\s+данными\s+между\s+командой\b",
+    r"\bпродолжаю\s+молчать\b",
+    r"\bмолчу[,.\s]",
+    r"\bпока\s+молчу\b",
+    r"\bне\s+вмешива\w+\b",
+    r"\bв\s+диалог\s+не\s+вступаю\b",
+    r"\bне\s+вступаю\s+в\s+диалог\b",
+    r"\bждуу?\s+пока\s+клиент\b",
+    r"\bждуу?\s+когда\s+клиент\b",
+    r"\bжду\s+действий\s+клиента\b",
+    r"\bжду\s+результат\b.*\bперевязк\w*",
+    r"\bпропускаю\s+ответ\b",
+    r"\bsilent\s+mode\b",
+    r"\b\[\s*молч\w*\s*\]",
+    r"^\s*\(\s*молч\w*\s*\)\s*$",
+]
+_SILENCE_RX = [re.compile(p, re.IGNORECASE | re.MULTILINE) for p in _SILENCE_ANNOUNCEMENT_PATTERNS]
+
+
+def _is_silence_announcement(text: str) -> bool:
+    """True если ответ AI — это анонс молчания вместо реального молчания."""
+    if not text:
+        return True  # пустота = тоже молчание, не шлём
+    stripped = text.strip()
+    # Очень короткие «..»/«ок»/«…» — пропускаем (это норм короткий ответ)
+    if len(stripped) < 6:
+        return False
+    # Если хоть один из «silence-announcement» паттернов матчится — это шум
+    for rx in _SILENCE_RX:
+        if rx.search(stripped):
+            return True
+    return False
+
+
 def _split_text(text: str, limit: int = 3900) -> list:
     """Split long text into chunks <= limit. Tries to break on newlines/spaces."""
     if len(text) <= limit:
@@ -924,6 +964,20 @@ class UserbotService:
         if reply is None:
             await storage.bump_ai_stats(errors=1)
             logger.warning("AI: chat=%s — claude returned None", chat_id)
+            return
+
+        # 🔴 ФИЛЬТР: AI иногда пишет «молчу, не вмешиваюсь» / «внутренний диалог
+        # команды» вместо того чтобы реально молчать. Это пустой шум, тратит
+        # кредиты, мусорит чат. Перехватываем и НЕ отправляем.
+        if _is_silence_announcement(reply):
+            logger.info(
+                "AI: chat=%s — пропускаю «silence announcement» (%.40s...)",
+                chat_id, reply.strip(),
+            )
+            _e("ai-silence-suppressed", {
+                "chat_id": chat_id,
+                "short": reply[:120],
+            }, severity="warning")
             return
 
         try:
