@@ -1297,12 +1297,26 @@ class UserbotService:
         # и в Группе 2 Бухгалтерия. Один и тот же _handle_daily_summary.
         # Раскрыть детали конкретного банка: «детали Альфа» / «раскрой ОЗОН».
         m_bd = re.match(
-            r"^\s*(?:деталь|детали|раскрой|раскрыть|развернуть|развер[нт]и)\s+"
-            r"([\w\-]+)\s*$",
+            r"^\s*"
+            r"(?:детал(?:ь|и|ьно)?|раскрой|раскрыть|раскрывай|"
+            r"разверни|развернуть|разверн[иуь]\w*|"
+            r"подробн(?:о|ее|ости))"
+            r"\W*([\wа-яА-Я\-]*)",
             text, re.I,
         )
         if m_bd:
-            await self._handle_bank_details(event, m_bd.group(1))
+            bank_arg = (m_bd.group(1) or "").strip()
+            if not bank_arg:
+                try:
+                    await event.reply(
+                        "ℹ️ Нужно указать банк. Пример: <code>детали ОЗОН</code> "
+                        "или <code>раскрой Альфа</code>.",
+                        parse_mode="html",
+                    )
+                except Exception:
+                    pass
+                return
+            await self._handle_bank_details(event, bank_arg)
             return
         if re.search(
             r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
@@ -2846,12 +2860,26 @@ class UserbotService:
         # Команда: дневная сводка / раскрыть детали по банку.
         # Не блокирующие мини-запросы к storage, без AI-вызовов.
         m_bd = re.match(
-            r"^\s*(?:деталь|детали|раскрой|раскрыть|развернуть|развер[нт]и)\s+"
-            r"([\w\-]+)\s*$",
+            r"^\s*"
+            r"(?:детал(?:ь|и|ьно)?|раскрой|раскрыть|раскрывай|"
+            r"разверни|развернуть|разверн[иуь]\w*|"
+            r"подробн(?:о|ее|ости))"
+            r"\W*([\wа-яА-Я\-]*)",
             text, re.I,
         )
         if m_bd:
-            await self._handle_bank_details(event, m_bd.group(1))
+            bank_arg = (m_bd.group(1) or "").strip()
+            if not bank_arg:
+                try:
+                    await event.reply(
+                        "ℹ️ Нужно указать банк. Пример: <code>детали ОЗОН</code> "
+                        "или <code>раскрой Альфа</code>.",
+                        parse_mode="html",
+                    )
+                except Exception:
+                    pass
+                return
+            await self._handle_bank_details(event, bank_arg)
             return
         if re.search(
             r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
@@ -3173,6 +3201,10 @@ class UserbotService:
         этого банка с поставщиком, ФИО, ценой, методом, статусом.
         Используется когда из сводки нужно копнуть глубже."""
         bank_q = (bank_query or "").strip()
+        logger.info(
+            "bank_details: chat=%s bank_query=%r",
+            event.chat_id, bank_q,
+        )
         if not bank_q:
             return
         bank_q_lc = bank_q.lower()
