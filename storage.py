@@ -113,6 +113,10 @@ def _default_state() -> dict:
         # При создании новой work_chat юзербот приглашает каждого worker'а
         # и выдаёт ему админ-права (с rank=role в Telegram) если is_admin=True.
         "worker_roles": {},
+        # Сводки массовых импортов: {msg_id: {chat_id, html, card_ids[]}}.
+        # При удалении карточки из такого импорта — юзербот находит msg по
+        # ключу и редактирует html (зачёркивает строку этой карточки).
+        "import_summaries": {},
     }
 
 
@@ -808,6 +812,60 @@ class Storage:
                 continue
             out.append({"card_id": cid, **c})
         return out
+
+    # === Import summaries (массовые импорты ЛК) ===
+
+    async def save_import_summary(
+        self, msg_id: int, chat_id, html_text: str, card_ids: list,
+    ):
+        """Сохраняет HTML сводки массового импорта по msg_id — для дальнейшего
+        зачёркивания строк удалённых карточек."""
+        if not msg_id:
+            return False
+        key = str(int(msg_id))
+        async with _lock:
+            summaries = self.state.setdefault("import_summaries", {})
+            summaries[key] = {
+                "chat_id": _norm_chat_id(chat_id),
+                "html": html_text or "",
+                "card_ids": list(card_ids or []),
+            }
+            await self._save_unlocked()
+            return True
+
+    def get_import_summary(self, msg_id: int) -> dict:
+        if not msg_id:
+            return {}
+        key = str(int(msg_id))
+        return dict(self.state.get("import_summaries", {}).get(key) or {})
+
+    async def update_import_summary_html(self, msg_id: int, new_html: str):
+        """Обновляет сохранённый HTML сводки (после edit_message в Telegram)."""
+        if not msg_id:
+            return False
+        key = str(int(msg_id))
+        async with _lock:
+            summaries = self.state.setdefault("import_summaries", {})
+            entry = summaries.get(key)
+            if entry is None:
+                return False
+            entry["html"] = new_html or ""
+            await self._save_unlocked()
+            return True
+
+    async def delete_lk_card(self, card_id: str) -> bool:
+        """Удаляет одну карточку ЛК по card_id. Возвращает True если
+        карточка существовала и удалена."""
+        if not card_id:
+            return False
+        key = str(card_id).strip().lstrip("#")
+        async with _lock:
+            cards = self.state.get("lk_cards") or {}
+            if key not in cards:
+                return False
+            cards.pop(key, None)
+            await self._save_unlocked()
+            return True
 
     async def delete_all_lk_cards(self) -> int:
         """Удаляет ВСЕ карточки ЛК. Возвращает количество удалённых.

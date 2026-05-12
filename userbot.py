@@ -1278,6 +1278,10 @@ class UserbotService:
             await self._apply_sync_clients(event)
             return
 
+        # Команда удаления одной карточки (по #id, по банк+ФИО или reply на анкету)
+        if await self._maybe_handle_delete_one_lk(event, text):
+            return
+
         # Команда удаления всех карточек ЛК (с двойным подтверждением)
         if await self._maybe_handle_delete_all_lk(event, text):
             return
@@ -1825,6 +1829,215 @@ class UserbotService:
         except Exception as e:
             logger.warning("template hint reply failed: %s", e)
 
+    # Команда удаления ОДНОЙ карточки ЛК — без двойного подтверждения.
+    # Варианты:
+    #   1) «Ассистент удали ЛК #lk010» — по card_id
+    #   2) «Ассистент удали ЛК АЛЬФА Иванов» — по банк+ФИО (если карточка одна)
+    #   3) Reply на анкету в Группе 1 + «удалить» / «Ассистент удали»
+    _AI_CMD_DELETE_LK_BY_ID_RE = re.compile(
+        r"^\s*(?:ассистент[,\s]+)?(?:удали(?:ть)?|сотри|сотрите|снеси|снести)\s+"
+        r"(?:лк|карточк[уи]|анкет[уы])?\s*"
+        r"#?(lk\d+)\s*$",
+        re.I | re.M,
+    )
+    _AI_CMD_DELETE_LK_BY_BANKFIO_RE = re.compile(
+        r"^\s*(?:ассистент[,\s]+)?(?:удали(?:ть)?|сотри|сотрите|снеси|снести)\s+"
+        r"(?:лк|карточк[уи]|анкет[уы])\s+"
+        r"(?!все\b|всю\b|всех\b|всё\b|базу\b)"
+        r"(.+)$",
+        re.I | re.M,
+    )
+    _AI_CMD_DELETE_REPLY_RE = re.compile(
+        r"^\s*(?:ассистент[,\s]*)?(?:удали(?:ть)?|сотри|сотрите|снеси|снести)"
+        r"(?:\s+эт[ау]\s+(?:анкету|карточку|лк))?\s*$",
+        re.I | re.M,
+    )
+
+    async def _maybe_handle_delete_one_lk(self, event, text: str) -> bool:
+        """Удаление одной карточки ЛК. Доступно админам/Тимону/работникам."""
+        try:
+            sender_id = int(event.sender_id) if event.sender_id else 0
+        except Exception:
+            sender_id = 0
+        try:
+            sender = await event.get_sender()
+        except Exception:
+            sender = None
+        sender_username = (getattr(sender, "username", "") or "").lower()
+        is_admin = sender_id in (storage.get_admins() or [])
+        is_tymon = sender_id == self.TIMON_USER_ID
+        is_worker = sender_username and sender_username in {
+            w.lower() for w in storage.get_workers()
+        }
+        if not (is_admin or is_tymon or is_worker):
+            return False
+
+        # 1) По #id
+        m = self._AI_CMD_DELETE_LK_BY_ID_RE.search(text)
+        if m:
+            card_id = m.group(1).lower().strip()
+            await self._do_delete_one_lk(event, card_id, reason="по id")
+            return True
+
+        # 2) Reply на анкету + слово «удалить»
+        if (
+            event.message and getattr(event.message, "reply_to", None)
+            and self._AI_CMD_DELETE_REPLY_RE.match(text)
+        ):
+            reply_to = getattr(event.message.reply_to, "reply_to_msg_id", None)
+            if reply_to:
+                # Найти карточку по lk_group_msg_id
+                cards = storage.list_lk_cards() or {}
+                target_id = None
+                for cid, c in cards.items():
+                    if int(c.get("lk_group_msg_id") or 0) == int(reply_to):
+                        target_id = cid
+                        break
+                if target_id:
+                    await self._do_delete_one_lk(event, target_id, reason="reply на анкету")
+                    return True
+                # Reply есть, но не на анкету — не наша команда
+                return False
+
+        # 3) По банк+ФИО
+        m = self._AI_CMD_DELETE_LK_BY_BANKFIO_RE.search(text)
+        if m:
+            rest = m.group(1).strip()
+            parts = rest.split(maxsplit=1)
+            if len(parts) >= 2:
+                bank, fio = parts[0], parts[1]
+                found = storage.find_lk_card(bank=bank, fio=fio) or []
+                if not found:
+                    await event.reply(
+                        f"⚠️ Не нашёл карточку: <b>{bank} {fio}</b>",
+                        parse_mode="html",
+                    )
+                    return True
+                if len(found) > 1:
+                    ids = ", ".join(f"#{c.get('card_id')}" for c in found[:5])
+                    await event.reply(
+                        f"⚠️ Найдено {len(found)} карточек: {ids}. "
+                        f"Уточни командой <code>Ассистент удали ЛК #lkXXX</code>.",
+                        parse_mode="html",
+                    )
+                    return True
+                target_id = found[0].get("card_id")
+                if target_id:
+                    await self._do_delete_one_lk(event, target_id, reason=f"банк+ФИО")
+                    return True
+
+        return False
+
+    async def _do_delete_one_lk(self, event, card_id: str, reason: str = ""):
+        """Удаляет карточку:
+          1. Из storage.
+          2. Сообщение с анкетой (lk_group_msg_id) из Группы 1.
+          3. Если карта была в массовом импорте — зачёркивает строку в сводке.
+        """
+        card = storage.get_lk_card(card_id) or {}
+        if not card:
+            await event.reply(
+                f"⚠️ Карточка <code>#{card_id}</code> не найдена.",
+                parse_mode="html",
+            )
+            return
+        bank = card.get("bank") or "—"
+        fio = card.get("fio") or "—"
+        lk_group_msg_id = card.get("lk_group_msg_id") or 0
+        import_summary_msg_id = card.get("import_summary_msg_id") or 0
+
+        try:
+            ok = await storage.delete_lk_card(card_id)
+        except Exception as e:
+            await event.reply(
+                f"⚠️ Ошибка удаления <code>#{card_id}</code>: <code>{e}</code>",
+                parse_mode="html",
+            )
+            return
+        if not ok:
+            await event.reply(
+                f"⚠️ Карточка <code>#{card_id}</code> уже отсутствует.",
+                parse_mode="html",
+            )
+            return
+
+        # 2. Удалить сообщение с анкетой
+        chat_for_delete = event.chat_id
+        if lk_group_msg_id:
+            try:
+                target = await self._resolve_chat_target(chat_for_delete)
+                await self.client.delete_messages(target, [int(lk_group_msg_id)])
+                logger.info(
+                    "delete_one_lk: card=%s anketa msg=%s deleted",
+                    card_id, lk_group_msg_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "delete_one_lk: cannot delete anketa msg=%s: %s",
+                    lk_group_msg_id, e,
+                )
+
+        # 3. Зачеркнуть строку в сводке массового импорта (если есть)
+        if import_summary_msg_id:
+            try:
+                await self._strike_summary_line(
+                    chat_for_delete, int(import_summary_msg_id), card_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "delete_one_lk: strike summary failed for card=%s: %s",
+                    card_id, e,
+                )
+
+        suffix = f" ({reason})" if reason else ""
+        await event.reply(
+            f"🗑 Удалена карточка <code>#{card_id}</code> — "
+            f"<b>{bank} {fio}</b>{suffix}.",
+            parse_mode="html",
+        )
+        logger.info(
+            "delete_one_lk: card_id=%s by sender=%s reason=%s anketa_msg=%s summary=%s",
+            card_id, event.sender_id, reason,
+            lk_group_msg_id, import_summary_msg_id,
+        )
+
+    async def _strike_summary_line(
+        self, chat_id, summary_msg_id: int, card_id: str,
+    ):
+        """В HTML сводки массового импорта находит строку с #card_id и
+        оборачивает её в <s>…</s> + добавляет «❌ удалена». Затем edit_message."""
+        summary = storage.get_import_summary(summary_msg_id)
+        if not summary or not summary.get("html"):
+            return
+        html = summary["html"]
+        # Маркер: строка содержит <code>#card_id</code>
+        marker = f"<code>#{card_id}</code>"
+        if marker not in html:
+            return
+        lines = html.split("\n")
+        new_lines = []
+        for ln in lines:
+            if marker in ln and "<s>" not in ln:
+                # Зачеркнём только саму строку с маркером.
+                # Сохраняем начальные эмодзи/символы (✅/🔗/⚠️/❌) перед маркером.
+                new_lines.append(f"<s>{ln}</s> ❌ <i>удалена</i>")
+            else:
+                new_lines.append(ln)
+        new_html = "\n".join(new_lines)
+        try:
+            target = await self._resolve_chat_target(chat_id)
+            await self.client.edit_message(
+                target, summary_msg_id, new_html,
+                parse_mode="html", link_preview=False,
+            )
+        except Exception as e:
+            logger.warning(
+                "strike_summary edit_message failed (msg=%s): %s",
+                summary_msg_id, e,
+            )
+            return
+        await storage.update_import_summary_html(summary_msg_id, new_html)
+
     # Команда удаления всех ЛК — деструктивная, требует двойного «+»
     # от Тимона (id 397572312) и от любого админа (`storage.get_admins()`).
     _AI_CMD_DELETE_ALL_LK_RE = re.compile(
@@ -1985,6 +2198,7 @@ class UserbotService:
         """
         created_by_tag = self._resolve_created_by_tag(event)
         ok_lines: list = []
+        ok_card_ids: list = []
         skip_lines: list = []
         for block in blocks:
             card_data = accounting2.parse_lk_card(block)
@@ -2044,6 +2258,7 @@ class UserbotService:
                 f"✅ <code>#{card_id}</code> {card_data.get('bank')} "
                 f"{card_data.get('fio')}"
             )
+            ok_card_ids.append(card_id)
             # Чтобы Telegram не словил FloodWait при большом количестве:
             await asyncio.sleep(0.2)
 
@@ -2061,7 +2276,14 @@ class UserbotService:
             if len(skip_lines) > 10:
                 report += f"\n<i>… и ещё {len(skip_lines) - 10}</i>"
         try:
-            await event.reply(report, parse_mode="html", link_preview=False)
+            sent_summary = await event.reply(
+                report, parse_mode="html", link_preview=False,
+            )
+            summary_msg_id = getattr(sent_summary, "id", None)
+            if summary_msg_id:
+                await self._save_import_summary_links(
+                    summary_msg_id, event.chat_id, report, ok_card_ids,
+                )
         except Exception as e:
             logger.warning("bulk_lk summary reply failed: %s", e)
 
@@ -2135,6 +2357,7 @@ class UserbotService:
             return
 
         ok_lines: list = []
+        ok_card_ids: list = []
         skip_lines: list = []
         for raw in rows:
             parsed = accounting2.parse_lk_card_compact(raw)
@@ -2171,6 +2394,7 @@ class UserbotService:
                 f"{mark} <code>#{card_id}</code> {parsed.get('bank')} "
                 f"{parsed.get('fio')} → {sup_disp}{note}"
             )
+            ok_card_ids.append(card_id)
 
         report = "📦 <b>Импорт ЛК завершён</b>\n\n"
         if ok_lines:
@@ -2186,9 +2410,38 @@ class UserbotService:
             if len(skip_lines) > 10:
                 report += f"\n<i>… и ещё {len(skip_lines) - 10}</i>"
         try:
-            await event.reply(report, parse_mode="html", link_preview=False)
+            sent_summary = await event.reply(
+                report, parse_mode="html", link_preview=False,
+            )
+            sm_id = getattr(sent_summary, "id", None)
+            if sm_id:
+                await self._save_import_summary_links(
+                    sm_id, event.chat_id, report, ok_card_ids,
+                )
         except Exception as e:
             logger.warning("import_lk summary failed: %s", e)
+
+    async def _save_import_summary_links(
+        self, summary_msg_id: int, chat_id, html_text: str, card_ids: list,
+    ):
+        """Связывает сводку с каждой картой: при удалении одной из них
+        юзербот сможет найти summary, зачеркнуть строку и сделать edit."""
+        try:
+            await storage.save_import_summary(
+                summary_msg_id, chat_id, html_text, card_ids,
+            )
+        except Exception as e:
+            logger.warning("save_import_summary failed: %s", e)
+            return
+        for cid in card_ids:
+            try:
+                await storage.update_lk_card(
+                    cid, import_summary_msg_id=int(summary_msg_id),
+                )
+            except Exception as e:
+                logger.warning(
+                    "set import_summary_msg_id for %s failed: %s", cid, e,
+                )
 
     async def _apply_sync_clients(self, event):
         """Синхронизация client_username по всем managed_chats:
