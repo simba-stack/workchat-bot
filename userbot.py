@@ -960,10 +960,25 @@ class UserbotService:
                 client_username = getattr(client_entity, "username", None)
             except Exception as e:
                 logger.warning("client entity resolve failed: %s", e)
+        # Память клиента: подгружаем прошлые предпочтения из client_preferences
+        # (по @username, между разными work-чатами). AI увидит что у клиента
+        # уже есть выбранный метод оплаты и не будет спрашивать заново.
+        prev_prefs = {}
+        try:
+            uname_for_prefs = (
+                (chat_info.get("client_username") or client_username or "")
+                .lstrip("@").strip()
+            )
+            if uname_for_prefs:
+                prev_prefs = storage.get_client_preferences(uname_for_prefs)
+        except Exception as e:
+            logger.warning("get_client_preferences failed: %s", e)
+
         client_context = {
             "id": client_id,
             "name": chat_info.get("client_name") or "",
             "username": client_username or "",
+            "prev_preferences": prev_prefs,  # {payment_method, usdt_address, lk_count, ...}
         }
 
         last_msg_id = getattr(getattr(event, "message", None), "id", None)
@@ -1189,6 +1204,17 @@ class UserbotService:
         except Exception as e:
             logger.warning("set_payment_method: save failed: %s", e)
             return {"status": "error", "error": "save_failed", "detail": str(e)}
+
+        # Память клиента: дублируем в client_preferences (по @username)
+        try:
+            info = storage.get_chat_info(chat_id) or {}
+            uname = (info.get("client_username") or "").lstrip("@").strip()
+            if uname:
+                await storage.save_client_preferences(
+                    uname, payment_method=method_full, usdt_address=addr,
+                )
+        except Exception as e:
+            logger.warning("set_payment_method: save_client_preferences failed: %s", e)
 
         logger.info(
             "set_payment_method: chat=%s method=%s usdt=%s",
@@ -3336,6 +3362,19 @@ class UserbotService:
             await storage.bump_funnel("rs_handed")
         except Exception:
             pass
+        # Память клиента: сохраняем метод оплаты и адрес под @username
+        # чтобы при следующем перевязе AI не спрашивал заново.
+        try:
+            if client_uname:
+                await storage.save_client_preferences(
+                    client_uname,
+                    payment_method=method,
+                    usdt_address=usdt_addr,
+                    fio=fio,
+                    bank=bank,
+                )
+        except Exception as e:
+            logger.warning("save_client_preferences failed: %s", e)
         card_id = await storage.add_lk_card(
             supplier=client_uname,
             bank=bank,

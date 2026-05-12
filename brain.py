@@ -376,8 +376,32 @@ def _build_system_prompt(brain_notes: str = "", client_context: Optional[dict] =
             block += f"Telegram ID: {cid}\n"
         block += (
             "Используй эти данные когда инструменту нужен username клиента "
-            "(передавай БЕЗ @ префикса)."
+            "(передавай БЕЗ @ префикса).\n"
         )
+        # Память клиента: прошлые предпочтения по методу оплаты
+        prev = client_context.get("prev_preferences") or {}
+        if prev.get("payment_method"):
+            pm = prev["payment_method"]
+            addr = prev.get("usdt_address") or ""
+            lk_count = int(prev.get("lk_count") or 0)
+            pref_block = (
+                "\n# === 🔴 ПАМЯТЬ КЛИЕНТА (КРИТИЧНО) ===\n"
+                f"Этот клиент УЖЕ работал с нами ({lk_count} ЛК ранее). "
+                f"Прошлый выбранный метод оплаты: **{pm}**"
+            )
+            if addr:
+                pref_block += f"\nUSDT адрес сохранён: {addr}"
+            pref_block += (
+                "\n\n🔴 ПРАВИЛО: при новой перевязке/новом ЛК **НЕ спрашивай** "
+                "клиента «USDT или гарант?» с нуля. Вместо этого сразу "
+                "ПРЕДЛОЖИ прошлый метод и уточни только согласие:\n"
+                f"   «Оставляем выплату как в прошлый раз — {pm}"
+                f"{' на ' + addr if addr else ''}? Или хотите по-другому?»\n"
+                "Если клиент согласен — фиксируй тот же метод через "
+                "`set_payment_method`. Если хочет другой — спрашивай детали "
+                "только нового метода."
+            )
+            block += pref_block
         parts.append(block)
     return "\n\n".join(parts)
 

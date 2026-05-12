@@ -129,6 +129,12 @@ def _default_state() -> dict:
         # Структура: {uname_lower: {messages, chats_touched, last_active_ts,
         #   payments_made, lk_completed, junk_handled, ...}}
         "manager_stats": {},
+        # Предпочтения клиентов — память на уровне @username (а не чата).
+        # Используется чтобы при перевязе НОВОГО ЛК того же клиента AI
+        # уже знал прошлый метод оплаты / USDT-адрес — не спрашивал заново.
+        # Структура: {uname_lower: {payment_method, usdt_address,
+        #   last_updated_ts, lk_count, fio_last, bank_last}}
+        "client_preferences": {},
     }
 
 
@@ -1176,6 +1182,42 @@ class Storage:
         """Стата конкретного менеджера."""
         uname = (username or "").lstrip("@").lower().strip()
         return dict((self.state.get("manager_stats") or {}).get(uname) or {})
+
+    # === Предпочтения клиентов (память на уровне @username) ===
+
+    def get_client_preferences(self, username: str) -> dict:
+        """Вернуть прошлые предпочтения этого клиента (метод оплаты,
+        USDT-адрес и т.д.). Пустой dict если клиент новый."""
+        uname = (username or "").lstrip("@").lower().strip()
+        if not uname:
+            return {}
+        prefs = self.state.get("client_preferences") or {}
+        return dict(prefs.get(uname) or {})
+
+    async def save_client_preferences(
+        self, username: str, payment_method: str = "",
+        usdt_address: str = "", fio: str = "", bank: str = "",
+    ) -> bool:
+        """Сохраняет/обновляет предпочтения клиента. Инкрементит lk_count
+        и обновляет timestamp. Пустые поля не затирают существующие."""
+        uname = (username or "").lstrip("@").lower().strip()
+        if not uname:
+            return False
+        async with _lock:
+            prefs = self.state.setdefault("client_preferences", {})
+            entry = prefs.setdefault(uname, {})
+            if payment_method:
+                entry["payment_method"] = payment_method.upper()
+            if usdt_address:
+                entry["usdt_address"] = usdt_address.strip()
+            if fio:
+                entry["fio_last"] = fio.strip()
+            if bank:
+                entry["bank_last"] = bank.strip()
+            entry["last_updated_ts"] = time.time()
+            entry["lk_count"] = int(entry.get("lk_count", 0)) + 1
+            await self._save_unlocked()
+            return True
 
 
 storage = Storage(config.STORAGE_PATH)
