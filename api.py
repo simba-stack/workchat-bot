@@ -401,16 +401,56 @@ async def tg_callback(request: Request):
             "<p>Свяжись с владельцем.</p>",
             status_code=403,
         )
-    # Подписанный куки
+    # Подписанный куки + HTML который закрывает popup и обновляет parent.
+    # Telegram Login Widget открывает /tg/callback в popup, и наш RedirectResponse
+    # просто рендерил дашборд внутри popup — а родительское окно оставалось
+    # на /login. Вместо редиректа отдаём HTML с JS-обработкой.
     cookie_val = _sign_session(uid)
-    resp = RedirectResponse(url="/", status_code=302)
+    success_html = """<!DOCTYPE html><html><head>
+<meta charset='UTF-8'><title>JARVIS · auth ok</title>
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: #050818;
+    color: #00e5ff; font-family: "JetBrains Mono", monospace;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center;
+  }
+  .logo {
+    font-size: 32px; font-weight: 900;
+    letter-spacing: 8px;
+    text-shadow: 0 0 16px #00e5ff;
+    margin-bottom: 14px;
+  }
+  .ok { font-size: 13px; letter-spacing: 2px; color: #4ade80; }
+  .hint { font-size: 11px; color: #5b7299; margin-top: 20px; }
+</style>
+</head><body>
+<div class="logo">JARVIS</div>
+<div class="ok">✓ AUTHORIZED</div>
+<div class="hint">Это окно закроется автоматически…</div>
+<script>
+(function() {
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.location.href = '/';
+      window.close();
+      return;
+    }
+  } catch (e) {}
+  // Не popup или opener закрыт — просто редиректим текущее окно
+  setTimeout(function() { location.href = '/'; }, 700);
+})();
+</script>
+</body></html>"""
+    resp = HTMLResponse(success_html)
     resp.set_cookie(
         SESSION_COOKIE,
         cookie_val,
         max_age=SESSION_TTL_SEC,
         httponly=True,
         samesite="lax",
-        secure=False,  # Railway HTTPS termination; Set True if прямой HTTPS
+        secure=False,
     )
     try:
         event_bus.emit_event(
