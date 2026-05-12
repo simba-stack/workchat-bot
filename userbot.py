@@ -1133,7 +1133,94 @@ class UserbotService:
                 deal_id=tool_input.get("deal_id", ""),
                 usdt_address=tool_input.get("usdt_address", ""),
             )
+        if tool_name == "set_payment_method":
+            return await self._tool_set_payment_method(
+                chat_id=chat_id,
+                method=tool_input.get("method", ""),
+                usdt_address=tool_input.get("usdt_address", ""),
+            )
         return {"status": "error", "error": f"unknown_tool:{tool_name}"}
+
+    async def _tool_set_payment_method(
+        self, chat_id, method: str = "", usdt_address: str = "",
+    ) -> dict:
+        """Фиксирует метод оплаты и USDT-адрес клиента в managed_chats.
+
+        Принимает короткое значение из enum brain.py:
+          - 'USDT_TRC20' (требует usdt_address)
+          - 'GUARANTOR' (расшифровываем в GUARANTOR_AFTER_WORK как default)
+        Также принимает полные значения из accounting2.PAYMENT_METHODS.
+        После записи, если в storage.pending_perevyaz уже лежит (банк+ФИО)
+        от sys01/CRM-бота — сразу создаёт карточку ЛК.
+        """
+        m_raw = (method or "").strip().upper()
+        if not m_raw:
+            return {"status": "error", "error": "method_required"}
+        # Алиасы: AI может прислать короткое "GUARANTOR" — это значит default
+        # для PRIDE: сделка ПОСЛЕ отработки счёта.
+        alias_map = {
+            "GUARANTOR": "GUARANTOR_AFTER_WORK",
+            "USDT": "USDT_TRC20",
+            "TRC20": "USDT_TRC20",
+        }
+        method_full = alias_map.get(m_raw, m_raw)
+        if method_full not in accounting2.PAYMENT_METHODS:
+            return {
+                "status": "error",
+                "error": "payment_method_invalid",
+                "got": m_raw,
+                "allowed": list(accounting2.PAYMENT_METHODS) + list(alias_map),
+            }
+        addr = (usdt_address or "").strip()
+        if method_full == "USDT_TRC20" and not addr:
+            return {"status": "error", "error": "usdt_address_required_for_usdt"}
+
+        # Сохраняем в managed_chats
+        try:
+            await storage.set_chat_payment_info(
+                chat_id, method=method_full, usdt_address=addr or "",
+            )
+        except Exception as e:
+            logger.warning("set_payment_method: save failed: %s", e)
+            return {"status": "error", "error": "save_failed", "detail": str(e)}
+
+        logger.info(
+            "set_payment_method: chat=%s method=%s usdt=%s",
+            chat_id, method_full, addr[:10] + "..." if addr else "",
+        )
+
+        # Если перевязка УЖЕ была (есть pending_perevyaz) — создаём карточку
+        # сейчас, не ждём ещё одного триггера.
+        created_card_id = None
+        try:
+            pending = await storage.pop_pending_perevyaz(chat_id)
+            if pending and (pending.get("bank") or pending.get("fio")):
+                fresh = storage.get_chat_info(chat_id) or {}
+                # Эмитируем «фейковый» event для _create_lk_card_from_perevyaz:
+                # ему нужен только event.chat_id. Используем простой shim.
+                class _Shim:
+                    def __init__(self, cid):
+                        self.chat_id = cid
+                        self.message = type("M", (), {"id": None, "text": ""})()
+                shim = _Shim(chat_id)
+                await self._create_lk_card_from_perevyaz(
+                    shim, fresh,
+                    lk_text=pending.get("bank", ""),
+                    fio_text=pending.get("fio", ""),
+                )
+                logger.info(
+                    "set_payment_method: card created from pending perevyaz for chat=%s",
+                    chat_id,
+                )
+        except Exception as e:
+            logger.warning("set_payment_method: pending card creation failed: %s", e)
+
+        return {
+            "status": "ok",
+            "payment_method": method_full,
+            "usdt_address": addr,
+            "card_created": bool(created_card_id),
+        }
 
     async def _tool_add_partner_to_crm(self, chat_id, client_username: str) -> dict:
         username = (client_username or "").lstrip("@").strip()
@@ -4557,16 +4644,47 @@ class UserbotService:
     )
 
     def _extract_fio(self, text: str) -> str:
-        """Достать ФИО из текста (2-4 слова с заглавных)."""
+        """Достать ФИО из текста (2-4 слова с заглавных).
+        Останавливаемся на токене банка чтобы не залезть в «Локо/Альфа» и т.п."""
         if not text:
             return ""
-        # Чистим разделители «—», «-», «:» которые могут слипнуться
-        cleaned = re.sub(r"[—–\-:]+", " ", text)
-        m = self._FIO_RE.search(cleaned)
+        # 1) Если строка содержит «—», «-», «|» — режем по ним и берём первый
+        # сегмент с валидным ФИО. Это покрывает «Иванов Иван — Альфа — перевяз».
+        segments = re.split(r"\s*[—–\-|]\s*", text)
+        candidate_text = ""
+        for seg in segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+            # Если сегмент содержит токен банка — это банк, не ФИО
+            if self._extract_bank_token(seg):
+                continue
+            # Если сегмент содержит триггер «перевяз/успешен/...» — это статус
+            if self._PEREVYAZ_TRIGGER_WORDS_RE.search(seg):
+                continue
+            # Иначе — кандидат на ФИО
+            candidate_text = seg
+            break
+
+        # Если разделителей не было — пробуем по всему тексту, но обрезаем по
+        # первой найденной банк-метке
+        if not candidate_text:
+            candidate_text = text
+            bank_lc = self._extract_bank_token(text).lower()
+            if bank_lc:
+                tl = candidate_text.lower()
+                # Ищем позицию любого из алиасов банка
+                cut = len(candidate_text)
+                for tok in sorted(self._KNOWN_BANK_TOKENS, key=len, reverse=True):
+                    pos = tl.find(tok)
+                    if pos != -1 and pos < cut:
+                        cut = pos
+                candidate_text = candidate_text[:cut]
+
+        m = self._FIO_RE.search(candidate_text)
         if not m:
             return ""
         fio = m.group(1).strip()
-        # Отбрасываем явные служебные сочетания
         bad_lc = {"перевяз успешен", "перевяз выполнен", "перевяз готов"}
         if fio.lower() in bad_lc:
             return ""
