@@ -809,6 +809,20 @@ class Storage:
             out.append({"card_id": cid, **c})
         return out
 
+    async def delete_all_lk_cards(self) -> int:
+        """Удаляет ВСЕ карточки ЛК. Возвращает количество удалённых.
+
+        ⚠️ Деструктивная операция — вызывается только после двойного
+        подтверждения (Тимон + админ) через команду «Ассистент удалить все ЛК»
+        в Группе 1."""
+        async with _lock:
+            cards = self.state.get("lk_cards") or {}
+            n = len(cards)
+            self.state["lk_cards"] = {}
+            self.state["lk_cards_seq"] = 0
+            await self._save_unlocked()
+            return n
+
     async def add_lk_card(self, **fields) -> str:
         """Создаёт новую карточку. Возвращает card_id ("lk001"...).
 

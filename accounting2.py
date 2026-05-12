@@ -193,17 +193,81 @@ def _normalize_method(raw: str) -> str:
     ))
     is_usdt = any(w in t for w in ("usdt", "trc", "трц", "крипт"))
     if is_guarantor:
-        if any(w in t for w in ("после отработ", "post_work", "отработк")):
-            return "GUARANTOR_AFTER_WORK"
-        if any(w in t for w in ("после перевяз", "потом", "после")):
-            return "GUARANTOR_AFTER"
-        if any(w in t for w in ("сейчас", "до", "вперёд", "вперед", "before")):
+        # ВАЖНО: «до отработки» содержит «отработ», поэтому маркеры
+        # «до …» проверяем ПЕРВЫМИ. Иначе фраза «Сделка в конте
+        # (до отработки)» матчит «отработ» и сваливается в AFTER_WORK.
+        if any(w in t for w in (
+            "до отработ", "до перевяз",
+            "сейчас", "сразу", "вперёд", "вперед",
+            "before", "сначала", "пополнен",
+        )):
             return "GUARANTOR_BEFORE"
-        # дефолт для гаранта без уточнения — после перевязки
-        return "GUARANTOR_AFTER"
+        if any(w in t for w in ("после отработ", "post_work")):
+            return "GUARANTOR_AFTER_WORK"
+        if "после перевяз" in t:
+            return "GUARANTOR_AFTER"
+        # Дефолт «после отработки» — самый частый сценарий PRIDE.
+        return "GUARANTOR_AFTER_WORK"
     if is_usdt:
         return "USDT_TRC20"
     return ""
+
+
+# Маркеры строк анкеты ЛК — используются для де-склейки и разбиения на блоки.
+_LK_LINE_MARKERS = (
+    "поставщик", "supplier", "клиент",
+    "банк", "bank",
+    "ф.и.о", "фио", "fio", "holder",
+    "цена", "price",
+    "метод", "способ", "payment",
+    "номер сделки", "сделка", "deal_id", "deal",
+    "адрес", "usdt", "trc20", "wallet",
+    "статус", "status",
+)
+
+
+def _unstick_lk_lines(text: str) -> str:
+    """Вставляет перенос строки перед маркером анкеты если он «слипся»
+    с предыдущим значением. Например `Банк: АльфаФИО: Иванов` → две строки."""
+    if not text:
+        return text
+    # Регекс «маркер + двоеточие/тире» — вставляем \n перед ним, если он
+    # не в начале строки.
+    pattern = (
+        r"(?<!^)(?<!\n)\s*"
+        r"(?=(?:поставщик|supplier|клиент|банк|bank|ф\.?и\.?о\.?|fio|holder|"
+        r"цена|price|метод(?:\s+оплаты)?|способ\s+оплаты|payment|"
+        r"номер\s+сделки|сделка|deal_id|deal|"
+        r"адрес|usdt|trc20|wallet|статус|status)"
+        r"\s*[:—\-])"
+    )
+    return re.sub(pattern, "\n", text, flags=re.I)
+
+
+def split_lk_cards_text(text: str) -> list:
+    """Разбивает мульти-карточный текст на отдельные блоки по «Поставщик:».
+    Каждый блок передаётся в parse_lk_card отдельно. Возвращает list[str]."""
+    if not text:
+        return []
+    clean = _strip_markdown(text)
+    clean = _unstick_lk_lines(clean)
+    lines = clean.splitlines()
+    # Если в тексте только один «Поставщик:» — возвращаем как есть.
+    supplier_marker = re.compile(
+        r"^\s*(?:\d+[.)]\s*)?(?:поставщик|supplier|клиент)\s*[:—\-]",
+        re.I,
+    )
+    indices = [i for i, ln in enumerate(lines) if supplier_marker.match(ln)]
+    if len(indices) < 2:
+        return [clean] if clean.strip() else []
+    # Разбиваем по индексам Поставщик:
+    blocks = []
+    for idx, start in enumerate(indices):
+        end = indices[idx + 1] if idx + 1 < len(indices) else len(lines)
+        block = "\n".join(lines[start:end]).strip()
+        if block:
+            blocks.append(block)
+    return blocks
 
 
 def parse_lk_card(text: str) -> Optional[dict]:
@@ -212,6 +276,7 @@ def parse_lk_card(text: str) -> Optional[dict]:
     if not text:
         return None
     clean = _strip_markdown(text)
+    clean = _unstick_lk_lines(clean)
 
     out: dict = {}
 

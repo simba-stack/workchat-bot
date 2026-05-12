@@ -147,6 +147,10 @@ class UserbotService:
         #   - перевязкой ЛК ('🔗 Перевяз ЛК выполнен')
         #   - истечением TTL.
         self._ai_silent_until: dict[str, float] = {}
+        # Pending запрос на удаление всех ЛК (команда «Ассистент удалить все ЛК»).
+        # Структура: {chat_key: {msg_id, requested_by, approved_by: set, expires_at}}.
+        # Удаление срабатывает когда approved_by содержит ID Тимона И ID любого админа.
+        self._pending_delete_all_lk: dict[str, dict] = {}
 
     def _get_welcome_lock(self, chat_id) -> asyncio.Lock:
         """Lock на отправку welcome для конкретного чата.
@@ -1274,6 +1278,10 @@ class UserbotService:
             await self._apply_sync_clients(event)
             return
 
+        # Команда удаления всех карточек ЛК (с двойным подтверждением)
+        if await self._maybe_handle_delete_all_lk(event, text):
+            return
+
         # БРАК / БЛОК — короткие команды
         if low.startswith("брак"):
             cmd = accounting2.parse_brak_command(text)
@@ -1288,6 +1296,12 @@ class UserbotService:
 
         # Анкета (мульти-строка с банком/ценой/методом)
         if "\n" in text and ("банк" in low or "поставщик" in low):
+            # Сначала — попытка bulk-парса (несколько анкет в одном сообщении,
+            # разделённых строкой «Поставщик: …»).
+            blocks = accounting2.split_lk_cards_text(text)
+            if len(blocks) > 1:
+                await self._apply_bulk_manual_lk_cards(event, blocks)
+                return
             card_data = accounting2.parse_lk_card(text)
             if not card_data:
                 await self._reply_lk_template_hint(
@@ -1810,6 +1824,246 @@ class UserbotService:
             await event.reply(body, parse_mode="html", link_preview=False)
         except Exception as e:
             logger.warning("template hint reply failed: %s", e)
+
+    # Команда удаления всех ЛК — деструктивная, требует двойного «+»
+    # от Тимона (id 397572312) и от любого админа (`storage.get_admins()`).
+    _AI_CMD_DELETE_ALL_LK_RE = re.compile(
+        r"^\s*ассистент[,\s]+"
+        r"(?:удали(?:ть)?|очисти(?:ть)?|сотри|сотрите|обнули|обнулить|"
+        r"стереть|снеси|снести)\s+"
+        r"(?:все|всю|всех|всё|базу)\s*"
+        r"(?:лк|карточк[уи]|анкет[ыу]|кабинет[ыов]*)?\s*$",
+        re.I | re.M,
+    )
+    _AI_CMD_DELETE_CANCEL_RE = re.compile(
+        r"^\s*ассистент[,\s]+(?:отмена|стоп\s+удаления?|отмени(?:ть)?)",
+        re.I | re.M,
+    )
+    _PENDING_TTL_SEC = 600  # 10 минут на сбор подтверждений
+
+    async def _maybe_handle_delete_all_lk(self, event, text: str) -> bool:
+        """Обработка команды «Ассистент удалить все ЛК» и подтверждений «+»."""
+        from storage import _norm_chat_id
+        chat_key = _norm_chat_id(event.chat_id)
+
+        try:
+            sender_id = int(event.sender_id) if event.sender_id else 0
+        except Exception:
+            sender_id = 0
+
+        # Команда отмены — снимает pending если есть
+        if self._AI_CMD_DELETE_CANCEL_RE.search(text):
+            if chat_key in self._pending_delete_all_lk:
+                self._pending_delete_all_lk.pop(chat_key, None)
+                try:
+                    await event.reply(
+                        "🚫 Запрос на удаление ВСЕХ ЛК отменён.",
+                        parse_mode="html",
+                    )
+                except Exception:
+                    pass
+                return True
+            return False
+
+        # Команда инициации удаления
+        if self._AI_CMD_DELETE_ALL_LK_RE.search(text):
+            # Только админ или Тимон может инициировать
+            is_admin = sender_id in (storage.get_admins() or [])
+            is_tymon = sender_id == self.TIMON_USER_ID
+            if not (is_admin or is_tymon):
+                await event.reply(
+                    "🚫 Удаление ЛК доступно только админам и Тимону.",
+                    parse_mode="html",
+                )
+                return True
+
+            total = len(storage.list_lk_cards() or {})
+            if total == 0:
+                await event.reply("ℹ️ База ЛК уже пустая.", parse_mode="html")
+                return True
+
+            # Создаём pending
+            msg_text = (
+                f"⚠️ <b>Запрос на удаление ВСЕХ карточек ЛК</b> ({total} шт.)\n\n"
+                f"Запросил: <code>{sender_id}</code>\n\n"
+                "Для выполнения нужны <b>два +</b>:\n"
+                "• от <b>@TimonSkupCL</b>\n"
+                "• от <b>админа</b> юзербота\n\n"
+                "Напишите <code>+</code> в reply на это сообщение, чтобы подтвердить.\n"
+                "Или <code>Ассистент отмена</code> чтобы отменить.\n\n"
+                f"<i>TTL подтверждения: 10 минут.</i>"
+            )
+            try:
+                sent = await event.reply(
+                    msg_text, parse_mode="html", link_preview=False,
+                )
+            except Exception as e:
+                logger.warning("delete_all_lk request send failed: %s", e)
+                return True
+            sent_id = getattr(sent, "id", None) or 0
+            self._pending_delete_all_lk[chat_key] = {
+                "msg_id": int(sent_id),
+                "requested_by": sender_id,
+                "approved_by": set(),
+                "expires_at": time.time() + self._PENDING_TTL_SEC,
+                "total": total,
+            }
+            return True
+
+        # «+» (или «плюс») — подтверждение от уполномоченного
+        if re.match(r"^\s*\+\s*$", text):
+            pending = self._pending_delete_all_lk.get(chat_key)
+            if not pending:
+                return False
+            # TTL
+            if time.time() > pending.get("expires_at", 0):
+                self._pending_delete_all_lk.pop(chat_key, None)
+                try:
+                    await event.reply(
+                        "⌛ Запрос истёк (10 мин). Повтори команду заново.",
+                        parse_mode="html",
+                    )
+                except Exception:
+                    pass
+                return True
+            # Проверка reply'я на нужное сообщение (опционально, не обязательно)
+            # Главное — sender уполномочен и не подтверждал ранее
+            is_admin = sender_id in (storage.get_admins() or [])
+            is_tymon = sender_id == self.TIMON_USER_ID
+            if not (is_admin or is_tymon):
+                await event.reply(
+                    "🚫 Подтвердить может только админ или Тимон.",
+                    parse_mode="html",
+                )
+                return True
+            # Категория подтверждения
+            cat = "tymon" if is_tymon else "admin"
+            approved = pending["approved_by"]
+            if cat in approved:
+                await event.reply(
+                    f"ℹ️ Ты уже подтверждал ({cat}). Жду подтверждение от "
+                    f"{'админа' if cat == 'tymon' else 'Тимона'}.",
+                    parse_mode="html",
+                )
+                return True
+            approved.add(cat)
+            # Готово?
+            if "tymon" in approved and "admin" in approved:
+                total = pending.get("total", 0)
+                self._pending_delete_all_lk.pop(chat_key, None)
+                try:
+                    n = await storage.delete_all_lk_cards()
+                    await event.reply(
+                        f"🗑 <b>Удалено</b>: {n} карточек ЛК. База очищена.",
+                        parse_mode="html",
+                    )
+                    logger.info(
+                        "delete_all_lk: %d cards removed (approved by tymon+admin)",
+                        n,
+                    )
+                except Exception as e:
+                    await event.reply(
+                        f"⚠️ Ошибка удаления: <code>{e}</code>",
+                        parse_mode="html",
+                    )
+                    logger.exception("delete_all_lk failed: %s", e)
+                return True
+            else:
+                missing = "Тимона" if "tymon" not in approved else "админа"
+                await event.reply(
+                    f"✅ {cat} подтвердил. Жду подтверждение от <b>{missing}</b>.",
+                    parse_mode="html",
+                )
+                return True
+
+        return False
+
+    async def _apply_bulk_manual_lk_cards(self, event, blocks: list):
+        """Массовый ввод: несколько анкет в одном сообщении, разделённые
+        строкой «Поставщик: …». Каждый блок — отдельная карточка.
+        В конце шлёт сводку (добавлено N, ошибок M).
+        """
+        created_by_tag = self._resolve_created_by_tag(event)
+        ok_lines: list = []
+        skip_lines: list = []
+        for block in blocks:
+            card_data = accounting2.parse_lk_card(block)
+            if not card_data:
+                first_line = block.splitlines()[0][:60] if block else "?"
+                skip_lines.append(
+                    f"❌ <code>{first_line}…</code> — формат не распознан"
+                )
+                continue
+            if not (card_data.get("fio") or "").strip():
+                first_line = block.splitlines()[0][:60] if block else "?"
+                skip_lines.append(
+                    f"❌ <code>{first_line}…</code> — нет ФИО"
+                )
+                continue
+            method = (card_data.get("payment_method") or "").upper()
+            if method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER"):
+                deal_id = (card_data.get("deal_id") or "").strip().lstrip("-").strip()
+                if not deal_id or deal_id in ("-", "—"):
+                    skip_lines.append(
+                        f"❌ {card_data.get('bank')} {card_data.get('fio')} — "
+                        f"для {method} нужен номер сделки"
+                    )
+                    continue
+            # USDT адрес — желательно но не обязательно для bulk (можно дозаполнить позже)
+            card_data["_created_by"] = created_by_tag
+            # Резолв work_chat по supplier — то же что в обычном _apply_manual_lk_card
+            supplier = (card_data.get("supplier") or "").lstrip("@")
+            if supplier and not card_data.get("work_chat_id"):
+                resolved = self._resolve_work_chat_by_supplier(supplier)
+                if resolved:
+                    card_data.update(resolved)
+            try:
+                created_by = card_data.pop("_created_by", None) or "manual"
+                card_id = await storage.add_lk_card(
+                    **card_data, created_by=created_by,
+                )
+            except Exception as e:
+                skip_lines.append(
+                    f"❌ {card_data.get('bank')} {card_data.get('fio')} — "
+                    f"ошибка: <code>{e}</code>"
+                )
+                continue
+            # Постим саму анкету как reply
+            try:
+                card = storage.get_lk_card(card_id) or {}
+                rendered = accounting2.format_lk_card(card)
+                sent = await event.reply(
+                    rendered, parse_mode="html", link_preview=False,
+                )
+                sent_id = getattr(sent, "id", None)
+                if sent_id:
+                    await storage.set_lk_card_msg_id(card_id, int(sent_id))
+            except Exception as e:
+                logger.warning("bulk_lk: card %s post failed: %s", card_id, e)
+            ok_lines.append(
+                f"✅ <code>#{card_id}</code> {card_data.get('bank')} "
+                f"{card_data.get('fio')}"
+            )
+            # Чтобы Telegram не словил FloodWait при большом количестве:
+            await asyncio.sleep(0.2)
+
+        report = f"📦 <b>Массовый импорт ЛК</b>\n\n"
+        if ok_lines:
+            report += f"✅ Добавлено: <b>{len(ok_lines)}</b>\n"
+            report += "\n".join(ok_lines[:30])
+            if len(ok_lines) > 30:
+                report += f"\n<i>… и ещё {len(ok_lines) - 30}</i>"
+        if skip_lines:
+            if ok_lines:
+                report += "\n\n"
+            report += f"⚠️ Пропущено: <b>{len(skip_lines)}</b>\n"
+            report += "\n".join(skip_lines[:10])
+            if len(skip_lines) > 10:
+                report += f"\n<i>… и ещё {len(skip_lines) - 10}</i>"
+        try:
+            await event.reply(report, parse_mode="html", link_preview=False)
+        except Exception as e:
+            logger.warning("bulk_lk summary reply failed: %s", e)
 
     async def _apply_manual_lk_card(self, event, card_data: dict):
         """Менеджер вручную создал анкету — сохраняем в storage и сразу
