@@ -1104,6 +1104,7 @@ class UserbotService:
                         deal_id=deal_id, by="record_deal",
                     )
                     await self._refresh_lk_card_post(cid)
+                    await self._post_action_reply_to_lk_card(cid)
                     moved_card_id = cid
                     break
             except Exception as e:
@@ -1433,6 +1434,19 @@ class UserbotService:
             if compact:
                 compact["_created_by"] = self._resolve_created_by_tag(event)
                 await self._apply_manual_lk_card(event, compact)
+                return
+
+        # Edit карточки: «#lk044 сделка #12345», «#lk044 адрес TXxxx», и т.п.
+        # Или reply на анкету в группе + просто «сделка #12345» / «адрес TX...».
+        m_edit_id = re.match(r"^\s*#?(lk\d+)\s+(.+)$", text, re.I)
+        if m_edit_id:
+            cid_q = m_edit_id.group(1).lower()
+            rest = m_edit_id.group(2)
+            if await self._handle_lk_card_edit(event, rest, card_id=cid_q):
+                return
+        # Reply на анкету без явного #lkNNN — поле/значение в самом тексте
+        if event.message and getattr(event.message, "reply_to", None):
+            if await self._handle_lk_card_edit(event, text):
                 return
 
     async def _apply_brak_command(self, event, cmd: dict):
@@ -2604,6 +2618,253 @@ class UserbotService:
         except Exception as e:
             logger.warning("sync_clients summary failed: %s", e)
 
+    # === Редактирование карточки ЛК ===
+    # Команды можно отправлять либо с явным #lkNNN в начале, либо как
+    # reply на анкету. В обоих случаях парсим поле + значение и обновляем.
+    _LK_EDIT_FIELD_PATTERNS = [
+        (re.compile(
+            r"^\s*(?:сделка|deal|номер\s*сделки|deal_id)\s*[:\-]?\s*#?(\S+)\s*$",
+            re.I,
+        ), "deal_id"),
+        (re.compile(
+            r"^\s*(?:адрес|usdt|trc20|wallet|кошел[её]к)\s*[:\-]?\s*(\S+)\s*$",
+            re.I,
+        ), "usdt_address"),
+        (re.compile(
+            r"^\s*(?:цена|price)\s*[:\-]?\s*([\d.,]+)\s*\$?\s*$",
+            re.I,
+        ), "price_usdt"),
+        (re.compile(
+            r"^\s*(?:метод(?:\s*оплаты)?|способ\s*оплаты|payment)\s*[:\-]?\s*(.+?)\s*$",
+            re.I,
+        ), "payment_method"),
+        (re.compile(
+            r"^\s*(?:банк|bank)\s*[:\-]?\s*(.+?)\s*$",
+            re.I,
+        ), "bank"),
+        (re.compile(
+            r"^\s*(?:ф\.?и\.?о\.?|fio|holder)\s*[:\-]?\s*(.+?)\s*$",
+            re.I,
+        ), "fio"),
+        (re.compile(
+            r"^\s*(?:поставщик|supplier|клиент)\s*[:\-]?\s*@?(\S+)\s*$",
+            re.I,
+        ), "supplier"),
+    ]
+    _LK_FIELD_LABELS = {
+        "deal_id": "номер сделки",
+        "usdt_address": "USDT-адрес",
+        "price_usdt": "цена",
+        "payment_method": "метод оплаты",
+        "bank": "банк",
+        "fio": "ФИО",
+        "supplier": "поставщик",
+    }
+
+    def _parse_lk_field_update(self, text: str):
+        """Парсит «поле: значение» — возвращает (field, raw_value) или None."""
+        if not text:
+            return None
+        clean = text.strip()
+        if not clean:
+            return None
+        for pat, field in self._LK_EDIT_FIELD_PATTERNS:
+            m = pat.match(clean)
+            if m:
+                return field, m.group(1).strip()
+        return None
+
+    async def _handle_lk_card_edit(
+        self, event, payload_text: str, card_id: Optional[str] = None,
+    ) -> bool:
+        """Применяет правку поля к карточке. Возвращает True если что-то
+        изменилось (или ошибка отвечена пользователю). False — текст не
+        распознан как edit (передать выше по цепочке хендлеров)."""
+        # Если card_id не передан — пробуем reply на анкету
+        if not card_id and event.message and getattr(event.message, "reply_to", None):
+            reply_to = getattr(event.message.reply_to, "reply_to_msg_id", None)
+            if reply_to:
+                cards = storage.list_lk_cards() or {}
+                for cid, c in cards.items():
+                    if int(c.get("lk_group_msg_id") or 0) == int(reply_to):
+                        card_id = cid
+                        break
+        if not card_id:
+            return False
+        parsed = self._parse_lk_field_update(payload_text)
+        if not parsed:
+            return False
+        field, raw_val = parsed
+        # Подготовка значения
+        update: dict = {}
+        if field == "deal_id":
+            v = raw_val.lstrip("#").strip()
+            if v in ("-", "—", ""):
+                v = ""
+            update["deal_id"] = v
+        elif field == "usdt_address":
+            v = raw_val.strip()
+            if v in ("-", "—"):
+                v = ""
+            update["usdt_address"] = v
+        elif field == "price_usdt":
+            try:
+                update["price_usdt"] = float(raw_val.replace(",", ".").rstrip("$"))
+            except ValueError:
+                await event.reply(
+                    f"⚠️ Не понял цену: <code>{raw_val}</code>",
+                    parse_mode="html",
+                )
+                return True
+        elif field == "payment_method":
+            normalized = accounting2._normalize_method(raw_val)
+            if not normalized:
+                await event.reply(
+                    f"⚠️ Не понял метод: <code>{raw_val}</code>. "
+                    "Допустимы: USDT_TRC20 / GUARANTOR_BEFORE / GUARANTOR_AFTER / "
+                    "GUARANTOR_AFTER_WORK или фразы «сделка в конте (до/после отработки)».",
+                    parse_mode="html",
+                )
+                return True
+            update["payment_method"] = normalized
+        elif field in ("bank", "fio"):
+            update[field] = raw_val.strip()
+        elif field == "supplier":
+            update["supplier"] = raw_val.lstrip("@").strip()
+        if not update:
+            return False
+        ok = await storage.update_lk_card(card_id, **update)
+        if not ok:
+            await event.reply(
+                f"⚠️ Карточка <code>#{card_id}</code> не найдена.",
+                parse_mode="html",
+            )
+            return True
+        await self._refresh_lk_card_post(card_id)
+        label = self._LK_FIELD_LABELS.get(field, field)
+        await event.reply(
+            f"✅ <code>#{card_id}</code> · {label} обновлён.",
+            parse_mode="html",
+        )
+        logger.info(
+            "lk_card_edit: card=%s field=%s value=%r by=%s",
+            card_id, field, update.get(field), event.sender_id,
+        )
+
+        # Спец-логика: задан deal_id для ОТРАБОТАН + GUARANTOR_AFTER_WORK
+        # → автоматически переводим в ПОПОЛНИТЬ_И_ОТПУСТИТЬ.
+        if field == "deal_id" and update["deal_id"]:
+            try:
+                card = storage.get_lk_card(card_id) or {}
+                if (card.get("status") == "ОТРАБОТАН"
+                        and (card.get("payment_method") or "").upper()
+                            == "GUARANTOR_AFTER_WORK"):
+                    await storage.set_lk_card_status(
+                        card_id, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                        by="manual_edit_deal_id",
+                    )
+                    await self._refresh_lk_card_post(card_id)
+                    await self._post_action_reply_to_lk_card(card_id)
+            except Exception as e:
+                logger.warning(
+                    "auto status change after deal_id edit failed: %s", e,
+                )
+
+        # Спец-логика: задан usdt_address для ОТРАБОТАН + USDT_TRC20 →
+        # повторный reply на анкету с инструкцией (теперь адрес есть).
+        if field == "usdt_address" and update["usdt_address"]:
+            try:
+                card = storage.get_lk_card(card_id) or {}
+                if (card.get("status") == "ОТРАБОТАН"
+                        and (card.get("payment_method") or "").upper()
+                            == "USDT_TRC20"):
+                    await self._post_action_reply_to_lk_card(card_id)
+            except Exception as e:
+                logger.warning(
+                    "post-action reply after usdt_address edit failed: %s", e,
+                )
+        return True
+
+    async def _post_action_reply_to_lk_card(self, card_id: str) -> bool:
+        """Кидает reply на анкету ЛК в Группе 1 с инструкцией для работника-
+        выплат — какое следующее действие нужно. Вызывается после смены
+        статуса на ОТРАБОТАН/ПОПОЛНИТЬ_И_ОТПУСТИТЬ.
+
+        Возвращает True если reply отправлен."""
+        card = storage.get_lk_card(card_id) or {}
+        if not card:
+            return False
+        msg_id = int(card.get("lk_group_msg_id") or 0)
+        lk_gid = storage.get_lk_group_id()
+        if not lk_gid or not msg_id:
+            return False
+        status = card.get("status") or ""
+        method = (card.get("payment_method") or "").upper()
+        deal_id = (card.get("deal_id") or "").strip().lstrip("#")
+        usdt_addr = (card.get("usdt_address") or "").strip()
+        price = accounting2._fmt_usdt(card.get("price_usdt", 0))
+
+        text = ""
+        if status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ" and deal_id:
+            text = (
+                f"💎 <b>ПОПОЛНИТЬ И ОТПУСТИТЬ</b> сделку "
+                f"<code>#{deal_id}</code>\n"
+                f"Сумма: <b>{price}</b>"
+            )
+        elif status == "ОТРАБОТАН":
+            if method == "USDT_TRC20":
+                if usdt_addr:
+                    text = (
+                        f"💸 <b>ОПЛАТИТЕ USDT TRC20</b>\n"
+                        f"Адрес: <code>{usdt_addr}</code>\n"
+                        f"Сумма: <b>{price}</b>"
+                    )
+                else:
+                    text = (
+                        "⚠️ <b>USDT TRC20</b> — адрес не задан.\n"
+                        "Дополни командой <code>адрес TX...</code> в reply "
+                        "на эту анкету (или <code>#" + card_id + " адрес TX...</code>)"
+                    )
+            elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER") and deal_id:
+                text = (
+                    f"🔓 <b>ОТПУСТИТЕ</b> сделку <code>#{deal_id}</code>\n"
+                    f"Сумма: <b>{price}</b>"
+                )
+            elif method == "GUARANTOR_AFTER_WORK":
+                if deal_id:
+                    text = (
+                        f"💎 <b>ПОПОЛНИТЬ И ОТПУСТИТЬ</b> сделку "
+                        f"<code>#{deal_id}</code>"
+                    )
+                else:
+                    text = (
+                        "⏳ <b>Ждём создания сделки клиентом.</b>\n"
+                        "Когда придёт номер — статус изменится автоматически."
+                    )
+            else:
+                text = (
+                    f"⚠️ Метод <code>{method or '—'}</code> — действие неясно."
+                )
+        if not text:
+            return False
+        try:
+            target = await self._resolve_chat_target(lk_gid)
+            await self.client.send_message(
+                target, text, reply_to=msg_id,
+                parse_mode="html", link_preview=False,
+            )
+            logger.info(
+                "post action reply to lk_card=%s status=%s method=%s",
+                card_id, status, method,
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                "post action reply to lk_card=%s failed: %s",
+                card_id, e,
+            )
+            return False
+
     async def _refresh_lk_card_post(self, card_id: str) -> bool:
         """Edit/post карточки в Группе 1 актуальным состоянием."""
         card = storage.get_lk_card(card_id)
@@ -3212,6 +3473,19 @@ class UserbotService:
             "<code>БРАК ОЗОН Иванов причина</code>\n"
             "<code>БЛОК АЛЬФА Петров 50000 описание_как_снять</code>\n"
             "\n"
+            "<b>✏️ Дополнить / изменить поле карточки</b>\n"
+            "По <code>#lkNNN</code>:\n"
+            "<code>#lk044 сделка #12345</code>\n"
+            "<code>#lk044 адрес TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code>\n"
+            "<code>#lk044 цена 350</code>\n"
+            "<code>#lk044 метод USDT_TRC20</code>\n"
+            "<code>#lk044 банк ОЗОН</code> / <code>#lk044 ФИО Иванов И.И.</code>\n"
+            "Либо reply на анкету (без <code>#lkNNN</code>):\n"
+            "<code>сделка #12345</code> / <code>адрес TX...</code> / "
+            "<code>цена 350</code> / <code>метод USDT_TRC20</code>\n"
+            "<i>Если задаёшь номер сделки для ОТРАБОТАН + GUARANTOR_AFTER_WORK — "
+            "карточка автоматически переходит в ПОПОЛНИТЬ_И_ОТПУСТИТЬ.</i>\n"
+            "\n"
             "<b>🗑 Удалить ОДНУ карточку</b>\n"
             "<code>Ассистент удали ЛК #lk010</code>\n"
             "<code>Ассистент удали ЛК Альфа Иванов</code>\n"
@@ -3557,6 +3831,7 @@ class UserbotService:
                     last_application_id=new_id,
                 )
                 await self._refresh_lk_card_post(cid)
+                await self._post_action_reply_to_lk_card(cid)
                 asyncio.create_task(
                     self._request_post_work_deal(card)
                 )
@@ -3567,6 +3842,7 @@ class UserbotService:
                     last_application_id=new_id,
                 )
                 await self._refresh_lk_card_post(cid)
+                await self._post_action_reply_to_lk_card(cid)
             moved += 1
 
         if moved:
