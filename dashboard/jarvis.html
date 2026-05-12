@@ -820,6 +820,138 @@
     margin-top: 8px;
   }
 
+  /* ===== Lion narrator sphere ===== */
+  .lion-sphere {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    max-width: 240px;
+    margin: 0 auto 8px;
+  }
+  .lion-sphere::before {
+    /* outer radar ring */
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    animation: lion-radar 6s linear infinite;
+  }
+  .lion-sphere::after {
+    /* inner ring */
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border-radius: 50%;
+    border: 1px dashed rgba(var(--primary-rgb), 0.18);
+    animation: lion-radar-rev 12s linear infinite;
+  }
+  @keyframes lion-radar {
+    0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); }
+  }
+  @keyframes lion-radar-rev {
+    0% { transform: rotate(360deg); } 100% { transform: rotate(0deg); }
+  }
+  .lion-svg-wrap {
+    position: absolute;
+    inset: 14px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(var(--primary-rgb), 0.18) 0%, rgba(8,14,30,0.95) 70%);
+    box-shadow:
+      0 0 30px rgba(var(--primary-rgb), 0.35),
+      inset 0 0 24px rgba(var(--primary-rgb), 0.2);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lion-svg { width: 75%; height: 75%; }
+  .lion-svg .mouth {
+    transform-origin: 100px 130px;
+    transition: transform 0.08s linear;
+  }
+  .lion-speaking .lion-svg .mouth {
+    animation: mouth-talk 0.18s ease-in-out infinite alternate;
+  }
+  @keyframes mouth-talk {
+    0%   { transform: scaleY(1);   }
+    100% { transform: scaleY(1.5); }
+  }
+  .lion-svg .eye {
+    animation: lion-blink 5s infinite;
+  }
+  @keyframes lion-blink {
+    0%, 94%, 100% { opacity: 1; }
+    96%           { opacity: 0; }
+  }
+  .lion-status {
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 6px 0;
+  }
+  .lion-status.speaking { color: var(--hud-primary); text-shadow: 0 0 8px currentColor; }
+
+  /* ===== Command chat ===== */
+  .cmd-chat-input-wrap {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid rgba(var(--primary-rgb), 0.15);
+  }
+  .cmd-chat-input {
+    flex: 1;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border 0.2s;
+  }
+  .cmd-chat-input:focus { border-color: var(--hud-primary); }
+  .cmd-chat-send {
+    background: rgba(var(--primary-rgb), 0.15);
+    border: 1px solid var(--hud-primary);
+    color: var(--hud-primary);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .cmd-chat-send:hover { background: rgba(var(--primary-rgb), 0.3); }
+  .cmd-chat-log {
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .cmd-chat-msg {
+    padding: 6px 14px;
+    font-size: 11px;
+    line-height: 1.4;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .cmd-chat-msg .who {
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .cmd-chat-msg.you .who    { color: var(--hud-primary); }
+  .cmd-chat-msg.lion .who   { color: var(--hud-amber); }
+  .cmd-chat-msg.result .who { color: var(--hud-emerald); }
+  .cmd-chat-msg.err .who    { color: var(--hud-rose); }
+  .cmd-chat-msg .body { color: var(--text); word-break: break-word; }
+  .cmd-chat-msg.lion .body  { color: var(--hud-amber); font-style: italic; }
+  .cmd-chat-msg.err .body   { color: var(--hud-rose); }
+
   /* Scrollbars */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: rgba(var(--primary-rgb),0.04); }
@@ -869,6 +1001,7 @@
       <span x-text="'AI ' + (state.stats.ai_enabled ? 'ON' : 'OFF')"></span>
     </div>
     <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
+    <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 LOGOUT</div>
     <div class="stat-pill"><span x-text="clockText"></span></div>
   </div>
 </header>
@@ -886,6 +1019,79 @@
 
   <!-- LEFT -->
   <aside class="space-y-4">
+    <!-- ===== LION NARRATOR ===== -->
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Narrator · LEO
+        <span class="badge-mini" :class="lionEnabled ? '' : 'opacity-50'" x-text="lionEnabled ? 'ACTIVE' : 'MUTED'" @click="toggleLion()" style="cursor: pointer;"></span>
+      </div>
+      <div style="padding: 12px;">
+        <div class="lion-sphere" :class="lionSpeaking ? 'lion-speaking' : ''">
+          <div class="lion-svg-wrap">
+            <svg class="lion-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+              <!-- mane (грива) — лучи-треугольники -->
+              <g fill="currentColor" style="color: var(--hud-primary); opacity: 0.6;">
+                <polygon points="100,8 88,52 112,52"/>
+                <polygon points="60,18 60,62 88,52"/>
+                <polygon points="32,42 56,80 76,68"/>
+                <polygon points="20,90 60,90 56,72"/>
+                <polygon points="22,130 64,108 54,92"/>
+                <polygon points="40,160 78,132 64,118"/>
+                <polygon points="140,18 140,62 112,52"/>
+                <polygon points="168,42 144,80 124,68"/>
+                <polygon points="180,90 140,90 144,72"/>
+                <polygon points="178,130 136,108 146,92"/>
+                <polygon points="160,160 122,132 136,118"/>
+              </g>
+              <!-- face -->
+              <circle cx="100" cy="100" r="42" fill="rgba(8,14,30,0.9)" stroke="var(--hud-primary)" stroke-width="1.5"/>
+              <!-- eyes -->
+              <ellipse class="eye" cx="84" cy="92" rx="4" ry="6" fill="var(--hud-primary)"/>
+              <ellipse class="eye" cx="116" cy="92" rx="4" ry="6" fill="var(--hud-primary)"/>
+              <!-- inner eye glow -->
+              <circle cx="84" cy="92" r="1.6" fill="#ffffff"/>
+              <circle cx="116" cy="92" r="1.6" fill="#ffffff"/>
+              <!-- nose -->
+              <polygon points="100,108 92,118 108,118" fill="var(--hud-primary)"/>
+              <!-- mouth (анимируется при речи) -->
+              <ellipse class="mouth" cx="100" cy="130" rx="9" ry="5" fill="var(--bg-deep)" stroke="var(--hud-primary)" stroke-width="1.3"/>
+              <!-- chin lines -->
+              <line x1="100" y1="118" x2="100" y2="124" stroke="var(--hud-primary)" stroke-width="1.2"/>
+              <line x1="88" y1="118" x2="84" y2="105" stroke="var(--hud-primary)" stroke-width="0.8" opacity="0.5"/>
+              <line x1="112" y1="118" x2="116" y2="105" stroke="var(--hud-primary)" stroke-width="0.8" opacity="0.5"/>
+            </svg>
+          </div>
+        </div>
+        <div class="lion-status" :class="lionSpeaking ? 'speaking' : ''" x-text="lionStatus"></div>
+      </div>
+    </div>
+
+    <!-- ===== COMMAND CHAT ===== -->
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Command Console
+        <span class="badge-mini">FREE-FORM</span>
+      </div>
+      <div class="cmd-chat-log" x-ref="cmdlog">
+        <template x-if="cmdLog.length === 0">
+          <div class="cmd-chat-msg lion">
+            <span class="who">LEO</span>
+            <span class="body">Я готов выполнять команды. Примеры: <code>stats</code>, <code>pause ai</code>, <code>рассылка работчатам: текст</code>, <code>рассылка боту: текст</code>, <code>рассылка незарегистрированным: текст</code>.</span>
+          </div>
+        </template>
+        <template x-for="(m, i) in cmdLog" :key="i">
+          <div class="cmd-chat-msg" :class="m.cls">
+            <span class="who" x-text="m.who"></span>
+            <span class="body" x-text="m.body"></span>
+          </div>
+        </template>
+      </div>
+      <div class="cmd-chat-input-wrap">
+        <input class="cmd-chat-input" placeholder="Команда..." x-model="cmdInput" @keydown.enter="sendCmd()"/>
+        <button class="cmd-chat-send" @click="sendCmd()">▶</button>
+      </div>
+    </div>
+
     <div class="jarvis-panel">
       <div class="panel-title">
         Communications
@@ -1240,6 +1446,16 @@ function jarvis() {
     clockText: '--:--:--',
     sparklines: {},  // metric -> [{date, value}]
     lastReply: { ts: 0, text: '', chat: '' },
+    // Lion narrator
+    lionEnabled: localStorage.getItem('jarvis-lion') !== '0',
+    lionSpeaking: false,
+    lionStatus: 'IDLE',
+    lionQueue: [],
+    lionVoice: null,
+    // Command console
+    cmdInput: '',
+    cmdLog: [],
+    knownCmds: new Set(),
     funnelSteps: [
       { key: 'starts',         label: 'Старт',      zone: 'left'   },
       { key: 'chats_created',  label: 'Беседы',     zone: 'left'   },
@@ -1275,6 +1491,9 @@ function jarvis() {
       { id: 'refresh', icon: '↻', label: 'Refresh всё', hint: 'r', action: () => this.refreshAll() },
       { id: 'classic', icon: '◧', label: 'Открыть классический дашборд', action: () => location.href = '/classic' },
       { id: 'health', icon: '♥', label: 'Healthcheck', action: () => window.open('/healthz', '_blank') },
+      { id: 'logout', icon: '🚪', label: 'Выйти (logout)', action: () => location.href = '/logout' },
+      { id: 'login', icon: '🔑', label: 'Telegram login', action: () => location.href = '/login' },
+      { id: 'sync_lk', icon: '↻', label: 'Запросить sync карточек ЛК', action: () => this.requestSyncLK() },
     ],
 
     // === Modals ===
@@ -1294,8 +1513,9 @@ function jarvis() {
       this.startClock();
       this.setupHotkeys();
       this.generateClientDots();
-      // init sound (если включён)
+      this.initLion();
       if (this.soundOn) this.initAudio();
+      this.startCmdResultsPoller();
     },
 
     startClock() {
@@ -1467,12 +1687,51 @@ function jarvis() {
       } catch (e) {}
     },
 
-    // === SSE ===
+    // === Connect: пробуем WebSocket, fallback на SSE ===
     connectSSE() {
-      this.connState = 'connecting'; this.connText = 'CONNECTING';
+      this.connectWS();  // try WS first
+    },
+    connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/ws`;
+      this.connState = 'connecting'; this.connText = 'WS CONNECTING';
+      try {
+        this.ws = new WebSocket(url);
+        this.ws.onopen = () => {
+          this.connState = 'online'; this.connText = 'WS ONLINE';
+          // ping periodically
+          this.wsPingInterval = setInterval(() => {
+            try { this.ws.send(JSON.stringify({ cmd: 'ping' })); } catch {}
+          }, 25000);
+        };
+        this.ws.onclose = () => {
+          this.connState = 'offline'; this.connText = 'WS LOST · SSE...';
+          if (this.wsPingInterval) clearInterval(this.wsPingInterval);
+          // Fallback на SSE
+          setTimeout(() => this.connectSSEFallback(), 1500);
+        };
+        this.ws.onerror = () => {
+          // close handler сделает остальное
+        };
+        this.ws.onmessage = (e) => {
+          try {
+            const m = JSON.parse(e.data);
+            if (m.kind === 'event') {
+              this.handleEvent(m);
+            } else if (m.kind === 'state') {
+              // обновим частично
+              if (m.ai_enabled !== undefined) this.state.stats.ai_enabled = m.ai_enabled;
+            }
+          } catch {}
+        };
+      } catch (e) {
+        this.connectSSEFallback();
+      }
+    },
+    connectSSEFallback() {
       try {
         this.es = new EventSource('/api/events/stream');
-        this.es.onopen = () => { this.connState = 'online'; this.connText = 'ONLINE'; };
+        this.es.onopen = () => { this.connState = 'online'; this.connText = 'SSE ONLINE'; };
         this.es.onerror = () => { this.connState = 'offline'; this.connText = 'RECONNECT'; };
         this.es.onmessage = (e) => {
           try { this.handleEvent(JSON.parse(e.data)); } catch {}
@@ -1518,6 +1777,9 @@ function jarvis() {
       if (['ai-reply','application-processed','lk-created','lk-status-changed'].includes(t)) {
         setTimeout(() => this.refresh(), 600);
       }
+
+      // Lion narrator — озвучить важное событие
+      this.lionNarrateEvent(ev);
     },
 
     shortMsg(ev) {
@@ -1694,6 +1956,143 @@ function jarvis() {
     },
 
     // === Control actions ===
+    // === Lion narrator ===
+    initLion() {
+      if (!('speechSynthesis' in window)) {
+        this.lionStatus = 'TTS UNSUPPORTED';
+        return;
+      }
+      // Подбираем русский голос если есть
+      const pick = () => {
+        const voices = speechSynthesis.getVoices();
+        this.lionVoice =
+          voices.find(v => /ru[-_]/i.test(v.lang)) ||
+          voices.find(v => /russian/i.test(v.name)) ||
+          voices[0] || null;
+      };
+      pick();
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = pick;
+      }
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+    },
+    toggleLion() {
+      this.lionEnabled = !this.lionEnabled;
+      localStorage.setItem('jarvis-lion', this.lionEnabled ? '1' : '0');
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+      if (!this.lionEnabled) {
+        try { speechSynthesis.cancel(); } catch {}
+        this.lionSpeaking = false;
+      } else {
+        this.lionSay('Готов к работе.');
+      }
+    },
+    lionSay(text) {
+      if (!this.lionEnabled || !text) return;
+      if (!('speechSynthesis' in window)) return;
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        if (this.lionVoice) u.voice = this.lionVoice;
+        u.lang = (this.lionVoice && this.lionVoice.lang) || 'ru-RU';
+        u.rate = 1.05;
+        u.pitch = 0.85;  // ниже = мужественнее
+        u.volume = 0.9;
+        u.onstart = () => { this.lionSpeaking = true; this.lionStatus = 'SPEAKING'; };
+        u.onend = () => {
+          this.lionSpeaking = false;
+          this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+        };
+        u.onerror = () => { this.lionSpeaking = false; };
+        speechSynthesis.speak(u);
+      } catch (e) {}
+    },
+    lionNarrateEvent(ev) {
+      if (!this.lionEnabled) return;
+      const t = ev.type || '';
+      const p = ev.payload || {};
+      // Только важные события — не озвучивать каждый ping
+      const phrases = {
+        'lk-created': () => `Новая карточка ${p.card_id || ''}, банк ${p.bank || ''}`,
+        'lk-status-changed': () => `Карточка ${p.card_id || ''} переведена в ${(p.new_status || '').replace(/_/g, ' ')}`,
+        'application-processed': () => `Заявка обработана, маржа ${p.margin_usdt || 0} долларов`,
+        'dashboard-ai-toggle': () => p.enabled ? 'Ассистент включён' : 'Ассистент отключён',
+        'dashboard-cmd-done': () => `Команда выполнена: ${p.result || ''}`,
+        'lk-from-worker-perevyaz': () => `Перевяз ${p.bank || ''} выполнен`,
+        'sync-lk-cards': () => `Синхронизация карточек: создано ${p.created || 0}, обновлено ${p.updated || 0}`,
+        'dashboard-login': () => 'Авторизация выполнена',
+      };
+      const builder = phrases[t];
+      if (builder) {
+        try { this.lionSay(builder()); } catch {}
+      }
+    },
+
+    // === Command console ===
+    async sendCmd() {
+      const text = (this.cmdInput || '').trim();
+      if (!text) return;
+      this.cmdLog.push({ who: 'YOU', body: text, cls: 'you' });
+      this.cmdInput = '';
+      try {
+        const r = await fetch('/api/commands', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const cid = data.command && data.command.id;
+          if (cid) this.knownCmds.add(cid);
+          this.cmdLog.push({ who: 'LEO', body: '⏳ принял, исполняю...', cls: 'lion' });
+          this.playBeep(800);
+          this.lionSay('Принято');
+        } else {
+          this.cmdLog.push({ who: 'ERR', body: 'HTTP ' + r.status, cls: 'err' });
+        }
+      } catch (e) {
+        this.cmdLog.push({ who: 'ERR', body: String(e), cls: 'err' });
+      }
+      this.scrollCmdLog();
+    },
+    scrollCmdLog() {
+      this.$nextTick(() => {
+        const box = this.$refs.cmdlog;
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+    },
+    startCmdResultsPoller() {
+      // Раз в 3 сек подтягиваем последние команды и показываем новые результаты
+      setInterval(async () => {
+        try {
+          const r = await fetch('/api/commands?limit=30', { credentials: 'include' });
+          if (!r.ok) return;
+          const data = await r.json();
+          for (const c of (data.commands || [])) {
+            if (c.status !== 'pending' && this.knownCmds.has(c.id) && !this.knownCmds.has('done:' + c.id)) {
+              this.cmdLog.push({
+                who: 'LEO',
+                body: '✅ ' + (c.result || c.status),
+                cls: 'result',
+              });
+              this.knownCmds.add('done:' + c.id);
+              this.scrollCmdLog();
+              this.lionSay(c.result || 'Готово');
+            }
+          }
+        } catch {}
+      }, 3000);
+    },
+
+    async requestSyncLK() {
+      try {
+        const r = await fetch('/api/control/sync_lk_request', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (r.ok) this.playBeep(880);
+      } catch (e) {}
+    },
     async toggleAI() {
       await this.setAI(!this.state.stats.ai_enabled);
     },

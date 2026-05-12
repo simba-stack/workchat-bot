@@ -826,6 +826,100 @@ STATUS_LABELS = {
 }
 
 
+_REVERSE_METHOD_LABELS = {v: k for k, v in METHOD_LABELS.items()}
+_REVERSE_STATUS_LABELS = {v: k for k, v in STATUS_LABELS.items()}
+
+
+def parse_rendered_lk_card(text: str) -> Optional[dict]:
+    """Парсит plain-text сообщение карточки ЛК (то что format_lk_card вернул и
+    Telegram отрендерил). Возвращает {card_id, supplier, bank, fio, price_usdt,
+    payment_method, deal_id, usdt_address, status, ...} или None если не похоже.
+
+    Это обратная функция к format_lk_card — для синхронизации (восстановление
+    storage.lk_cards из истории сообщений в Группе 1 после потери state.json)."""
+    if not text:
+        return None
+    # Первая строка должна быть "🆔 ЛК #lkNNN" (после strip эмодзи)
+    m_head = re.search(r"ЛК\s*#?(lk\d+)", text, re.I)
+    if not m_head:
+        return None
+    cid = m_head.group(1).lower()
+
+    out = {"card_id": cid}
+
+    m = re.search(r"Поставщик:\s*@?([^\s\n]+)", text)
+    if m:
+        sup = m.group(1).strip()
+        if sup.lower() not in ("не", "—", "-"):
+            out["supplier"] = sup.lstrip("@")
+
+    m = re.search(r"Банк:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        out["bank"] = m.group(1).strip()
+
+    m = re.search(r"ФИО:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        fio = m.group(1).strip()
+        if fio not in ("—", "-"):
+            out["fio"] = fio
+
+    m = re.search(r"Цена:\s*([\d.]+)\s*\$", text)
+    if m:
+        try:
+            out["price_usdt"] = float(m.group(1))
+        except ValueError:
+            pass
+
+    m = re.search(r"Метод оплаты:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        label = m.group(1).strip()
+        if label in _REVERSE_METHOD_LABELS:
+            out["payment_method"] = _REVERSE_METHOD_LABELS[label]
+        else:
+            # fallback на нормализатор
+            norm = _normalize_method(label)
+            if norm:
+                out["payment_method"] = norm
+
+    m = re.search(r"Номер сделки:\s*#?([\w\d]+)", text)
+    if m:
+        deal = m.group(1).strip()
+        if deal not in ("—", "-", "создастся", ""):
+            out["deal_id"] = deal
+
+    m = re.search(r"USDT\s*TRC20:\s*([A-Za-z0-9]{20,})", text)
+    if m:
+        out["usdt_address"] = m.group(1).strip()
+
+    m = re.search(r"Статус:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        label = m.group(1).strip()
+        if label in _REVERSE_STATUS_LABELS:
+            out["status"] = _REVERSE_STATUS_LABELS[label]
+        else:
+            # Может быть просто "В РАБОТЕ" без эмодзи / разный формат
+            label_u = label.upper().replace(" ", "_")
+            label_u = re.sub(r"[^\wА-ЯЁ_]", "", label_u)
+            if label_u in STATUS_LABELS:
+                out["status"] = label_u
+
+    # БЛОК — сумма + примечание
+    m = re.search(r"Сумма блока:\s*([\d\s.,]+)", text)
+    if m:
+        try:
+            out["block_amount_rub"] = float(re.sub(r"[^\d.]", "", m.group(1).replace(",", ".")))
+        except ValueError:
+            pass
+    m = re.search(r"Что нужно:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        out["block_note"] = m.group(1).strip()
+    m = re.search(r"Причина:\s*([^\n]+?)\s*$", text, re.M)
+    if m:
+        out["brak_reason"] = m.group(1).strip()
+
+    return out
+
+
 def format_lk_card(card: dict) -> str:
     """Шаблон анкеты ЛК для Группы 1 (Telegram HTML)."""
     cid = card.get("card_id", "?")

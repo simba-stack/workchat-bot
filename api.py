@@ -20,10 +20,13 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import secrets
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -32,10 +35,11 @@ from fastapi import (
     FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 import event_bus
+import config
 from storage import storage
 
 logger = logging.getLogger(__name__)
@@ -46,9 +50,146 @@ security = HTTPBasic(auto_error=False)
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "")
 
+# Telegram OAuth: ID-владельцы которым разрешён вход через Telegram Login.
+# Авто-заполняется из config.ADMIN_ID если env пуст.
+_tg_admins_raw = os.getenv("TG_ADMINS", "") or str(config.ADMIN_ID or "")
+TG_ADMINS = {
+    int(x.strip()) for x in _tg_admins_raw.split(",")
+    if x.strip().isdigit()
+}
+# Username бота (без @) — нужен для Telegram Login Widget.
+# Авто-резолвится из BOT_TOKEN через getMe если env не задан (см. ниже).
+TG_BOT_USERNAME = (os.getenv("TG_BOT_USERNAME", "") or "").lstrip("@").strip()
+# Секрет для подписи session cookies. Хранится в storage.state чтоб переживал
+# рестарты процесса (если volume настроен).
+_env_session_secret = os.getenv("SESSION_SECRET", "")
+SESSION_TTL_SEC = int(os.getenv("SESSION_TTL_DAYS", "30")) * 86400
+SESSION_COOKIE = "jarvis_session"
+# Строгий режим: только Telegram OAuth, Basic-auth выключен.
+# По умолчанию — strict если есть TG_ADMINS и BOT_TOKEN.
+AUTH_STRICT_TELEGRAM = (
+    os.getenv("AUTH_STRICT_TELEGRAM", "auto") or "auto"
+).lower()
+
+
+def _get_session_secret() -> str:
+    """Возвращает SESSION_SECRET. Если env задан — оттуда. Иначе — из
+    storage.state (генерится при первом старте, переживает рестарты если
+    есть volume)."""
+    if _env_session_secret:
+        return _env_session_secret
+    s = storage.state.get("session_secret")
+    if not s:
+        s = secrets.token_urlsafe(32)
+        # Запишем синхронно — мы внутри async-приложения, но эта функция
+        # вызывается на этапе bootstrap
+        try:
+            storage.state["session_secret"] = s
+            # сохранение асинхронное — пометим что нужно сохранить
+            asyncio.get_event_loop().create_task(storage._save_unlocked())
+        except Exception:
+            pass
+    return s
+
+
+# Кеш для bot username из getMe
+_bot_username_cache = {"value": TG_BOT_USERNAME, "checked": False}
+
+
+async def _resolve_bot_username() -> str:
+    """Если TG_BOT_USERNAME не задан в env — резолвим через Telegram getMe."""
+    if _bot_username_cache["value"]:
+        return _bot_username_cache["value"]
+    if _bot_username_cache["checked"]:
+        return ""  # уже пытались
+    _bot_username_cache["checked"] = True
+    if not config.BOT_TOKEN:
+        return ""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as cli:
+            r = await cli.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe")
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("ok"):
+                    uname = (data.get("result") or {}).get("username") or ""
+                    _bot_username_cache["value"] = uname
+                    logger.info("[auth] resolved bot username: @%s", uname)
+                    return uname
+    except Exception as e:
+        logger.warning("[auth] getMe failed: %s", e)
+    return ""
+
+
+def _is_strict_telegram() -> bool:
+    """Включён ли strict mode (только Telegram, без Basic)."""
+    if AUTH_STRICT_TELEGRAM == "1" or AUTH_STRICT_TELEGRAM == "true":
+        return True
+    if AUTH_STRICT_TELEGRAM == "0" or AUTH_STRICT_TELEGRAM == "false":
+        return False
+    # auto: strict если есть BOT_TOKEN и TG_ADMINS (значит OAuth настроен)
+    return bool(config.BOT_TOKEN and TG_ADMINS)
+
 _HTML_PATH = Path(__file__).parent / "dashboard" / "index.html"
 _JARVIS_PATH = Path(__file__).parent / "dashboard" / "jarvis.html"
 DASHBOARD_DEFAULT = (os.getenv("DASHBOARD_DEFAULT", "jarvis") or "").lower()
+
+
+def _sign_session(user_id: int) -> str:
+    """Подписанный куки: '{uid}.{ts}.{hmac}'."""
+    payload = f"{int(user_id)}.{int(time.time())}"
+    sig = hmac.new(
+        _get_session_secret().encode(), payload.encode(), hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _verify_session(cookie: str) -> Optional[int]:
+    """Возвращает user_id из куки если подпись + ttl ОК, иначе None."""
+    try:
+        uid_s, ts_s, sig = cookie.rsplit(".", 2)
+        payload = f"{uid_s}.{ts_s}"
+        expected = hmac.new(
+            _get_session_secret().encode(), payload.encode(), hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        if int(time.time()) - int(ts_s) > SESSION_TTL_SEC:
+            return None
+        return int(uid_s)
+    except Exception:
+        return None
+
+
+def _verify_telegram_login(data: dict) -> bool:
+    """Проверяет hash от Telegram Login Widget.
+    Алгоритм: https://core.telegram.org/widgets/login#checking-authorization
+      1. data_check_string = sort(keys, без 'hash'), join('\\n', f'{k}={v}')
+      2. secret = SHA256(bot_token)
+      3. expected = HMAC-SHA256(secret, data_check_string)
+      4. hmac.compare_digest(expected, received_hash)
+    Также проверяем auth_date свежий (< 1 час).
+    """
+    if not config.BOT_TOKEN:
+        return False
+    received_hash = (data.get("hash") or "").strip()
+    if not received_hash:
+        return False
+    # Сборка строки сверки
+    keys = sorted(k for k in data.keys() if k != "hash")
+    check_string = "\n".join(f"{k}={data[k]}" for k in keys)
+    secret = hashlib.sha256(config.BOT_TOKEN.encode()).digest()
+    expected = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received_hash):
+        return False
+    # Свежесть auth_date (защита от replay): max 3600 сек
+    try:
+        auth_age = int(time.time()) - int(data.get("auth_date", 0))
+        if auth_age > 3600:
+            return False
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def _load_html(which: str = "index") -> str:
@@ -63,34 +204,74 @@ def _load_html(which: str = "index") -> str:
         )
 
 
-def _check_auth(credentials: Optional[HTTPBasicCredentials]) -> None:
-    """Basic auth check. 503 если пароль не задан в env."""
+def _try_session_auth(request: Request) -> Optional[int]:
+    """Если в request есть валидный session cookie с Telegram user_id из
+    TG_ADMINS — возвращает user_id. Иначе None."""
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        return None
+    uid = _verify_session(cookie)
+    if uid is None:
+        return None
+    if TG_ADMINS and uid not in TG_ADMINS:
+        return None
+    return uid
+
+
+def _try_basic_auth(credentials: Optional[HTTPBasicCredentials]) -> bool:
     if not DASHBOARD_PASS:
+        return False
+    if credentials is None:
+        return False
+    user_ok = secrets.compare_digest(credentials.username, DASHBOARD_USER)
+    pass_ok = secrets.compare_digest(credentials.password, DASHBOARD_PASS)
+    return user_ok and pass_ok
+
+
+def _check_auth(
+    request: Request,
+    credentials: Optional[HTTPBasicCredentials],
+) -> None:
+    """Принимает либо Telegram session cookie, либо (если не strict) Basic.
+    Strict-режим: только Telegram, без fallback. 401 → дашборд редиректит на /login.
+    """
+    strict = _is_strict_telegram()
+    no_auth_configured = (
+        not DASHBOARD_PASS and not (config.BOT_TOKEN and TG_ADMINS)
+    )
+    if no_auth_configured:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Dashboard auth not configured. Set DASHBOARD_USER и "
-                "DASHBOARD_PASS в Railway → Variables."
+                "Dashboard auth not configured. Set DASHBOARD_USER/DASHBOARD_PASS "
+                "OR BOT_TOKEN + TG_ADMINS (with ADMIN_ID as fallback)."
             ),
         )
-    if credentials is None:
+    # 1) Telegram session cookie
+    if _try_session_auth(request) is not None:
+        return
+    # 2) Basic auth — только если strict выключен
+    if not strict and _try_basic_auth(credentials):
+        return
+    # 3) Не авторизован
+    if strict:
+        # для HTML-запросов отдадим редирект через спецзаголовок
         raise HTTPException(
             status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Basic"},
+            detail="Telegram login required — open /login",
         )
-    user_ok = secrets.compare_digest(credentials.username, DASHBOARD_USER)
-    pass_ok = secrets.compare_digest(credentials.password, DASHBOARD_PASS)
-    if not (user_ok and pass_ok):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
+    raise HTTPException(
+        status_code=401,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Basic"},
+    )
 
 
-def _auth(credentials: HTTPBasicCredentials = Depends(security)):
-    _check_auth(credentials)
+def _auth(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    _check_auth(request, credentials)
 
 
 # === Static & health ===
@@ -101,20 +282,186 @@ async def healthz():
     return {"status": "ok", "subscribers": event_bus.subscriber_count()}
 
 
+# === Telegram OAuth ===
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Логин-страница с Telegram Login Widget. Если у юзера уже валидный
+    session cookie — редиректит на /."""
+    if _try_session_auth(request) is not None:
+        return RedirectResponse(url="/", status_code=302)
+    # Резолвим bot username из BOT_TOKEN если env не задан
+    bot_uname = TG_BOT_USERNAME or await _resolve_bot_username()
+    # Если бот не настроен — показываем заглушку
+    if not (bot_uname and config.BOT_TOKEN and TG_ADMINS):
+        return HTMLResponse(
+            "<!DOCTYPE html><html><head><title>Login</title>"
+            "<style>body{background:#050818;color:#d6e3ff;"
+            "font-family:monospace;text-align:center;padding-top:80px;}</style>"
+            "</head><body><h2>Telegram Login не настроен</h2>"
+            "<p>Установи env:</p>"
+            "<pre style='display:inline-block;text-align:left;'>"
+            "BOT_TOKEN=...  (уже есть)\n"
+            "TG_ADMINS=12345,67890   (твой Telegram user_id)\n"
+            "ADMIN_ID=12345          (или этот — fallback)</pre>"
+            "<p>TG_BOT_USERNAME резолвится автоматически из BOT_TOKEN.</p>"
+            "<p>Или используй Basic auth: <code>AUTH_STRICT_TELEGRAM=0</code> + DASHBOARD_USER/PASS</p>"
+            "</body></html>",
+            status_code=200,
+        )
+    # Telegram Login Widget — рендерим страницу
+    html = """<!DOCTYPE html><html><head>
+<meta charset='UTF-8'><title>J.A.R.V.I.S. · Login</title>
+<style>
+  body {
+    margin: 0; min-height: 100vh;
+    background: radial-gradient(ellipse at center, #0a1240 0%, #050818 80%);
+    color: #d6e3ff;
+    font-family: "JetBrains Mono", monospace;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background:
+      linear-gradient(rgba(0,229,255,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask: radial-gradient(ellipse at center, black 40%, transparent 80%);
+    pointer-events: none;
+  }
+  .logo {
+    font-size: 48px; font-weight: 900;
+    letter-spacing: 14px; color: #00e5ff;
+    text-shadow: 0 0 24px #00e5ff;
+    margin-bottom: 8px;
+  }
+  .sub {
+    font-size: 11px; letter-spacing: 4px; color: #5b7299;
+    margin-bottom: 50px;
+  }
+  .login-box {
+    border: 1px solid rgba(0,229,255,0.3);
+    background: rgba(8,14,30,0.7);
+    padding: 30px 40px; border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 0 30px rgba(0,229,255,0.15);
+  }
+  .label {
+    font-size: 10px; letter-spacing: 2px;
+    color: #5b7299; text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .hint {
+    font-size: 10px; color: #5b7299;
+    margin-top: 20px; max-width: 300px;
+    line-height: 1.6;
+  }
+</style>
+</head><body>
+  <div class="logo">JARVIS</div>
+  <div class="sub">PRIDE OPERATIONS · ACCESS REQUIRED</div>
+  <div class="login-box">
+    <div class="label">Войдите через Telegram</div>
+    <script async src="https://telegram.org/js/telegram-widget.js?22"
+      data-telegram-login="__BOT_USERNAME__"
+      data-size="large"
+      data-radius="6"
+      data-auth-url="/tg/callback"
+      data-request-access="write"></script>
+    <div class="hint">
+      Только админы из TG_ADMINS env могут войти.<br>
+      Для альтернативного входа открой <code style="color:#00e5ff">/</code> — браузер запросит Basic auth.
+    </div>
+  </div>
+</body></html>"""
+    return HTMLResponse(html.replace("__BOT_USERNAME__", bot_uname))
+
+
+@app.get("/tg/callback")
+async def tg_callback(request: Request):
+    """Callback от Telegram Login Widget — проверяет hash, ставит session cookie."""
+    if not config.BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="BOT_TOKEN not configured")
+    # Telegram передаёт поля как query string
+    data = dict(request.query_params)
+    if not _verify_telegram_login(data):
+        return HTMLResponse(
+            "<h2>❌ Invalid Telegram login signature</h2>"
+            "<p>Hash check failed. <a href='/login'>Retry</a>.</p>",
+            status_code=401,
+        )
+    try:
+        uid = int(data.get("id", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="bad user id")
+    if TG_ADMINS and uid not in TG_ADMINS:
+        return HTMLResponse(
+            f"<h2>🚫 User {uid} не в списке TG_ADMINS</h2>"
+            "<p>Свяжись с владельцем.</p>",
+            status_code=403,
+        )
+    # Подписанный куки
+    cookie_val = _sign_session(uid)
+    resp = RedirectResponse(url="/", status_code=302)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        cookie_val,
+        max_age=SESSION_TTL_SEC,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Railway HTTPS termination; Set True if прямой HTTPS
+    )
+    try:
+        event_bus.emit_event(
+            "dashboard-login",
+            {"user_id": uid, "username": data.get("username", "")},
+            severity="info",
+        )
+    except Exception:
+        pass
+    return resp
+
+
+@app.get("/logout")
+async def logout():
+    """Удалить session cookie."""
+    resp = RedirectResponse(url="/login", status_code=302)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
-async def root(_: None = Depends(_auth)):
+async def root(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    # В strict-режиме редиректим на /login если не авторизован
+    if _is_strict_telegram() and _try_session_auth(request) is None:
+        return RedirectResponse(url="/login", status_code=302)
+    _check_auth(request, credentials)
     return HTMLResponse(_load_html(DASHBOARD_DEFAULT))
 
 
 @app.get("/classic", response_class=HTMLResponse)
-async def classic_dashboard(_: None = Depends(_auth)):
-    """Классический дашборд (старый дизайн)."""
+async def classic_dashboard(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    if _is_strict_telegram() and _try_session_auth(request) is None:
+        return RedirectResponse(url="/login", status_code=302)
+    _check_auth(request, credentials)
     return HTMLResponse(_load_html("index"))
 
 
 @app.get("/jarvis", response_class=HTMLResponse)
-async def jarvis_dashboard(_: None = Depends(_auth)):
-    """J.A.R.V.I.S. дашборд — 3 колонки + анимированный офис."""
+async def jarvis_dashboard(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    if _is_strict_telegram() and _try_session_auth(request) is None:
+        return RedirectResponse(url="/login", status_code=302)
+    _check_auth(request, credentials)
     return HTMLResponse(_load_html("jarvis"))
 
 
@@ -561,6 +908,99 @@ async def control_lk_delete(card_id: str, _: None = Depends(_auth)):
     return {"ok": True, "card_id": card_id}
 
 
+class CommandReq(BaseModel):
+    text: str
+
+
+@app.post("/api/commands")
+async def api_command_enqueue(req: CommandReq, _: None = Depends(_auth)):
+    """Очередь команд для userbot. Дашборд отправляет сюда команды
+    free-form, userbot опрашивает каждые 5 сек и выполняет."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty text")
+    entry = await storage.enqueue_dashboard_command(text, source="dashboard")
+    try:
+        event_bus.emit_event(
+            "dashboard-command",
+            {"text": text[:200], "cmd_id": entry.get("id")},
+            severity="info",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "command": entry}
+
+
+@app.get("/api/commands")
+async def api_command_list(limit: int = 30, _: None = Depends(_auth)):
+    """Список последних команд (для отображения истории в дашборде)."""
+    storage.reload_sync()
+    return {"commands": storage.list_dashboard_commands(limit=max(1, min(limit, 200)))}
+
+
+# === Push endpoint for external (AI) integrations ===
+
+API_PUSH_TOKEN = os.getenv("API_PUSH_TOKEN", "")
+
+
+class PushEvent(BaseModel):
+    type: str
+    payload: dict = {}
+    character: Optional[str] = None
+    severity: Optional[str] = "info"
+
+
+@app.post("/api/push")
+async def api_push_event(req: PushEvent, request: Request):
+    """Внешний канал — позволяет AI/скриптам пихать события в event_bus
+    без затрат на Anthropic. Аутентификация через Bearer token (env
+    API_PUSH_TOKEN). Если token не задан — endpoint отключён."""
+    if not API_PUSH_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="push disabled — set API_PUSH_TOKEN env",
+        )
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="bearer token required")
+    token = auth_header[7:].strip()
+    if not secrets.compare_digest(token, API_PUSH_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid token")
+    try:
+        event_bus.emit_event(
+            req.type, req.payload or {},
+            character=req.character or "",
+            severity=req.severity or "info",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"ok": True}
+
+
+@app.post("/api/control/sync_lk_request")
+async def control_sync_lk_request(_: None = Depends(_auth)):
+    """Просит userbot.py запустить sync_lk_cards. Делаем через event_bus —
+    userbot подписывается и реагирует.
+    NOTE: реализация требует чтобы userbot слушал event 'request-sync-lk'.
+    Альтернатива — запустить вручную команду '/sync_lk' в Группе 1 ЛК.
+    """
+    try:
+        event_bus.emit_event(
+            "request-sync-lk",
+            {"by": "dashboard", "limit": 1000},
+            severity="info",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "ok": True,
+        "hint": (
+            "Запрос отправлен. Если userbot не подцепит — выполни в Группе 1 "
+            "ЛК команду '/sync_lk' или '/sync_lk 1000'."
+        ),
+    }
+
+
 @app.get("/api/control/info")
 async def control_info(_: None = Depends(_auth)):
     """Текущее состояние управления — чтоб дашборд знал в каком режиме."""
@@ -580,17 +1020,29 @@ async def websocket_events(ws: WebSocket):
     """WebSocket для двусторонней связи.
     Принимает: ping/команды от дашборда.
     Шлёт: события из event_bus в реальном времени.
-    Auth: ?user=...&pass=... в query string (Basic auth не работает в WS browser API).
+    Auth — два варианта:
+      1) Cookie `jarvis_session` (после Telegram OAuth) — предпочтительно
+      2) ?user=...&pass=... в query string (legacy Basic)
     """
-    user = ws.query_params.get("user", "")
-    pwd = ws.query_params.get("pass", "")
-    if not DASHBOARD_PASS:
-        await ws.close(code=4503, reason="auth not configured")
-        return
-    if not (
-        secrets.compare_digest(user, DASHBOARD_USER)
-        and secrets.compare_digest(pwd, DASHBOARD_PASS)
-    ):
+    authed = False
+    # 1) Try session cookie
+    cookie_val = ws.cookies.get(SESSION_COOKIE)
+    if cookie_val:
+        uid = _verify_session(cookie_val)
+        if uid is not None and (not TG_ADMINS or uid in TG_ADMINS):
+            authed = True
+    # 2) Try query-string basic
+    if not authed:
+        user = ws.query_params.get("user", "")
+        pwd = ws.query_params.get("pass", "")
+        if DASHBOARD_PASS and user and pwd:
+            if (
+                secrets.compare_digest(user, DASHBOARD_USER)
+                and secrets.compare_digest(pwd, DASHBOARD_PASS)
+            ):
+                authed = True
+
+    if not authed:
         await ws.close(code=4401, reason="unauthorized")
         return
 

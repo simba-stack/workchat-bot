@@ -12,5 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Директория для persistent storage. Если Railway Volume смонтирован
+# в /app/data — данные переживают редеплои. Если нет — обнуляются.
+RUN mkdir -p /app/data
+
 # -u для немедленного flush логов в Railway
 CMD ["python", "-u", "bot.py"]

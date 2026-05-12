@@ -227,6 +227,12 @@ class UserbotService:
             "Userbot started: %s (@%s, id=%s)",
             self._me.first_name, self._me.username, self._me.id,
         )
+        # Запускаем воркер для команд из дашборда (опрос storage каждые 5 сек)
+        try:
+            asyncio.create_task(self._dashboard_command_worker())
+            logger.info("dashboard_command_worker started")
+        except Exception as e:
+            logger.warning("dashboard_command_worker start failed: %s", e)
         for label, cid in (
             ("brain_chat", storage.get_brain_chat_id()),
             ("coord_chat", storage.get_coordination_chat_id()),
@@ -378,6 +384,12 @@ class UserbotService:
                     ))
                     logger.info("watch chat=%s: client %s joined, sending welcome", channel.id, client_id)
                     await self._send_welcome(channel.id, client_id, source="poll")
+                    # Помечаем пользователя как «вошёл в work-чат» для воронки
+                    try:
+                        await storage.mark_user_entered_work_chat(client_id)
+                        await storage.bump_funnel("chats_active")
+                    except Exception:
+                        pass
                     return
                 except UserNotParticipantError:
                     pass
@@ -854,6 +866,19 @@ class UserbotService:
         # /learn — bulk-обучение из истории чатов
         if text.lower().startswith("/learn"):
             await self._handle_learn_command(event, text)
+            return
+        # /sync_lk — синхронизация карточек ЛК из истории Группы 1
+        low = text.lower().strip()
+        if (
+            low.startswith("/sync_lk")
+            or low.startswith("/sync_cards")
+            or low.startswith("синхронизация карточек")
+            or low.startswith("синхронизация лк")
+        ):
+            m_lim = re.search(r"\b(\d+)\b", text)
+            limit = int(m_lim.group(1)) if m_lim else 500
+            limit = max(50, min(limit, 3000))
+            await self._apply_sync_lk_cards(event, limit=limit)
             return
         # Команда «прайс» — управление прайсом ЛК (единый источник цен).
         if re.match(r"^\s*(?:прайс|price|цены|цена)\b", text, re.I):
@@ -1732,6 +1757,22 @@ class UserbotService:
             or low.startswith("синхронизация клиентов")
         ):
             await self._apply_sync_clients(event)
+            return
+
+        # Синхронизация карточек ЛК: восстановить storage.lk_cards из истории
+        # сообщений Группы 1 (если state.json был потерян).
+        if (
+            low.startswith("/sync_lk")
+            or low.startswith("/sync_cards")
+            or low.startswith("синхронизация карточек")
+            or low.startswith("синхронизация лк")
+            or low.startswith("синхрони")
+        ):
+            # Опциональный аргумент: лимит сообщений
+            m_lim = re.search(r"\b(\d+)\b", text)
+            limit = int(m_lim.group(1)) if m_lim else 500
+            limit = max(50, min(limit, 3000))
+            await self._apply_sync_lk_cards(event, limit=limit)
             return
 
         # Команда удаления одной карточки (по #id, по банк+ФИО или reply на анкету)
@@ -2933,6 +2974,107 @@ class UserbotService:
                 logger.warning(
                     "set import_summary_msg_id for %s failed: %s", cid, e,
                 )
+
+    async def _apply_sync_lk_cards(self, event, limit: int = 500):
+        """Сканирует Группу 1 ЛК на N последних сообщений и восстанавливает
+        отсутствующие карточки в storage.lk_cards. Полезно после потери
+        state.json — все карточки можно вернуть из истории сообщений бота.
+        """
+        lk_gid = storage.get_lk_group_id()
+        if not lk_gid:
+            try:
+                await event.reply("⚠️ lk_group_id не настроен.")
+            except Exception:
+                pass
+            return
+
+        try:
+            await event.reply(
+                f"🔄 Сканирую последние <b>{limit}</b> сообщений Группы 1 ЛК…",
+                parse_mode="html", link_preview=False,
+            )
+        except Exception:
+            pass
+
+        scanned = 0
+        parsed = 0
+        created = 0
+        updated = 0
+        errors = 0
+        try:
+            target = await self._resolve_chat_target(lk_gid)
+        except Exception as e:
+            try:
+                await event.reply(f"⚠️ Не смог resolve lk_group: {e}")
+            except Exception:
+                pass
+            return
+
+        # Идём по сообщениям от старых к новым чтобы lk_cards_seq в storage
+        # обновился правильно (последняя карточка = последний seq).
+        messages_buffer = []
+        try:
+            async for msg in self.client.iter_messages(target, limit=limit):
+                scanned += 1
+                if not msg or not getattr(msg, "text", None):
+                    continue
+                text = msg.text or ""
+                # Быстрый отбор: должна быть строка "ЛК #lkN"
+                if "ЛК" not in text or "#lk" not in text.lower():
+                    continue
+                messages_buffer.append((msg.id, text))
+        except Exception as e:
+            logger.warning("sync_lk_cards: iter_messages failed: %s", e)
+            errors += 1
+
+        # Сортируем по msg.id ASC — старые → новые
+        messages_buffer.sort(key=lambda t: t[0])
+
+        for msg_id, text in messages_buffer:
+            card = accounting2.parse_rendered_lk_card(text)
+            if not card or not card.get("card_id"):
+                continue
+            parsed += 1
+            cid = card["card_id"]
+            existing = storage.get_lk_card(cid)
+            card["lk_group_msg_id"] = msg_id
+            try:
+                if existing:
+                    await storage.update_lk_card(cid, **card)
+                    # Перепривяжем msg_id отдельно (на случай если update_lk_card
+                    # не трогает служебные поля)
+                    await storage.set_lk_card_msg_id(cid, msg_id)
+                    updated += 1
+                else:
+                    await storage.restore_lk_card(cid, card)
+                    created += 1
+            except Exception as e:
+                logger.warning("sync_lk_cards: card %s failed: %s", cid, e)
+                errors += 1
+
+        try:
+            await event.reply(
+                (
+                    f"✅ Синхронизация ЛК завершена\n\n"
+                    f"📨 Просканировано сообщений: <b>{scanned}</b>\n"
+                    f"🔍 Распознано как карточки: <b>{parsed}</b>\n"
+                    f"➕ Создано (новые): <b>{created}</b>\n"
+                    f"🔄 Обновлено (msg_id привязан): <b>{updated}</b>\n"
+                    f"⚠️ Ошибок: <b>{errors}</b>\n\n"
+                    "Теперь команды <code>#lkNNN ...</code> снова работают, "
+                    "карточки можно редактировать."
+                ),
+                parse_mode="html", link_preview=False,
+            )
+        except Exception:
+            pass
+        try:
+            _e("sync-lk-cards", {
+                "scanned": scanned, "parsed": parsed,
+                "created": created, "updated": updated, "errors": errors,
+            }, severity="success" if not errors else "warning")
+        except Exception:
+            pass
 
     async def _apply_sync_clients(self, event):
         """Синхронизация client_username по всем managed_chats:
@@ -4860,6 +5002,181 @@ class UserbotService:
         except Exception as e:
             logger.warning("perevyaz: lk-card creation failed: %s", e)
         return True
+
+    # === Dashboard command worker ===
+
+    async def _dashboard_command_worker(self):
+        """Опрашивает storage.dashboard_commands каждые 5 сек, выполняет
+        pending команды. Распознаёт:
+          • «рассылка работчатам: TEXT» / «broadcast workchats: TEXT»
+          • «рассылка боту: TEXT» / «broadcast bot: TEXT»
+          • «рассылка незарегистрированным: TEXT» / «inactive: TEXT»
+          • «stats» — отдаёт быструю стату
+          • «pause ai» / «resume ai»
+          • «список клиентов» / «list clients»
+        Результат записывает обратно в команду + emit-event.
+        """
+        await asyncio.sleep(3)  # дать боту полностью встать
+        while True:
+            try:
+                # Подтянуть свежие команды (на случай если api.py их добавил
+                # из другого процесса)
+                try:
+                    storage.reload_sync()
+                except Exception:
+                    pass
+                pending = storage.get_pending_dashboard_commands()
+                for cmd in pending:
+                    cmd_id = cmd.get("id")
+                    text = (cmd.get("text") or "").strip()
+                    if not text:
+                        await storage.mark_dashboard_command_done(
+                            cmd_id, "empty", status="skipped",
+                        )
+                        continue
+                    try:
+                        result = await self._execute_dashboard_command(text)
+                    except Exception as e:
+                        result = f"error: {e}"
+                        logger.warning("dashboard cmd failed: %s — %s", text, e)
+                    await storage.mark_dashboard_command_done(cmd_id, result)
+                    try:
+                        _e("dashboard-cmd-done", {
+                            "id": cmd_id, "text": text[:120], "result": result[:200],
+                        })
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("_dashboard_command_worker tick failed: %s", e)
+            await asyncio.sleep(5)
+
+    async def _execute_dashboard_command(self, text: str) -> str:
+        """Парсит и выполняет одну команду из дашборда. Возвращает текст
+        результата (для отображения в дашборде)."""
+        low = text.lower().strip()
+
+        # ===== STATS =====
+        if low in ("stats", "стата", "статистика"):
+            cards = storage.list_lk_cards() or {}
+            managed = storage.state.get("managed_chats") or {}
+            ai_stats = storage.state.get("ai_stats", {}) or {}
+            return (
+                f"📊 LK={len(cards)} · chats={len(managed)} · "
+                f"AI replies={ai_stats.get('replies_total', 0)} · "
+                f"users={len(storage.list_bot_users())}"
+            )
+
+        # ===== PAUSE/RESUME AI =====
+        if low in ("pause ai", "пауза ai", "ai off", "stop ai"):
+            await storage.set_ai_enabled(False)
+            return "✅ AI выключен"
+        if low in ("resume ai", "старт ai", "ai on", "start ai"):
+            await storage.set_ai_enabled(True)
+            return "✅ AI включён"
+
+        # ===== LIST CLIENTS =====
+        if low in ("list clients", "список клиентов", "клиенты"):
+            users = storage.list_bot_users()
+            inactive = storage.list_inactive_bot_users()
+            return (
+                f"👥 Bot users: {len(users)} (не зашли в чат: {len(inactive)}) · "
+                f"Work chats: {len(storage.state.get('managed_chats') or {})}"
+            )
+
+        # ===== BROADCAST: work chats =====
+        m = re.match(
+            r"^\s*(?:рассылка|broadcast)\s*"
+            r"(?:в\s*)?(?:работ\w*\s*чат\w*|workchats?|work[-_ ]?chats?|"
+            r"рабочим|клиентам)\s*[:\-]\s*(.+)$",
+            text, re.I | re.S,
+        )
+        if m:
+            msg = m.group(1).strip()
+            return await self._broadcast_workchats(msg)
+
+        # ===== BROADCAST: bot users =====
+        m = re.match(
+            r"^\s*(?:рассылка|broadcast)\s*"
+            r"(?:по\s*)?(?:бот\w*|bot|всем)\s*[:\-]\s*(.+)$",
+            text, re.I | re.S,
+        )
+        if m:
+            msg = m.group(1).strip()
+            return await self._broadcast_bot_users(msg, only_inactive=False)
+
+        # ===== BROADCAST: inactive (не зашли в чат) =====
+        m = re.match(
+            r"^\s*(?:рассылка|broadcast)\s*"
+            r"(?:незарегистрир\w*|inactive|не\s+(?:вошли|зашли))\s*[:\-]\s*(.+)$",
+            text, re.I | re.S,
+        )
+        if m:
+            msg = m.group(1).strip()
+            return await self._broadcast_bot_users(msg, only_inactive=True)
+
+        return f"unknown command: {text[:80]}"
+
+    async def _broadcast_workchats(self, msg: str) -> str:
+        """Рассылка в managed_chats через userbot (Telethon)."""
+        if not msg:
+            return "empty message"
+        chat_ids = storage.get_managed_chat_ids()
+        sent = 0
+        errors = 0
+        for cid in chat_ids:
+            try:
+                target = await self._resolve_chat_target(cid)
+                await self.client.send_message(target, msg, link_preview=False)
+                sent += 1
+                await asyncio.sleep(0.5)  # rate limit
+            except Exception as e:
+                errors += 1
+                logger.warning("broadcast workchat %s failed: %s", cid, e)
+        return f"📤 work-чатов отправлено: {sent}, ошибок: {errors}"
+
+    async def _broadcast_bot_users(self, msg: str, only_inactive: bool = False) -> str:
+        """Рассылка через bot.py (aiogram). Userbot не может слать сообщения
+        от лица бота, поэтому используем Bot.send_message напрямую через
+        bot_token (минимально — через HTTP API)."""
+        if not msg:
+            return "empty message"
+        if only_inactive:
+            users = storage.list_inactive_bot_users()
+        else:
+            users = [
+                {"user_id": int(uid), **info}
+                for uid, info in (storage.list_bot_users() or {}).items()
+            ]
+        if not users:
+            return "нет получателей"
+
+        # Используем httpx (уже в requirements) для прямого вызова Telegram Bot API
+        import httpx
+        sent = 0
+        errors = 0
+        token = config.BOT_TOKEN
+        if not token:
+            return "BOT_TOKEN не задан"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            for u in users:
+                uid = u.get("user_id")
+                if not uid:
+                    continue
+                try:
+                    r = await cli.post(url, json={
+                        "chat_id": uid,
+                        "text": msg,
+                        "disable_web_page_preview": True,
+                    })
+                    if r.status_code == 200:
+                        sent += 1
+                    else:
+                        errors += 1
+                except Exception:
+                    errors += 1
+                await asyncio.sleep(0.05)
+        return f"📤 bot-юзерам отправлено: {sent}, ошибок: {errors}"
 
     async def stop(self):
         await self.client.disconnect()

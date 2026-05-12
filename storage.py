@@ -1,6 +1,7 @@
 """JSON-based persistent storage for bot state. Atomic via .tmp+os.replace."""
 import json
 import os
+import re
 import asyncio
 import time
 import secrets
@@ -135,6 +136,15 @@ def _default_state() -> dict:
         # Структура: {uname_lower: {payment_method, usdt_address,
         #   last_updated_ts, lk_count, fio_last, bank_last}}
         "client_preferences": {},
+        # Пользователи которые нажимали /start у бота. Структура:
+        # {user_id: {first_name, username, first_seen_ts, last_seen_ts,
+        #            entered_work_chat: bool}}
+        # Нужно для рассылок: "всем", "только тем кто не вошёл в work-чат".
+        "bot_users": {},
+        # Очередь команд от дашборда (приходят через /api/commands).
+        # Userbot периодически опрашивает, выполняет и помечает done=True.
+        # Структура: [{id, ts, text, status, result, source}, ...]
+        "dashboard_commands": [],
     }
 
 
@@ -1217,6 +1227,63 @@ class Storage:
         prefs = self.state.get("client_preferences") or {}
         return dict(prefs.get(uname) or {})
 
+    async def restore_lk_card(self, card_id: str, fields: dict) -> str:
+        """Восстановить карточку с конкретным card_id (например, из истории
+        сообщений в Группе 1 после потери state.json).
+        Если карточка с таким id уже есть — обновляет поля (без затирания
+        history). Иначе создаёт новую с указанным card_id и обновляет
+        lk_cards_seq."""
+        if not card_id:
+            return ""
+        cid = str(card_id).lower().lstrip("#")
+        async with _lock:
+            cards = self.state.setdefault("lk_cards", {})
+            existing = cards.get(cid)
+            if existing:
+                # Обновляем поля кроме служебных
+                for k, v in fields.items():
+                    if k in ("card_id", "history", "created_at"):
+                        continue
+                    if v is not None and v != "":
+                        existing[k] = v
+                await self._save_unlocked()
+                return cid
+            # Создаём новую с заданным id
+            base = {
+                "card_id": cid,
+                "supplier": (fields.get("supplier") or "").lstrip("@"),
+                "bank": fields.get("bank") or "",
+                "fio": fields.get("fio") or "",
+                "price_usdt": float(fields.get("price_usdt") or 0),
+                "payment_method": fields.get("payment_method") or "",
+                "deal_id": fields.get("deal_id") or "",
+                "usdt_address": fields.get("usdt_address") or "",
+                "status": fields.get("status") or "В_РАБОТЕ",
+                "block_amount_rub": float(fields.get("block_amount_rub") or 0),
+                "block_note": fields.get("block_note") or "",
+                "brak_reason": fields.get("brak_reason") or "",
+                "client_id": int(fields.get("client_id") or 0),
+                "client_username": (fields.get("client_username") or "").lstrip("@"),
+                "work_chat_id": fields.get("work_chat_id") or 0,
+                "lk_group_msg_id": int(fields.get("lk_group_msg_id") or 0),
+                "created_at": float(fields.get("created_at") or time.time()),
+                "history": [{
+                    "ts": time.time(),
+                    "status": fields.get("status") or "В_РАБОТЕ",
+                    "by": "sync",
+                }],
+            }
+            cards[cid] = base
+            # Обновляем seq если card_id больше текущего
+            try:
+                num = int(re.sub(r"\D", "", cid))
+                if num > int(self.state.get("lk_cards_seq", 0)):
+                    self.state["lk_cards_seq"] = num
+            except Exception:
+                pass
+            await self._save_unlocked()
+            return cid
+
     async def save_client_preferences(
         self, username: str, payment_method: str = "",
         usdt_address: str = "", fio: str = "", bank: str = "",
@@ -1241,6 +1308,97 @@ class Storage:
             entry["lk_count"] = int(entry.get("lk_count", 0)) + 1
             await self._save_unlocked()
             return True
+
+
+    # === Bot users registry (для рассылок) ===
+
+    async def track_bot_user(
+        self, user_id: int, first_name: str = "", username: str = "",
+    ):
+        """Запомнить пользователя бота. Зовётся из /start."""
+        if not user_id:
+            return
+        uid = str(int(user_id))
+        async with _lock:
+            users = self.state.setdefault("bot_users", {})
+            entry = users.setdefault(uid, {})
+            now = time.time()
+            entry.setdefault("first_seen_ts", now)
+            entry["last_seen_ts"] = now
+            if first_name:
+                entry["first_name"] = first_name
+            if username:
+                entry["username"] = (username or "").lstrip("@")
+            entry.setdefault("entered_work_chat", False)
+            await self._save_unlocked()
+
+    async def mark_user_entered_work_chat(self, user_id: int):
+        """Пометить что пользователь зашёл в свою work-беседу."""
+        if not user_id:
+            return
+        uid = str(int(user_id))
+        async with _lock:
+            users = self.state.setdefault("bot_users", {})
+            entry = users.get(uid)
+            if entry is not None:
+                entry["entered_work_chat"] = True
+                await self._save_unlocked()
+
+    def list_bot_users(self) -> dict:
+        return dict(self.state.get("bot_users") or {})
+
+    def list_inactive_bot_users(self) -> list:
+        """Юзеры которые нажали /start но ещё не вошли в work-чат."""
+        out = []
+        for uid, info in (self.state.get("bot_users") or {}).items():
+            if not info.get("entered_work_chat"):
+                out.append({"user_id": int(uid), **info})
+        return out
+
+    # === Dashboard commands queue ===
+
+    async def enqueue_dashboard_command(self, text: str, source: str = "dashboard") -> dict:
+        """Добавляет команду в очередь для userbot."""
+        if not text or not text.strip():
+            return {}
+        async with _lock:
+            q = self.state.setdefault("dashboard_commands", [])
+            entry = {
+                "id": int(time.time() * 1000),
+                "ts": time.time(),
+                "text": text.strip(),
+                "status": "pending",
+                "result": "",
+                "source": source,
+            }
+            q.append(entry)
+            # храним не больше 200
+            if len(q) > 200:
+                self.state["dashboard_commands"] = q[-200:]
+            await self._save_unlocked()
+            return dict(entry)
+
+    def get_pending_dashboard_commands(self) -> list:
+        return [
+            c for c in (self.state.get("dashboard_commands") or [])
+            if c.get("status") == "pending"
+        ]
+
+    def list_dashboard_commands(self, limit: int = 50) -> list:
+        q = list(self.state.get("dashboard_commands") or [])
+        return q[-limit:][::-1]
+
+    async def mark_dashboard_command_done(
+        self, cmd_id: int, result: str = "", status: str = "done",
+    ):
+        async with _lock:
+            for c in self.state.get("dashboard_commands") or []:
+                if int(c.get("id", 0)) == int(cmd_id):
+                    c["status"] = status
+                    c["result"] = (result or "")[:1500]
+                    c["finished_ts"] = time.time()
+                    break
+            await self._save_unlocked()
 
 
 storage = Storage(config.STORAGE_PATH)

@@ -184,6 +184,15 @@ async def on_start(message: Message, state: FSMContext):
         await storage.bump_funnel("starts")
     except Exception:
         pass
+    # Track bot user (для рассылок)
+    try:
+        await storage.track_bot_user(
+            message.from_user.id,
+            first_name=message.from_user.first_name or "",
+            username=message.from_user.username or "",
+        )
+    except Exception:
+        pass
     # Если пользователь уже был атрибутирован — пропускаем опрос,
     # сразу даём кнопку «Получить рабочую беседу».
     if storage.get_user_source(message.from_user.id):
