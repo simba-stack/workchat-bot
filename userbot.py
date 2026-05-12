@@ -148,10 +148,21 @@ class UserbotService:
         #   - истечением TTL.
         self._ai_silent_until: dict[str, float] = {}
 
-    def _get_welcome_lock(self, chat_id: int) -> asyncio.Lock:
-        if chat_id not in self._welcome_locks:
-            self._welcome_locks[chat_id] = asyncio.Lock()
-        return self._welcome_locks[chat_id]
+    def _get_welcome_lock(self, chat_id) -> asyncio.Lock:
+        """Lock на отправку welcome для конкретного чата.
+
+        КРИТИЧНО: ключ нормализуем через _norm_chat_id, потому что Telethon
+        отдаёт chat_id в разных форматах:
+          - _handle_chat_action: event.chat_id — signed (-100xxx)
+          - _watch_for_client_join: channel.id — unsigned (xxx)
+        Без нормализации создаются ДВА разных lock'а и оба источника
+        параллельно проходят первую проверку welcome_sent → дубль welcome.
+        """
+        from storage import _norm_chat_id
+        key = _norm_chat_id(chat_id)
+        if key not in self._welcome_locks:
+            self._welcome_locks[key] = asyncio.Lock()
+        return self._welcome_locks[key]
 
     async def start(self):
         await self.client.start(phone=config.USERBOT_PHONE)
@@ -249,7 +260,7 @@ class UserbotService:
         await self._send_welcome(event.chat_id, expected, source="event")
 
     async def _send_welcome(self, chat_id, expected_client_id: int, source: str = "?"):
-        lock = self._get_welcome_lock(int(chat_id))
+        lock = self._get_welcome_lock(chat_id)
         async with lock:
             info = storage.get_chat_info(chat_id)
             if not info or info.get("welcome_sent"):
