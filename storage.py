@@ -413,6 +413,38 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    async def set_pending_perevyaz(self, chat_id, bank: str = "", fio: str = ""):
+        """Сохраняем bank+fio когда перевязка пришла, а метод оплаты ещё не
+        задан. Как только клиент назовёт метод — заберём pending и создадим
+        карточку без повторного перевязного события."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            info["pending_perevyaz"] = {
+                "bank": (bank or "").strip(),
+                "fio": (fio or "").strip(),
+                "ts": time.time(),
+            }
+            await self._save_unlocked()
+            return True
+
+    def get_pending_perevyaz(self, chat_id) -> dict:
+        info = self.state["managed_chats"].get(_norm_chat_id(chat_id)) or {}
+        return dict(info.get("pending_perevyaz") or {})
+
+    async def pop_pending_perevyaz(self, chat_id) -> dict:
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return {}
+            pending = info.pop("pending_perevyaz", None) or {}
+            if pending:
+                await self._save_unlocked()
+            return dict(pending)
+
     def get_chat_info(self, chat_id) -> Optional[dict]:
         return self.state["managed_chats"].get(_norm_chat_id(chat_id))
 

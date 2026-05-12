@@ -467,6 +467,22 @@ class UserbotService:
         if client_id and sender_id != client_id:
             return
 
+        # AUTO-DETECT метода оплаты из сообщения клиента: страховка на случай
+        # если AI забыл вызвать set_payment_method. Срабатывает только если
+        # метод ещё не задан И клиент явно упомянул вариант.
+        try:
+            if not chat_info.get("payment_method"):
+                msg_text_lc = ((event.message and event.message.text) or "").lower()
+                if msg_text_lc and await self._maybe_autodetect_payment_method(
+                    event, chat_id, msg_text_lc,
+                ):
+                    # Метод определён + карточка ЛК (если pending был) уже
+                    # создана. AI пусть отвечает дальше как обычно — короткое
+                    # подтверждение от юзербота уже улетело.
+                    pass
+        except Exception as e:
+            logger.warning("auto-detect payment method failed: %s", e)
+
         # SILENT MODE: после add_partner_to_crm AI молчит 30 минут пока
         # клиент заполняет анкету в @PrideCONTROLE_bot. Снимается явным
         # запросом помощи или истечением TTL.
@@ -2136,6 +2152,14 @@ class UserbotService:
             await self.client.send_message(target, msg, link_preview=False)
         except Exception as e:
             logger.warning("request_lk_data send failed: %s", e)
+        # Сохраняем bank+fio перевязки в pending, чтобы когда клиент назовёт
+        # метод — забрать оттуда и сразу создать карточку (без повторного
+        # перевязного события от CRM-бота).
+        if eff_bank or eff_fio:
+            try:
+                await storage.set_pending_perevyaz(wc, eff_bank, eff_fio)
+            except Exception as e:
+                logger.warning("set_pending_perevyaz failed: %s", e)
         # Запоминаем что нужны данные — reminder loop
         from storage import _norm_chat_id
         key = _norm_chat_id(wc)
@@ -2610,6 +2634,77 @@ class UserbotService:
                 "AI silent mode lifted for chat=%s — CRM ready marker detected",
                 chat_id,
             )
+
+    async def _maybe_autodetect_payment_method(
+        self, event, chat_id, text_lc: str,
+    ) -> bool:
+        """Страховка от ситуации «AI забыл вызвать set_payment_method».
+
+        Если клиент в своём сообщении явно упомянул метод
+        (гарант/USDT/TRC20/конте/...) — юзербот САМ ставит payment_method и,
+        если в storage есть pending_perevyaz (банк+ФИО) — сразу создаёт
+        карточку ЛК в Группе 1.
+
+        Возвращает True если метод был определён."""
+        # Маркеры USDT
+        is_usdt = any(m in text_lc for m in (
+            "usdt", "trc20", "трц20", "трц 20", "трон",
+        ))
+        # Маркеры гаранта/Conte
+        is_guarantor = any(m in text_lc for m in (
+            "гарант", "конте", "контик", "сделк", "conte",
+        ))
+        # Доп. сигналы про сделку без «сделки»: «можно после», «после отработки»
+        # сами по себе не определяют гарант, нужно сочетание с одним из marker'ов выше.
+        if not (is_usdt or is_guarantor):
+            return False
+
+        method = ""
+        if is_usdt:
+            method = "USDT_TRC20"
+        elif is_guarantor:
+            # Уточняем разновидность
+            if any(m in text_lc for m in ("после отработ", "когда отработа", "по отработ")):
+                method = "GUARANTOR_AFTER_WORK"
+            elif any(m in text_lc for m in ("сразу", "сначала сделк", "до перевяз", "перед перевяз", "вперёд", "вперед")):
+                method = "GUARANTOR_BEFORE"
+            elif any(m in text_lc for m in ("после перевяз", "после")):
+                method = "GUARANTOR_AFTER"
+            else:
+                method = "GUARANTOR_AFTER_WORK"  # default для PRIDE — сделка после отработки
+
+        if not method:
+            return False
+
+        # Сохраняем method в managed_chats
+        await storage.set_chat_payment_info(chat_id, method=method)
+        logger.info(
+            "auto-detect: chat=%s method=%s (text=%r)",
+            chat_id, method, text_lc[:80],
+        )
+
+        # Если перевязка уже была — забираем pending и создаём карточку.
+        pending = await storage.pop_pending_perevyaz(chat_id)
+        if pending and (pending.get("bank") or pending.get("fio")):
+            # У USDT_TRC20 нужен адрес — если не задан, карточку всё равно
+            # создаём (можно дозаполнить адрес позже отдельным сообщением AI).
+            try:
+                chat_info_fresh = storage.get_chat_info(chat_id) or {}
+                await self._create_lk_card_from_perevyaz(
+                    event, chat_info_fresh,
+                    lk_text=pending.get("bank", ""),
+                    fio_text=pending.get("fio", ""),
+                )
+                logger.info(
+                    "auto-detect: card created from pending perevyaz for chat=%s",
+                    chat_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "auto-detect: create card failed for chat=%s: %s",
+                    chat_id, e,
+                )
+        return True
 
     async def _maybe_handle_perevyaz(self, event, chat_info: dict) -> bool:
         """Триггер Перевяз ЛК выполнен — парсим банк и ФИО прямо из текста
