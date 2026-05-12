@@ -131,6 +131,47 @@ class Storage:
         d = os.path.dirname(path) or "."
         os.makedirs(d, exist_ok=True)
 
+    def reload_sync(self) -> bool:
+        """Синхронный hot-reload state.json — для дашборд-API.
+        Bot.py и userbot.py живут разными процессами и каждый держит свой
+        in-memory storage.state. Когда userbot пишет в файл, bot.py об этом
+        не знает. Дашборд читает через bot.py → видит устаревшее.
+        Вызывай эту функцию из API endpoints чтоб подтянуть свежее с диска.
+        Возвращает True если что-то перечитал."""
+        if not os.path.exists(self.path):
+            return False
+        try:
+            mtime = os.path.getmtime(self.path)
+        except OSError:
+            return False
+        # Не перечитываем если файл не менялся с прошлого раза
+        last = getattr(self, "_last_reload_mtime", 0)
+        if mtime <= last:
+            return False
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except Exception as e:
+            print(f"[storage] reload_sync failed: {e}")
+            return False
+        # Миграция V2: те же ключи что в load()
+        for legacy_key in (
+            "accounts_group_id", "pending_accounts_posts",
+            "accounting", "deals_group_id",
+        ):
+            loaded.pop(legacy_key, None)
+        for d in (loaded.get("deals") or {}).values():
+            if isinstance(d, dict):
+                d.pop("accounts_group_msg_id", None)
+                d.pop("deals_group_msg_id", None)
+        defaults = _default_state()
+        for k, v in defaults.items():
+            if k not in loaded:
+                loaded[k] = v
+        self.state = loaded
+        self._last_reload_mtime = mtime
+        return True
+
     async def load(self):
         async with _lock:
             if os.path.exists(self.path):

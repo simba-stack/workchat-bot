@@ -131,6 +131,7 @@ def _slim_card(cid: str, c: dict) -> dict:
 @app.get("/api/state")
 async def api_state(_: None = Depends(_auth)):
     """Снимок для первичного рендера. Лёгкий — без полных списков."""
+    storage.reload_sync()  # подтянуть свежие данные от userbot.py
     cards = storage.list_lk_cards() or {}
     managed = storage.state.get("managed_chats") or {}
     deals = storage.list_deals() or {}
@@ -201,6 +202,7 @@ async def api_lk_cards(
     _: None = Depends(_auth),
 ):
     """Список карточек ЛК. Фильтры: status_filter, method, bank, supplier."""
+    storage.reload_sync()
     cards = storage.list_lk_cards() or {}
     result = []
     for cid, c in cards.items():
@@ -225,6 +227,7 @@ async def api_applications(
     _: None = Depends(_auth),
 ):
     """Заявки V2 за последние N дней (включая сегодня)."""
+    storage.reload_sync()
     result = []
     today = datetime.now()
     for i in range(max(1, days)):
@@ -248,6 +251,7 @@ async def api_applications(
 @app.get("/api/chats")
 async def api_chats(_: None = Depends(_auth)):
     """Managed-чаты (рабочие беседы клиентов)."""
+    storage.reload_sync()
     managed = storage.state.get("managed_chats") or {}
     result = []
     for chat_id, info in managed.items():
@@ -273,6 +277,7 @@ async def api_deals(
     _: None = Depends(_auth),
 ):
     """Сделки storage.deals."""
+    storage.reload_sync()
     deals = storage.list_deals() or {}
     result = []
     for did, d in deals.items():
