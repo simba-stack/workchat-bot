@@ -3086,7 +3086,7 @@ class UserbotService:
                 msg = (
                     f"✅ Оплата за ЛК <b>{bank}</b> ({fio}) "
                     f"на ваш USDT TRC20 <b>переведена</b>.\n\n"
-                    f"Сумма: <b>{_fmt_usdt(card.get('price_usdt', 0))}</b>\n"
+                    f"Сумма: <b>{accounting2._fmt_usdt(card.get('price_usdt', 0))}</b>\n"
                 )
                 if usdt_addr:
                     msg += f"Адрес: <code>{usdt_addr}</code>\n"
@@ -3195,7 +3195,7 @@ class UserbotService:
                 extra = f" — <code>{e['usdt_address'][:12]}...</code>"
             return (
                 f"• {sup} — <b>{e['bank']}</b> — {e['fio']} — "
-                f"{_fmt_usdt(e['price_usdt'])}{extra}"
+                f"{accounting2._fmt_usdt(e['price_usdt'])}{extra}"
             )
 
         sections = []
@@ -3416,7 +3416,7 @@ class UserbotService:
 
             lines.append(
                 f"• {supplier_tag} — <b>{bank}</b> — {fio} — "
-                f"{_fmt_usdt(card.get('price_usdt', 0))}\n  └─ {action}"
+                f"{accounting2._fmt_usdt(card.get('price_usdt', 0))}\n  └─ {action}"
             )
             cards_with_msg.append(cid)
 
