@@ -3228,10 +3228,17 @@ class UserbotService:
             sections.extend(_fmt_entry(e) for e in g_wait_client)
             sections.append("")
         if g_in_work:
-            sections.append("🟢 <b>В работе у операционистов:</b>")
-            sections.extend(_fmt_entry(e) for e in g_in_work[:15])
-            if len(g_in_work) > 15:
-                sections.append(f"<i>… и ещё {len(g_in_work) - 15}</i>")
+            # Агрегация по банкам — длинный список не нужен, всё равно
+            # действия по этим ЛК не требуются. Один пробег по entries.
+            by_bank: dict = {}
+            for e in g_in_work:
+                bk = (e.get("bank") or "—").strip()
+                by_bank[bk] = by_bank.get(bk, 0) + 1
+            sections.append(
+                f"🟢 <b>В работе у операционистов:</b> всего <b>{len(g_in_work)}</b>"
+            )
+            for bank, n in sorted(by_bank.items(), key=lambda x: -x[1]):
+                sections.append(f"• <b>{bank}</b> — {n}")
             sections.append("")
 
         if not sections:
