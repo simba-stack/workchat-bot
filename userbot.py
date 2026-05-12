@@ -402,9 +402,16 @@ class UserbotService:
             await self._handle_accounting_v2_message(event)
             return
         chat_info = storage.get_chat_info(chat_id)
-        if not chat_info:
-            return
+        # Команды takeover/forget работают в ЛЮБОЙ группе, даже если её
+        # ещё нет в managed_chats — это и есть смысл takeover'а.
         if not event.message or not (event.message.text or "").strip():
+            return
+        try:
+            if await self._maybe_handle_takeover_command(event, chat_id, chat_info):
+                return
+        except Exception as e:
+            logger.warning("takeover handler error: %s", e)
+        if not chat_info:
             return
 
         # Снимаем silent mode если пришёл сигнал готовности от CRM-бота:
@@ -1477,6 +1484,146 @@ class UserbotService:
 
     # ID Тимона для определения created_by при ручном создании карточек.
     TIMON_USER_ID = 397572312
+
+    # Команды takeover — взять чат под AI / отпустить
+    _AI_CMD_TAKEOVER_RE = re.compile(
+        r"^\s*ассистент[,\s]+"
+        r"(?:возьми|работай|веди)\s+"
+        r"(?:этот\s+чат\s+|тут\s+|здесь\s+|в\s+этом\s+чате\s+)?"
+        r"(?:для\s+|с\s+)?"
+        r"@?(\w+)\b",
+        re.I | re.M,
+    )
+    _AI_CMD_FORGET_RE = re.compile(
+        r"^\s*ассистент[,\s]+(?:забудь|перестань|стоп|выйди)"
+        r"(?:\s+этот\s+чат|\s+тут|\s+здесь|\s+отсюда)?\s*$",
+        re.I | re.M,
+    )
+
+    async def _maybe_handle_takeover_command(
+        self, event, chat_id, chat_info: Optional[dict],
+    ) -> bool:
+        """Команды в любой группе с юзерботом:
+          'Ассистент возьми этот чат для @nick' / 'Ассистент работай тут с @nick'
+                — регистрирует чат как managed_chat для клиента @nick.
+          'Ассистент забудь этот чат' — удаляет чат из managed_chats.
+        Доступно только админам и worker'ам. Возвращает True если обработано."""
+        text = (event.message and event.message.text) or ""
+        if not text:
+            return False
+
+        # Проверка авторизации
+        try:
+            sender_id = int(event.sender_id) if event.sender_id else 0
+        except Exception:
+            sender_id = 0
+        try:
+            sender = await event.get_sender()
+        except Exception:
+            sender = None
+        sender_username = (getattr(sender, "username", "") or "").lower()
+        is_admin = sender_id in (storage.get_admins() or [])
+        is_worker = sender_username and sender_username in {
+            w.lower() for w in storage.get_workers()
+        }
+        if not (is_admin or is_worker):
+            # Команды не от уполномоченного — игнорируем
+            return False
+
+        # FORGET
+        if self._AI_CMD_FORGET_RE.search(text):
+            if not chat_info:
+                await event.reply("ℹ️ Этот чат и так не под AI.", parse_mode="html")
+                return True
+            await self._cmd_forget_chat(event, chat_id)
+            return True
+
+        # TAKEOVER
+        m = self._AI_CMD_TAKEOVER_RE.search(text)
+        if not m:
+            return False
+        username = m.group(1).strip().lstrip("@")
+        if not username:
+            return False
+        await self._cmd_takeover_chat(event, chat_id, username, chat_info)
+        return True
+
+    async def _cmd_takeover_chat(
+        self, event, chat_id, username: str, chat_info: Optional[dict],
+    ):
+        """Регистрирует чат как managed_chat для клиента @username.
+        Не делает API-вызовов к Claude — AI сам подтянет историю при первом
+        своём ответе клиенту через iter_messages."""
+        try:
+            user = await self.client.get_entity(username)
+        except UsernameNotOccupiedError:
+            await event.reply(f"⚠️ Пользователь @{username} не существует.")
+            return
+        except Exception as e:
+            await event.reply(
+                f"⚠️ Не нашёл @{username}: <code>{e}</code>", parse_mode="html",
+            )
+            return
+
+        client_id = int(getattr(user, "id", 0) or 0)
+        if not client_id:
+            await event.reply(f"⚠️ Не смог получить ID пользователя @{username}.")
+            return
+        client_name = (
+            (getattr(user, "first_name", "") or "")
+            + " "
+            + (getattr(user, "last_name", "") or "")
+        ).strip() or f"@{username}"
+        client_username = (getattr(user, "username", "") or username).lstrip("@")
+
+        # Если чат уже в managed_chats — обновляем клиента
+        action = "обновил" if chat_info else "взял под AI"
+        await storage.register_chat(
+            chat_id, client_id, client_name, client_username,
+        )
+        # Отметим welcome_sent=True чтобы юзербот не слал welcome задним числом
+        try:
+            await storage.mark_welcome_sent(chat_id)
+        except Exception:
+            pass
+
+        # Сохраним кто взял для аудита (через payment_info — без отдельного метода)
+        try:
+            await storage.set_chat_payment_info(chat_id, client_username=client_username)
+        except Exception:
+            pass
+
+        await event.reply(
+            f"✅ {action.capitalize()}: клиент <b>@{client_username}</b> "
+            f"({client_name}).\n"
+            f"Дальше AI отвечает на его сообщения как в обычной рабочей беседе.\n\n"
+            f"<i>Если AI выключен — включи в /admin → 🧠 AI.</i>",
+            parse_mode="html",
+        )
+        logger.info(
+            "ai cmd takeover: chat=%s client=%s/@%s by sender=%s",
+            chat_id, client_id, client_username, event.sender_id,
+        )
+
+    async def _cmd_forget_chat(self, event, chat_id):
+        """Удаляет чат из managed_chats — AI перестаёт там отвечать.
+        Само сообщение/историю не трогаем."""
+        try:
+            removed = await storage.remove_managed_chat(chat_id)
+        except Exception as e:
+            await event.reply(
+                f"⚠️ Не смог удалить чат из managed: <code>{e}</code>",
+                parse_mode="html",
+            )
+            return
+        if removed:
+            await event.reply(
+                "🔇 Этот чат больше не под AI. Сообщения клиентов AI не подхватывает.",
+                parse_mode="html",
+            )
+            logger.info("ai cmd forget: chat=%s by sender=%s", chat_id, event.sender_id)
+        else:
+            await event.reply("ℹ️ Этот чат и так не был под AI.")
 
     # Команды AI от админов: 'Ассистент добавь @user' / 'Ассистент выдай админку @user'
     # Допускаем любой хвост после @username ("в беседу", "в чат", "сюда" и т.п.) —
@@ -2557,6 +2704,36 @@ class UserbotService:
                 statuses[uname_or_id] = f"flood wait {e.seconds}s"
             except Exception as e:
                 statuses[uname_or_id] = f"ошибка: {e}"
+
+            # Выдать админ-права с rank=role если задано в worker_roles
+            role_info = storage.get_worker_role(uname_or_id)
+            if role_info.get("is_admin"):
+                rank = (role_info.get("role") or "Admin")[:16]
+                try:
+                    rights = ChatAdminRights(
+                        change_info=True,
+                        post_messages=False,
+                        edit_messages=True,
+                        delete_messages=True,
+                        ban_users=True,
+                        invite_users=True,
+                        pin_messages=True,
+                        add_admins=False,
+                        anonymous=False,
+                        manage_call=True,
+                    )
+                    await self.client(EditAdminRequest(
+                        channel=channel, user_id=user,
+                        admin_rights=rights, rank=rank,
+                    ))
+                    statuses[uname_or_id] = (
+                        f"{statuses.get(uname_or_id, '')} + админка ({rank})"
+                    ).strip(" +")
+                except Exception as e:
+                    logger.warning(
+                        "grant admin failed for @%s in chat=%s: %s",
+                        uname_or_id, channel.id, e,
+                    )
 
         for u, s in statuses.items():
             logger.info("invite chat=%s @%s -> %s", channel.id, u, s)

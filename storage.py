@@ -109,6 +109,10 @@ def _default_state() -> dict:
         # Обратный индекс client_username -> chat_id (последний по created_at).
         # Telegram username case-insensitive, ключи храним в lowercase, без @.
         "client_username_index": {},
+        # Роли работников: {uname_lower: {role: str, is_admin: bool}}.
+        # При создании новой work_chat юзербот приглашает каждого worker'а
+        # и выдаёт ему админ-права (с rank=role в Telegram) если is_admin=True.
+        "worker_roles": {},
     }
 
 
@@ -204,6 +208,61 @@ class Storage:
         async with _lock:
             if username in self.state["workers"]:
                 self.state["workers"].remove(username)
+            # Заодно чистим роли — чтобы worker_roles не разрастался
+            roles = self.state.setdefault("worker_roles", {})
+            roles.pop(username.lower(), None)
+            await self._save_unlocked()
+
+    # === Роли работников ===
+    # Для каждого worker'а можно задать роль (например "Менеджер", "Оператор")
+    # и флаг is_admin. При создании новой work_chat юзербот приглашает worker'а
+    # и выдаёт ему админ-права с rank=role если is_admin=True. Если роли нет —
+    # worker добавляется обычным участником.
+
+    def get_worker_role(self, username: str) -> dict:
+        """Возвращает {role: str, is_admin: bool} для worker'а по username,
+        либо пустой dict если роль не задана."""
+        if not username:
+            return {}
+        key = username.lstrip("@").lower().strip()
+        if not key:
+            return {}
+        roles = self.state.get("worker_roles") or {}
+        return dict(roles.get(key) or {})
+
+    def list_worker_roles(self) -> dict:
+        """Возвращает копию всего worker_roles dict (uname_lower → {role, is_admin})."""
+        return dict(self.state.get("worker_roles") or {})
+
+    async def set_worker_role(self, username: str, role: str, is_admin: bool = False):
+        """Задаёт роль и админ-флаг для worker'а. Если worker'а не было в
+        списке — добавляет (worker_roles работает только с членами workers)."""
+        clean = username.lstrip("@").strip()
+        if not clean:
+            return False
+        key = clean.lower()
+        async with _lock:
+            # Гарантируем что worker в списке
+            if clean not in self.state["workers"]:
+                self.state["workers"].append(clean)
+            roles = self.state.setdefault("worker_roles", {})
+            roles[key] = {
+                "role": (role or "").strip()[:16] or "Сотрудник",
+                "is_admin": bool(is_admin),
+            }
+            await self._save_unlocked()
+            return True
+
+    async def remove_worker_role(self, username: str):
+        """Удаляет только роль (worker остаётся в списке)."""
+        if not username:
+            return
+        key = username.lstrip("@").lower().strip()
+        if not key:
+            return
+        async with _lock:
+            roles = self.state.setdefault("worker_roles", {})
+            roles.pop(key, None)
             await self._save_unlocked()
 
     def get_welcome(self) -> str:
@@ -367,6 +426,23 @@ class Storage:
             if info:
                 info["welcome_sent"] = True
             await self._save_unlocked()
+
+    async def remove_managed_chat(self, chat_id) -> bool:
+        """Удаляет чат из managed_chats — AI перестаёт там отвечать.
+        Используется командой 'Ассистент забудь этот чат'."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            managed = self.state.get("managed_chats") or {}
+            if key not in managed:
+                return False
+            managed.pop(key, None)
+            # Заодно почистим обратный индекс username, если он указывал сюда.
+            idx = self.state.get("client_username_index") or {}
+            for uname_key, mapped in list(idx.items()):
+                if str(mapped) == str(key):
+                    idx.pop(uname_key, None)
+            await self._save_unlocked()
+            return True
 
     async def cleanup(self):
         now = time.time()

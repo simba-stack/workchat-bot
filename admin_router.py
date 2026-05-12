@@ -26,11 +26,15 @@ class AdminFSM(StatesGroup):
     set_coord_chat = State()
     set_accounting_chat = State()
     set_lk_chat = State()
+    set_role_username = State()   # FSM роли: ввод @username
+    set_role_name = State()       # FSM роли: ввод названия роли
+    set_role_admin = State()      # FSM роли: выбор is_admin
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Работники", callback_data="adm:workers")],
+        [InlineKeyboardButton(text="🎭 Роли работников", callback_data="adm:roles")],
         [InlineKeyboardButton(text="💬 Приветствие", callback_data="adm:welcome")],
         [InlineKeyboardButton(text="⏱ Кулдаун", callback_data="adm:cooldown")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
@@ -69,6 +73,33 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
     elif action == "workers":
         await render_workers(call)
+    elif action == "roles":
+        await render_roles(call)
+    elif action == "role_add":
+        await call.message.edit_text(
+            "🎭 <b>Добавить/изменить роль</b>\n\n"
+            "Пришлите <code>@username</code> работника (он также будет добавлен "
+            "в список 👥 Работники если его там ещё нет).\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_role_username)
+    elif action.startswith("role_del:"):
+        uname = action.split(":", 1)[1]
+        await storage.remove_worker_role(uname)
+        await call.answer(f"Роль @{uname} удалена.")
+        await render_roles(call)
+    elif action.startswith("role_toggle:"):
+        uname = action.split(":", 1)[1]
+        info = storage.get_worker_role(uname)
+        new_is_admin = not bool(info.get("is_admin"))
+        await storage.set_worker_role(
+            uname, info.get("role") or "Сотрудник", new_is_admin,
+        )
+        await call.answer(
+            "Админ: " + ("ДА" if new_is_admin else "НЕТ") + f" для @{uname}"
+        )
+        await render_roles(call)
     elif action == "welcome":
         await render_welcome(call)
     elif action == "cooldown":
@@ -213,12 +244,68 @@ def back_kb() -> InlineKeyboardMarkup:
 
 async def render_workers(call: CallbackQuery):
     workers = storage.get_workers()
+    roles = storage.list_worker_roles()
     text = f"👥 <b>Работники ({len(workers)})</b>\n\n"
-    text += "\n".join(f"• @{w}" for w in workers) if workers else "<i>пусто</i>"
+    if workers:
+        lines = []
+        for w in workers:
+            info = roles.get(w.lower()) or {}
+            role = info.get("role") or ""
+            admin_mark = " 👑" if info.get("is_admin") else ""
+            tag = f" — {role}{admin_mark}" if role or admin_mark else ""
+            lines.append(f"• @{w}{tag}")
+        text += "\n".join(lines)
+    else:
+        text += "<i>пусто</i>"
     rows = [[InlineKeyboardButton(text=f"🗑 @{w}", callback_data=f"adm:worker_del:{w}")] for w in workers]
     rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data="adm:worker_add")])
+    rows.append([InlineKeyboardButton(text="🎭 Роли", callback_data="adm:roles")])
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")])
     await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+async def render_roles(call: CallbackQuery):
+    """Меню ролей: список работников с ролями + кнопки управления."""
+    workers = storage.get_workers()
+    roles = storage.list_worker_roles()
+    lines = [
+        "🎭 <b>Роли работников</b>",
+        "",
+        "При создании новой рабочей беседы с клиентом юзербот:",
+        "1. Приглашает каждого работника",
+        "2. Если у работника <b>👑 админ</b> — выдаёт админ-права с rank=роль",
+        "",
+        "<i>Telegram показывает rank рядом с никнеймом в чате.</i>",
+        "",
+    ]
+    rows = []
+    if workers:
+        lines.append("<b>Текущие настройки:</b>")
+        for w in workers:
+            info = roles.get(w.lower()) or {}
+            role = info.get("role") or "<i>не задана</i>"
+            admin_mark = " 👑" if info.get("is_admin") else ""
+            lines.append(f"• @{w} — {role}{admin_mark}")
+            row_btns = [
+                InlineKeyboardButton(
+                    text=("👑 admin: ON" if info.get("is_admin") else "👤 admin: OFF") + f" @{w}",
+                    callback_data=f"adm:role_toggle:{w}",
+                ),
+            ]
+            if info:
+                row_btns.append(InlineKeyboardButton(
+                    text=f"🗑 @{w}",
+                    callback_data=f"adm:role_del:{w}",
+                ))
+            rows.append(row_btns)
+    else:
+        lines.append("<i>Работников нет — добавь их в 👥 Работники.</i>")
+    rows.append([InlineKeyboardButton(text="✏️ Добавить/изменить роль", callback_data="adm:role_add")])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")])
+    await call.message.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
 async def render_welcome(call: CallbackQuery):
@@ -414,6 +501,88 @@ async def fsm_add_worker(message: Message, state: FSMContext):
     await storage.add_worker(username)
     await state.clear()
     await message.answer(f"✅ Добавлен @{username}", reply_markup=main_menu_kb())
+
+
+# --- FSM ролей: 3 шага (@username → название роли → admin yes/no) ---
+
+@router.message(AdminFSM.set_role_username)
+async def fsm_set_role_username(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    username = (message.text or "").strip().lstrip("@")
+    if not username or " " in username or len(username) > 64:
+        await message.answer("Некорректный username. Пришлите ещё раз или /admin.")
+        return
+    await state.update_data(role_username=username)
+    current = storage.get_worker_role(username) or {}
+    current_role = current.get("role") or ""
+    note = f"\n\n<i>Текущая роль: {current_role}</i>" if current_role else ""
+    await message.answer(
+        f"Введите название роли для <b>@{username}</b> (до 16 символов).\n"
+        f"Примеры: <code>Менеджер</code>, <code>Оператор</code>, <code>Бухгалтер</code>, <code>Откупщик</code>.{note}\n\n"
+        "Или /admin для отмены.",
+    )
+    await state.set_state(AdminFSM.set_role_name)
+
+
+@router.message(AdminFSM.set_role_name)
+async def fsm_set_role_name(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    role = (message.text or "").strip()
+    if not role:
+        await message.answer("Пустая роль. Пришлите название или /admin.")
+        return
+    if len(role) > 16:
+        await message.answer("Telegram-лимит rank: 16 символов. Сократите.")
+        return
+    await state.update_data(role_name=role)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👑 Да, админ", callback_data="adm:role_set:1"),
+            InlineKeyboardButton(text="👤 Нет, обычный", callback_data="adm:role_set:0"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:role_set:cancel")],
+    ])
+    await message.answer(
+        f"Выдавать ли <b>{role}</b> админ-права в новых рабочих беседах?\n\n"
+        "<i>👑 Админ — Telegram-rank будет показан рядом с никнеймом, "
+        "права: edit/delete сообщений, ban/invite, pin. Без add_admins.</i>",
+        reply_markup=kb,
+    )
+    await state.set_state(AdminFSM.set_role_admin)
+
+
+@router.callback_query(F.data.startswith("adm:role_set:"), AdminFSM.set_role_admin)
+async def cb_role_set(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await state.clear()
+        return
+    flag = call.data.split(":", 2)[2]
+    data = await state.get_data()
+    uname = data.get("role_username")
+    role = data.get("role_name")
+    await state.clear()
+    if flag == "cancel" or not uname or not role:
+        await call.message.edit_text("Отменено.", reply_markup=main_menu_kb())
+        return
+    is_admin = flag == "1"
+    await storage.set_worker_role(uname, role, is_admin)
+    admin_mark = " 👑" if is_admin else ""
+    await call.message.edit_text(
+        f"✅ Роль <b>{role}</b>{admin_mark} назначена @{uname}.",
+        reply_markup=main_menu_kb(),
+    )
 
 
 @router.message(AdminFSM.set_welcome)
