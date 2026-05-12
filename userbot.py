@@ -867,8 +867,24 @@ class UserbotService:
         if text.lower().startswith("/learn"):
             await self._handle_learn_command(event, text)
             return
-        # /sync_lk — синхронизация карточек ЛК из истории Группы 1
+        # Команды очистки (в брейн-чате — самые быстрые)
         low = text.lower().strip()
+        cleanup_cmds = (
+            "очистить маржу", "очисти маржу", "обнули маржу",
+            "очистить бухгалтерию", "очисти бухгалтерию",
+            "очистить ai", "очисти ai", "очистить статистику ai",
+            "очистить всё", "очисти всё", "сбросить статистику",
+            "clear margin", "clear accounting", "clear ai",
+        )
+        if any(low == c or low.startswith(c + " ") for c in cleanup_cmds):
+            result = await self._execute_dashboard_command(text.strip())
+            try:
+                await event.reply(result, parse_mode="html", link_preview=False)
+            except Exception:
+                pass
+            return
+
+        # /sync_lk — синхронизация карточек ЛК из истории Группы 1
         if (
             low.startswith("/sync_lk")
             or low.startswith("/sync_cards")
@@ -5065,6 +5081,50 @@ class UserbotService:
                 f"AI replies={ai_stats.get('replies_total', 0)} · "
                 f"users={len(storage.list_bot_users())}"
             )
+
+        # ===== ОЧИСТКА БУХГАЛТЕРИИ (маржа / заявки / AI errors) =====
+        if low in (
+            "очистить маржу", "очисти маржу", "обнули маржу",
+            "очистить бухгалтерию", "очисти бухгалтерию", "обнули бухгалтерию",
+            "очистить заявки", "очисти заявки",
+            "clear margin", "clear accounting", "reset accounting",
+        ):
+            apps_count = sum(
+                len(v or []) for v in (storage.state.get("applications_v2") or {}).values()
+            )
+            # Чистим ТОЛЬКО заявки V2 — маржа считается из них и обнулится сама.
+            # deals_stats, AI stats, ЛК, чаты, прайс — НЕ трогаем.
+            storage.state["applications_v2"] = {}
+            await storage._save_unlocked()
+            return (
+                f"🧹 Бухгалтерия очищена: удалено заявок V2 = {apps_count}, "
+                "маржа сброшена на 0. Карточки ЛК, сделки, чаты, прайс — не тронуты."
+            )
+        if low in (
+            "очистить ai", "очисти ai", "очистить статистику ai", "очисти статистику ai",
+            "очистить ошибки ai", "очисти ошибки ai",
+            "clear ai", "reset ai stats", "clear ai errors",
+        ):
+            old = dict(storage.state.get("ai_stats") or {})
+            storage.state["ai_stats"] = {}
+            storage.state["escalate_stats"] = {}
+            await storage._save_unlocked()
+            return (
+                f"🧹 AI стата сброшена. Было: replies={old.get('replies_total', 0)}, "
+                f"errors={old.get('errors_total', 0)}"
+            )
+        if low in (
+            "очистить всё", "очисти всё", "сбросить статистику",
+            "reset all stats", "clear all stats",
+        ):
+            storage.state["applications_v2"] = {}
+            storage.state["deals_stats"] = {}
+            storage.state["ai_stats"] = {}
+            storage.state["escalate_stats"] = {}
+            storage.state["writeback_stats"] = {}
+            storage.state["funnel_stats"] = {}
+            await storage._save_unlocked()
+            return "🧹 Все счётчики сброшены: маржа, AI, эскалации, writeback, воронка."
 
         # ===== PAUSE/RESUME AI =====
         if low in ("pause ai", "пауза ai", "ai off", "stop ai"):
