@@ -2246,6 +2246,31 @@ class UserbotService:
 
         low = text.lower()
 
+        # Reply работника-выплат на сообщение юзербота с инструкциями —
+        # это пруф что действие выполнено. Снимаем карточку → ЗАВЕРШЁН,
+        # уведомляем клиента в его work_chat.
+        try:
+            reply_to_id = None
+            if event.message and getattr(event.message, "reply_to", None):
+                reply_to_id = getattr(event.message.reply_to, "reply_to_msg_id", None)
+            if reply_to_id:
+                if await self._maybe_handle_payment_proof(event, int(reply_to_id), text):
+                    return
+        except Exception as e:
+            logger.warning("payment proof check failed: %s", e)
+
+        # Команда: дневная сводка действий (что оплатить/отпустить/etc).
+        # Не блокирующий мини-запрос к storage, без AI-вызовов.
+        if re.search(
+            r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
+            r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
+            r"дневн(?:ой|ая)\s+(?:отч[её]т|свод)|"
+            r"кому\s+оплат)\b",
+            text, re.I,
+        ):
+            await self._handle_daily_summary(event)
+            return
+
         # Команда: удалить заявку N
         m = re.match(r"^\s*удалить\s+заявку\s+#?(\d+)\s*$", text, re.I)
         if m:
@@ -2451,6 +2476,197 @@ class UserbotService:
             )
             return
 
+    async def _maybe_handle_payment_proof(
+        self, event, reply_to_msg_id: int, proof_text: str,
+    ) -> bool:
+        """Работник reply'ит на сообщение юзербота с инструкциями (со пруфом
+        выплаты/отпуска). Юзербот:
+          1. Находит карточки ЛК где accounting_reply_msg_id == reply_to_msg_id.
+          2. Для каждой карточки: статус → ЗАВЕРШЁН, refresh поста в Группе 1.
+          3. Пишет клиенту в его work_chat (USDT/GUARANTOR — по методу).
+        """
+        cards = storage.list_lk_cards() or {}
+        matched = [
+            (cid, c) for cid, c in cards.items()
+            if int(c.get("accounting_reply_msg_id") or 0) == int(reply_to_msg_id)
+            and c.get("status") not in ("ЗАВЕРШЁН", "БРАК")
+        ]
+        if not matched:
+            return False
+
+        notified = 0
+        for cid, card in matched:
+            # 1. Статус → ЗАВЕРШЁН
+            try:
+                await storage.set_lk_card_status(
+                    cid, "ЗАВЕРШЁН", by="accounting_v2_proof",
+                )
+                await self._refresh_lk_card_post(cid)
+            except Exception as e:
+                logger.warning("set ЗАВЕРШЁН failed for %s: %s", cid, e)
+
+            # 2. Уведомление клиенту в его work_chat
+            wc = card.get("work_chat_id")
+            if not wc:
+                logger.warning(
+                    "payment proof: no work_chat for card=%s — клиента не уведомить",
+                    cid,
+                )
+                continue
+            method = (card.get("payment_method") or "").upper()
+            bank = card.get("bank") or "—"
+            fio = card.get("fio") or "—"
+            deal_id = (card.get("deal_id") or "").strip().lstrip("#")
+            usdt_addr = (card.get("usdt_address") or "").strip()
+
+            if method == "USDT_TRC20":
+                msg = (
+                    f"✅ Оплата за ЛК <b>{bank}</b> ({fio}) "
+                    f"на ваш USDT TRC20 <b>переведена</b>.\n\n"
+                    f"Сумма: <b>{_fmt_usdt(card.get('price_usdt', 0))}</b>\n"
+                )
+                if usdt_addr:
+                    msg += f"Адрес: <code>{usdt_addr}</code>\n"
+                msg += "Проверьте поступление 🙏"
+            elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER", "GUARANTOR_AFTER_WORK"):
+                if deal_id:
+                    msg = (
+                        f"✅ Сделка <code>#{deal_id}</code> по ЛК <b>{bank}</b> "
+                        f"({fio}) <b>пополнена и отпущена в вашу сторону</b>.\n\n"
+                        "Проверьте Conte 🙏"
+                    )
+                else:
+                    msg = (
+                        f"✅ ЛК <b>{bank}</b> ({fio}) обработан, выплата ушла. "
+                        "Если что-то не пришло — напишите."
+                    )
+            else:
+                msg = (
+                    f"✅ ЛК <b>{bank}</b> ({fio}) обработан, выплата ушла."
+                )
+
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target, msg, parse_mode="html", link_preview=False,
+                )
+                notified += 1
+                logger.info(
+                    "payment proof: notified client work_chat=%s card=%s",
+                    wc, cid,
+                )
+            except Exception as e:
+                logger.warning(
+                    "payment proof notify failed for card=%s chat=%s: %s",
+                    cid, wc, e,
+                )
+
+        # Подтверждение работнику в Группе 2
+        try:
+            await event.reply(
+                f"✅ Зафиксировал, карточки → ЗАВЕРШЁН ({len(matched)}). "
+                f"Клиентов уведомил: {notified}.",
+                parse_mode="html", link_preview=False,
+            )
+        except Exception as e:
+            logger.warning("payment proof ack failed: %s", e)
+        return True
+
+    async def _handle_daily_summary(self, event):
+        """Команда «сводка/действия/что оплатить» в Группе 2.
+
+        Пробегает по всем активным карточкам ЛК и группирует по требуемому
+        действию. Никаких AI-вызовов — чистый storage read.
+        """
+        cards = storage.list_lk_cards() or {}
+        # Группы действий
+        g_pay_usdt: list = []        # ОТРАБОТАН + USDT_TRC20
+        g_release_deal: list = []     # ОТРАБОТАН + GUARANTOR (deal_id есть)
+        g_fund_release: list = []     # ПОПОЛНИТЬ_И_ОТПУСТИТЬ
+        g_wait_client: list = []      # ОТРАБОТАН + GUARANTOR_AFTER_WORK без deal_id
+        g_in_work: list = []          # В_РАБОТЕ — ничего делать не нужно, но покажем для контекста
+
+        for cid, c in cards.items():
+            status = c.get("status") or ""
+            if status in ("БРАК", "ЗАВЕРШЁН"):
+                continue
+            method = (c.get("payment_method") or "").upper()
+            deal_id = (c.get("deal_id") or "").strip().lstrip("#")
+            entry = {
+                "card_id": cid,
+                "supplier": c.get("supplier") or c.get("client_username") or "",
+                "bank": c.get("bank") or "—",
+                "fio": c.get("fio") or "—",
+                "price_usdt": c.get("price_usdt") or 0,
+                "deal_id": deal_id,
+                "usdt_address": c.get("usdt_address") or "",
+                "method": method,
+                "status": status,
+            }
+            if status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
+                g_fund_release.append(entry)
+            elif status == "ОТРАБОТАН":
+                if method == "USDT_TRC20":
+                    g_pay_usdt.append(entry)
+                elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER") and deal_id:
+                    g_release_deal.append(entry)
+                elif method == "GUARANTOR_AFTER_WORK" and not deal_id:
+                    g_wait_client.append(entry)
+                elif method == "GUARANTOR_AFTER_WORK" and deal_id:
+                    g_fund_release.append(entry)
+                else:
+                    g_release_deal.append(entry)
+            elif status == "В_РАБОТЕ":
+                g_in_work.append(entry)
+
+        def _fmt_entry(e: dict) -> str:
+            sup = _fmt_username(e["supplier"], fallback="—")
+            extra = ""
+            if e.get("deal_id"):
+                extra = f" — <code>#{e['deal_id']}</code>"
+            elif e.get("usdt_address"):
+                extra = f" — <code>{e['usdt_address'][:12]}...</code>"
+            return (
+                f"• {sup} — <b>{e['bank']}</b> — {e['fio']} — "
+                f"{_fmt_usdt(e['price_usdt'])}{extra}"
+            )
+
+        sections = []
+        if g_pay_usdt:
+            sections.append("💸 <b>Оплатить USDT TRC20:</b>")
+            sections.extend(_fmt_entry(e) for e in g_pay_usdt)
+            sections.append("")
+        if g_release_deal:
+            sections.append("🔓 <b>Отпустить сделку:</b>")
+            sections.extend(_fmt_entry(e) for e in g_release_deal)
+            sections.append("")
+        if g_fund_release:
+            sections.append("💎 <b>Пополнить и отпустить:</b>")
+            sections.extend(_fmt_entry(e) for e in g_fund_release)
+            sections.append("")
+        if g_wait_client:
+            sections.append("⏳ <b>Ждать сделку от клиента:</b>")
+            sections.extend(_fmt_entry(e) for e in g_wait_client)
+            sections.append("")
+        if g_in_work:
+            sections.append("🟢 <b>В работе у операционистов:</b>")
+            sections.extend(_fmt_entry(e) for e in g_in_work[:15])
+            if len(g_in_work) > 15:
+                sections.append(f"<i>… и ещё {len(g_in_work) - 15}</i>")
+            sections.append("")
+
+        if not sections:
+            text = "📋 <b>Действия на сегодня</b>\n\n<i>Нет активных карточек.</i>"
+        else:
+            text = "📋 <b>Действия на сегодня</b>\n\n" + "\n".join(sections).rstrip()
+
+        try:
+            for chunk in _split_text(text, 3900):
+                await event.reply(chunk, parse_mode="html", link_preview=False)
+                await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning("daily_summary reply failed: %s", e)
+
     async def _apply_application_v2(self, event, app: dict, replaced=None):
         """Сохранить заявку, посчитать, ответить отчётом, авто-перевести ЛК.
 
@@ -2542,6 +2758,120 @@ class UserbotService:
             "applied app_v2 id=%s date=%s margin=%.0f$ moved=%d",
             new_id, date_str, computed.get("margin_usdt", 0), moved,
         )
+
+        # Reply с инструкциями для работника-выплат — по каждому ЛК заявки
+        # отдельная строка действия. Сохраняет msg_id в карточку для
+        # последующего распознавания reply-пруфа от Тимона (Коммит 4).
+        try:
+            await self._send_post_application_actions(event, app, sent_id)
+        except Exception as e:
+            logger.warning("post-app actions send failed: %s", e)
+
+    async def _send_post_application_actions(
+        self, event, app: dict, parent_msg_id: Optional[int],
+    ):
+        """После отчёта в Группе 2 — reply со списком действий по каждому ЛК.
+
+        Для каждого банка+ФИО находим карточку в Группе 1 и формируем
+        инструкцию по `payment_method`:
+          • USDT_TRC20 → «ОПЛАТИТЕ на адрес ...»
+          • GUARANTOR_BEFORE/AFTER (есть deal_id) → «ОТПУСТИТЕ сделку #N»
+          • GUARANTOR_AFTER_WORK без deal_id → «ОЖИДАЙТЕ создания сделки»
+          • ПОПОЛНИТЬ_И_ОТПУСТИТЬ → «ПОПОЛНИТЕ И ОТПУСТИТЕ #N»
+        """
+        intake = app.get("intake") or {}
+        outputs = app.get("outputs") or []
+        intake_list = []
+        if intake.get("bank") and intake.get("fio"):
+            intake_list.append(intake)
+        all_lks = [*intake_list, *outputs]
+        if not all_lks:
+            return
+
+        lines = ["💼 <b>Действия по заявке:</b>", ""]
+        cards_with_msg: list = []  # [(card_id, line_idx)] — для msg_id update
+        for o in all_lks:
+            bank = (o.get("bank") or "").strip()
+            fio = (o.get("fio") or "").strip()
+            cards = storage.find_lk_card(bank=bank, fio=fio)
+            if not cards:
+                lines.append(
+                    f"⚠️ <b>{bank} {fio}</b> — карточка не найдена в Группе 1"
+                )
+                continue
+            card = cards[0]
+            cid = card.get("card_id", "?")
+            method = (card.get("payment_method") or "").upper()
+            status = card.get("status") or ""
+            deal_id = (card.get("deal_id") or "").strip().lstrip("#")
+            usdt_addr = (card.get("usdt_address") or "").strip()
+            supplier = card.get("supplier") or card.get("client_username") or ""
+            supplier_tag = _fmt_username(supplier, fallback="—")
+
+            action = ""
+            if status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ" and deal_id:
+                action = (
+                    f"💎 <b>ПОПОЛНИТЬ И ОТПУСТИТЬ</b> сделку <code>#{deal_id}</code>"
+                )
+            elif method == "USDT_TRC20":
+                if usdt_addr:
+                    action = (
+                        f"💸 <b>ОПЛАТИТЕ USDT TRC20</b> на адрес: "
+                        f"<code>{usdt_addr}</code>"
+                    )
+                else:
+                    action = (
+                        "⚠️ <b>USDT TRC20</b> — адрес не задан, уточни у клиента"
+                    )
+            elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER") and deal_id:
+                action = (
+                    f"🔓 <b>ОТПУСТИТЕ</b> сделку <code>#{deal_id}</code>"
+                )
+            elif method == "GUARANTOR_AFTER_WORK":
+                if deal_id:
+                    action = (
+                        f"💎 <b>ПОПОЛНИТЬ И ОТПУСТИТЬ</b> сделку <code>#{deal_id}</code>"
+                    )
+                else:
+                    action = (
+                        "⏳ <b>Ожидаем создания сделки клиентом</b> — "
+                        "когда AI получит номер, статус сменится"
+                    )
+            else:
+                action = (
+                    f"⚠️ Метод <code>{method or '—'}</code> — действие неясно"
+                )
+
+            lines.append(
+                f"• {supplier_tag} — <b>{bank}</b> — {fio} — "
+                f"{_fmt_usdt(card.get('price_usdt', 0))}\n  └─ {action}"
+            )
+            cards_with_msg.append(cid)
+
+        body = "\n".join(lines)
+        try:
+            kwargs = {"parse_mode": "html", "link_preview": False}
+            if parent_msg_id:
+                kwargs["reply_to"] = int(parent_msg_id)
+            sent = await event.reply(body, **kwargs)
+        except Exception as e:
+            logger.warning("post-app actions reply failed: %s", e)
+            return
+
+        # Сохранить msg_id reply'я в каждую упомянутую карточку — для
+        # последующего распознавания reply-пруфа от работника-выплат.
+        sent_id = getattr(sent, "id", None)
+        if sent_id:
+            for cid in cards_with_msg:
+                try:
+                    await storage.update_lk_card(
+                        cid, accounting_reply_msg_id=int(sent_id)
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "save accounting_reply_msg_id for %s failed: %s",
+                        cid, e,
+                    )
 
     async def _request_post_work_deal(self, card: dict):
         """ЛК отработан, метод = GUARANTOR_AFTER_WORK → теги клиента в work_chat,

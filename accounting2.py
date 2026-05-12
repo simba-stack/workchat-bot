@@ -415,17 +415,27 @@ _RE_WITHDRAWN = re.compile(
     re.I | re.M,
 )
 _RE_COURSE_WITHDRAW = re.compile(
-    r"^\s*курс\s+вывод(?:а)?\s*[:—\-]\s*([\d.,]+)\s*$",
+    r"^\s*курс\s+(?:вывода|вывод|откупа|откуп|выкупа|выкуп|закупа|закуп|"
+    r"покупки|закупки)\s*[:—\-]?\s*([\d.,]+)\s*₽?\s*$",
     re.I | re.M,
 )
 _RE_COURSE_PAYOUT = re.compile(
-    r"^\s*курс\s+выплат(?:ы)?\s*[:—\-]\s*([\d.,]+)\s*$",
+    r"^\s*курс\s+выплат[ыи](?:\s+партн[её]ру?)?\s*[:—\-]?\s*"
+    r"([\d.,]+)\s*₽?\s*$",
     re.I | re.M,
 )
+# «процент выплаты партнёру: 40» / «наша доля: 37» / «процент: 37»
+# Семантика для всех — это процент который МЫ забираем себе.
+# Клиенту достаётся (100 − pct).
 _RE_PARTNER_PCT = re.compile(
-    r"^\s*процент\s+выплаты\s+партн[её]ру\s*[:—\-]\s*([\d.,]+)\s*%?\s*$",
+    r"^\s*(?:процент\s+(?:выплаты\s+)?партн[её]ру?|наша\s+доля|наш\s+процент|"
+    r"процент|наш[ая]?\s+часть)\s*[:—\-]?\s*([\d.,]+)\s*%?\s*$",
     re.I | re.M,
 )
+
+# Наша комиссия на откупе USDT (default 2%). Можно переопределить через env.
+import os as _os  # noqa
+OUR_BUY_FEE_PCT = float(_os.getenv("OUR_BUY_FEE_PCT", "2.0"))
 
 
 def parse_application_v2(text: str) -> Optional[dict]:
@@ -550,10 +560,14 @@ def compute_application_v2(app: dict, lk_cards: dict, prev_apps=None) -> dict:
     if not total_withdrawn:
         total_withdrawn = withdrawn_rub
 
-    # Мы получили (USDT)
-    we_got_usdt = (total_withdrawn / course_w) if course_w else 0.0
+    # Мы получили (USDT) — это outputs_total / курс_откупа, МИНУС наша
+    # комиссия за откуп (OUR_BUY_FEE_PCT, default 2%).
+    we_got_usdt_gross = (total_withdrawn / course_w) if course_w else 0.0
+    we_buy_fee_pct = OUR_BUY_FEE_PCT
+    we_got_usdt = we_got_usdt_gross * (1 - we_buy_fee_pct / 100.0)
 
-    # Выплата клиенту
+    # Выплата клиенту/партнёру. partner_pct = «наша доля в %» (что МЫ
+    # забираем себе). Клиенту достаётся (100 − partner_pct).
     client_part_rub = intake_rub * (1 - partner_pct / 100.0)
     client_payout_usdt = (client_part_rub / course_p) if course_p else 0.0
 
@@ -689,6 +703,8 @@ def compute_application_v2(app: dict, lk_cards: dict, prev_apps=None) -> dict:
         "course_withdrawal": course_w,
         "course_payout": course_p,
         "partner_pct": partner_pct,
+        "our_buy_fee_pct": we_buy_fee_pct,
+        "we_got_usdt_gross": we_got_usdt_gross,
         "we_got_usdt": we_got_usdt,
         "client_payout_usdt": client_payout_usdt,
         "client_part_rub": client_part_rub,
@@ -792,16 +808,21 @@ def format_application_report_v2(app: dict, computed: dict) -> str:
             f"{_fmt_rub(o.get('amount_rub', 0))}"
         )
 
+    our_pct = computed.get("partner_pct", 0)
+    client_pct = max(0, 100 - our_pct)
+    fee_pct = computed.get("our_buy_fee_pct", 0)
+    we_gross = computed.get("we_got_usdt_gross", 0)
     lines += [
         "",
-        f"💱 Курс ВЫВОДА: <b>{computed['course_withdrawal']:.2f} ₽/USDT</b>",
-        f"💱 Курс ВЫПЛАТЫ: <b>{computed['course_payout']:.2f} ₽/USDT</b>",
-        f"📊 Процент партнёру: <b>{computed['partner_pct']:.1f}%</b>",
+        f"💱 Курс ОТКУПА: <b>{computed['course_withdrawal']:.2f} ₽/USDT</b>",
+        f"💱 Курс ВЫПЛАТЫ партнёру: <b>{computed['course_payout']:.2f} ₽/USDT</b>",
+        f"📊 Наша доля: <b>{our_pct:.1f}%</b> (клиенту → {client_pct:.1f}%)",
         "",
         "━━━━━━━━━━━━━━",
         f"💰 ВСЕГО ОТКУПИЛИ: <b>{_fmt_rub(computed['total_withdrawn_rub'])}</b>",
         f"✅ МЫ ПОЛУЧИЛИ: <b>{_fmt_usdt(computed['we_got_usdt'])}</b>",
-        f"💸 ВЫПЛАТА КЛИЕНТУ: <b>{_fmt_usdt(computed['client_payout_usdt'])}</b>",
+        f"   <i>({_fmt_usdt(we_gross)} − наша комиссия {fee_pct:.1f}%)</i>",
+        f"💸 ВЫПЛАТА ПАРТНЁРУ: <b>{_fmt_usdt(computed['client_payout_usdt'])}</b>",
         f"🛒 ОПЛАТА ЗА ЛК: <b>{_fmt_usdt(computed['lk_costs_usdt'])}</b>",
         "",
     ]
