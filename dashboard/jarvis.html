@@ -1063,6 +1063,16 @@
           </div>
         </div>
         <div class="lion-status" :class="lionSpeaking ? 'speaking' : ''" x-text="lionStatus"></div>
+        <div style="text-align: center; margin-top: 8px;">
+          <button class="btn"
+                  :class="voiceActive ? 'danger' : 'success'"
+                  @click="toggleVoice()"
+                  style="font-size: 11px; padding: 6px 14px; cursor: pointer;">
+            <span x-text="voiceActive ? '⏹ STOP VOICE' : '🎤 VOICE CHAT'"></span>
+          </button>
+          <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 9px;"
+               x-text="voiceState"></div>
+        </div>
       </div>
     </div>
 
@@ -1456,6 +1466,13 @@ function jarvis() {
     cmdInput: '',
     cmdLog: [],
     knownCmds: new Set(),
+    // Voice chat (OpenAI Realtime)
+    voiceActive: false,
+    voiceState: 'не активно',
+    voicePc: null,
+    voiceDc: null,
+    voiceAudio: null,
+    voiceStream: null,
     funnelSteps: [
       { key: 'starts',         label: 'Старт',      zone: 'left'   },
       { key: 'chats_created',  label: 'Беседы',     zone: 'left'   },
@@ -1987,15 +2004,58 @@ function jarvis() {
         this.lionSay('Готов к работе.');
       }
     },
+    _cleanForSpeech(text) {
+      if (!text) return '';
+      let s = String(text);
+      // Убираем все эмодзи / pictographs / symbols
+      try {
+        s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}]/gu, ' ');
+      } catch {
+        s = s.replace(/[^ -Ѐ-ӿ\s.,!?;:()«»"'-]/g, ' ');
+      }
+      // Markdown: **жирный**, *курсив*, _и_, ~~strike~~, `code`
+      s = s.replace(/```[\s\S]*?```/g, ' ');
+      s = s.replace(/`([^`]*)`/g, '$1');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+      s = s.replace(/__([^_]+)__/g, '$1');
+      s = s.replace(/(^|\s)\*([^\s*][^*]*)\*/g, '$1$2');
+      s = s.replace(/~~([^~]+)~~/g, '$1');
+      // Заголовки / списки / цитаты в начале строк
+      s = s.replace(/^[\s]*#{1,6}\s+/gm, '');
+      s = s.replace(/^[\s]*[•*\-–—]\s+/gm, '');
+      s = s.replace(/^[\s]*>\s+/gm, '');
+      // Markdown ссылки [text](url) → text
+      s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+      // # хэштеги перед id (#lk050 → "карточка lk 050"? оставлю просто l k)
+      s = s.replace(/#(lk)(\d+)/gi, 'карточка $2');
+      // Доллар → "доллар"
+      s = s.replace(/\$(\d+)/g, '$1 долларов');
+      // Лишние пробелы и переносы
+      s = s.replace(/\s+/g, ' ').trim();
+      return s;
+    },
     lionSay(text) {
       if (!this.lionEnabled || !text) return;
       if (!('speechSynthesis' in window)) return;
+      // Чистим markdown / эмодзи перед озвучкой
+      const clean = this._cleanForSpeech(text);
+      if (!clean || clean.length < 2) return;
+      // Обрезаем — больше 240 символов TTS — это уже стена болтовни.
+      // Берём первое предложение или 240 символов.
+      let speech = clean;
+      const dot = clean.search(/[.!?](\s|$)/);
+      if (dot > 30 && dot < 200) {
+        speech = clean.slice(0, dot + 1);
+      } else if (speech.length > 240) {
+        speech = speech.slice(0, 240).replace(/\s+\S*$/, '') + '.';
+      }
       try {
-        const u = new SpeechSynthesisUtterance(text);
+        speechSynthesis.cancel();  // прерываем предыдущую речь
+        const u = new SpeechSynthesisUtterance(speech);
         if (this.lionVoice) u.voice = this.lionVoice;
         u.lang = (this.lionVoice && this.lionVoice.lang) || 'ru-RU';
-        u.rate = 1.05;
-        u.pitch = 0.85;  // ниже = мужественнее
+        u.rate = 1.1;
+        u.pitch = 0.85;
         u.volume = 0.9;
         u.onstart = () => { this.lionSpeaking = true; this.lionStatus = 'SPEAKING'; };
         u.onend = () => {
@@ -2007,23 +2067,204 @@ function jarvis() {
       } catch (e) {}
     },
     lionNarrateEvent(ev) {
+      // По умолчанию НЕ озвучиваем события автоматически. Лев говорит
+      // только когда ты задал ему вопрос/команду через консоль.
+      // Если хочешь авто-озвучку — выставь localStorage.lion-autoread = '1'.
       if (!this.lionEnabled) return;
+      if (localStorage.getItem('jarvis-lion-autoread') !== '1') return;
       const t = ev.type || '';
       const p = ev.payload || {};
-      // Только важные события — не озвучивать каждый ping
       const phrases = {
-        'lk-created': () => `Новая карточка ${p.card_id || ''}, банк ${p.bank || ''}`,
-        'lk-status-changed': () => `Карточка ${p.card_id || ''} переведена в ${(p.new_status || '').replace(/_/g, ' ')}`,
+        'lk-created': () => `Создана карточка для банка ${p.bank || ''}`,
+        'lk-status-changed': () => `Карточка переведена в ${(p.new_status || '').replace(/_/g, ' ')}`,
         'application-processed': () => `Заявка обработана, маржа ${p.margin_usdt || 0} долларов`,
         'dashboard-ai-toggle': () => p.enabled ? 'Ассистент включён' : 'Ассистент отключён',
-        'dashboard-cmd-done': () => `Команда выполнена: ${p.result || ''}`,
-        'lk-from-worker-perevyaz': () => `Перевяз ${p.bank || ''} выполнен`,
-        'sync-lk-cards': () => `Синхронизация карточек: создано ${p.created || 0}, обновлено ${p.updated || 0}`,
-        'dashboard-login': () => 'Авторизация выполнена',
+        'lk-from-worker-perevyaz': () => `Перевяз выполнен`,
       };
       const builder = phrases[t];
       if (builder) {
         try { this.lionSay(builder()); } catch {}
+      }
+    },
+
+    // === Voice chat (OpenAI Realtime API via WebRTC) ===
+    async toggleVoice() {
+      if (this.voiceActive) {
+        this.stopVoice();
+      } else {
+        await this.startVoice();
+      }
+    },
+    async startVoice() {
+      this.voiceState = 'получаю токен...';
+      this.cmdLog.push({who: 'LEO', body: 'Подключаюсь к голосу...', cls: 'lion'});
+      this.scrollCmdLog();
+      try {
+        // 1. Берём ephemeral token у нашего бэкенда
+        const tokenRes = await fetch('/api/leo/realtime_session', {
+          method: 'POST', credentials: 'include',
+        });
+        if (!tokenRes.ok) {
+          const errText = await tokenRes.text();
+          throw new Error('token fetch failed: ' + tokenRes.status + ' ' + errText.slice(0, 200));
+        }
+        const session = await tokenRes.json();
+        const EPHEMERAL_KEY = (session.client_secret && session.client_secret.value) || '';
+        if (!EPHEMERAL_KEY) throw new Error('no ephemeral key in response');
+
+        // 2. Создаём peer connection
+        this.voiceState = 'устанавливаю WebRTC...';
+        const pc = new RTCPeerConnection();
+        this.voicePc = pc;
+
+        // 3. Аудио output — играем что нам шлёт OpenAI
+        const audioEl = document.createElement('audio');
+        audioEl.autoplay = true;
+        document.body.appendChild(audioEl);
+        this.voiceAudio = audioEl;
+        pc.ontrack = (e) => {
+          if (e.streams && e.streams[0]) audioEl.srcObject = e.streams[0];
+          this.lionSpeaking = true;
+          this.lionStatus = 'SPEAKING';
+        };
+
+        // 4. Аудио input — микрофон
+        this.voiceState = 'разрешите доступ к микрофону...';
+        const ms = await navigator.mediaDevices.getUserMedia({audio: true});
+        this.voiceStream = ms;
+        ms.getTracks().forEach(t => pc.addTrack(t, ms));
+
+        // 5. Data channel для событий
+        const dc = pc.createDataChannel('oai-events');
+        this.voiceDc = dc;
+        dc.addEventListener('message', (e) => {
+          try { this.handleVoiceEvent(JSON.parse(e.data)); } catch {}
+        });
+        dc.addEventListener('open', () => {
+          this.voiceState = '🟢 онлайн — говори';
+          this.cmdLog.push({who: 'LEO', body: 'Слушаю тебя.', cls: 'lion'});
+          this.scrollCmdLog();
+        });
+
+        // 6. SDP offer → OpenAI
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const model = 'gpt-4o-realtime-preview-2024-12-17';
+        const sdpResponse = await fetch(
+          `https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
+          {
+            method: 'POST',
+            body: offer.sdp,
+            headers: {
+              'Authorization': `Bearer ${EPHEMERAL_KEY}`,
+              'Content-Type': 'application/sdp',
+            },
+          }
+        );
+        if (!sdpResponse.ok) {
+          throw new Error('OpenAI SDP error: ' + sdpResponse.status);
+        }
+        const answerSdp = await sdpResponse.text();
+        await pc.setRemoteDescription({type: 'answer', sdp: answerSdp});
+
+        this.voiceActive = true;
+        this.voiceState = '🟢 онлайн — говори';
+      } catch (e) {
+        console.error('voice start failed', e);
+        this.voiceState = 'ошибка: ' + String(e).slice(0, 80);
+        this.cmdLog.push({who: 'ERR', body: 'Голос недоступен: ' + e, cls: 'err'});
+        this.scrollCmdLog();
+        this.stopVoice();
+      }
+    },
+    stopVoice() {
+      try { if (this.voiceDc) this.voiceDc.close(); } catch {}
+      try { if (this.voicePc) this.voicePc.close(); } catch {}
+      try {
+        if (this.voiceStream) this.voiceStream.getTracks().forEach(t => t.stop());
+      } catch {}
+      try {
+        if (this.voiceAudio) {
+          this.voiceAudio.pause();
+          this.voiceAudio.srcObject = null;
+          this.voiceAudio.remove();
+        }
+      } catch {}
+      this.voicePc = null;
+      this.voiceDc = null;
+      this.voiceAudio = null;
+      this.voiceStream = null;
+      this.voiceActive = false;
+      this.voiceState = 'не активно';
+      this.lionSpeaking = false;
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+    },
+    async handleVoiceEvent(ev) {
+      // OpenAI Realtime events: response.audio_transcript.delta, response.done,
+      // response.function_call_arguments.done, input_audio_buffer.speech_started/stopped
+      const t = ev.type || '';
+      // Когда юзер начинает говорить — приглушаем визуально
+      if (t === 'input_audio_buffer.speech_started') {
+        this.lionStatus = 'LISTENING';
+      }
+      if (t === 'input_audio_buffer.speech_stopped') {
+        this.lionStatus = 'THINKING';
+      }
+      // Когда модель начинает отвечать аудио — флаг speaking
+      if (t === 'response.audio.delta' || t === 'response.audio_transcript.delta') {
+        this.lionSpeaking = true;
+        this.lionStatus = 'SPEAKING';
+      }
+      if (t === 'response.done') {
+        this.lionSpeaking = false;
+        this.lionStatus = '🟢 онлайн';
+      }
+      // Транскрипт ответа Льва — добавляем в чат-лог
+      if (t === 'response.audio_transcript.done' && ev.transcript) {
+        this.cmdLog.push({who: 'LEO', body: ev.transcript, cls: 'lion'});
+        this.scrollCmdLog();
+      }
+      // Транскрипт пользователя
+      if (t === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
+        this.cmdLog.push({who: 'YOU', body: ev.transcript, cls: 'you'});
+        this.scrollCmdLog();
+      }
+      // Function call от Льва — execute_command
+      if (t === 'response.function_call_arguments.done') {
+        try {
+          const args = JSON.parse(ev.arguments || '{}');
+          const cmd = args.cmd || '';
+          if (cmd) {
+            // Отправляем команду в очередь userbot
+            const r = await fetch('/api/leo/voice_command', {
+              method: 'POST',
+              credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({text: cmd}),
+            });
+            const data = await r.json();
+            this.cmdLog.push({
+              who: 'EXEC', body: 'команда: ' + cmd,
+              cls: 'result',
+            });
+            this.scrollCmdLog();
+            // Шлём ответ обратно в Realtime — Лев продолжит разговор
+            if (this.voiceDc && this.voiceDc.readyState === 'open') {
+              this.voiceDc.send(JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'function_call_output',
+                  call_id: ev.call_id,
+                  output: JSON.stringify({status: 'queued', id: data.command?.id}),
+                },
+              }));
+              this.voiceDc.send(JSON.stringify({type: 'response.create'}));
+            }
+          }
+        } catch (e) {
+          console.warn('function_call handle failed', e);
+        }
       }
     },
 
@@ -2035,9 +2276,6 @@ function jarvis() {
       this.cmdInput = '';
       this.lionStatus = 'THINKING';
       try {
-        // LEO — умный AI агент: Claude API + tool-use + knowledge graph.
-        // Отвечает текстом и при необходимости автоматически ставит команды
-        // в очередь юзербота. Стоит немного токенов на каждый запрос.
         const r = await fetch('/api/leo/ask', {
           method: 'POST',
           credentials: 'include',
@@ -2048,17 +2286,24 @@ function jarvis() {
           const data = await r.json();
           const reply = (data.reply || '').trim() || '(пусто)';
           this.cmdLog.push({ who: 'LEO', body: reply, cls: 'lion' });
-          this.lionSay(reply);
+          // Озвучиваем ОДИН раз — текст ответа (чистый, без markdown/эмодзи).
+          // Если команда подтянулась но Лев молчит — короткое подтверждение.
+          if (reply && reply !== '(пусто)') {
+            this.lionSay(reply);
+          } else if (data.executed && data.executed.length) {
+            this.lionSay('Готово');
+          }
           if (data.executed && data.executed.length) {
             for (const e of data.executed) {
               this.cmdLog.push({
                 who: 'EXEC',
-                body: `⚙ ${e.tool} → ${e.cmd}`,
+                body: 'команда: ' + e.cmd,
                 cls: 'result',
               });
               if (e.id) this.knownCmds.add(e.id);
             }
           }
+          // Beep тихий чтоб не наезжал на голос
           this.playBeep(820);
         } else {
           this.cmdLog.push({ who: 'ERR', body: 'HTTP ' + r.status, cls: 'err' });

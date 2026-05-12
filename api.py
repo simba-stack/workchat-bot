@@ -957,6 +957,117 @@ class LeoAskReq(BaseModel):
     auto_execute: bool = True
 
 
+@app.post("/api/leo/realtime_session")
+async def leo_realtime_session(_: None = Depends(_auth)):
+    """Выдаёт ephemeral client token от OpenAI Realtime API.
+    Фронтенд использует его для прямого WebRTC соединения с OpenAI —
+    голос в обе стороны, низкая латентность, натуральный голос.
+
+    Требует env OPENAI_API_KEY. Стоимость ~$0.06/мин разговора.
+    """
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if not openai_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY не задан в env Railway. Без него Realtime не работает.",
+        )
+    # Готовим инструкции с актуальным снимком состояния + knowledge graph
+    try:
+        import leo as leo_mod
+        state_snap = leo_mod._build_state_snapshot()
+        knowledge = leo_mod._load_knowledge_summary(max_chars=8000)
+    except Exception:
+        state_snap, knowledge = {}, ""
+
+    instructions = (
+        "Ты — LEO, голосовой AI-ассистент PRIDE (компания по выкупу российских "
+        "расчётных счетов). Тебя зовёт админ через дашборд J.A.R.V.I.S.\n\n"
+        "ПРАВИЛА РАЗГОВОРА:\n"
+        "- Говори естественно, как живой собеседник. Коротко, по делу.\n"
+        "- НЕ зачитывай эмодзи, маркдаун, символы. Только живая речь.\n"
+        "- Если просят сделать действие (рассылку, очистку, аудит) — "
+        "вызывай функцию execute_command с нужной строкой команды.\n"
+        "- Если спрашивают цифры — используй snapshot ниже.\n"
+        "- Если спрашивают правила / прайс / процессы — используй knowledge.\n"
+        "- Не выдумывай. Если не знаешь — скажи «не знаю».\n\n"
+        f"=== СНИМОК СИСТЕМЫ ===\n{json.dumps(state_snap, ensure_ascii=False)}\n\n"
+        f"=== KNOWLEDGE GRAPH (правила, прайс, FAQ) ===\n{knowledge}\n"
+    )
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                "https://api.openai.com/v1/realtime/sessions",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17"),
+                    "voice": os.getenv("LEO_VOICE", "ash"),  # ash/ballad/coral/sage/verse/alloy/echo/shimmer
+                    "instructions": instructions,
+                    "modalities": ["audio", "text"],
+                    "input_audio_transcription": {"model": "whisper-1"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "silence_duration_ms": 600,
+                    },
+                    "tools": [{
+                        "type": "function",
+                        "name": "execute_command",
+                        "description": (
+                            "Выполнить команду PRIDE через юзербот. Используй когда "
+                            "юзер просит сделать что-то: рассылку, аудит, очистку, "
+                            "смену статуса, поиск. Примеры команд: 'очисти маржу', "
+                            "'аудит', 'рассылка работчатам: текст', '/sync_lk', "
+                            "'/operator @timonskupc1', '/find_card Альфа Зоткин'."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "cmd": {
+                                    "type": "string",
+                                    "description": "Текст команды как для command console",
+                                },
+                            },
+                            "required": ["cmd"],
+                        },
+                    }],
+                },
+            )
+            if r.status_code >= 400:
+                raise HTTPException(
+                    status_code=r.status_code,
+                    detail=f"OpenAI Realtime API: {r.text[:300]}",
+                )
+            return r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/leo/voice_command")
+async def leo_voice_command(req: CommandReq, _: None = Depends(_auth)):
+    """Принимает команду от голосового Льва (через OpenAI tool-call) —
+    ставит её в очередь userbot."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty cmd")
+    entry = await storage.enqueue_dashboard_command(text, source="leo-voice")
+    try:
+        event_bus.emit_event(
+            "leo-voice-cmd",
+            {"cmd": text[:160], "id": entry.get("id")},
+            character="leo", severity="info",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "command": entry}
+
+
 @app.post("/api/leo/ask")
 async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth)):
     """LEO — умный AI агент. Принимает свободный текст, отвечает + при
