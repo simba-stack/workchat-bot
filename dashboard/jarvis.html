@@ -1389,6 +1389,66 @@
         </template>
       </div>
     </div>
+
+    <!-- ===== BRAIN NOTES (LEO) ===== -->
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Brain Notes
+        <span class="badge-mini" x-text="(notesPreview.length) + (notesPreview.length > 0 ? ' · LEO' : '')"></span>
+      </div>
+      <div style="padding: 6px 12px; border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);">
+        <select x-model="notesCategory" @change="refreshNotes()"
+                class="cmd-input" style="padding: 4px 8px; font-size: 11px; width: 100%;">
+          <option value="">все категории</option>
+          <option value="fact">fact</option>
+          <option value="rule">rule</option>
+          <option value="task">task</option>
+          <option value="idea">idea</option>
+          <option value="correction">correction</option>
+          <option value="client">client</option>
+          <option value="deal">deal</option>
+          <option value="pricing">pricing</option>
+        </select>
+      </div>
+      <div style="max-height: 360px; overflow-y: auto;">
+        <template x-if="notesPreview.length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Скажи Льву: «запиши что Альфа сегодня горячая»
+          </div>
+        </template>
+        <template x-for="n in notesPreview" :key="n.id">
+          <div class="metric" style="padding: 8px 14px;">
+            <div class="flex items-center gap-2">
+              <span class="badge" :class="'cat-' + n.category"
+                    style="font-size: 9px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 2px;"
+                    x-text="(n.category || '').toUpperCase()"></span>
+              <span class="text-xs ml-auto" style="color: var(--text-dim)" x-text="formatNoteTime(n.ts)"></span>
+              <span class="text-xs" x-show="n.synced_to_knowledge" style="color: var(--hud-emerald);" title="в knowledge">✓ kg</span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text);" x-text="n.text"></div>
+            <div class="text-xs mt-1 flex gap-1" style="color: var(--text-dim); font-size: 9px;">
+              <template x-for="tag in (n.tags || [])" :key="tag">
+                <span>#<span x-text="tag"></span></span>
+              </template>
+            </div>
+            <div class="flex gap-1 mt-2" style="font-size: 9px;">
+              <button class="btn" style="padding: 2px 6px; font-size: 9px;"
+                      @click="moveNote(n, 'pricing.md')" title="в pricing.md">→ price</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 9px;"
+                      @click="moveNote(n, 'faq.md')" title="в faq.md">→ faq</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 9px;"
+                      @click="moveNote(n, 'policy.md')" title="в policy.md">→ policy</button>
+              <button class="btn danger" style="padding: 2px 6px; font-size: 9px;"
+                      @click="deleteNote(n)">×</button>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
+        <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1;" @click="refreshNotes()">↻ обновить</button>
+        <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="archiveOld()" title="старше 30 дней → archive">🗄 архив</button>
+      </div>
+    </div>
   </aside>
 </main>
 
@@ -1517,6 +1577,9 @@ function jarvis() {
     cmdInput: '',
     cmdLog: [],
     knownCmds: new Set(),
+    // Brain notes (LEO)
+    notesPreview: [],
+    notesCategory: '',
     // Voice chat (OpenAI Realtime API via WebRTC)
     voiceActive: false,
     voiceState: 'не активно',
@@ -1584,6 +1647,8 @@ function jarvis() {
       this.initLion();
       if (this.soundOn) this.initAudio();
       this.startCmdResultsPoller();
+      this.refreshNotes();
+      setInterval(() => this.refreshNotes(), 20000);
     },
 
     startClock() {
@@ -1937,28 +2002,77 @@ function jarvis() {
       if (t === 'response.function_call_arguments.done') {
         try {
           const args = JSON.parse(ev.arguments || '{}');
-          const cmd = args.cmd || '';
-          if (cmd) {
-            const r = await fetch('/api/leo/voice_command', {
-              method: 'POST',
-              credentials: 'include',
+          const fname = ev.name || '';
+          let result = {};
+
+          if (fname === 'execute_command') {
+            const cmd = args.cmd || '';
+            if (cmd) {
+              const r = await fetch('/api/leo/voice_command', {
+                method: 'POST', credentials: 'include',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: cmd}),
+              });
+              const data = await r.json();
+              this.cmdLog.push({who: 'EXEC', body: 'команда: ' + cmd, cls: 'result'});
+              result = {status: 'queued', id: (data.command && data.command.id) || null};
+            }
+          } else if (fname === 'search_knowledge_notes') {
+            const r = await fetch('/api/leo/notes/search', {
+              method: 'POST', credentials: 'include',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({text: cmd}),
+              body: JSON.stringify({query: args.query || '', limit: 10}),
             });
             const data = await r.json();
-            this.cmdLog.push({who: 'EXEC', body: 'команда: ' + cmd, cls: 'result'});
-            this.scrollCmdLog();
-            if (this.voiceDc && this.voiceDc.readyState === 'open') {
-              this.voiceDc.send(JSON.stringify({
-                type: 'conversation.item.create',
-                item: {
-                  type: 'function_call_output',
-                  call_id: ev.call_id,
-                  output: JSON.stringify({status: 'queued', id: (data.command && data.command.id) || null}),
-                },
-              }));
-              this.voiceDc.send(JSON.stringify({type: 'response.create'}));
-            }
+            const notes = (data.notes || []).map(n => ({
+              category: n.category, text: n.text,
+              ts: n.ts, tags: n.tags || [],
+            }));
+            this.cmdLog.push({
+              who: 'SEARCH',
+              body: `по '${args.query}': найдено ${notes.length}`,
+              cls: 'result',
+            });
+            result = {found: notes.length, notes: notes};
+          } else if (fname === 'save_to_knowledge_graph') {
+            const r = await fetch('/api/leo/note', {
+              method: 'POST', credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                text: args.text || '',
+                category: args.category || 'fact',
+                priority: args.priority || 'normal',
+                tags: args.tags || [],
+                sync_to_knowledge: true,
+              }),
+            });
+            const data = await r.json();
+            this.cmdLog.push({
+              who: 'BRAIN',
+              body: `[${args.category}] ${args.text}` +
+                (data.synced ? ' · → knowledge ✓' : ' · ⚠ нет writeback'),
+              cls: 'result',
+            });
+            if (this.notesPreview) this.refreshNotes();
+            result = {
+              status: 'saved', id: data.note && data.note.id,
+              synced_to_knowledge: data.synced, url: data.knowledge_url || '',
+            };
+          } else {
+            result = {error: 'unknown function: ' + fname};
+          }
+          this.scrollCmdLog();
+
+          if (this.voiceDc && this.voiceDc.readyState === 'open') {
+            this.voiceDc.send(JSON.stringify({
+              type: 'conversation.item.create',
+              item: {
+                type: 'function_call_output',
+                call_id: ev.call_id,
+                output: JSON.stringify(result),
+              },
+            }));
+            this.voiceDc.send(JSON.stringify({type: 'response.create'}));
           }
         } catch (e) {
           console.warn('voice function_call failed', e);
@@ -2259,6 +2373,70 @@ function jarvis() {
           }
         } catch {}
       }, 3000);
+    },
+
+    // === Brain Notes ===
+    async refreshNotes() {
+      try {
+        const params = new URLSearchParams({limit: '50'});
+        if (this.notesCategory) params.set('category', this.notesCategory);
+        const r = await fetch('/api/leo/notes?' + params.toString(), {credentials: 'include'});
+        if (r.ok) {
+          const data = await r.json();
+          this.notesPreview = data.notes || [];
+        }
+      } catch (e) { console.warn('refreshNotes failed', e); }
+    },
+    formatNoteTime(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        const now = new Date();
+        const diffMin = Math.floor((now - d) / 60000);
+        if (diffMin < 1) return 'сейчас';
+        if (diffMin < 60) return diffMin + ' мин';
+        if (diffMin < 1440) return Math.floor(diffMin/60) + ' ч';
+        return Math.floor(diffMin/1440) + ' дн';
+      } catch { return ''; }
+    },
+    async moveNote(note, file) {
+      try {
+        const r = await fetch(`/api/leo/note/${note.id}/move`, {
+          method: 'POST', credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({file}),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          this.cmdLog.push({
+            who: 'LEO', body: `записал в ${file}: ${note.text.slice(0, 60)}`,
+            cls: 'lion',
+          });
+          this.scrollCmdLog();
+          this.refreshNotes();
+        } else {
+          alert('не удалось — HTTP ' + r.status);
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async deleteNote(note) {
+      if (!confirm('Удалить заметку?\n' + note.text)) return;
+      try {
+        await fetch(`/api/leo/note/${note.id}`, {
+          method: 'DELETE', credentials: 'include',
+        });
+        this.refreshNotes();
+      } catch (e) {}
+    },
+    async archiveOld() {
+      if (!confirm('Перенести заметки старше 30 дней в knowledge/leo_archive.md и удалить из БД?')) return;
+      try {
+        const r = await fetch('/api/leo/notes/archive_old?days=30', {
+          method: 'POST', credentials: 'include',
+        });
+        const data = await r.json();
+        alert('Архивировано: ' + (data.archived || 0));
+        this.refreshNotes();
+      } catch (e) { alert(String(e)); }
     },
 
     async requestSyncLK() {

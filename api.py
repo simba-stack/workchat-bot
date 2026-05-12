@@ -986,7 +986,16 @@ async def leo_realtime_session(_: None = Depends(_auth)):
         "- Говори естественно, как живой собеседник. Коротко, по делу.\n"
         "- НЕ зачитывай эмодзи, маркдаун, символы. Только живая речь.\n"
         "- Если просят сделать действие (рассылку, очистку, аудит) — "
-        "вызывай функцию execute_command с нужной строкой команды.\n"
+        "вызывай функцию execute_command.\n"
+        "- Если юзер диктует ВАЖНЫЙ ФАКТ / ПРАВИЛО / ЗАДАЧУ / ИДЕЮ / ПОПРАВКУ "
+        "которое должно сохраниться навсегда — ОБЯЗАТЕЛЬНО вызывай функцию "
+        "save_to_knowledge_graph. Заметка попадёт в knowledge graph и AI-ассистенты "
+        "клиентов сразу её увидят.\n"
+        "- Триггеры записи в граф: 'запиши', 'запомни', 'добавь в базу', 'отметь что', "
+        "'задача', 'идея', 'правило', 'поправка', а также когда юзер просто "
+        "констатирует факт который ассистент должен знать.\n"
+        "- После save_to_knowledge_graph коротко подтверди голосом ('записал' / "
+        "'добавил в правила' / 'сохранил задачу').\n"
         "- Если спрашивают цифры — используй snapshot ниже.\n"
         "- Если спрашивают правила / прайс / процессы — используй knowledge.\n"
         "- Не выдумывай. Если не знаешь — скажи «не знаю».\n\n"
@@ -1014,27 +1023,94 @@ async def leo_realtime_session(_: None = Depends(_auth)):
                         "threshold": 0.5,
                         "silence_duration_ms": 600,
                     },
-                    "tools": [{
-                        "type": "function",
-                        "name": "execute_command",
-                        "description": (
-                            "Выполнить команду PRIDE через юзербот. Используй когда "
-                            "юзер просит сделать что-то: рассылку, аудит, очистку, "
-                            "смену статуса, поиск. Примеры команд: 'очисти маржу', "
-                            "'аудит', 'рассылка работчатам: текст', '/sync_lk', "
-                            "'/operator @timonskupc1', '/find_card Альфа Зоткин'."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "cmd": {
-                                    "type": "string",
-                                    "description": "Текст команды как для command console",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "execute_command",
+                            "description": (
+                                "Выполнить команду PRIDE через юзербот. Используй когда "
+                                "юзер просит сделать что-то: рассылку, аудит, очистку, "
+                                "смену статуса, поиск. Примеры команд: 'очисти маржу', "
+                                "'аудит', 'рассылка работчатам: текст', '/sync_lk', "
+                                "'/operator @timonskupc1', '/find_card Альфа Зоткин'."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "cmd": {
+                                        "type": "string",
+                                        "description": "Текст команды как для command console",
+                                    },
                                 },
+                                "required": ["cmd"],
                             },
-                            "required": ["cmd"],
                         },
-                    }],
+                        {
+                            "type": "function",
+                            "name": "search_knowledge_notes",
+                            "description": (
+                                "Поиск по сохранённым заметкам / правилам / задачам "
+                                "в graph PRIDE. Используй когда юзер спрашивает "
+                                "'что мы говорили про Альфу', 'какие задачи у нас', "
+                                "'была идея про промокод?'. Возвращает до 10 совпадений."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Что искать — ключевое слово/фраза",
+                                    },
+                                },
+                                "required": ["query"],
+                            },
+                        },
+                        {
+                            "type": "function",
+                            "name": "save_to_knowledge_graph",
+                            "description": (
+                                "Сохранить факт / правило / задачу в граф знаний PRIDE. "
+                                "Используй когда юзер диктует что-то важное что должно "
+                                "запомниться навсегда (новое правило, цена, факт о клиенте, "
+                                "идея, поправка). Заметка пишется в storage И автоматически "
+                                "коммитится в knowledge/leo_brain.md на GitHub — AI-ассистенты "
+                                "клиентов сразу видят новые знания.\n\n"
+                                "Примеры триггеров (юзер говорит):\n"
+                                "  'Запиши: Точка временно не работает' → category=rule\n"
+                                "  'Запомни что Иванов наш клиент с прошлого года' → category=fact\n"
+                                "  'Задача: перезвонить Тимону завтра' → category=task\n"
+                                "  'Идея: добавить промокод для VIP' → category=idea\n"
+                                "  'Поправка: Локо теперь стоит 300, не 250' → category=correction\n"
+                                "После вызова обязательно скажи юзеру голосом что записал."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Сам факт/правило/задача — чистым текстом, без 'я записал...'",
+                                    },
+                                    "category": {
+                                        "type": "string",
+                                        "enum": ["fact", "rule", "task", "idea",
+                                                 "correction", "client", "deal", "pricing"],
+                                        "description": "Тип заметки",
+                                    },
+                                    "priority": {
+                                        "type": "string",
+                                        "enum": ["normal", "high", "urgent"],
+                                        "description": "Срочность — normal по умолчанию",
+                                    },
+                                    "tags": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Опц. теги, без #. Например ['альфа', 'клиент-иванов']",
+                                    },
+                                },
+                                "required": ["text", "category"],
+                            },
+                        },
+                    ],
                 },
             )
             if r.status_code >= 400:
@@ -1047,6 +1123,212 @@ async def leo_realtime_session(_: None = Depends(_auth)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class LeoNoteReq(BaseModel):
+    text: str
+    category: str = "fact"   # fact / rule / task / idea / correction / client / deal / pricing
+    priority: str = "normal"  # normal / high / urgent
+    tags: list = []
+    sync_to_knowledge: bool = True  # сразу writeback в knowledge/*.md
+
+
+@app.post("/api/leo/note")
+async def leo_save_note(req: LeoNoteReq, _: None = Depends(_auth)):
+    """Принимает заметку от LEO (через голос или текстом из консоли),
+    сохраняет в storage.leo_notes + при необходимости коммитит в knowledge graph
+    (knowledge/leo_brain.md) через memory.commit_to_knowledge.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty text")
+    note = await storage.add_leo_note(
+        text=text, category=req.category, priority=req.priority,
+        source="voice", tags=req.tags,
+    )
+    knowledge_url = None
+    if req.sync_to_knowledge:
+        try:
+            import memory
+            # Куда писать — зависит от категории
+            file_map = {
+                "pricing": "leo_brain.md",
+                "rule":    "leo_brain.md",
+                "fact":    "leo_brain.md",
+                "task":    "leo_brain.md",
+                "idea":    "leo_brain.md",
+                "correction": "leo_brain.md",
+                "client":  "leo_brain.md",
+                "deal":    "leo_brain.md",
+            }
+            target_file = file_map.get(req.category, "leo_brain.md")
+            from datetime import datetime as _dt
+            ts = _dt.now().strftime("%Y-%m-%d %H:%M")
+            tags_str = " ".join(f"#{t}" for t in (req.tags or []))
+            block = (
+                f"## [{req.category.upper()}] {ts}"
+                + (f" · {req.priority}" if req.priority != "normal" else "")
+                + (f"\n{tags_str}" if tags_str else "")
+                + f"\n\n{text}\n"
+            )
+            commit_msg = f"leo-brain: {req.category} — {text[:50]}"
+            knowledge_url = await memory.commit_to_knowledge(
+                target_file, block, commit_msg, overwrite=False,
+            )
+            if knowledge_url:
+                await storage.mark_leo_note_synced(note["id"], knowledge_url)
+        except Exception as e:
+            logger.warning("leo_note knowledge sync failed: %s", e)
+    try:
+        event_bus.emit_event(
+            "leo-note", {
+                "id": note.get("id"),
+                "category": req.category,
+                "text": text[:120],
+                "synced": bool(knowledge_url),
+                "url": knowledge_url or "",
+            }, character="leo", severity="success",
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True, "note": note,
+        "knowledge_url": knowledge_url, "synced": bool(knowledge_url),
+    }
+
+
+@app.get("/api/leo/notes")
+async def leo_list_notes(
+    limit: int = 100, category: Optional[str] = None,
+    _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    return {"notes": storage.list_leo_notes(limit=limit, category=category)}
+
+
+@app.delete("/api/leo/note/{note_id}")
+async def leo_delete_note(note_id: int, _: None = Depends(_auth)):
+    ok = await storage.delete_leo_note(note_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="note not found")
+    return {"ok": True}
+
+
+class LeoNoteSearchReq(BaseModel):
+    query: str
+    limit: int = 20
+
+
+@app.post("/api/leo/notes/search")
+async def leo_search_notes(req: LeoNoteSearchReq, _: None = Depends(_auth)):
+    """Поиск по заметкам — по тексту, тегам, категории."""
+    storage.reload_sync()
+    q = (req.query or "").lower().strip()
+    if not q:
+        return {"notes": []}
+    notes = storage.list_leo_notes(limit=1000)
+    found = []
+    for n in notes:
+        haystack = " ".join([
+            n.get("text") or "", n.get("category") or "",
+            " ".join(n.get("tags") or []),
+        ]).lower()
+        if all(part in haystack for part in q.split()):
+            found.append(n)
+    return {"notes": found[:max(1, min(req.limit, 100))]}
+
+
+class MoveNoteReq(BaseModel):
+    file: str   # pricing.md / faq.md / policy.md / about.md / deals.md / style.md
+
+
+@app.post("/api/leo/note/{note_id}/move")
+async def leo_move_note(note_id: int, req: MoveNoteReq, _: None = Depends(_auth)):
+    """Переносит заметку в конкретный knowledge-файл (rules.md / pricing.md и т.п.).
+    Из leo_brain.md заметка НЕ удаляется — только добавляется ссылка."""
+    storage.reload_sync()
+    target = (req.file or "").strip().lower()
+    if not target.endswith(".md"):
+        target += ".md"
+    allowed = {
+        "pricing.md", "faq.md", "policy.md", "about.md",
+        "deals.md", "style.md", "lk_cards.md", "accounting.md",
+        "rules.md", "leo_brain.md",
+    }
+    if target not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target file must be one of {sorted(allowed)}",
+        )
+    # Найдём заметку
+    note = None
+    for n in storage.list_leo_notes(limit=1000):
+        if int(n.get("id", 0)) == int(note_id):
+            note = n; break
+    if not note:
+        raise HTTPException(status_code=404, detail="note not found")
+
+    try:
+        import memory
+        from datetime import datetime as _dt
+        ts = _dt.fromtimestamp(note.get("ts", time.time())).strftime("%Y-%m-%d %H:%M")
+        cat = (note.get("category") or "fact").upper()
+        tags = " ".join(f"#{t}" for t in (note.get("tags") or []))
+        block = (
+            f"## [{cat} · LEO] {ts}\n"
+            + (tags + "\n\n" if tags else "")
+            + (note.get("text") or "")
+            + "\n"
+        )
+        msg = f"leo-move: {cat} → {target} — {(note.get('text') or '')[:50]}"
+        url = await memory.commit_to_knowledge(target, block, msg, overwrite=False)
+        if not url:
+            raise HTTPException(status_code=500, detail="GitHub commit failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        event_bus.emit_event(
+            "leo-note-moved",
+            {"id": note_id, "file": target, "url": url},
+            character="leo", severity="success",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "url": url, "file": target}
+
+
+@app.post("/api/leo/notes/archive_old")
+async def leo_archive_old(days: int = 30, _: None = Depends(_auth)):
+    """Архивирует заметки старше N дней: переносит в knowledge/leo_archive.md
+    и удаляет из storage. Возвращает количество перенесённых."""
+    storage.reload_sync()
+    cutoff = time.time() - days * 86400
+    notes = storage.list_leo_notes(limit=10000)
+    old = [n for n in notes if float(n.get("ts", 0)) < cutoff]
+    if not old:
+        return {"archived": 0, "url": None}
+    import memory
+    from datetime import datetime as _dt
+    lines = [f"# Архив заметок LEO (старше {days} дней)\n"]
+    for n in sorted(old, key=lambda x: x.get("ts", 0)):
+        ts = _dt.fromtimestamp(n.get("ts", 0)).strftime("%Y-%m-%d %H:%M")
+        lines.append(
+            f"## [{(n.get('category') or '').upper()}] {ts}\n"
+            f"{n.get('text') or ''}\n"
+        )
+    block = "\n".join(lines)
+    url = await memory.commit_to_knowledge(
+        "leo_archive.md", block,
+        f"leo-archive: {len(old)} заметок старше {days} дней",
+        overwrite=False,
+    )
+    if url:
+        # Удаляем из storage
+        for n in old:
+            await storage.delete_leo_note(int(n.get("id", 0)))
+    return {"archived": len(old), "url": url}
 
 
 @app.post("/api/leo/voice_command")

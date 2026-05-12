@@ -145,6 +145,11 @@ def _default_state() -> dict:
         # Userbot периодически опрашивает, выполняет и помечает done=True.
         # Структура: [{id, ts, text, status, result, source}, ...]
         "dashboard_commands": [],
+        # Заметки от LEO (через голосовой чат или вручную через API).
+        # Структура: [{id, ts, category, priority, text, source, author,
+        #              tags[], synced_to_knowledge: bool, knowledge_url}]
+        # Категории: fact / rule / task / idea / correction / client / deal
+        "leo_notes": [],
     }
 
 
@@ -1423,6 +1428,62 @@ class Storage:
                     c["finished_ts"] = time.time()
                     break
             await self._save_unlocked()
+
+
+    # === LEO Notes (заметки от голосового LEO с записью в knowledge graph) ===
+
+    async def add_leo_note(
+        self, text: str, category: str = "fact", priority: str = "normal",
+        source: str = "voice", author: str = "", tags: list = None,
+    ) -> dict:
+        """Сохраняет заметку. Возвращает созданную запись."""
+        if not text or not text.strip():
+            return {}
+        async with _lock:
+            notes = self.state.setdefault("leo_notes", [])
+            entry = {
+                "id": int(time.time() * 1000),
+                "ts": time.time(),
+                "category": (category or "fact").lower(),
+                "priority": (priority or "normal").lower(),
+                "text": text.strip()[:2000],
+                "source": source or "voice",
+                "author": author or "",
+                "tags": list(tags or []),
+                "synced_to_knowledge": False,
+                "knowledge_url": "",
+            }
+            notes.append(entry)
+            # Храним последние 1000 заметок (старше — обрезаем)
+            if len(notes) > 1000:
+                self.state["leo_notes"] = notes[-1000:]
+            await self._save_unlocked()
+            return dict(entry)
+
+    async def mark_leo_note_synced(self, note_id: int, knowledge_url: str):
+        async with _lock:
+            for n in self.state.get("leo_notes") or []:
+                if int(n.get("id", 0)) == int(note_id):
+                    n["synced_to_knowledge"] = True
+                    n["knowledge_url"] = knowledge_url or ""
+                    break
+            await self._save_unlocked()
+
+    def list_leo_notes(self, limit: int = 100, category: str = None) -> list:
+        notes = list(self.state.get("leo_notes") or [])
+        if category:
+            notes = [n for n in notes if (n.get("category") or "") == category]
+        return notes[-limit:][::-1]  # последние первыми
+
+    async def delete_leo_note(self, note_id: int) -> bool:
+        async with _lock:
+            notes = self.state.get("leo_notes") or []
+            new = [n for n in notes if int(n.get("id", 0)) != int(note_id)]
+            if len(new) == len(notes):
+                return False
+            self.state["leo_notes"] = new
+            await self._save_unlocked()
+            return True
 
 
 storage = Storage(config.STORAGE_PATH)
