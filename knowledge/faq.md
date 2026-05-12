@@ -3102,3 +3102,12 @@ https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-
 https://teletype.in/@rfc_manager_1/q55-sRUjgrs
 
 Связано: [[policy]] [[about]] [[index]]
+
+## Как открыть ИП? Мануал по регистрации
+
+Если клиент спрашивает как открыть ИП или просит инструкцию — выдавай ТОЛЬКО эту ссылку:
+**https://teletype.in/@rfc_manager_1/q55-sRUjgrs**
+
+⚠️ Другие инструкции не актуальны. Используй только актуальный мануал по ссылке выше.
+
+Связано: [[about]] [[policy]]
