@@ -821,68 +821,81 @@
   }
 
   /* ===== Lion narrator sphere ===== */
-  .lion-sphere {
+  /* ===== JARVIS Core Sphere ===== */
+  .jarvis-sphere {
     position: relative;
     width: 100%;
     aspect-ratio: 1 / 1;
-    max-width: 240px;
+    max-width: 260px;
     margin: 0 auto 8px;
   }
-  .lion-sphere::before {
-    /* outer radar ring */
-    content: '';
-    position: absolute;
-    inset: -8px;
-    border-radius: 50%;
-    border: 1px solid rgba(var(--primary-rgb), 0.2);
-    animation: lion-radar 6s linear infinite;
+  .jarvis-sphere-svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 0 18px rgba(var(--primary-rgb), 0.55));
   }
-  .lion-sphere::after {
-    /* inner ring */
-    content: '';
-    position: absolute;
-    inset: 4px;
-    border-radius: 50%;
-    border: 1px dashed rgba(var(--primary-rgb), 0.18);
-    animation: lion-radar-rev 12s linear infinite;
+  .sphere-halo {
+    animation: halo-pulse 3.5s ease-in-out infinite;
+    transform-origin: center;
   }
-  @keyframes lion-radar {
-    0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); }
+  @keyframes halo-pulse {
+    0%, 100% { opacity: 0.5; transform: scale(1); }
+    50%      { opacity: 0.9; transform: scale(1.07); }
   }
-  @keyframes lion-radar-rev {
-    0% { transform: rotate(360deg); } 100% { transform: rotate(0deg); }
+  .sphere-ring {
+    transform-origin: 110px 110px;
   }
-  .lion-svg-wrap {
-    position: absolute;
-    inset: 14px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(var(--primary-rgb), 0.18) 0%, rgba(8,14,30,0.95) 70%);
-    box-shadow:
-      0 0 30px rgba(var(--primary-rgb), 0.35),
-      inset 0 0 24px rgba(var(--primary-rgb), 0.2);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .sphere-ring-outer { animation: sphere-spin 18s linear infinite; }
+  .sphere-ring-mid   { animation: sphere-spin-rev 11s linear infinite; }
+  .sphere-ring-inner { animation: sphere-spin 7s linear infinite; }
+  @keyframes sphere-spin     { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  @keyframes sphere-spin-rev { 0% { transform: rotate(360deg); } 100% { transform: rotate(0deg); } }
+
+  .sphere-hex {
+    animation: hex-pulse 2.5s ease-in-out infinite;
+    transform-origin: 110px 110px;
   }
-  .lion-svg { width: 75%; height: 75%; }
-  .lion-svg .mouth {
-    transform-origin: 100px 130px;
-    transition: transform 0.08s linear;
+  @keyframes hex-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.04); opacity: 0.7; }
   }
-  .lion-speaking .lion-svg .mouth {
-    animation: mouth-talk 0.18s ease-in-out infinite alternate;
+  .sphere-pulse {
+    transform-origin: 110px 110px;
+    animation: tri-pulse 1.8s ease-in-out infinite;
   }
-  @keyframes mouth-talk {
-    0%   { transform: scaleY(1);   }
-    100% { transform: scaleY(1.5); }
+  @keyframes tri-pulse {
+    0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.9; }
+    50%      { transform: scale(0.85) rotate(180deg); opacity: 0.6; }
   }
-  .lion-svg .eye {
-    animation: lion-blink 5s infinite;
+  .sphere-spikes line {
+    animation: spike-blink 2s ease-in-out infinite;
   }
-  @keyframes lion-blink {
-    0%, 94%, 100% { opacity: 1; }
-    96%           { opacity: 0; }
+  .sphere-spikes line:nth-child(2n) { animation-delay: 0.4s; }
+  .sphere-spikes line:nth-child(3n) { animation-delay: 0.8s; }
+  @keyframes spike-blink {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 0.8; }
+  }
+  /* Waveform — статичная в idle, активная при разговоре */
+  .sphere-wave { opacity: 0; transition: opacity 0.3s; }
+  .sphere-live .sphere-wave,
+  .sphere-speaking .sphere-wave {
+    opacity: 1;
+    animation: wave-move 0.6s ease-in-out infinite alternate;
+  }
+  @keyframes wave-move {
+    0%   { transform: translateY(-2px) scaleY(0.7); }
+    100% { transform: translateY(2px)  scaleY(1.3); }
+  }
+  /* Когда LIVE — усиливаем свечение и пульс */
+  .sphere-live .sphere-halo {
+    animation: halo-pulse 1.2s ease-in-out infinite;
+  }
+  .sphere-live .jarvis-sphere-svg {
+    filter: drop-shadow(0 0 28px rgba(var(--primary-rgb), 0.85));
+  }
+  .sphere-speaking .sphere-halo {
+    animation: halo-pulse 0.8s ease-in-out infinite;
   }
   .lion-status {
     text-align: center;
@@ -1019,50 +1032,83 @@
 
   <!-- LEFT -->
   <aside class="space-y-4">
-    <!-- ===== LION NARRATOR ===== -->
+    <!-- ===== JARVIS CORE SPHERE ===== -->
     <div class="jarvis-panel">
       <div class="panel-title">
-        Narrator · LEO
-        <span class="badge-mini" :class="lionEnabled ? '' : 'opacity-50'" x-text="lionEnabled ? 'ACTIVE' : 'MUTED'" @click="toggleLion()" style="cursor: pointer;"></span>
+        JARVIS CORE
+        <span class="badge-mini" x-text="voiceActive ? 'LIVE' : 'STANDBY'"></span>
       </div>
       <div style="padding: 12px;">
-        <div class="lion-sphere" :class="lionSpeaking ? 'lion-speaking' : ''">
-          <div class="lion-svg-wrap">
-            <svg class="lion-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-              <!-- mane (грива) — лучи-треугольники -->
-              <g fill="currentColor" style="color: var(--hud-primary); opacity: 0.6;">
-                <polygon points="100,8 88,52 112,52"/>
-                <polygon points="60,18 60,62 88,52"/>
-                <polygon points="32,42 56,80 76,68"/>
-                <polygon points="20,90 60,90 56,72"/>
-                <polygon points="22,130 64,108 54,92"/>
-                <polygon points="40,160 78,132 64,118"/>
-                <polygon points="140,18 140,62 112,52"/>
-                <polygon points="168,42 144,80 124,68"/>
-                <polygon points="180,90 140,90 144,72"/>
-                <polygon points="178,130 136,108 146,92"/>
-                <polygon points="160,160 122,132 136,118"/>
-              </g>
-              <!-- face -->
-              <circle cx="100" cy="100" r="42" fill="rgba(8,14,30,0.9)" stroke="var(--hud-primary)" stroke-width="1.5"/>
-              <!-- eyes -->
-              <ellipse class="eye" cx="84" cy="92" rx="4" ry="6" fill="var(--hud-primary)"/>
-              <ellipse class="eye" cx="116" cy="92" rx="4" ry="6" fill="var(--hud-primary)"/>
-              <!-- inner eye glow -->
-              <circle cx="84" cy="92" r="1.6" fill="#ffffff"/>
-              <circle cx="116" cy="92" r="1.6" fill="#ffffff"/>
-              <!-- nose -->
-              <polygon points="100,108 92,118 108,118" fill="var(--hud-primary)"/>
-              <!-- mouth (анимируется при речи) -->
-              <ellipse class="mouth" cx="100" cy="130" rx="9" ry="5" fill="var(--bg-deep)" stroke="var(--hud-primary)" stroke-width="1.3"/>
-              <!-- chin lines -->
-              <line x1="100" y1="118" x2="100" y2="124" stroke="var(--hud-primary)" stroke-width="1.2"/>
-              <line x1="88" y1="118" x2="84" y2="105" stroke="var(--hud-primary)" stroke-width="0.8" opacity="0.5"/>
-              <line x1="112" y1="118" x2="116" y2="105" stroke="var(--hud-primary)" stroke-width="0.8" opacity="0.5"/>
-            </svg>
-          </div>
+        <div class="jarvis-sphere" :class="voiceActive ? 'sphere-live' : (lionSpeaking ? 'sphere-speaking' : 'sphere-idle')">
+          <svg viewBox="0 0 220 220" class="jarvis-sphere-svg" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <radialGradient id="sphereCore" cx="50%" cy="50%" r="50%">
+                <stop offset="0%"  stop-color="var(--hud-primary)" stop-opacity="0.9"/>
+                <stop offset="35%" stop-color="var(--hud-primary)" stop-opacity="0.35"/>
+                <stop offset="100%" stop-color="var(--hud-primary)" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="sphereGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%"  stop-color="var(--hud-primary)" stop-opacity="0.5"/>
+                <stop offset="100%" stop-color="var(--hud-primary)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <!-- Внешнее свечение -->
+            <circle cx="110" cy="110" r="100" fill="url(#sphereGlow)" class="sphere-halo"/>
+            <!-- Внешнее кольцо (медленно вращается) -->
+            <g class="sphere-ring sphere-ring-outer">
+              <circle cx="110" cy="110" r="95" fill="none"
+                      stroke="var(--hud-primary)" stroke-width="0.8"
+                      stroke-dasharray="2 6" opacity="0.6"/>
+              <circle cx="110" cy="14" r="3" fill="var(--hud-primary)"/>
+              <circle cx="110" cy="206" r="2" fill="var(--hud-primary)" opacity="0.5"/>
+              <circle cx="14" cy="110" r="2" fill="var(--hud-primary)" opacity="0.4"/>
+              <circle cx="206" cy="110" r="2" fill="var(--hud-primary)" opacity="0.4"/>
+            </g>
+            <!-- Среднее кольцо (вращается обратно) -->
+            <g class="sphere-ring sphere-ring-mid">
+              <circle cx="110" cy="110" r="78" fill="none"
+                      stroke="var(--hud-primary)" stroke-width="1"
+                      stroke-dasharray="14 4 4 4" opacity="0.7"/>
+              <path d="M 110 32 A 78 78 0 0 1 188 110" fill="none"
+                    stroke="var(--hud-primary)" stroke-width="1.5"/>
+            </g>
+            <!-- Внутреннее кольцо -->
+            <g class="sphere-ring sphere-ring-inner">
+              <circle cx="110" cy="110" r="60" fill="none"
+                      stroke="var(--hud-primary)" stroke-width="0.6"
+                      stroke-dasharray="1 3" opacity="0.5"/>
+            </g>
+            <!-- Ядро / Arc reactor -->
+            <circle cx="110" cy="110" r="42" fill="url(#sphereCore)"/>
+            <circle cx="110" cy="110" r="42" fill="none"
+                    stroke="var(--hud-primary)" stroke-width="1.5" opacity="0.7"/>
+            <!-- Hexagon в центре (как у arc reactor) -->
+            <polygon points="110,80 137,95 137,125 110,140 83,125 83,95"
+                     fill="rgba(8,14,30,0.7)"
+                     stroke="var(--hud-primary)" stroke-width="1.2"
+                     class="sphere-hex"/>
+            <!-- Маленький треугольник в центре -->
+            <polygon points="110,98 122,118 98,118"
+                     fill="var(--hud-primary)" opacity="0.9"
+                     class="sphere-pulse"/>
+            <!-- Лучи / спайки изнутри -->
+            <g stroke="var(--hud-primary)" stroke-width="1" opacity="0.5" class="sphere-spikes">
+              <line x1="110" y1="68" x2="110" y2="50"/>
+              <line x1="110" y1="170" x2="110" y2="152"/>
+              <line x1="68" y1="110" x2="50" y2="110"/>
+              <line x1="170" y1="110" x2="152" y2="110"/>
+              <line x1="80" y1="80" x2="68" y2="68"/>
+              <line x1="140" y1="80" x2="152" y2="68"/>
+              <line x1="80" y1="140" x2="68" y2="152"/>
+              <line x1="140" y1="140" x2="152" y2="152"/>
+            </g>
+            <!-- Waveform (анимируется при разговоре) -->
+            <g class="sphere-wave" stroke="var(--hud-primary)" stroke-width="1.2" stroke-linecap="round" fill="none">
+              <path d="M 76 110 L 84 108 L 92 113 L 100 105 L 108 115 L 116 102 L 124 116 L 132 107 L 140 112 L 148 110"/>
+            </g>
+          </svg>
         </div>
-        <div class="lion-status" :class="lionSpeaking ? 'speaking' : ''" x-text="lionStatus"></div>
+        <div class="lion-status" :class="lionSpeaking || voiceActive ? 'speaking' : ''" x-text="voiceActive ? 'VOICE LIVE' : (voiceState !== 'не активно' ? voiceState : 'STANDBY')"></div>
         <div style="text-align: center; margin-top: 8px;">
           <button class="btn"
                   :class="voiceActive ? 'danger' : 'success'"
@@ -2131,75 +2177,13 @@ function jarvis() {
 
     // === Control actions ===
     // === Lion narrator ===
-    initLion() {
-      if (!('speechSynthesis' in window)) {
-        this.lionStatus = 'TTS UNSUPPORTED';
-        return;
-      }
-      // Подбираем русский голос если есть
-      const pick = () => {
-        const voices = speechSynthesis.getVoices();
-        this.lionVoice =
-          voices.find(v => /ru[-_]/i.test(v.lang)) ||
-          voices.find(v => /russian/i.test(v.name)) ||
-          voices[0] || null;
-      };
-      pick();
-      if (speechSynthesis.onvoiceschanged !== undefined) {
-        speechSynthesis.onvoiceschanged = pick;
-      }
-      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
-    },
-    toggleLion() {
-      this.lionEnabled = !this.lionEnabled;
-      localStorage.setItem('jarvis-lion', this.lionEnabled ? '1' : '0');
-      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
-      if (!this.lionEnabled) {
-        try { speechSynthesis.cancel(); } catch {}
-        this.lionSpeaking = false;
-      } else {
-        this.lionSay('Готов к работе.');
-      }
-    },
-    lionSay(text) {
-      if (!this.lionEnabled || !text) return;
-      if (!('speechSynthesis' in window)) return;
-      try {
-        const u = new SpeechSynthesisUtterance(text);
-        if (this.lionVoice) u.voice = this.lionVoice;
-        u.lang = (this.lionVoice && this.lionVoice.lang) || 'ru-RU';
-        u.rate = 1.05;
-        u.pitch = 0.85;  // ниже = мужественнее
-        u.volume = 0.9;
-        u.onstart = () => { this.lionSpeaking = true; this.lionStatus = 'SPEAKING'; };
-        u.onend = () => {
-          this.lionSpeaking = false;
-          this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
-        };
-        u.onerror = () => { this.lionSpeaking = false; };
-        speechSynthesis.speak(u);
-      } catch (e) {}
-    },
-    lionNarrateEvent(ev) {
-      if (!this.lionEnabled) return;
-      const t = ev.type || '';
-      const p = ev.payload || {};
-      // Только важные события — не озвучивать каждый ping
-      const phrases = {
-        'lk-created': () => `Новая карточка ${p.card_id || ''}, банк ${p.bank || ''}`,
-        'lk-status-changed': () => `Карточка ${p.card_id || ''} переведена в ${(p.new_status || '').replace(/_/g, ' ')}`,
-        'application-processed': () => `Заявка обработана, маржа ${p.margin_usdt || 0} долларов`,
-        'dashboard-ai-toggle': () => p.enabled ? 'Ассистент включён' : 'Ассистент отключён',
-        'dashboard-cmd-done': () => `Команда выполнена: ${p.result || ''}`,
-        'lk-from-worker-perevyaz': () => `Перевяз ${p.bank || ''} выполнен`,
-        'sync-lk-cards': () => `Синхронизация карточек: создано ${p.created || 0}, обновлено ${p.updated || 0}`,
-        'dashboard-login': () => 'Авторизация выполнена',
-      };
-      const builder = phrases[t];
-      if (builder) {
-        try { this.lionSay(builder()); } catch {}
-      }
-    },
+    // TTS полностью отключён — голос работает ТОЛЬКО через OpenAI Realtime
+    // (кнопка VOICE CHAT). Эти функции оставлены как no-op для совместимости
+    // с вызовами в коде.
+    initLion() { this.lionStatus = 'JARVIS'; },
+    toggleLion() { /* no-op — Лев теперь немой по умолчанию */ },
+    lionSay(text) { /* no-op — speechSynthesis отключён */ },
+    lionNarrateEvent(ev) { /* no-op */ },
 
     // === Command console ===
     async sendCmd() {
