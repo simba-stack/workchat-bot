@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRIDE Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg-deep: #0a0e1a;
+    --bg-card: rgba(20, 28, 48, 0.65);
+    --bg-glass: rgba(30, 41, 70, 0.45);
+    --accent: #8b5cf6;
+    --accent-2: #06b6d4;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --text: #e5e7eb;
+    --text-dim: #94a3b8;
+    --border: rgba(139, 92, 246, 0.15);
+  }
+  * { box-sizing: border-box; }
+  body {
+    background:
+      radial-gradient(at 20% 30%, rgba(139, 92, 246, 0.13) 0px, transparent 50%),
+      radial-gradient(at 80% 20%, rgba(6, 182, 212, 0.08) 0px, transparent 50%),
+      radial-gradient(at 50% 90%, rgba(16, 185, 129, 0.07) 0px, transparent 50%),
+      var(--bg-deep);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    min-height: 100vh;
+    margin: 0;
+    overflow-x: hidden;
+  }
+  .glass {
+    background: var(--bg-card);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+  }
+  .glass-soft {
+    background: var(--bg-glass);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  /* ===== Office: 3D-ish ground + characters ===== */
+  .office-scene {
+    position: relative;
+    height: 360px;
+    overflow: hidden;
+    background:
+      linear-gradient(180deg, rgba(15, 23, 42, 0.5) 0%, rgba(30, 41, 70, 0.85) 100%);
+    border-radius: 18px;
+    border: 1px solid var(--border);
+  }
+  .office-floor {
+    position: absolute;
+    bottom: 0; left: 0; right: 0; height: 35%;
+    background:
+      linear-gradient(180deg, rgba(139, 92, 246, 0.05) 0%, rgba(139, 92, 246, 0.18) 100%);
+    border-top: 1px solid rgba(139, 92, 246, 0.2);
+  }
+  .office-grid {
+    position: absolute;
+    bottom: 0; left: 0; right: 0; height: 35%;
+    background-image:
+      linear-gradient(0deg, transparent 24%, rgba(139, 92, 246, 0.06) 25%, rgba(139, 92, 246, 0.06) 26%, transparent 27%, transparent 74%, rgba(139, 92, 246, 0.06) 75%, rgba(139, 92, 246, 0.06) 76%, transparent 77%, transparent),
+      linear-gradient(90deg, transparent 24%, rgba(139, 92, 246, 0.06) 25%, rgba(139, 92, 246, 0.06) 26%, transparent 27%, transparent 74%, rgba(139, 92, 246, 0.06) 75%, rgba(139, 92, 246, 0.06) 76%, transparent 77%, transparent);
+    background-size: 60px 60px;
+    transform: perspective(400px) rotateX(60deg);
+    transform-origin: bottom;
+  }
+  .character {
+    position: absolute;
+    bottom: 12%;
+    width: 140px;
+    text-align: center;
+    transition: transform 0.4s ease;
+  }
+  .character.ai-chat       { left: 12%; }
+  .character.ai-accounting { left: 50%; transform: translateX(-50%); }
+  .character.ai-lk         { right: 12%; }
+
+  .char-svg {
+    width: 110px;
+    height: 130px;
+    margin: 0 auto;
+    filter: drop-shadow(0 8px 16px rgba(139, 92, 246, 0.35));
+  }
+  /* idle — медленное покачивание */
+  .character[data-state="idle"] .char-svg {
+    animation: idle 4s ease-in-out infinite;
+  }
+  /* working — печатает / шевелится */
+  .character[data-state="working"] .char-svg {
+    animation: working 0.6s ease-in-out infinite;
+  }
+  .character[data-state="working"] .char-aura {
+    opacity: 1;
+  }
+  /* alert — тревога */
+  .character[data-state="alert"] .char-svg {
+    animation: alert 0.4s ease-in-out infinite;
+    filter: drop-shadow(0 0 14px rgba(239, 68, 68, 0.9));
+  }
+  @keyframes idle {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50%      { transform: translateY(-4px) rotate(1deg); }
+  }
+  @keyframes working {
+    0%, 100% { transform: translateY(0); }
+    25%      { transform: translateY(-3px) rotate(-2deg); }
+    75%      { transform: translateY(-1px) rotate(2deg); }
+  }
+  @keyframes alert {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50%      { transform: translateY(-2px) scale(1.05); }
+  }
+  .char-aura {
+    position: absolute;
+    inset: -10px -10px 20px -10px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.3) 0%, transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    z-index: -1;
+  }
+  .character[data-state="alert"] .char-aura {
+    background: radial-gradient(circle, rgba(239, 68, 68, 0.4) 0%, transparent 70%);
+    opacity: 1;
+    animation: pulse 0.8s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.15); }
+  }
+  .char-name {
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .character[data-state="working"] .char-name,
+  .character[data-state="alert"] .char-name {
+    color: var(--text);
+  }
+  .char-status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .character[data-state="working"] .char-status-dot {
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+    animation: blink 1s ease-in-out infinite;
+  }
+  .character[data-state="alert"] .char-status-dot {
+    background: var(--danger);
+    box-shadow: 0 0 12px var(--danger);
+    animation: blink 0.4s ease-in-out infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+
+  /* Speech bubble */
+  .speech-bubble {
+    position: absolute;
+    bottom: 150px; left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    padding: 8px 12px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.3;
+    white-space: nowrap;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 10;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+  .speech-bubble.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .speech-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -8px; left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 8px solid var(--accent);
+  }
+
+  /* Logs */
+  .log-line {
+    padding: 6px 10px;
+    border-left: 2px solid transparent;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    animation: slideIn 0.3s ease-out;
+    border-radius: 4px;
+    margin-bottom: 2px;
+  }
+  .log-line.info     { border-left-color: var(--accent-2); background: rgba(6, 182, 212, 0.07); }
+  .log-line.success  { border-left-color: var(--success);  background: rgba(16, 185, 129, 0.07); }
+  .log-line.warning  { border-left-color: var(--warning);  background: rgba(245, 158, 11, 0.07); }
+  .log-line.alert    { border-left-color: var(--danger);   background: rgba(239, 68, 68, 0.08); }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .log-ts {
+    color: var(--text-dim);
+    margin-right: 8px;
+  }
+  .log-type {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: rgba(139, 92, 246, 0.2);
+    color: var(--accent);
+  }
+  .log-char {
+    display: inline-block;
+    margin-right: 4px;
+  }
+
+  /* Status badges */
+  .status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .status-В_РАБОТЕ              { background: rgba(16, 185, 129, 0.2);  color: #10b981; }
+  .status-ОТРАБОТАН             { background: rgba(6, 182, 212, 0.2);   color: #06b6d4; }
+  .status-ПОПОЛНИТЬ_И_ОТПУСТИТЬ { background: rgba(139, 92, 246, 0.25); color: #c4b5fd; }
+  .status-БРАК                  { background: rgba(239, 68, 68, 0.2);   color: #ef4444; }
+  .status-БЛОК                  { background: rgba(245, 158, 11, 0.2);  color: #f59e0b; }
+  .status-ЗАВЕРШЁН              { background: rgba(100, 116, 139, 0.3); color: #94a3b8; }
+
+  /* Cards grid */
+  .card-row:hover {
+    background: rgba(139, 92, 246, 0.06);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px; height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.3);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.5);
+  }
+
+  /* Connection indicator */
+  .conn-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+  .conn-dot.online {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+  }
+  .conn-dot.offline {
+    background: var(--danger);
+  }
+  .conn-dot.connecting {
+    background: var(--warning);
+    animation: blink 0.8s infinite;
+  }
+
+  /* Section header */
+  .section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .section-title h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .section-title .badge {
+    background: rgba(139, 92, 246, 0.2);
+    color: var(--accent);
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  /* Stat tile */
+  .stat-tile {
+    padding: 14px 16px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .stat-tile .label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .stat-tile .value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    margin-top: 4px;
+  }
+  .stat-tile .sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* Mobile */
+  @media (max-width: 1024px) {
+    .office-scene { height: 280px; }
+    .character { width: 100px; }
+    .char-svg { width: 80px; height: 100px; }
+  }
+</style>
+</head>
+<body x-data="dashboard()" x-init="init()">
+
+<!-- Top header -->
+<header class="px-4 md:px-8 py-4 flex items-center justify-between glass mb-4 mx-2 md:mx-4 mt-2 md:mt-4">
+  <div class="flex items-center gap-3">
+    <div class="text-2xl">🦁</div>
+    <div>
+      <div class="text-base font-bold tracking-wide">PRIDE Dashboard</div>
+      <div class="text-xs text-slate-400">Real-time AI assistant control panel</div>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <div class="conn-indicator">
+      <span class="conn-dot" :class="connState"></span>
+      <span x-text="connText"></span>
+    </div>
+    <div class="text-xs text-slate-400 hidden md:block">
+      AI: <span :class="state.stats.ai_enabled ? 'text-emerald-400' : 'text-slate-500'" x-text="state.stats.ai_enabled ? 'ON' : 'OFF'"></span>
+      ·
+      Writeback: <span :class="state.stats.writeback_enabled ? 'text-emerald-400' : 'text-slate-500'" x-text="state.stats.writeback_enabled ? 'ON' : 'OFF'"></span>
+    </div>
+  </div>
+</header>
+
+<!-- Main grid -->
+<div class="px-2 md:px-4 pb-6 grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+  <!-- ===== Office section ===== -->
+  <section class="glass p-4 lg:col-span-7">
+    <div class="section-title">
+      <h2>🏢 Офис</h2>
+      <span class="badge" x-text="'Подписчики: ' + state.stats.subscribers"></span>
+    </div>
+
+    <div class="office-scene">
+      <div class="office-grid"></div>
+      <div class="office-floor"></div>
+
+      <!-- AI Chat character -->
+      <div class="character ai-chat" :data-state="chars.chat.state">
+        <div class="char-aura"></div>
+        <div class="speech-bubble" :class="chars.chat.bubble ? 'visible' : ''" x-text="chars.chat.bubble"></div>
+        <svg class="char-svg" viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg">
+          <!-- Body -->
+          <ellipse cx="50" cy="105" rx="32" ry="6" fill="rgba(0,0,0,0.3)"/>
+          <rect x="30" y="55" width="40" height="48" rx="14" fill="#6366f1"/>
+          <!-- Head -->
+          <circle cx="50" cy="38" r="22" fill="#fbbf24"/>
+          <!-- Headset -->
+          <path d="M 30 35 Q 50 12, 70 35" stroke="#1f2937" stroke-width="3" fill="none"/>
+          <circle cx="28" cy="38" r="4" fill="#1f2937"/>
+          <circle cx="72" cy="38" r="4" fill="#1f2937"/>
+          <line x1="28" y1="42" x2="28" y2="52" stroke="#1f2937" stroke-width="2"/>
+          <circle cx="28" cy="54" r="3" fill="#10b981"/>
+          <!-- Eyes -->
+          <circle cx="42" cy="36" r="2.5" fill="#1f2937"/>
+          <circle cx="58" cy="36" r="2.5" fill="#1f2937"/>
+          <!-- Smile -->
+          <path d="M 43 46 Q 50 50, 57 46" stroke="#1f2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+        <div class="char-name"><span class="char-status-dot"></span>AI-Chat</div>
+      </div>
+
+      <!-- AI Accounting character -->
+      <div class="character ai-accounting" :data-state="chars.accounting.state">
+        <div class="char-aura"></div>
+        <div class="speech-bubble" :class="chars.accounting.bubble ? 'visible' : ''" x-text="chars.accounting.bubble"></div>
+        <svg class="char-svg" viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="50" cy="105" rx="32" ry="6" fill="rgba(0,0,0,0.3)"/>
+          <!-- Body -->
+          <rect x="30" y="55" width="40" height="48" rx="14" fill="#10b981"/>
+          <!-- Tie -->
+          <polygon points="48,60 52,60 50,72" fill="#fbbf24"/>
+          <!-- Head -->
+          <circle cx="50" cy="38" r="22" fill="#f5d0a9"/>
+          <!-- Glasses -->
+          <circle cx="42" cy="36" r="6" fill="none" stroke="#1f2937" stroke-width="2"/>
+          <circle cx="58" cy="36" r="6" fill="none" stroke="#1f2937" stroke-width="2"/>
+          <line x1="48" y1="36" x2="52" y2="36" stroke="#1f2937" stroke-width="2"/>
+          <!-- Eyes (behind glasses) -->
+          <circle cx="42" cy="36" r="1.5" fill="#1f2937"/>
+          <circle cx="58" cy="36" r="1.5" fill="#1f2937"/>
+          <!-- Smile -->
+          <path d="M 43 47 Q 50 51, 57 47" stroke="#1f2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <!-- Calculator in hand -->
+          <rect x="60" y="78" width="14" height="18" rx="2" fill="#1f2937"/>
+          <rect x="62" y="80" width="10" height="3" fill="#10b981"/>
+          <circle cx="64" cy="86" r="1" fill="#fbbf24"/>
+          <circle cx="68" cy="86" r="1" fill="#fbbf24"/>
+          <circle cx="72" cy="86" r="1" fill="#fbbf24"/>
+          <circle cx="64" cy="90" r="1" fill="#fbbf24"/>
+          <circle cx="68" cy="90" r="1" fill="#fbbf24"/>
+          <circle cx="72" cy="90" r="1" fill="#fbbf24"/>
+        </svg>
+        <div class="char-name"><span class="char-status-dot"></span>AI-Бухгалтер</div>
+      </div>
+
+      <!-- AI LK character -->
+      <div class="character ai-lk" :data-state="chars.lk.state">
+        <div class="char-aura"></div>
+        <div class="speech-bubble" :class="chars.lk.bubble ? 'visible' : ''" x-text="chars.lk.bubble"></div>
+        <svg class="char-svg" viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="50" cy="105" rx="32" ry="6" fill="rgba(0,0,0,0.3)"/>
+          <!-- Body -->
+          <rect x="30" y="55" width="40" height="48" rx="14" fill="#a855f7"/>
+          <!-- Head -->
+          <circle cx="50" cy="38" r="22" fill="#fda4af"/>
+          <!-- Hair -->
+          <path d="M 30 32 Q 50 16, 70 32 L 70 24 Q 50 14, 30 24 Z" fill="#7c2d12"/>
+          <!-- Eyes -->
+          <circle cx="42" cy="38" r="2.5" fill="#1f2937"/>
+          <circle cx="58" cy="38" r="2.5" fill="#1f2937"/>
+          <!-- Smile -->
+          <path d="M 43 47 Q 50 51, 57 47" stroke="#1f2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <!-- Folder -->
+          <rect x="26" y="76" width="18" height="22" rx="2" fill="#fbbf24"/>
+          <rect x="26" y="76" width="18" height="4" fill="#d97706"/>
+          <rect x="30" y="84" width="10" height="1.5" fill="#1f2937"/>
+          <rect x="30" y="88" width="10" height="1.5" fill="#1f2937"/>
+          <rect x="30" y="92" width="8" height="1.5" fill="#1f2937"/>
+        </svg>
+        <div class="char-name"><span class="char-status-dot"></span>AI-ЛК</div>
+      </div>
+    </div>
+
+    <!-- Stats tiles row -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+      <div class="stat-tile">
+        <div class="label">Маржа сегодня</div>
+        <div class="value" :class="state.stats.margin_today_usdt >= 0 ? 'text-emerald-400' : 'text-rose-400'">
+          <span x-text="fmtUsd(state.stats.margin_today_usdt)"></span>
+        </div>
+        <div class="sub" x-text="'неделя: ' + fmtUsd(state.stats.margin_week_usdt)"></div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Карточек ЛК</div>
+        <div class="value" x-text="state.stats.lk_cards_total"></div>
+        <div class="sub" x-text="'в работе: ' + (state.stats.lk_cards_by_status['В_РАБОТЕ'] || 0)"></div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Активных клиентов</div>
+        <div class="value" x-text="state.stats.managed_chats_active"></div>
+        <div class="sub" x-text="'сделок: ' + state.stats.deals_total"></div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">AI вызовов</div>
+        <div class="value text-cyan-300" x-text="state.stats.ai.replies_total || 0"></div>
+        <div class="sub" x-text="'ошибок: ' + (state.stats.ai.errors_total || 0)"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Logs section ===== -->
+  <section class="glass p-4 lg:col-span-5">
+    <div class="section-title">
+      <h2>📡 Логи событий</h2>
+      <span class="badge" x-text="'Всего: ' + logs.length"></span>
+    </div>
+    <div class="overflow-y-auto" style="height: 460px;" x-ref="logbox" @scroll="onLogScroll($event)">
+      <template x-if="logs.length === 0">
+        <div class="text-center py-12 text-slate-500 text-sm">
+          <div class="text-3xl mb-3">📭</div>
+          Ждём первое событие из бота…
+        </div>
+      </template>
+      <template x-for="(log, i) in logs" :key="i + ':' + log.ts">
+        <div class="log-line" :class="log.severity || 'info'">
+          <span class="log-ts" x-text="fmtTime(log.ts)"></span>
+          <span class="log-char" x-text="charIcon(log.character)"></span>
+          <span class="log-type" x-text="log.type"></span>
+          <span x-text="formatLogPayload(log)"></span>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ===== Statistics section ===== -->
+  <section class="glass p-4 lg:col-span-7">
+    <div class="section-title">
+      <h2>📈 Статистика</h2>
+      <span class="badge" x-text="'Модель: ' + (state.stats.ai_model || 'не задана')"></span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- Margin chart -->
+      <div class="glass-soft p-3">
+        <div class="text-xs text-slate-400 mb-2 uppercase tracking-wide">Маржа за 7 дней</div>
+        <canvas x-ref="marginChart" height="160"></canvas>
+      </div>
+
+      <!-- Status pie -->
+      <div class="glass-soft p-3">
+        <div class="text-xs text-slate-400 mb-2 uppercase tracking-wide">Карточки ЛК по статусам</div>
+        <canvas x-ref="statusChart" height="160"></canvas>
+      </div>
+
+      <!-- Method pie -->
+      <div class="glass-soft p-3">
+        <div class="text-xs text-slate-400 mb-2 uppercase tracking-wide">Методы оплаты</div>
+        <canvas x-ref="methodChart" height="160"></canvas>
+      </div>
+
+      <!-- Escalations + writeback -->
+      <div class="glass-soft p-3">
+        <div class="text-xs text-slate-400 mb-2 uppercase tracking-wide">Активность AI</div>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between">
+            <span class="text-slate-400">Replies всего</span>
+            <span class="text-cyan-300" x-text="state.stats.ai.replies_total || 0"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Input tokens</span>
+            <span x-text="(state.stats.ai.input_tokens_total || 0).toLocaleString()"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Output tokens</span>
+            <span x-text="(state.stats.ai.output_tokens_total || 0).toLocaleString()"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Skip worker active</span>
+            <span class="text-amber-300" x-text="state.stats.ai.skipped_worker_active || 0"></span>
+          </div>
+          <hr class="border-slate-700 my-2">
+          <div class="flex justify-between">
+            <span class="text-slate-400">Эскалации</span>
+            <span class="text-purple-300" x-text="state.stats.escalate.calls_total || 0"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Writeback коммитов</span>
+            <span class="text-emerald-300" x-text="state.stats.writeback.commits_total || 0"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-400">Создано сделок</span>
+            <span x-text="state.stats.deals_stats.created_total || 0"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== LK cards list ===== -->
+  <section class="glass p-4 lg:col-span-5">
+    <div class="section-title">
+      <h2>📋 Карточки ЛК (последние)</h2>
+      <span class="badge" x-text="cards.length"></span>
+    </div>
+    <div class="overflow-y-auto" style="height: 380px;">
+      <template x-if="cards.length === 0">
+        <div class="text-center py-12 text-slate-500 text-sm">Нет карточек</div>
+      </template>
+      <template x-for="card in cards.slice(0, 50)" :key="card.card_id">
+        <div class="card-row px-3 py-2 rounded-lg flex items-center justify-between transition">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium truncate" x-text="card.bank + ' · ' + card.fio"></div>
+            <div class="text-xs text-slate-400 truncate">
+              <span x-text="'#' + card.card_id"></span>
+              · <span x-text="card.payment_method || '—'"></span>
+              · <span x-text="card.price_usdt + '$'"></span>
+              · <span x-text="card.supplier ? '@' + card.supplier : '—'"></span>
+            </div>
+          </div>
+          <span class="status-badge" :class="'status-' + card.status" x-text="(card.status || '—').replace(/_/g, ' ')"></span>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ===== Recent applications ===== -->
+  <section class="glass p-4 lg:col-span-12">
+    <div class="section-title">
+      <h2>💼 Последние заявки (бухгалтерия)</h2>
+      <span class="badge" x-text="state.recent_applications.length"></span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-400 text-xs uppercase tracking-wider">
+            <th class="text-left py-2 px-2">Дата</th>
+            <th class="text-left px-2">#</th>
+            <th class="text-left px-2">Приём</th>
+            <th class="text-left px-2">ФИО</th>
+            <th class="text-center px-2">Вывод</th>
+            <th class="text-right px-2">Маржа $</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="(a, i) in state.recent_applications" :key="a.date + ':' + a.id">
+            <tr class="border-t border-slate-800/50 hover:bg-purple-500/5">
+              <td class="py-2 px-2 text-slate-400 text-xs whitespace-nowrap" x-text="a.date"></td>
+              <td class="px-2" x-text="'#' + a.id"></td>
+              <td class="px-2" x-text="a.intake_bank || '—'"></td>
+              <td class="px-2 truncate max-w-[200px]" x-text="a.intake_fio || '—'"></td>
+              <td class="text-center px-2" x-text="a.outputs_count"></td>
+              <td class="text-right px-2 font-mono" :class="a.margin_usdt >= 0 ? 'text-emerald-400' : 'text-rose-400'" x-text="fmtUsd(a.margin_usdt)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <template x-if="state.recent_applications.length === 0">
+        <div class="text-center py-12 text-slate-500 text-sm">Заявок пока нет</div>
+      </template>
+    </div>
+  </section>
+
+</div>
+
+<script>
+function dashboard() {
+  return {
+    state: {
+      stats: {
+        lk_cards_total: 0,
+        lk_cards_by_status: {},
+        lk_cards_by_method: {},
+        managed_chats_active: 0,
+        deals_total: 0,
+        margin_today_usdt: 0,
+        margin_week_usdt: 0,
+        ai: {},
+        escalate: {},
+        writeback: {},
+        deals_stats: {},
+        ai_enabled: false,
+        writeback_enabled: false,
+        subscribers: 0,
+      },
+      recent_applications: [],
+    },
+    cards: [],
+    logs: [],
+    autoscroll: true,
+    chars: {
+      chat:       { state: 'idle', bubble: '', _timer: null },
+      accounting: { state: 'idle', bubble: '', _timer: null },
+      lk:         { state: 'idle', bubble: '', _timer: null },
+    },
+    es: null,
+    connState: 'connecting',
+    connText: 'Подключение…',
+    charts: {},
+
+    async init() {
+      await this.refresh();
+      this.connectSSE();
+      this.startPolling();
+    },
+
+    // ----- HTTP polling fallback (раз в 10 сек обновляет state) -----
+    startPolling() {
+      setInterval(() => this.refresh(), 10000);
+      // Cards чуть реже, чтобы не дёргать storage слишком часто
+      setInterval(() => this.refreshCards(), 12000);
+    },
+
+    async refresh() {
+      try {
+        const r = await fetch('/api/state', { credentials: 'include' });
+        if (r.ok) {
+          this.state = await r.json();
+          this.updateCharts();
+        }
+      } catch (e) { console.warn('refresh failed', e); }
+      if (this.cards.length === 0) await this.refreshCards();
+    },
+
+    async refreshCards() {
+      try {
+        const r = await fetch('/api/lk_cards?limit=100', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.cards = data.cards || [];
+        }
+      } catch (e) { console.warn('refreshCards failed', e); }
+    },
+
+    // ----- SSE -----
+    connectSSE() {
+      this.connState = 'connecting';
+      this.connText = 'Подключение…';
+      try {
+        this.es = new EventSource('/api/events/stream');
+        this.es.onopen = () => {
+          this.connState = 'online';
+          this.connText = 'Online';
+        };
+        this.es.onerror = () => {
+          this.connState = 'offline';
+          this.connText = 'Reconnecting…';
+          // EventSource сам переподключится. Логировать не будем.
+        };
+        this.es.onmessage = (e) => {
+          try {
+            const event = JSON.parse(e.data);
+            this.handleEvent(event);
+          } catch (err) {
+            console.warn('SSE parse failed', err, e.data);
+          }
+        };
+      } catch (e) {
+        console.warn('SSE init failed', e);
+        this.connState = 'offline';
+        this.connText = 'Не доступен';
+      }
+    },
+
+    // ----- Event dispatch -----
+    handleEvent(ev) {
+      // Лог
+      this.logs.push(ev);
+      if (this.logs.length > 300) this.logs.shift();
+      this.$nextTick(() => {
+        if (this.autoscroll && this.$refs.logbox) {
+          this.$refs.logbox.scrollTop = this.$refs.logbox.scrollHeight;
+        }
+      });
+
+      // Анимация персонажа
+      const char = ev.character;
+      if (char && this.chars[char]) {
+        this.animateCharacter(char, ev);
+      }
+
+      // Если событие "что-то изменилось" — пересчитать state/cards
+      const liveTypes = [
+        'ai-reply', 'application-processed', 'lk-created', 'lk-status',
+        'lk-deleted', 'deal-recorded', 'deal-status',
+      ];
+      if (liveTypes.includes(ev.type)) {
+        this.refresh();
+        this.refreshCards();
+      }
+    },
+
+    animateCharacter(charKey, ev) {
+      const ch = this.chars[charKey];
+      const newState = ev.severity === 'alert' ? 'alert' : 'working';
+      ch.state = newState;
+      ch.bubble = this.formatBubble(ev);
+      if (ch._timer) clearTimeout(ch._timer);
+      const ttl = newState === 'alert' ? 4000 : 2500;
+      ch._timer = setTimeout(() => {
+        ch.state = 'idle';
+        ch.bubble = '';
+      }, ttl);
+    },
+
+    formatBubble(ev) {
+      const p = ev.payload || {};
+      const t = ev.type;
+      if (t === 'ai-reply') return '💬 ' + (p.short || 'отвечает клиенту');
+      if (t === 'application-processed') return '📊 заявка #' + (p.id || '?') + ' · маржа ' + this.fmtUsd(p.margin_usdt);
+      if (t === 'lk-created') return '✨ карточка ' + (p.card_id || '');
+      if (t === 'lk-deleted') return '🗑 удалена ' + (p.card_id || '');
+      if (t === 'lk-status') return '🔄 ' + (p.card_id || '') + ' → ' + (p.status || '');
+      if (t === 'lk-brak') return '❌ БРАК · ' + (p.card_id || '');
+      if (t === 'lk-blok') return '🚫 БЛОК · ' + (p.card_id || '');
+      if (t === 'escalation') return '🆘 ' + (p.specialist || '');
+      if (t === 'deal-recorded') return '🤝 сделка #' + (p.deal_id || '');
+      if (t === 'payment-confirmed') return '✅ оплачено ' + (p.card_id || '');
+      return ev.type;
+    },
+
+    formatLogPayload(ev) {
+      const p = ev.payload || {};
+      const parts = [];
+      if (p.card_id) parts.push('#' + p.card_id);
+      if (p.bank) parts.push(p.bank);
+      if (p.fio) parts.push(p.fio);
+      if (p.client_username) parts.push('@' + p.client_username);
+      if (p.deal_id) parts.push('deal #' + p.deal_id);
+      if (p.status) parts.push('→ ' + p.status);
+      if (p.id !== undefined) parts.push('#' + p.id);
+      if (p.margin_usdt !== undefined) parts.push('маржа ' + this.fmtUsd(p.margin_usdt));
+      if (p.short) parts.push(p.short);
+      if (p.specialist) parts.push('@' + p.specialist);
+      if (p.reason) parts.push(p.reason);
+      return parts.join(' · ');
+    },
+
+    charIcon(c) {
+      return { chat: '💬', accounting: '📊', lk: '📋' }[c] || '·';
+    },
+
+    onLogScroll(e) {
+      const el = e.target;
+      const bottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+      this.autoscroll = bottom;
+    },
+
+    fmtTime(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `${hh}:${mm}:${ss}`;
+      } catch { return ''; }
+    },
+
+    fmtUsd(v) {
+      const n = Number(v) || 0;
+      const sign = n < 0 ? '−' : '';
+      const abs = Math.abs(n);
+      return sign + '$' + abs.toLocaleString(undefined, {maximumFractionDigits: 0});
+    },
+
+    // ----- Charts -----
+    updateCharts() {
+      this.$nextTick(() => this.renderCharts());
+    },
+
+    renderCharts() {
+      this._renderMarginChart();
+      this._renderStatusChart();
+      this._renderMethodChart();
+    },
+
+    _renderMarginChart() {
+      const el = this.$refs.marginChart;
+      if (!el) return;
+      // Aggregate margin by date
+      const byDate = {};
+      (this.state.recent_applications || []).forEach(a => {
+        byDate[a.date] = (byDate[a.date] || 0) + (Number(a.margin_usdt) || 0);
+      });
+      const labels = Object.keys(byDate).sort();
+      const data = labels.map(l => byDate[l]);
+      if (this.charts.margin) {
+        this.charts.margin.data.labels = labels;
+        this.charts.margin.data.datasets[0].data = data;
+        this.charts.margin.update();
+        return;
+      }
+      this.charts.margin = new Chart(el, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Маржа USDT',
+            data,
+            backgroundColor: 'rgba(139, 92, 246, 0.55)',
+            borderColor: '#a855f7',
+            borderWidth: 1.5,
+            borderRadius: 6,
+          }]
+        },
+        options: chartBaseOptions(),
+      });
+    },
+
+    _renderStatusChart() {
+      const el = this.$refs.statusChart;
+      if (!el) return;
+      const data = this.state.stats.lk_cards_by_status || {};
+      const labels = Object.keys(data);
+      const values = labels.map(k => data[k]);
+      const palette = {
+        'В_РАБОТЕ': '#10b981',
+        'ОТРАБОТАН': '#06b6d4',
+        'ПОПОЛНИТЬ_И_ОТПУСТИТЬ': '#a855f7',
+        'БРАК': '#ef4444',
+        'БЛОК': '#f59e0b',
+        'ЗАВЕРШЁН': '#94a3b8',
+      };
+      const colors = labels.map(l => palette[l] || '#64748b');
+      if (this.charts.status) {
+        this.charts.status.data.labels = labels;
+        this.charts.status.data.datasets[0].data = values;
+        this.charts.status.data.datasets[0].backgroundColor = colors;
+        this.charts.status.update();
+        return;
+      }
+      this.charts.status = new Chart(el, {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+        options: chartPieOptions(),
+      });
+    },
+
+    _renderMethodChart() {
+      const el = this.$refs.methodChart;
+      if (!el) return;
+      const data = this.state.stats.lk_cards_by_method || {};
+      const labels = Object.keys(data);
+      const values = labels.map(k => data[k]);
+      const colors = ['#06b6d4', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#64748b'];
+      if (this.charts.method) {
+        this.charts.method.data.labels = labels;
+        this.charts.method.data.datasets[0].data = values;
+        this.charts.method.update();
+        return;
+      }
+      this.charts.method = new Chart(el, {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+        options: chartPieOptions(),
+      });
+    },
+  };
+}
+
+function chartBaseOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+        borderColor: 'rgba(139, 92, 246, 0.3)',
+        borderWidth: 1,
+      },
+    },
+    scales: {
+      x: {
+        ticks: { color: '#94a3b8', font: { size: 10 } },
+        grid:  { color: 'rgba(148, 163, 184, 0.08)' },
+      },
+      y: {
+        ticks: { color: '#94a3b8', font: { size: 10 } },
+        grid:  { color: 'rgba(148, 163, 184, 0.08)' },
+      },
+    },
+  };
+}
+
+function chartPieOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: true,
+        position: 'right',
+        labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 },
+      },
+      tooltip: {
+        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+        borderColor: 'rgba(139, 92, 246, 0.3)',
+        borderWidth: 1,
+      },
+    },
+  };
+}
+</script>
+
+</body>
+</html>

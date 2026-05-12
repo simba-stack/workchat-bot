@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import html
+import os
 import random
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -417,12 +418,47 @@ async def main():
     # Запускаем фоновую очистку storage
     asyncio.create_task(_periodic_cleanup())
 
+    # FastAPI дашборд — запускаем параллельно. При любой ошибке/отсутствии
+    # модулей дашборд просто не стартует, бот продолжает работать как обычно.
+    dashboard_task = asyncio.create_task(_start_dashboard_api())
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot)
     finally:
+        if not dashboard_task.done():
+            dashboard_task.cancel()
         await userbot.stop()
         await bot.session.close()
+
+
+async def _start_dashboard_api():
+    """Запускает FastAPI дашборд на отдельном порту. Не падает если
+    fastapi/uvicorn не установлены — просто молча выходит."""
+    try:
+        import uvicorn
+        from api import app as fastapi_app
+    except ImportError as e:
+        logger.warning(
+            "Dashboard not started: %s. Установите fastapi+uvicorn для активации.",
+            e,
+        )
+        return
+    port = int(os.getenv("PORT", "8080"))
+    host = "0.0.0.0"
+    logger.info("Starting FastAPI dashboard on %s:%d ...", host, port)
+    try:
+        cfg = uvicorn.Config(
+            fastapi_app, host=host, port=port,
+            log_level="warning", access_log=False, lifespan="off",
+        )
+        server = uvicorn.Server(cfg)
+        await server.serve()
+    except asyncio.CancelledError:
+        logger.info("Dashboard API stopping (cancelled)")
+        raise
+    except Exception as e:
+        logger.warning("Dashboard API crashed: %s", e)
 
 
 if __name__ == "__main__":

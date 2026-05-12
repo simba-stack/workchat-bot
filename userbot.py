@@ -52,6 +52,18 @@ import memory
 import accounting2
 import learn
 
+# Event bus для дашборда. Безопасный no-op fallback если модуль не доступен.
+try:
+    from event_bus import emit_event as _emit_event
+    def _e(t, payload=None, character="", severity="info"):
+        try:
+            _emit_event(t, payload, character, severity)
+        except Exception:
+            pass
+except Exception:
+    def _e(t, payload=None, character="", severity="info"):
+        pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -796,6 +808,15 @@ class UserbotService:
             "AI: replied chat=%s in=%s out=%s",
             chat_id, usage.get("input_tokens"), usage.get("output_tokens"),
         )
+        _e("ai-reply", {
+            "chat_id": chat_id,
+            "client_username": chat_info.get("client_username"),
+            "client_name": chat_info.get("client_name"),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_read": usage.get("cache_read_tokens", 0),
+            "short": (reply[:80] if reply else ""),
+        }, character="chat", severity="info")
 
         client_text = (event.message.text or "").strip()
         await self._log_to_brain(
@@ -1021,6 +1042,11 @@ class UserbotService:
 
         await storage.bump_escalate_stats(specialist=spec)
         logger.info("AI escalated to @%s in coord_chat=%s", spec, coord_id)
+        _e("escalation", {
+            "specialist": spec,
+            "reason": reason,
+            "client_question": (client_question or "")[:120],
+        }, character="chat", severity="warning")
         return {"status": "ok", "specialist": spec, "coord_chat": coord_id, "msg_link": msg_link}
 
     # === Tools для системы учёта сделок ===
@@ -1055,6 +1081,10 @@ class UserbotService:
         if not ok:
             return {"status": "error", "error": "add_failed"}
         logger.info("deal recorded: %s | @%s | %s | %s", deal_id, client_username, bank, amount)
+        _e("deal-recorded", {
+            "deal_id": deal_id, "client_username": client_username,
+            "fio": fio, "bank": bank, "amount": amount, "method": method,
+        }, character="chat", severity="success")
 
         moved_card_id = None
         if work_chat_id is not None:
@@ -1384,6 +1414,11 @@ class UserbotService:
             by="lk_group",
         )
         await self._refresh_lk_card_post(cid)
+        _e("lk-brak", {
+            "card_id": cid, "bank": card.get("bank"),
+            "fio": card.get("fio"),
+            "reason": cmd.get("reason", ""),
+        }, character="lk", severity="alert")
 
         # Уведомить клиента в work_chat
         wc = card.get("work_chat_id")
@@ -1453,6 +1488,12 @@ class UserbotService:
             by="lk_group",
         )
         await self._refresh_lk_card_post(cid)
+        _e("lk-blok", {
+            "card_id": cid, "bank": card.get("bank"),
+            "fio": card.get("fio"),
+            "amount_rub": cmd.get("amount_rub", 0),
+            "note": cmd.get("note", ""),
+        }, character="lk", severity="alert")
 
         wc = card.get("work_chat_id")
         msg = (
@@ -2000,6 +2041,10 @@ class UserbotService:
             card_id, event.sender_id, reason,
             lk_group_msg_id, import_summary_msg_id,
         )
+        _e("lk-deleted", {
+            "card_id": card_id, "bank": bank, "fio": fio,
+            "reason": reason,
+        }, character="lk", severity="warning")
 
     async def _strike_summary_line(
         self, chat_id, summary_msg_id: int, card_id: str,
@@ -2311,6 +2356,13 @@ class UserbotService:
         # чтобы не передавать его в add_lk_card как поле модели.
         created_by = card_data.pop("_created_by", None) or "manual"
         card_id = await storage.add_lk_card(**card_data, created_by=created_by)
+        _e("lk-created", {
+            "card_id": card_id,
+            "bank": card_data.get("bank"),
+            "fio": card_data.get("fio"),
+            "method": card_data.get("payment_method"),
+            "source": created_by,
+        }, character="lk", severity="success")
         # Получаем готовый рендер анкеты
         card = storage.get_lk_card(card_id) or {}
         text = accounting2.format_lk_card(card)
@@ -2626,6 +2678,10 @@ class UserbotService:
             "LK card created from perevyaz: %s for chat=%s bank=%s fio=%s method=%s",
             card_id, wc, bank, fio, method,
         )
+        _e("lk-created", {
+            "card_id": card_id, "bank": bank, "fio": fio,
+            "method": method, "source": "perevyaz",
+        }, character="lk", severity="success")
         return card_id
 
     async def _request_lk_data_from_client(
@@ -3062,6 +3118,10 @@ class UserbotService:
                     "payment proof: notified client work_chat=%s card=%s",
                     wc, cid,
                 )
+                _e("payment-confirmed", {
+                    "card_id": cid, "bank": bank, "fio": fio,
+                    "method": method, "deal_id": deal_id,
+                }, character="accounting", severity="success")
             except Exception as e:
                 logger.warning(
                     "payment proof notify failed for card=%s chat=%s: %s",
@@ -3265,6 +3325,11 @@ class UserbotService:
             "applied app_v2 id=%s date=%s margin=%.0f$ moved=%d",
             new_id, date_str, computed.get("margin_usdt", 0), moved,
         )
+        _e("application-processed", {
+            "id": new_id, "date": date_str,
+            "margin_usdt": computed.get("margin_usdt", 0),
+            "moved": moved,
+        }, character="accounting", severity="success")
 
         # Reply с инструкциями для работника-выплат — по каждому ЛК заявки
         # отдельная строка действия. Сохраняет msg_id в карточку для

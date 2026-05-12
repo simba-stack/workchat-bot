@@ -8,6 +8,7 @@
       "Dockerfile",
       "requirements.txt",
       "railway.json",
+      "dashboard/index.html",
       ".env.example",
       ".gitattributes"
     ]
@@ -15,6 +16,8 @@
   "deploy": {
     "startCommand": "python -u bot.py",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 10,
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 30
   }
 }
