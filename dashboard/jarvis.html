@@ -809,6 +809,7 @@
   .lk-chip .badge.s-завершен,
   .lk-chip .badge.s-пополнить_и_отпустить { color: var(--hud-emerald); border-color: var(--hud-emerald); }
   .lk-chip .badge.s-блок,
+  .lk-chip .badge.s-блок_без_отработки,
   .lk-chip .badge.s-брак { color: var(--hud-rose); border-color: var(--hud-rose); }
   .lk-actions {
     display: flex;
@@ -1671,9 +1672,14 @@
         <div class="sub" x-text="'в работе: ' + (state.stats.lk_in_work || 0)"></div>
       </div>
       <div class="metric">
-        <div class="label">Блоков</div>
+        <div class="label">Блоков (всего)</div>
         <div class="value rose" x-text="state.stats.lk_blocks || 0"></div>
-        <div class="sub" x-text="'всего карточек: ' + (state.stats.lk_cards_total || 0)"></div>
+        <div class="sub" x-text="'без отработки: ' + (state.stats.lk_blocks_nowork || 0) + ' · карточек: ' + (state.stats.lk_cards_total || 0)"></div>
+      </div>
+      <div class="metric" x-show="(state.stats.lk_blocks_nowork || 0) > 0">
+        <div class="label">⛔ Блок без отработки</div>
+        <div class="value rose" x-text="state.stats.lk_blocks_nowork || 0"></div>
+        <div class="sub">потенциальные потери — не успели отработать</div>
       </div>
     </div>
 
@@ -1974,6 +1980,7 @@
         <option>ЗАВЕРШЁН</option>
         <option>БРАК</option>
         <option>БЛОК</option>
+        <option>БЛОК_БЕЗ_ОТРАБОТКИ</option>
       </select>
       <div class="modal-actions">
         <button class="btn" @click="closeStatusModal()">Отмена</button>

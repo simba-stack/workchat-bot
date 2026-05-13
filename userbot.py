@@ -3472,6 +3472,141 @@ class UserbotService:
             )
             return False
 
+    async def _handle_block_no_work_actions(self, card_id: str) -> bool:
+        """Side-effects при переходе ЛК в статус БЛОК_БЕЗ_ОТРАБОТКИ:
+          1) Отменяем сделку (если есть deal_id) — статус ОТМЕНЁНА_БЛОК
+          2) Оповещаем клиента в его work_chat — что произошёл блок без
+             отработки и нужно решить в банке вопрос почему блок
+          3) Кидаем reply на анкету в Группе 1 ЛК с инструкцией для
+             работника-выплат (отмена сделки + забрать деньги если был гарант)
+
+        Возвращает True если хотя бы одно действие выполнено."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        card = storage.get_lk_card(card_id) or {}
+        if not card:
+            logger.warning("block_no_work: card #%s not found", card_id)
+            return False
+
+        bank = card.get("bank") or ""
+        fio = card.get("fio") or ""
+        deal_id = (card.get("deal_id") or "").strip().lstrip("#")
+        method = (card.get("payment_method") or "").upper()
+        wc = card.get("work_chat_id")
+        did_anything = False
+
+        # 1) Отменяем сделку, если она есть
+        deal_cancelled = False
+        if deal_id and storage.get_deal(deal_id):
+            try:
+                ok = await storage.update_deal_status(
+                    deal_id, "ОТМЕНЁНА_БЛОК",
+                )
+                if ok:
+                    deal_cancelled = True
+                    did_anything = True
+                    _e("deal-cancelled-block-no-work", {
+                        "deal_id": deal_id, "card_id": card_id,
+                        "bank": bank, "fio": fio,
+                    }, character="lk", severity="alert")
+                    logger.info(
+                        "block_no_work: deal cancelled deal=%s card=%s",
+                        deal_id, card_id,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "block_no_work: cancel deal %s failed: %s",
+                    deal_id, e,
+                )
+
+        # 2) Оповещаем клиента в work_chat
+        client_notified = False
+        if wc:
+            msg = (
+                f"⛔ <b>Блок без отработки</b>\n\n"
+                f"К сожалению, на ЛК <b>{bank}</b> ({fio}) банк наложил "
+                f"блок ещё до окончания отработки.\n\n"
+                f"Сейчас мы не можем продолжить работу по этому счёту — "
+                f"нужно <b>обратиться в банк и выяснить причину блока</b> "
+                f"(служба поддержки, чат банка, отделение или горячая линия).\n\n"
+                f"Как только разберётесь с банком и блок снимут — "
+                f"напишите нам, мы возобновим работу."
+            )
+            if deal_cancelled:
+                msg += (
+                    f"\n\nПо вашей сделке <b>#{deal_id}</b> мы инициировали "
+                    f"отмену — пожалуйста, подтвердите отмену со своей "
+                    f"стороны в боте гаранта."
+                )
+            try:
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(
+                    target, msg, parse_mode="html", link_preview=False,
+                )
+                client_notified = True
+                did_anything = True
+                logger.info(
+                    "block_no_work: client notified card=%s wc=%s",
+                    card_id, wc,
+                )
+            except Exception as e:
+                logger.warning(
+                    "block_no_work: notify client failed card=%s: %s",
+                    card_id, e,
+                )
+
+        # 3) Reply на анкету в Группе 1 с инструкцией работнику
+        msg_id = int(card.get("lk_group_msg_id") or 0)
+        lk_gid = storage.get_lk_group_id()
+        if lk_gid and msg_id:
+            lines = [
+                "⛔ <b>БЛОК БЕЗ ОТРАБОТКИ</b>",
+                f"ЛК: <b>{bank}</b> ({fio})",
+            ]
+            if deal_cancelled:
+                lines.append(f"❌ Сделка <code>#{deal_id}</code> — ОТМЕНА.")
+                lines.append("💸 Нужно ЗАБРАТЬ ДЕНЬГИ со сделки. @TimonSkupCL")
+            elif deal_id:
+                lines.append(
+                    f"⚠️ По сделке <code>#{deal_id}</code> — проверить статус."
+                )
+            if client_notified:
+                lines.append(
+                    "📩 Клиенту отправлено уведомление — пусть разбирается в банке."
+                )
+            else:
+                lines.append(
+                    "⚠️ Клиента уведомить не удалось (нет work_chat). "
+                    "Свяжитесь напрямую."
+                )
+            lines.append(
+                "🏦 Нужно решить в банке вопрос — почему произошёл блок."
+            )
+            instr_text = "\n".join(lines)
+            try:
+                target = await self._resolve_chat_target(lk_gid)
+                await self.client.send_message(
+                    target, instr_text, reply_to=msg_id,
+                    parse_mode="html", link_preview=False,
+                )
+                did_anything = True
+            except Exception as e:
+                logger.warning(
+                    "block_no_work: post instruction failed card=%s: %s",
+                    card_id, e,
+                )
+
+        _e("lk-block-no-work-processed", {
+            "card_id": card_id, "bank": bank, "fio": fio,
+            "deal_id": deal_id,
+            "deal_cancelled": deal_cancelled,
+            "client_notified": client_notified,
+        }, character="lk", severity="alert")
+
+        return did_anything
+
     async def _refresh_lk_card_post(self, card_id: str) -> bool:
         """Edit/post карточки в Группе 1 актуальным состоянием."""
         card = storage.get_lk_card(card_id)
@@ -5250,7 +5385,8 @@ class UserbotService:
             cid = m.group(1).lower()
             new_status = m.group(2).strip().upper()
             allowed = {"В_РАБОТЕ", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
-                       "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК"}
+                       "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК",
+                       "БЛОК_БЕЗ_ОТРАБОТКИ"}
             if new_status not in allowed:
                 return f"⚠️ статус {new_status} не разрешён. Допустимы: {sorted(allowed)}"
             ok = await storage.set_lk_card_status(cid, new_status, by="leo")
@@ -5260,7 +5396,31 @@ class UserbotService:
                 await self._refresh_lk_card_post(cid)
             except Exception:
                 pass
+            # Side-effects при БЛОК_БЕЗ_ОТРАБОТКИ: отмена сделки + клиент
+            if new_status == "БЛОК_БЕЗ_ОТРАБОТКИ":
+                try:
+                    await self._handle_block_no_work_actions(cid)
+                except Exception as e:
+                    logger.warning(
+                        "block_no_work side-effects card=%s: %s", cid, e,
+                    )
             return f"✅ #{cid} → {new_status}"
+
+        # ===== INTERNAL: block-no-work side-effects (от api.py) =====
+        m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            try:
+                ok = await self._handle_block_no_work_actions(cid)
+                return (
+                    f"✅ block_no_work обработан #{cid}" if ok
+                    else f"⚠️ block_no_work #{cid}: ничего не сделано"
+                )
+            except Exception as e:
+                logger.warning(
+                    "block_no_work side-effects card=%s: %s", cid, e,
+                )
+                return f"⚠️ block_no_work #{cid} ошибка: {e}"
 
         # ===== DELETE LK via command =====
         m = re.match(r"^(?:удалить|delete)\s+#?(lk\d+)\s*$", text, re.I)
@@ -5296,6 +5456,9 @@ class UserbotService:
         blocks = [c for c in cards.values() if (c.get("status") or "").upper() == "БЛОК"]
         if blocks:
             issues.append(f"🚫 в БЛОКе: {len(blocks)} карточек")
+        blocks_nw = [c for c in cards.values() if (c.get("status") or "").upper() == "БЛОК_БЕЗ_ОТРАБОТКИ"]
+        if blocks_nw:
+            issues.append(f"⛔ в БЛОКЕ БЕЗ ОТРАБОТКИ: {len(blocks_nw)} карточек (потенциальные потери)")
         brak = [c for c in cards.values() if (c.get("status") or "").upper() == "БРАК"]
         if brak:
             issues.append(f"❌ в БРАКе: {len(brak)} карточек")

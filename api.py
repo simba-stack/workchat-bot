@@ -582,7 +582,14 @@ async def api_state(_: None = Depends(_auth)):
             funnel_week_total[k] = funnel_week_total.get(k, 0) + float(v)
 
     # БЛОК — карточки в статусе БЛОК
-    blocks_count = sum(1 for c in cards.values() if (c.get("status") or "").upper() == "БЛОК")
+    blocks_count = sum(
+        1 for c in cards.values()
+        if (c.get("status") or "").upper() in ("БЛОК", "БЛОК_БЕЗ_ОТРАБОТКИ")
+    )
+    blocks_nowork_count = sum(
+        1 for c in cards.values()
+        if (c.get("status") or "").upper() == "БЛОК_БЕЗ_ОТРАБОТКИ"
+    )
     # ЛК отработанных (статус ОТРАБОТАН или ЗАВЕРШЁН)
     lk_done_count = sum(
         1 for c in cards.values()
@@ -600,6 +607,7 @@ async def api_state(_: None = Depends(_auth)):
             "lk_in_work": lk_in_work,
             "lk_done": lk_done_count,
             "lk_blocks": blocks_count,
+            "lk_blocks_nowork": blocks_nowork_count,
             "managed_chats_active": len(managed),
             "deals_total": len(deals),
             "margin_today_usdt": margin_today,
@@ -909,6 +917,7 @@ async def control_lk_status(
     allowed = {
         "В_РАБОТЕ", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
         "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК",
+        "БЛОК_БЕЗ_ОТРАБОТКИ",
     }
     new_status = (req.new_status or "").strip().upper()
     if new_status not in allowed:
@@ -926,6 +935,18 @@ async def control_lk_status(
         )
     except Exception:
         pass
+    # Side-effects при БЛОК_БЕЗ_ОТРАБОТКИ — userbot должен:
+    # 1) отменить сделку (если есть deal_id)
+    # 2) написать клиенту в work_chat про блок без отработки
+    # 3) reply на анкету в Группе 1 с инструкцией работнику
+    if new_status == "БЛОК_БЕЗ_ОТРАБОТКИ":
+        try:
+            await storage.enqueue_dashboard_command(
+                f"__handle_block_no_work {card_id}",
+                source="dashboard-block-no-work",
+            )
+        except Exception:
+            pass
     return {"ok": True, "card_id": card_id, "new_status": new_status}
 
 
