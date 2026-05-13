@@ -873,10 +873,13 @@ async def api_discord_channels(_: None = Depends(_auth)):
             created_by="system",
         )
         channels = storage.list_discord_channels()
-    # Добавляем активность звонков
-    calls = storage.list_discord_calls()
+    # Активность звонков теперь живёт в памяти api.py (через WebSocket).
+    # Тут заполняем voice_participants чтоб UI сразу показал кто в голосе.
     for ch in channels:
-        ch["call"] = calls.get(ch["id"])
+        if ch.get("type") == "voice":
+            ch["voice_participants"] = _online_users_in_voice(ch["id"])
+        else:
+            ch["voice_participants"] = []
     return {"channels": channels}
 
 
@@ -1008,10 +1011,16 @@ async def api_discord_delete_message(
 async def api_me(request: Request, _: None = Depends(_auth)):
     """Информация о текущем залогиненном админе:
     user_id, username, first_name, photo_url. Используется Discord-хабом
-    для аватарок и для voice-сигналинга."""
-    uid = _try_session_auth(request)
+    для аватарок и для voice-сигналинга.
+
+    Если профиль TG ещё не сохранён (юзер логинился до того как мы добавили
+    record_tg_user_info), просим перелогиниться — но всё равно отдаём
+    fallback чтоб фронт не падал."""
+    try:
+        uid = _try_session_auth(request)
+    except Exception:
+        uid = None
     if not uid:
-        # Basic-auth — нет TG-данных, возвращаем минимум
         return {
             "user_id": 0,
             "username": "admin",
@@ -1019,14 +1028,20 @@ async def api_me(request: Request, _: None = Depends(_auth)):
             "photo_url": "",
             "auth_mode": "basic",
         }
-    info = storage.get_tg_user_info(uid) or {}
+    try:
+        info = storage.get_tg_user_info(uid) or {}
+    except Exception:
+        info = {}
+    # Если TG-профиль пуст — fallback с user_id, но просим перелогиниться
+    needs_relogin = not (info.get("username") or info.get("first_name"))
     return {
         "user_id": uid,
         "username": info.get("username") or "",
-        "first_name": info.get("first_name") or "",
+        "first_name": info.get("first_name") or f"user_{uid}",
         "last_name": info.get("last_name") or "",
         "photo_url": info.get("photo_url") or "",
         "auth_mode": "telegram",
+        "needs_relogin": needs_relogin,
     }
 
 
@@ -1285,7 +1300,9 @@ async def discord_ws(ws: WebSocket):
         { type: "typing", channel_id, user }
         { type: "presence", online }
     """
-    # Auth — читаем session cookie
+    # Auth — пытаемся через session cookie. Если нет — даём гостевую
+    # admin-сессию (Basic auth уже отработал на HTTP-уровне; для WS-апгрейда
+    # cookie может отсутствовать).
     user_info = {}
     uid = None
     try:
@@ -1293,7 +1310,10 @@ async def discord_ws(ws: WebSocket):
         if cookie_val:
             uid = _verify_session(cookie_val)
         if uid:
-            info = storage.get_tg_user_info(uid) or {}
+            try:
+                info = storage.get_tg_user_info(uid) or {}
+            except Exception:
+                info = {}
             user_info = {
                 "user_id": uid,
                 "username": info.get("username") or "",
@@ -1303,12 +1323,18 @@ async def discord_ws(ws: WebSocket):
     except Exception as e:
         logger.warning("ws auth check failed: %s", e)
     if not user_info:
-        # Если basic-auth — даём гостевую сессию
+        # Basic-auth или session отсутствует — anonymous admin-сессия
         user_info = {
             "user_id": 0, "username": "admin",
             "first_name": "Admin", "photo_url": "",
         }
-    await ws.accept()
+    # accept ВСЕГДА — отказать заранее не можем (Basic auth требует Authorization
+    # header, который браузер не отправляет на WS-upgrade автоматом)
+    try:
+        await ws.accept()
+    except Exception as e:
+        logger.warning("ws accept failed: %s", e)
+        return
     import uuid as _uuid
     session_id = _uuid.uuid4().hex[:12]
     _ws_sessions[session_id] = {
@@ -1814,24 +1840,36 @@ async def leo_realtime_session(request: Request, _: None = Depends(_auth)):
             status_code=503,
             detail="OPENAI_API_KEY не задан в env Railway. Без него Realtime не работает.",
         )
-    # Регистрируем активность по этому юзеру (для отображения в dashboard)
-    user = _resolve_discord_user(request)
-    _record_session_activity(request, "leo-voice-start", {"user": user})
-    # Готовим инструкции с актуальным снимком состояния + knowledge graph
-    # Используем CACHED snapshot чтобы не блокировать event loop при одновременных вызовах
+    # Регистрируем активность (best-effort, не должно ломать endpoint)
+    try:
+        user = _resolve_discord_user(request)
+        _record_session_activity(request, "leo-voice-start", {"user": user})
+    except Exception as e:
+        logger.warning("leo session activity record failed: %s", e)
+    # Готовим инструкции с актуальным снимком состояния + knowledge graph.
+    # Тяжёлые операции — в thread pool чтобы не блокировать event loop.
+    state_snap, knowledge = {}, ""
     try:
         import leo as leo_mod
-        # Тяжёлые операции — в thread pool чтобы не блокировать API
-        import asyncio as _aio
-        loop = _aio.get_running_loop()
-        state_snap = await loop.run_in_executor(
-            None, leo_mod._build_state_snapshot_cached,
-        )
-        knowledge = await loop.run_in_executor(
-            None, leo_mod._load_knowledge_summary, 8000,
-        )
+        try:
+            import asyncio as _aio
+            loop = _aio.get_running_loop()
+            state_snap = await loop.run_in_executor(
+                None, leo_mod._build_state_snapshot_cached,
+            )
+        except Exception as e:
+            logger.warning("leo state snapshot failed: %s", e)
+            state_snap = {}
+        try:
+            loop = _aio.get_running_loop()
+            knowledge = await loop.run_in_executor(
+                None, leo_mod._load_knowledge_summary, 8000,
+            )
+        except Exception as e:
+            logger.warning("leo knowledge load failed: %s", e)
+            knowledge = ""
     except Exception as e:
-        logger.warning("leo realtime prep failed: %s", e)
+        logger.warning("leo realtime prep totally failed: %s", e)
         state_snap, knowledge = {}, ""
 
     instructions = (
