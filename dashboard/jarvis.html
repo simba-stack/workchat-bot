@@ -1337,7 +1337,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel" x-show="currentView === 'chat'">
+    <div class="jarvis-panel" x-show="['office','chat'].includes(currentView)">
       <div class="panel-title">
         Communications
         <span class="badge-mini" x-text="state.stats.ai.replies_total || 0"></span>
@@ -1367,7 +1367,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel" x-show="currentView === 'chat'">
+    <div class="jarvis-panel" x-show="['office','chat'].includes(currentView)">
       <div class="panel-title">
         Воронка · 7 дней
         <span class="badge-mini">CONVERSION</span>
@@ -1383,7 +1383,7 @@
       </template>
     </div>
 
-    <div class="jarvis-panel" x-show="currentView === 'chat'">
+    <div class="jarvis-panel" x-show="['office','chat'].includes(currentView)">
       <div class="panel-title">
         Last AI reply
         <span class="badge-mini" x-text="lastReply.ts ? fmtTime(lastReply.ts) : '—'"></span>
@@ -1397,7 +1397,7 @@
 
   <!-- CENTER -->
   <section class="central-office">
-    <div class="jarvis-panel" x-show="currentView === 'office'">
+    <div class="jarvis-panel">
       <div class="panel-title">
         Operations Floor
         <span class="badge-mini">REAL-TIME</span>
@@ -1525,7 +1525,7 @@
     </div>
 
     <!-- LK Cards -->
-    <div class="jarvis-panel" x-show="currentView === 'lk'">
+    <div class="jarvis-panel" x-show="['office','lk'].includes(currentView)">
       <div class="panel-title">
         LK Cards · live
         <span class="badge-mini" x-text="filteredCards.length + ' / ' + (state.stats.lk_cards_total || 0)"></span>
@@ -1555,11 +1555,98 @@
         </template>
       </div>
     </div>
+
+    <!-- ===== CHAT DEPT: AI Activity Feed ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'chat'">
+      <div class="panel-title">
+        AI Activity (последние)
+        <span class="badge-mini">CHAT</span>
+      </div>
+      <div style="max-height: 280px; overflow-y: auto;">
+        <template x-if="logs.filter(l => (l.type||'').startsWith('ai-')).length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Жду ai-событий...
+          </div>
+        </template>
+        <template x-for="(log, i) in logs.filter(l => (l.type||'').startsWith('ai-')).slice(0, 30)" :key="'aichat:' + i + ':' + log.ts">
+          <div class="feed-line" :class="'severity-' + (log.severity || 'info')">
+            <span class="ts" x-text="fmtTime(log.ts)"></span>
+            <span class="tag" x-text="(log.type || 'ai').replace('ai-', '')"></span>
+            <span class="msg" x-text="formatEvent(log)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== LK DEPT: LK Pipeline ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'lk'">
+      <div class="panel-title">
+        LK Pipeline (по статусам)
+        <span class="badge-mini" x-text="(state.stats.lk_cards_total || 0) + ' total'"></span>
+      </div>
+      <div style="padding: 12px;">
+        <template x-for="[status, count] in Object.entries(state.stats.lk_cards_by_status || {})" :key="status">
+          <div style="margin-bottom: 8px;">
+            <div class="flex items-center gap-2 text-xs">
+              <span x-text="status.replace(/_/g, ' ')"></span>
+              <span style="color: var(--text-dim); margin-left: auto;" x-text="count + ' карточек'"></span>
+            </div>
+            <div style="height: 6px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 3px; overflow: hidden;">
+              <div :style="'height: 100%; width: ' + (Math.min(100, count * 100 / Math.max(1, state.stats.lk_cards_total || 1))) + '%; background: ' + (status === 'В_РАБОТЕ' ? 'var(--hud-primary)' : (status === 'БЛОК' || status === 'БРАК' ? 'var(--hud-rose)' : (status === 'ОТРАБОТАН' ? 'var(--hud-amber)' : 'var(--hud-emerald)'))) + '; box-shadow: 0 0 6px currentColor;'"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== LK DEPT: by Bank ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'lk'">
+      <div class="panel-title">
+        ЛК по банкам
+        <span class="badge-mini">DISTRIBUTION</span>
+      </div>
+      <div style="padding: 8px 14px; max-height: 240px; overflow-y: auto;">
+        <template x-for="[bank, count] in Object.entries(banksFromCards()).sort((a,b) => b[1] - a[1])" :key="bank">
+          <div class="flex items-center gap-2 text-xs" style="padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="font-weight: 700;" x-text="bank"></span>
+            <span style="color: var(--text-dim); margin-left: auto;" x-text="count + ' карточек'"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== FIN DEPT: Recent Applications ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'fin'">
+      <div class="panel-title">
+        Recent Applications V2
+        <span class="badge-mini" x-text="(state.recent_applications || []).length + ' за неделю'"></span>
+      </div>
+      <div style="max-height: 320px; overflow-y: auto;">
+        <template x-if="(state.recent_applications || []).length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Нет заявок за последние 7 дней
+          </div>
+        </template>
+        <template x-for="app in (state.recent_applications || []).slice(0, 25)" :key="app.date + ':' + app.id">
+          <div class="metric" style="padding: 8px 14px;">
+            <div class="flex items-center gap-2 text-xs">
+              <span style="color: var(--text-dim);" x-text="app.date"></span>
+              <span style="font-weight: 700;" x-text="'#' + app.id"></span>
+              <span style="margin-left: auto;" :class="(app.margin_usdt || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'"
+                    x-text="fmtUsd(app.margin_usdt)"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim);">
+              <span x-text="(app.intake_bank || '—') + ' · ' + (app.intake_fio || '—') + ' · ' + (app.outputs_count || 0) + ' выводов'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
   </section>
 
   <!-- RIGHT -->
   <aside class="space-y-4">
-    <div class="jarvis-panel" x-show="currentView === 'fin'">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Финансы
         <span class="badge-mini">MARGIN</span>
@@ -1590,7 +1677,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel" x-show="currentView === 'fin'">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Operators
         <span class="badge-mini" x-text="managers.length + ' active'"></span>
@@ -1621,7 +1708,7 @@
     </div>
 
     <!-- ===== BRAIN NOTES (LEO) ===== -->
-    <div class="jarvis-panel" x-show="['lk','fin'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','lk','fin'].includes(currentView)">
       <div class="panel-title">
         Brain Notes
         <span class="badge-mini" x-text="(notesPreview.length) + (notesPreview.length > 0 ? ' · LEO' : '')"></span>
@@ -1681,7 +1768,7 @@
     </div>
 
     <!-- ===== OUTREACH ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'fin'">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Outreach
         <span class="badge-mini" x-text="outreachCampaigns.length + ' camp · ' + outreachBots.length + ' bots'"></span>
@@ -2593,6 +2680,14 @@ function jarvis() {
     goToView(view) {
       this.currentView = view;
       location.hash = '#' + view;
+    },
+    banksFromCards() {
+      const out = {};
+      for (const c of (this.cards || [])) {
+        const b = c.bank || '—';
+        out[b] = (out[b] || 0) + 1;
+      }
+      return out;
     },
 
     generateClientDots() {
