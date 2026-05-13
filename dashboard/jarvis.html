@@ -1072,6 +1072,165 @@
   }
   .history-row .h-st { color: var(--hud-amber); }
   .history-row .h-by { color: var(--text-dim); font-style: italic; text-align: right; }
+  /* ===== Discord-like hub ===== */
+  .discord-shell {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 0;
+    background: rgba(8, 12, 28, 0.6);
+    border: 1px solid rgba(var(--primary-rgb), 0.12);
+    border-radius: 6px;
+    height: calc(100vh - 220px);
+    min-height: 520px;
+    overflow: hidden;
+    margin-top: 12px;
+  }
+  .dc-rail {
+    background: rgba(5, 8, 18, 0.85);
+    border-right: 1px solid rgba(var(--primary-rgb), 0.1);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .dc-rail-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.1);
+    display: flex;
+    align-items: center;
+  }
+  .dc-cat {
+    padding: 8px 0;
+  }
+  .dc-cat-title {
+    padding: 4px 14px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+  }
+  .dc-channel {
+    padding: 5px 14px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-left: 2px solid transparent;
+    transition: all 0.1s;
+  }
+  .dc-channel:hover {
+    background: rgba(var(--primary-rgb), 0.06);
+  }
+  .dc-channel.active {
+    background: rgba(var(--primary-rgb), 0.12);
+    color: var(--hud-primary);
+    border-left-color: var(--hud-primary);
+  }
+  .dc-ch-icon {
+    color: var(--text-dim);
+    font-size: 13px;
+    width: 14px;
+    text-align: center;
+  }
+  .dc-channel.active .dc-ch-icon { color: var(--hud-primary); }
+  .dc-call-badge {
+    margin-left: auto;
+    font-size: 9px;
+    background: var(--hud-emerald);
+    color: #0a1421;
+    border-radius: 8px;
+    padding: 1px 6px;
+    font-weight: 700;
+  }
+  .dc-main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .dc-main-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.1);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(5, 8, 22, 0.7);
+  }
+  .dc-call-bar {
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);
+    background: rgba(16, 185, 129, 0.04);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .dc-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dc-msg {
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 10px;
+    padding: 4px 0;
+  }
+  .dc-msg.compact .dc-avatar { visibility: hidden; }
+  .dc-msg.compact { padding-top: 0; padding-bottom: 0; }
+  .dc-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.4), rgba(var(--primary-rgb), 0.15));
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+  }
+  .dc-msg-body { min-width: 0; }
+  .dc-msg-head {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin-bottom: 2px;
+  }
+  .dc-msg-text {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .dc-input-wrap {
+    padding: 8px 14px;
+    border-top: 1px solid rgba(var(--primary-rgb), 0.1);
+    display: flex;
+    gap: 8px;
+    background: rgba(5, 8, 22, 0.7);
+  }
+  .dc-input {
+    flex: 1;
+    background: var(--bg-soft);
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .dc-input:focus {
+    outline: none;
+    border-color: var(--hud-primary);
+    box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.25);
+  }
+
   .save-flash {
     position: absolute;
     top: 16px;
@@ -1300,6 +1459,7 @@
   <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Chat Dept</button>
   <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 LK Dept</button>
   <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Finance Dept</button>
+  <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Discord</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
 
@@ -1796,11 +1956,20 @@
               <span class="text-xs font-bold" x-text="'@' + m.username"></span>
               <span class="text-xs ml-auto" style="color: var(--text-dim)" x-text="m.role"></span>
             </div>
-            <div class="text-xs mt-1 flex gap-3" style="color: var(--text-dim)">
-              <span>💬 <span x-text="m.messages"></span></span>
-              <span>📋 <span x-text="m.chats_touched"></span></span>
-              <span>💸 <span x-text="m.payments_made"></span></span>
+            <div class="text-xs mt-1 flex gap-3 flex-wrap" style="color: var(--text-dim)">
+              <span title="Сообщений всего">💬 <span x-text="m.messages"></span></span>
+              <span title="Чатов задействовано">📋 <span x-text="m.chats_touched"></span></span>
+              <span title="Выплат сделано">💸 <span x-text="m.payments_made"></span></span>
+              <span title="ЛК завершено">✓ <span x-text="m.lk_completed || 0"></span></span>
               <span class="ml-auto" x-text="formatIdle(m.idle_sec)"></span>
+            </div>
+            <div class="text-xs mt-1 flex gap-3 flex-wrap" style="color: var(--text-dim)" x-show="(m.tags_received || 0) > 0">
+              <span title="Тегов получено">🔔 <span x-text="m.tags_received"></span></span>
+              <span title="Ответил на тегов">↩️ <span x-text="m.replies_to_tags"></span></span>
+              <span title="Response rate (ответы/теги)" :style="(m.response_rate || 0) >= 0.7 ? 'color: var(--hud-emerald)' : ((m.response_rate || 0) >= 0.3 ? 'color: var(--hud-amber)' : 'color: var(--hud-rose)')">
+                📊 <span x-text="m.response_rate === null ? '—' : (Math.round((m.response_rate || 0) * 100) + '%')"></span>
+              </span>
+              <span title="Вызовов от AI" x-show="(m.ai_escalated || 0) > 0">🤖 <span x-text="m.ai_escalated"></span></span>
             </div>
           </div>
         </template>
@@ -2037,6 +2206,126 @@
     </template>
   </div>
 </section>
+
+<!-- ===== DISCORD TAB ===== -->
+<section x-show="currentView === 'discord'" class="discord-shell">
+  <!-- LEFT: channel rail -->
+  <aside class="dc-rail">
+    <div class="dc-rail-head">
+      <span style="color: var(--hud-primary); font-weight: 700; letter-spacing: 2px;">PRIDE</span>
+      <span style="font-size: 9px; color: var(--text-dim); margin-left: auto;">внутр. хаб</span>
+    </div>
+    <template x-for="cat in discordCategories" :key="cat.name">
+      <div class="dc-cat">
+        <div class="dc-cat-title" x-text="cat.name"></div>
+        <template x-for="ch in cat.channels" :key="ch.id">
+          <div class="dc-channel" :class="discordActiveChannel?.id === ch.id ? 'active' : ''"
+               @click="openDiscordChannel(ch)">
+            <span class="dc-ch-icon" x-text="ch.type === 'voice' ? '🔊' : '#'"></span>
+            <span x-text="ch.name"></span>
+            <span class="dc-call-badge" x-show="ch.call && ch.call.participants && ch.call.participants.length > 0"
+                  x-text="(ch.call?.participants?.length || 0)" title="В звонке"></span>
+          </div>
+        </template>
+      </div>
+    </template>
+    <button class="btn" style="margin: 12px; font-size: 10px;" @click="openCreateChannel()">+ канал</button>
+  </aside>
+
+  <!-- MAIN: messages -->
+  <main class="dc-main" x-show="discordActiveChannel">
+    <div class="dc-main-head">
+      <span class="dc-ch-icon" style="font-size: 16px;" x-text="discordActiveChannel?.type === 'voice' ? '🔊' : '#'"></span>
+      <span style="font-weight: 700;" x-text="discordActiveChannel?.name || ''"></span>
+      <span style="font-size: 10px; color: var(--text-dim); margin-left: 8px;" x-text="discordActiveChannel?.topic || ''"></span>
+      <div style="margin-left: auto; display: flex; gap: 8px;">
+        <button x-show="discordActiveChannel?.type === 'voice'" class="btn"
+                @click="toggleDiscordCall()"
+                :class="discordInCall ? 'danger' : 'success'"
+                x-text="discordInCall ? '🚪 Выйти' : '🎙 Зайти'"></button>
+        <button class="btn" @click="refreshDiscordMessages()" title="Обновить">↻</button>
+      </div>
+    </div>
+
+    <!-- Voice call participants -->
+    <div class="dc-call-bar" x-show="discordActiveChannel?.type === 'voice' && (discordActiveChannel?.call?.participants?.length || 0) > 0">
+      <span style="color: var(--hud-emerald);">🎙 В голосе:</span>
+      <template x-for="p in (discordActiveChannel?.call?.participants || [])" :key="p">
+        <span class="dc-avatar" x-text="(p[0] || '?').toUpperCase()" :title="'@' + p"></span>
+      </template>
+      <span style="margin-left: auto; font-size: 9px; color: var(--text-dim);">
+        ⚠ голос/видео — в разработке (next iteration)
+      </span>
+    </div>
+
+    <div class="dc-messages" x-ref="dcMessages">
+      <template x-if="discordMessages.length === 0">
+        <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+          Сообщений нет. Начни обсуждение —
+          канал «<span x-text="discordActiveChannel?.name || ''"></span>»
+        </div>
+      </template>
+      <template x-for="(m, idx) in discordMessages" :key="m.id">
+        <div class="dc-msg" :class="(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300) ? 'compact' : ''">
+          <div class="dc-avatar" x-show="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)"
+               x-text="(m.author[0] || '?').toUpperCase()"></div>
+          <div class="dc-msg-body">
+            <div class="dc-msg-head" x-show="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)">
+              <span style="font-weight: 700; color: var(--hud-primary);" x-text="'@' + m.author"></span>
+              <span style="font-size: 9px; color: var(--text-dim);" x-text="fmtTime(m.ts)"></span>
+            </div>
+            <div class="dc-msg-text" x-text="m.text"></div>
+            <div x-show="m.edited" style="font-size: 9px; color: var(--text-dim);">(edited)</div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="dc-input-wrap">
+      <input
+        class="dc-input"
+        type="text"
+        x-model="discordDraft"
+        @keydown.enter="sendDiscordMessage()"
+        :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
+      />
+      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">Отправить</button>
+    </div>
+  </main>
+
+  <main class="dc-main" x-show="!discordActiveChannel" style="display: flex; align-items: center; justify-content: center;">
+    <div class="text-center text-xs" style="color: var(--text-dim); padding: 40px;">
+      <div style="font-size: 48px; opacity: 0.4; margin-bottom: 12px;">🟣</div>
+      Выбери канал слева чтобы начать
+    </div>
+  </main>
+</section>
+
+<!-- ===== Create channel modal ===== -->
+<template x-if="discordChannelModal.open">
+  <div class="modal-mask" @click="discordChannelModal.open = false">
+    <div class="modal" @click.stop>
+      <h3>Создать канал</h3>
+      <div class="detail-grid">
+        <label>Название</label>
+        <input type="text" x-model="discordChannelModal.name" placeholder="новый-канал">
+        <label>Тип</label>
+        <select x-model="discordChannelModal.type">
+          <option value="text">📝 Текст</option>
+          <option value="voice">🔊 Голос</option>
+        </select>
+        <label>Категория</label>
+        <input type="text" x-model="discordChannelModal.category" placeholder="general">
+        <label>Тема</label>
+        <input type="text" x-model="discordChannelModal.topic" placeholder="О чём канал">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" @click="discordChannelModal.open = false">Отмена</button>
+        <button class="btn success" @click="createDiscordChannel()">Создать</button>
+      </div>
+    </div>
+  </div>
+</template>
 
 <!-- ===== Command palette ===== -->
 <template x-if="paletteOpen">
@@ -2344,6 +2633,13 @@ function jarvis() {
     // === Modals ===
     statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
     deleteModal: { open: false, card_id: '', card: {} },
+    // Discord-hub state
+    discordChannels: [],
+    discordActiveChannel: null,
+    discordMessages: [],
+    discordDraft: '',
+    discordInCall: false,
+    discordChannelModal: { open: false, name: '', type: 'text', category: 'general', topic: '' },
     detailModal: {
       open: false, card_id: '', loading: false, saving: false, flash: '',
       original: {}, draft: {},
@@ -2371,8 +2667,17 @@ function jarvis() {
       this.startCmdResultsPoller();
       this.refreshNotes();
       this.refreshOutreach();
+      this.refreshDiscordChannels();
       setInterval(() => this.refreshNotes(), 20000);
       setInterval(() => this.refreshOutreach(), 25000);
+      // Discord: каналы каждые 15 сек (для звонков и новых каналов),
+      // сообщения активного канала — каждые 5 сек
+      setInterval(() => this.refreshDiscordChannels(), 15000);
+      setInterval(() => {
+        if (this.currentView === 'discord' && this.discordActiveChannel) {
+          this.refreshDiscordMessages();
+        }
+      }, 5000);
     },
 
     startClock() {
@@ -2858,6 +3163,15 @@ function jarvis() {
       if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
         setTimeout(() => this.refresh(), 500);
       }
+      // Discord events — обновляем что нужно
+      if (t === 'discord-message' && p.channel_id) {
+        if (this.discordActiveChannel?.id === p.channel_id) {
+          setTimeout(() => this.refreshDiscordMessages(), 200);
+        }
+      }
+      if (['discord-channel-created','discord-channel-deleted','discord-call-join','discord-call-leave'].includes(t)) {
+        setTimeout(() => this.refreshDiscordChannels(), 200);
+      }
 
       // Lion narrator — озвучить важное событие
       this.lionNarrateEvent(ev);
@@ -3041,6 +3355,131 @@ function jarvis() {
         (c.supplier || '').toLowerCase().includes(q) ||
         (c.card_id || '').toLowerCase().includes(q)
       );
+    },
+
+    // ===== Discord hub =====
+    get discordCategories() {
+      const map = {};
+      for (const ch of this.discordChannels) {
+        const cat = ch.category || 'general';
+        if (!map[cat]) map[cat] = { name: cat, channels: [] };
+        map[cat].channels.push(ch);
+      }
+      // Сортируем категории: general → voice → остальные по имени
+      const order = ['general', 'voice'];
+      return Object.values(map).sort((a, b) => {
+        const ia = order.indexOf(a.name), ib = order.indexOf(b.name);
+        if (ia >= 0 && ib >= 0) return ia - ib;
+        if (ia >= 0) return -1;
+        if (ib >= 0) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    },
+
+    async refreshDiscordChannels() {
+      try {
+        const r = await fetch('/api/discord/channels', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.discordChannels = data.channels || [];
+          // Если активный канал ещё существует — обнови его call-info
+          if (this.discordActiveChannel) {
+            const cur = this.discordChannels.find(c => c.id === this.discordActiveChannel.id);
+            if (cur) this.discordActiveChannel = cur;
+          }
+          // Авто-выбор первого текстового канала если ничего не открыто
+          if (!this.discordActiveChannel && this.discordChannels.length > 0) {
+            const first = this.discordChannels.find(c => c.type === 'text') || this.discordChannels[0];
+            if (first) await this.openDiscordChannel(first);
+          }
+        }
+      } catch (e) { console.warn('discord channels failed', e); }
+    },
+
+    async openDiscordChannel(ch) {
+      this.discordActiveChannel = ch;
+      this.discordMessages = [];
+      this.discordInCall = false;
+      if (ch.type === 'text') await this.refreshDiscordMessages();
+    },
+
+    async refreshDiscordMessages() {
+      if (!this.discordActiveChannel) return;
+      try {
+        const r = await fetch(
+          `/api/discord/messages?channel_id=${encodeURIComponent(this.discordActiveChannel.id)}&limit=100`,
+          { credentials: 'include' },
+        );
+        if (r.ok) {
+          const data = await r.json();
+          this.discordMessages = data.messages || [];
+          // Прокрутка в конец
+          this.$nextTick(() => {
+            const el = this.$refs.dcMessages;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
+      } catch (e) { console.warn('discord msgs failed', e); }
+    },
+
+    async sendDiscordMessage() {
+      const text = (this.discordDraft || '').trim();
+      if (!text || !this.discordActiveChannel) return;
+      try {
+        const r = await fetch('/api/discord/messages', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel_id: this.discordActiveChannel.id,
+            text: text,
+          }),
+        });
+        if (r.ok) {
+          this.discordDraft = '';
+          this.playBeep(900);
+          await this.refreshDiscordMessages();
+        }
+      } catch (e) { console.warn('send discord msg failed', e); }
+    },
+
+    openCreateChannel() {
+      this.discordChannelModal = {
+        open: true, name: '', type: 'text', category: 'general', topic: '',
+      };
+    },
+
+    async createDiscordChannel() {
+      const { name, type, category, topic } = this.discordChannelModal;
+      if (!name.trim()) return;
+      try {
+        const r = await fetch('/api/discord/channels', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), type, category: category.trim() || 'general', topic: topic.trim() }),
+        });
+        if (r.ok) {
+          this.discordChannelModal.open = false;
+          await this.refreshDiscordChannels();
+        }
+      } catch (e) { console.warn('create channel failed', e); }
+    },
+
+    async toggleDiscordCall() {
+      if (!this.discordActiveChannel) return;
+      const endpoint = this.discordInCall ? 'leave' : 'join';
+      try {
+        const r = await fetch(
+          `/api/discord/calls/${encodeURIComponent(this.discordActiveChannel.id)}/${endpoint}`,
+          { method: 'POST', credentials: 'include' },
+        );
+        if (r.ok) {
+          this.discordInCall = !this.discordInCall;
+          this.playBeep(this.discordInCall ? 700 : 300);
+          await this.refreshDiscordChannels();
+        }
+      } catch (e) { console.warn('discord call toggle failed', e); }
     },
 
     // === Control actions ===

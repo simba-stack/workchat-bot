@@ -775,6 +775,30 @@ async def api_managers(_: None = Depends(_auth)):
             online = "idle"
         else:
             online = "offline"
+        # Подсчёт тегов / ответов на теги по этому юзернейму
+        tags_received = 0
+        replies_to_tags = 0
+        try:
+            esc_tags = storage.state.get("escalation_tags") or {}
+            for _chat_key, by_spec in esc_tags.items():
+                e = by_spec.get(uname) or {}
+                tags_received += int(e.get("tags_total") or 0)
+                replies_to_tags += int(e.get("replies_total") or 0)
+        except Exception:
+            pass
+        # AI escalate-stats — сколько раз AI вызывал именно этого менеджера
+        ai_escalated = 0
+        try:
+            est = storage.state.get("escalate_stats") or {}
+            by_spec = est.get("by_specialist") or {}
+            ai_escalated = int(by_spec.get(uname) or 0)
+        except Exception:
+            pass
+        # Response rate: насколько часто менеджер отвечает на теги (0..1)
+        resp_rate = (
+            round(replies_to_tags / tags_received, 2)
+            if tags_received > 0 else None
+        )
         out.append({
             "username": uname,
             "role": r.get("role") or "—",
@@ -783,6 +807,10 @@ async def api_managers(_: None = Depends(_auth)):
             "chats_touched": int(s.get("chats_touched") or 0),
             "payments_made": int(s.get("payments_made") or 0),
             "lk_completed": int(s.get("lk_completed") or 0),
+            "tags_received": tags_received,
+            "replies_to_tags": replies_to_tags,
+            "response_rate": resp_rate,
+            "ai_escalated": ai_escalated,
             "last_active_ts": last,
             "idle_sec": idle_sec,
             "online": online,
@@ -791,6 +819,211 @@ async def api_managers(_: None = Depends(_auth)):
     online_priority = {"online": 0, "idle": 1, "offline": 2}
     out.sort(key=lambda x: (online_priority[x["online"]], -x["messages"]))
     return {"managers": out, "total": len(out)}
+
+
+# ===== DISCORD-LIKE HUB API =====
+
+class DiscordChannelReq(BaseModel):
+    name: str
+    type: str = "text"
+    category: str = "general"
+    topic: str = ""
+
+
+class DiscordMessageReq(BaseModel):
+    channel_id: str
+    text: str = ""
+    reply_to: Optional[str] = None
+    attachments: Optional[list] = None
+    mentions: Optional[list] = None
+
+
+@app.get("/api/discord/channels")
+async def api_discord_channels(_: None = Depends(_auth)):
+    """Список каналов внутреннего хаба админов."""
+    storage.reload_sync()
+    channels = storage.list_discord_channels()
+    # Авто-создание дефолтных каналов при первом запросе
+    if not channels:
+        await storage.add_discord_channel(
+            "общий", "text", "general", "Общий чат админов",
+            created_by="system",
+        )
+        await storage.add_discord_channel(
+            "выплаты", "text", "general", "Координация выплат",
+            created_by="system",
+        )
+        await storage.add_discord_channel(
+            "ЛК-перевязки", "text", "general", "Обсуждение перевязок",
+            created_by="system",
+        )
+        await storage.add_discord_channel(
+            "переговорка", "voice", "voice", "Голосовая комната для созвонов",
+            created_by="system",
+        )
+        channels = storage.list_discord_channels()
+    # Добавляем активность звонков
+    calls = storage.list_discord_calls()
+    for ch in channels:
+        ch["call"] = calls.get(ch["id"])
+    return {"channels": channels}
+
+
+@app.post("/api/discord/channels")
+async def api_discord_create_channel(
+    req: DiscordChannelReq, _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    cid = await storage.add_discord_channel(
+        name=req.name, ch_type=req.type, category=req.category,
+        topic=req.topic, created_by="dashboard",
+    )
+    try:
+        event_bus.emit_event(
+            "discord-channel-created",
+            {"channel_id": cid, "name": req.name, "type": req.type},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "channel_id": cid}
+
+
+@app.delete("/api/discord/channels/{channel_id}")
+async def api_discord_delete_channel(channel_id: str, _: None = Depends(_auth)):
+    storage.reload_sync()
+    ok = await storage.delete_discord_channel(channel_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="channel not found")
+    try:
+        event_bus.emit_event(
+            "discord-channel-deleted", {"channel_id": channel_id},
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.get("/api/discord/messages")
+async def api_discord_messages(
+    channel_id: str,
+    limit: int = 100,
+    before_ts: Optional[float] = None,
+    _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    msgs = storage.list_discord_messages(
+        channel_id, limit=max(1, min(limit, 500)), before_ts=before_ts,
+    )
+    return {"messages": msgs, "channel_id": channel_id}
+
+
+@app.post("/api/discord/messages")
+async def api_discord_send_message(
+    req: DiscordMessageReq, request: Request, _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    if not req.channel_id:
+        raise HTTPException(status_code=400, detail="channel_id required")
+    text = (req.text or "").strip()
+    if not text and not req.attachments:
+        raise HTTPException(status_code=400, detail="text or attachments required")
+    # Резолвим автора из cookie/сессии
+    author = "admin"
+    try:
+        cookie = request.cookies.get("tg_user")
+        if cookie:
+            data = json.loads(cookie) if cookie.startswith("{") else {}
+            author = (
+                data.get("username") or data.get("first_name") or "admin"
+            )
+    except Exception:
+        pass
+    msg = await storage.add_discord_message(
+        channel_id=req.channel_id,
+        author=author,
+        text=text,
+        attachments=req.attachments or [],
+        mentions=req.mentions or [],
+        reply_to=req.reply_to,
+    )
+    try:
+        event_bus.emit_event(
+            "discord-message",
+            {
+                "channel_id": req.channel_id,
+                "message_id": msg["id"],
+                "author": msg["author"],
+                "short": text[:160],
+            },
+        )
+    except Exception:
+        pass
+    return {"ok": True, "message": msg}
+
+
+@app.delete("/api/discord/messages/{message_id}")
+async def api_discord_delete_message(
+    message_id: str, _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    ok = await storage.delete_discord_message(message_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="message not found")
+    try:
+        event_bus.emit_event(
+            "discord-message-deleted", {"message_id": message_id},
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/discord/calls/{channel_id}/join")
+async def api_discord_call_join(
+    channel_id: str, request: Request, _: None = Depends(_auth),
+):
+    user = "admin"
+    try:
+        cookie = request.cookies.get("tg_user")
+        if cookie:
+            data = json.loads(cookie) if cookie.startswith("{") else {}
+            user = data.get("username") or data.get("first_name") or "admin"
+    except Exception:
+        pass
+    entry = await storage.discord_call_join(channel_id, user)
+    try:
+        event_bus.emit_event(
+            "discord-call-join",
+            {"channel_id": channel_id, "user": user,
+             "participants": entry.get("participants") or []},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "call": entry}
+
+
+@app.post("/api/discord/calls/{channel_id}/leave")
+async def api_discord_call_leave(
+    channel_id: str, request: Request, _: None = Depends(_auth),
+):
+    user = "admin"
+    try:
+        cookie = request.cookies.get("tg_user")
+        if cookie:
+            data = json.loads(cookie) if cookie.startswith("{") else {}
+            user = data.get("username") or data.get("first_name") or "admin"
+    except Exception:
+        pass
+    entry = await storage.discord_call_leave(channel_id, user)
+    try:
+        event_bus.emit_event(
+            "discord-call-leave",
+            {"channel_id": channel_id, "user": user,
+             "participants": entry.get("participants") or []},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "call": entry}
 
 
 # === Sparklines (per-day series for any metric) ===

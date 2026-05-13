@@ -145,6 +145,20 @@ def _default_state() -> dict:
         # Userbot периодически опрашивает, выполняет и помечает done=True.
         # Структура: [{id, ts, text, status, result, source}, ...]
         "dashboard_commands": [],
+        # Антиспам теги менеджеров в work-чатах.
+        # Структура: {chat_id_norm: {specialist_uname: {last_tag_ts,
+        #   last_reply_ts, reason_last, tags_total, replies_total}}}
+        "escalation_tags": {},
+        # === Discord-like: внутренний хаб для админов ===
+        # Каналы и сообщения. Голос — отдельно через WebRTC (next iteration).
+        # Структура каналов: {id: {name, type ("text"|"voice"), category,
+        #   topic, created_at, created_by}}
+        "discord_channels": {},
+        # Сообщения: [{id, channel_id, ts, author, author_avatar, text,
+        #              attachments[], mentions[], reply_to}]
+        "discord_messages": [],
+        # Активные звонки: {channel_id: {started_at, participants[]}}
+        "discord_calls": {},
         # Заметки от LEO (через голосовой чат или вручную через API).
         # Структура: [{id, ts, category, priority, text, source, author,
         #              tags[], synced_to_knowledge: bool, knowledge_url}]
@@ -604,6 +618,204 @@ class Storage:
             if responded:
                 stats["relevance_responded"] = int(stats.get("relevance_responded", 0)) + responded
             await self._save_unlocked()
+
+    # === Антиспам тегов менеджеров ===
+
+    def get_escalation_tag_state(self, chat_id, specialist: str) -> dict:
+        """Состояние тега менеджера в конкретном чате."""
+        key_chat = _norm_chat_id(chat_id)
+        uname = (specialist or "").lstrip("@").lower().strip()
+        per_chat = (self.state.get("escalation_tags") or {}).get(key_chat) or {}
+        return dict(per_chat.get(uname) or {})
+
+    async def can_tag_specialist(
+        self, chat_id, specialist: str, cooldown_sec: int = 300,
+    ) -> tuple[bool, str]:
+        """Можно ли тегать менеджера в этом чате прямо сейчас?
+
+        Правила (строгие):
+        1. Менеджер ответил после последнего тега → нельзя (он уже здесь)
+        2. С последнего тега прошло < cooldown_sec (5 мин) → нельзя
+        Returns: (can_tag, reason). reason описывает почему отказ.
+        """
+        st = self.get_escalation_tag_state(chat_id, specialist)
+        if not st:
+            return (True, "")
+        last_tag_ts = float(st.get("last_tag_ts") or 0)
+        last_reply_ts = float(st.get("last_reply_ts") or 0)
+        now = time.time()
+        if last_reply_ts > last_tag_ts:
+            return (False, f"manager already replied {int(now - last_reply_ts)}s ago")
+        elapsed = now - last_tag_ts
+        if elapsed < cooldown_sec:
+            return (False, f"cooldown {int(cooldown_sec - elapsed)}s left")
+        return (True, "")
+
+    async def record_specialist_tag(
+        self, chat_id, specialist: str, reason: str = "",
+    ):
+        """Фиксирует факт тега менеджера в чате."""
+        key_chat = _norm_chat_id(chat_id)
+        uname = (specialist or "").lstrip("@").lower().strip()
+        if not uname:
+            return
+        async with _lock:
+            tags = self.state.setdefault("escalation_tags", {})
+            per_chat = tags.setdefault(key_chat, {})
+            entry = per_chat.setdefault(uname, {})
+            entry["last_tag_ts"] = time.time()
+            entry["reason_last"] = (reason or "")[:200]
+            entry["tags_total"] = int(entry.get("tags_total", 0)) + 1
+            await self._save_unlocked()
+
+    async def record_specialist_reply(self, chat_id, specialist: str):
+        """Фиксирует факт ответа менеджера в чате — сбрасывает cooldown."""
+        key_chat = _norm_chat_id(chat_id)
+        uname = (specialist or "").lstrip("@").lower().strip()
+        if not uname:
+            return
+        async with _lock:
+            tags = self.state.setdefault("escalation_tags", {})
+            per_chat = tags.setdefault(key_chat, {})
+            entry = per_chat.setdefault(uname, {})
+            entry["last_reply_ts"] = time.time()
+            entry["replies_total"] = int(entry.get("replies_total", 0)) + 1
+            await self._save_unlocked()
+
+    # === Discord-like хаб для админов ===
+
+    async def add_discord_channel(
+        self, name: str, ch_type: str = "text", category: str = "general",
+        topic: str = "", created_by: str = "",
+    ) -> str:
+        """Создать канал. Возвращает channel_id."""
+        cid = f"ch{int(time.time() * 1000)}"
+        async with _lock:
+            chs = self.state.setdefault("discord_channels", {})
+            chs[cid] = {
+                "id": cid,
+                "name": (name or "новый").strip(),
+                "type": ch_type if ch_type in ("text", "voice") else "text",
+                "category": (category or "general").strip(),
+                "topic": (topic or "").strip(),
+                "created_at": time.time(),
+                "created_by": (created_by or "").lstrip("@"),
+            }
+            await self._save_unlocked()
+            return cid
+
+    def list_discord_channels(self) -> list:
+        chs = (self.state.get("discord_channels") or {}).values()
+        return sorted(chs, key=lambda c: (c.get("category", ""), c.get("name", "")))
+
+    async def delete_discord_channel(self, channel_id: str) -> bool:
+        async with _lock:
+            chs = self.state.get("discord_channels") or {}
+            if channel_id not in chs:
+                return False
+            del chs[channel_id]
+            # Удалим сообщения этого канала
+            msgs = self.state.get("discord_messages") or []
+            self.state["discord_messages"] = [
+                m for m in msgs if m.get("channel_id") != channel_id
+            ]
+            await self._save_unlocked()
+            return True
+
+    async def add_discord_message(
+        self, channel_id: str, author: str, text: str = "",
+        attachments: Optional[list] = None,
+        mentions: Optional[list] = None,
+        reply_to: Optional[str] = None,
+        author_avatar: str = "",
+    ) -> dict:
+        """Добавить сообщение в канал. Возвращает созданный entry."""
+        msg = {
+            "id": f"msg{int(time.time() * 1000)}",
+            "channel_id": channel_id,
+            "ts": time.time(),
+            "author": (author or "system").lstrip("@"),
+            "author_avatar": author_avatar or "",
+            "text": (text or "").strip(),
+            "attachments": list(attachments or []),
+            "mentions": list(mentions or []),
+            "reply_to": reply_to,
+            "edited": False,
+        }
+        async with _lock:
+            msgs = self.state.setdefault("discord_messages", [])
+            msgs.append(msg)
+            # Cap: храним максимум 5000 последних сообщений (защита от роста)
+            if len(msgs) > 5000:
+                self.state["discord_messages"] = msgs[-5000:]
+            await self._save_unlocked()
+            return msg
+
+    def list_discord_messages(
+        self, channel_id: str, limit: int = 100, before_ts: Optional[float] = None,
+    ) -> list:
+        msgs = self.state.get("discord_messages") or []
+        filtered = [m for m in msgs if m.get("channel_id") == channel_id]
+        if before_ts:
+            filtered = [m for m in filtered if (m.get("ts") or 0) < before_ts]
+        filtered.sort(key=lambda m: m.get("ts") or 0)
+        return filtered[-limit:] if limit else filtered
+
+    async def delete_discord_message(self, message_id: str) -> bool:
+        async with _lock:
+            msgs = self.state.get("discord_messages") or []
+            before = len(msgs)
+            self.state["discord_messages"] = [
+                m for m in msgs if m.get("id") != message_id
+            ]
+            changed = len(self.state["discord_messages"]) < before
+            if changed:
+                await self._save_unlocked()
+            return changed
+
+    async def edit_discord_message(self, message_id: str, new_text: str) -> bool:
+        async with _lock:
+            msgs = self.state.get("discord_messages") or []
+            for m in msgs:
+                if m.get("id") == message_id:
+                    m["text"] = (new_text or "").strip()
+                    m["edited"] = True
+                    m["edited_at"] = time.time()
+                    await self._save_unlocked()
+                    return True
+            return False
+
+    async def discord_call_join(self, channel_id: str, user: str) -> dict:
+        """Зайти в голосовой канал. Возвращает обновлённое состояние."""
+        async with _lock:
+            calls = self.state.setdefault("discord_calls", {})
+            entry = calls.setdefault(channel_id, {
+                "channel_id": channel_id,
+                "started_at": time.time(),
+                "participants": [],
+            })
+            u = (user or "").lstrip("@")
+            if u and u not in entry["participants"]:
+                entry["participants"].append(u)
+            await self._save_unlocked()
+            return dict(entry)
+
+    async def discord_call_leave(self, channel_id: str, user: str) -> dict:
+        async with _lock:
+            calls = self.state.setdefault("discord_calls", {})
+            entry = calls.get(channel_id) or {}
+            if entry:
+                u = (user or "").lstrip("@")
+                entry["participants"] = [
+                    p for p in (entry.get("participants") or []) if p != u
+                ]
+                if not entry["participants"]:
+                    calls.pop(channel_id, None)
+                await self._save_unlocked()
+            return dict(entry)
+
+    def list_discord_calls(self) -> dict:
+        return dict(self.state.get("discord_calls") or {})
 
     async def remove_managed_chat(self, chat_id) -> bool:
         """Удаляет чат из managed_chats — AI перестаёт там отвечать.

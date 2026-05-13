@@ -635,6 +635,12 @@ class UserbotService:
                     await storage.bump_manager(sender_username, "messages")
             except Exception:
                 pass
+            # Сбрасываем cooldown тега — менеджер пришёл и ответил
+            try:
+                if sender_username:
+                    await storage.record_specialist_reply(chat_id, sender_username)
+            except Exception as e:
+                logger.debug("record_specialist_reply failed: %s", e)
             # Команды админу: 'Ассистент добавь @x' / 'Ассистент выдай админку @x'.
             # Работают только в managed_chats (рабочие беседы клиентов).
             try:
@@ -1602,48 +1608,86 @@ class UserbotService:
         }
 
     async def _tool_escalate_to_team(self, work_chat_id, last_msg_id, specialist: str, reason: str, client_question: str) -> dict:
-        coord_id = storage.get_coordination_chat_id()
-        if not coord_id:
-            return {"status": "error", "error": "coordination_chat_not_set"}
+        """Тегнуть менеджера ПРЯМО В work-чате клиента (НЕ в координаторской).
 
-        allowed = {"TimonSkupCL", "pride_sys01", "pride_manager1"}
+        Жёсткие правила анти-спама:
+        1. Если менеджер уже отвечал в чате после последнего тега → не тегаем
+        2. С последнего тега прошло < 5 мин → не тегаем
+        3. Тегаем без кучи деталей — только «@spec — нужна помощь» + краткая причина
+
+        Если тегнуть нельзя — возвращаем status=skipped с пояснением.
+        AI должен ИНТЕРПРЕТИРОВАТЬ это как «менеджер уже знает / скоро ответит,
+        клиента просто заверь что ждём» вместо ретега."""
+        allowed = {"TimonSkupCL", "pride_sys01", "pride_manager1", "SIMBA_PRIDE_ADM"}
         spec = (specialist or "").lstrip("@").strip()
         if spec not in allowed:
             return {"status": "error", "error": f"unknown_specialist:{spec}"}
 
-        from storage import _norm_chat_id
-        bare = _norm_chat_id(work_chat_id)
-        chat_link = f"https://t.me/c/{bare}"
-        msg_link = f"{chat_link}/{last_msg_id}" if last_msg_id else chat_link
+        if not work_chat_id:
+            return {"status": "error", "error": "no_work_chat_id"}
+
+        # Анти-спам проверка
+        try:
+            can_tag, refusal = await storage.can_tag_specialist(
+                work_chat_id, spec, cooldown_sec=300,
+            )
+        except Exception as e:
+            logger.warning("can_tag_specialist failed: %s", e)
+            can_tag, refusal = (True, "")
+        if not can_tag:
+            logger.info(
+                "AI: escalate to @%s in chat=%s SKIPPED — %s",
+                spec, work_chat_id, refusal,
+            )
+            _e("escalation-skip", {
+                "specialist": spec,
+                "chat_id": work_chat_id,
+                "reason": refusal,
+            }, character="chat", severity="info")
+            return {
+                "status": "skipped",
+                "reason": refusal,
+                "specialist": spec,
+                "hint": (
+                    "Менеджер уже в курсе или скоро ответит. "
+                    "Клиенту скажи что ждём ответа специалиста, не тегай повторно."
+                ),
+            }
 
         info = storage.get_chat_info(work_chat_id) or {}
-        client_name = info.get("client_name") or "—"
-
-        text = (
-            f"🆘 @{spec}\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"<b>Причина:</b> {reason}\n\n"
-            f"<b>Клиент:</b> {client_name}\n"
-            f"<b>Вопрос клиента:</b>\n«{client_question}»\n\n"
-            f"📎 Сообщение: {msg_link}\n"
-            f"💬 Чат: {chat_link}"
-        )
+        client_name = (info.get("client_name") or "").strip()
+        # Лаконичный тег в work-чате: только @spec + ОДНА строка причины.
+        # Контекст клиент знает сам — он же в этом чате.
+        short_reason = (reason or "вопрос клиента").strip().rstrip(".").lower()
+        text = f"@{spec}, нужна помощь: {short_reason}."
         try:
-            target = await self._resolve_chat_target(coord_id)
-            await self.client.send_message(target, text, parse_mode="html", link_preview=False)
+            target = await self._resolve_chat_target(work_chat_id)
+            await self.client.send_message(
+                target, text, parse_mode="html", link_preview=False,
+            )
         except Exception as e:
             await storage.bump_escalate_stats(error=True)
             logger.warning("escalate send failed: %s", e)
             return {"status": "error", "step": "send", "error": str(e)}
 
+        await storage.record_specialist_tag(work_chat_id, spec, reason=reason)
         await storage.bump_escalate_stats(specialist=spec)
-        logger.info("AI escalated to @%s in coord_chat=%s", spec, coord_id)
+        logger.info(
+            "AI tagged @%s directly in work_chat=%s reason=%s",
+            spec, work_chat_id, (reason or "")[:60],
+        )
         _e("escalation", {
             "specialist": spec,
             "reason": reason,
+            "chat_id": work_chat_id,
+            "client_name": client_name,
             "client_question": (client_question or "")[:120],
         }, character="chat", severity="warning")
-        return {"status": "ok", "specialist": spec, "coord_chat": coord_id, "msg_link": msg_link}
+        return {
+            "status": "ok",
+            "specialist": spec,
+            "work_chat_id": work_chat_id,
+        }
 
     # === Tools для системы учёта сделок ===
 
