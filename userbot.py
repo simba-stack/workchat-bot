@@ -107,6 +107,57 @@ def _is_silence_announcement(text: str) -> bool:
     return False
 
 
+# Запрещённые темы в ответах клиенту (блок / отказ / самообвинение / спекуляции
+# про команду). Если хоть один паттерн матчится — ответ не отправляется,
+# AI принудительно молчит. См. knowledge/policy.md секция «ЗАПРЕЩЁННЫЕ ТЕМЫ».
+_FORBIDDEN_CLIENT_PATTERNS = [
+    # Самообвинение / брак на нашей стороне
+    r"\bбрак\s+на\s+нашей\s+сторон\w*",
+    r"\bнаша\s+ошибк\w*",
+    r"\bнаш\s+косяк\b",
+    r"\bмы\s+виноват\w*",
+    r"\bу\s+нас\s+(?:произош\w+|сбой|проблем\w*)",
+    r"\bпроизошёл\s+(?:критическ\w+\s+)?сбой\s+в\s+систем\w*",
+    r"\bошибк\w*\s+при\s+обработк\w*",
+    # Невозможные обещания (пересдача отклонённых счетов и т.п.)
+    r"\bпересда(?:ть|ча|чу|чи|дим|дите|м|йте)\b",
+    r"\bпересда\w*\s+счет\w*",
+    r"\bповторит\w*\s+перевязк\w*",
+    r"\bвзять\s+(?:их\s+)?снова\b",
+    # Технические спекуляции про команду
+    r"\bоперационист\w+\s+(?:не\s+)?(?:взял\w*|должн\w*|смог\w*)",
+    r"\bтехническ\w+\s+перевязан\w*\s+но\s+платеж\w*",
+    r"\b(?:тимон|@?timon\w*)\s+(?:точно\s+)?в\s+курсе\??",
+    r"\b(?:тимон|@?timon\w*)\s+должен\s+был",
+    r"\bчто\s+говорит\s+(?:тимон|@?timon\w*)",
+    r"\bпочему\s+(?:тимон|@?timon\w*)\s+не\s+(?:заметил|написал|сообщил)",
+    # Обещания компенсаций
+    r"\b(?:возврат|компенсаци\w+|переоценк\w*\s+потер\w+)\s+(?:если|и\s+|или)",
+    # Извинения за выдуманные сбои
+    r"\bвозможно\s+операционист\w+",
+    r"\bможет\s+быть\s+(?:блокировк\w*|сбой|баг)",
+]
+_FORBIDDEN_RX = [
+    re.compile(p, re.IGNORECASE | re.MULTILINE)
+    for p in _FORBIDDEN_CLIENT_PATTERNS
+]
+
+
+def _has_forbidden_topic(text: str) -> tuple:
+    """Возвращает (True, matched_pattern) если в тексте есть запрещённая
+    тема для клиентского чата. Иначе (False, "")."""
+    if not text:
+        return (False, "")
+    stripped = text.strip()
+    if len(stripped) < 6:
+        return (False, "")
+    for rx in _FORBIDDEN_RX:
+        m = rx.search(stripped)
+        if m:
+            return (True, rx.pattern)
+    return (False, "")
+
+
 def _split_text(text: str, limit: int = 3900) -> list:
     """Split long text into chunks <= limit. Tries to break on newlines/spaces."""
     if len(text) <= limit:
@@ -1099,6 +1150,24 @@ class UserbotService:
                 "chat_id": chat_id,
                 "short": reply[:120],
             }, severity="warning")
+            return
+
+        # 🔴🔴🔴 ФИЛЬТР: запрещённые темы (брак на нашей стороне, пересдача
+        # отклонённых счетов, спекуляции про сотрудников, обещания компенсаций).
+        # Полный список — knowledge/policy.md «ЗАПРЕЩЁННЫЕ ТЕМЫ В ОТВЕТАХ КЛИЕНТУ».
+        # Если матчится — НЕ отправляем (молчим) и фиксируем для метрики.
+        has_forbidden, forbidden_pat = _has_forbidden_topic(reply)
+        if has_forbidden:
+            logger.warning(
+                "AI: chat=%s — ЗАБЛОКИРОВАН ответ с запрещённой темой "
+                "(pat=%r) %.80s...",
+                chat_id, forbidden_pat, reply.strip(),
+            )
+            _e("ai-forbidden-topic-blocked", {
+                "chat_id": chat_id,
+                "pattern": forbidden_pat,
+                "short": reply[:200],
+            }, severity="error")
             return
 
         try:
