@@ -360,6 +360,185 @@
     flex-direction: column;
     gap: 14px;
   }
+  /* === Vкладки/views === */
+  .view-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 14px;
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.18);
+  }
+  .view-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-dim);
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    font-family: inherit;
+  }
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active {
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    border-color: rgba(var(--primary-rgb), 0.4);
+  }
+
+  /* === Furniture (столы, стулья, компы) === */
+  .furniture {
+    position: absolute;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .desk {
+    position: absolute;
+    width: 90px; height: 30px;
+    bottom: 22%;
+    transform: translateX(-50%);
+  }
+  .desk .desk-top {
+    position: absolute;
+    bottom: 18px;
+    left: 0; right: 0; height: 6px;
+    background: linear-gradient(180deg, rgba(40,52,80,0.95) 0%, rgba(20,28,48,0.9) 100%);
+    border-top: 1px solid rgba(var(--primary-rgb), 0.4);
+    border-bottom: 1px solid rgba(0,0,0,0.5);
+    border-radius: 2px;
+  }
+  .desk .desk-leg-l, .desk .desk-leg-r {
+    position: absolute; bottom: 0;
+    width: 4px; height: 18px;
+    background: rgba(30,40,60,0.9);
+    border-left: 1px solid rgba(var(--primary-rgb), 0.2);
+  }
+  .desk .desk-leg-l { left: 8px; }
+  .desk .desk-leg-r { right: 8px; }
+  .desk .monitor {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px; height: 24px;
+    background: rgba(8,14,30,0.95);
+    border: 2px solid rgba(60,70,90,0.9);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .desk .monitor::before {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    background: linear-gradient(135deg, currentColor 0%, rgba(0,0,0,0.4) 60%, currentColor 100%);
+    background-size: 200% 200%;
+    opacity: 0.6;
+    animation: screen-flicker 4s ease-in-out infinite;
+  }
+  .desk .monitor::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 14px; height: 3px;
+    background: rgba(60,70,90,0.9);
+    border-radius: 0 0 2px 2px;
+  }
+  .desk .monitor.chat-mon       { color: var(--hud-secondary); }
+  .desk .monitor.lk-mon         { color: var(--hud-accent); }
+  .desk .monitor.fin-mon        { color: var(--hud-emerald); }
+  @keyframes screen-flicker {
+    0%, 100% { background-position: 0% 0%; opacity: 0.5; }
+    50%      { background-position: 100% 100%; opacity: 0.8; }
+  }
+  /* Стул */
+  .chair {
+    position: absolute;
+    bottom: 8%;
+    width: 24px; height: 30px;
+    transform: translateX(-50%);
+  }
+  .chair .seat {
+    position: absolute;
+    bottom: 12px;
+    left: 0; right: 0;
+    height: 4px;
+    background: rgba(45,55,75,0.95);
+    border-radius: 1px;
+  }
+  .chair .back {
+    position: absolute;
+    bottom: 14px;
+    left: 50%; transform: translateX(-50%);
+    width: 18px; height: 14px;
+    background: rgba(35,45,65,0.95);
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    border-radius: 1px 1px 0 0;
+  }
+  .chair .stand {
+    position: absolute;
+    bottom: 4px;
+    left: 50%; transform: translateX(-50%);
+    width: 2px; height: 10px;
+    background: rgba(40,50,70,0.9);
+  }
+  .chair .wheels {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 4px;
+  }
+  .chair .wheels::before, .chair .wheels::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: rgba(30,40,60,0.9);
+  }
+  .chair .wheels::before { left: 0; }
+  .chair .wheels::after  { right: 0; }
+
+  /* Кликабельный человечек */
+  .walker.clickable {
+    cursor: pointer;
+    transition: filter 0.3s;
+  }
+  .walker.clickable:hover svg {
+    filter: drop-shadow(0 0 14px var(--hud-primary)) brightness(1.2);
+  }
+  .walker.clickable:hover .walker-name {
+    color: var(--hud-primary);
+    text-shadow: 0 0 12px currentColor;
+  }
+  /* Hover-подсказка */
+  .walker-hint {
+    position: absolute;
+    top: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(8,14,30,0.95);
+    border: 1px solid var(--hud-primary);
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-size: 10px;
+    color: var(--hud-primary);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .walker.clickable:hover .walker-hint { opacity: 1; }
+  .walker-hint::after {
+    content: '';
+    position: absolute;
+    bottom: -5px; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--hud-primary);
+  }
+
   .office-stage {
     position: relative;
     aspect-ratio: 16 / 9;
@@ -1013,11 +1192,21 @@
     <div class="stat-pill" :class="state.stats.ai_enabled ? '' : 'offline'" @click="toggleAI()">
       <span x-text="'AI ' + (state.stats.ai_enabled ? 'ON' : 'OFF')"></span>
     </div>
+    <div class="stat-pill" @click="goToView('office')" :class="currentView === 'office' ? 'active' : ''" title="Главная">🏢</div>
     <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
     <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 LOGOUT</div>
     <div class="stat-pill"><span x-text="clockText"></span></div>
   </div>
 </header>
+
+<!-- TABS -->
+<nav class="view-tabs">
+  <button class="view-tab" :class="currentView === 'office' ? 'active' : ''" @click="goToView('office')">🏢 Office</button>
+  <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Chat Dept</button>
+  <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 LK Dept</button>
+  <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Finance Dept</button>
+  <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
+</nav>
 
 <!-- ANOMALY BAR -->
 <template x-for="a in anomalies" :key="a.code">
@@ -1033,7 +1222,7 @@
   <!-- LEFT -->
   <aside class="space-y-4">
     <!-- ===== JARVIS CORE SPHERE ===== -->
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
         JARVIS CORE
         <span class="badge-mini" x-text="voiceActive ? 'LIVE' : 'STANDBY'"></span>
@@ -1123,7 +1312,7 @@
     </div>
 
     <!-- ===== COMMAND CHAT ===== -->
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
         Command Console
         <span class="badge-mini">FREE-FORM</span>
@@ -1148,7 +1337,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'chat'">
       <div class="panel-title">
         Communications
         <span class="badge-mini" x-text="state.stats.ai.replies_total || 0"></span>
@@ -1178,7 +1367,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'chat'">
       <div class="panel-title">
         Воронка · 7 дней
         <span class="badge-mini">CONVERSION</span>
@@ -1194,7 +1383,7 @@
       </template>
     </div>
 
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'chat'">
       <div class="panel-title">
         Last AI reply
         <span class="badge-mini" x-text="lastReply.ts ? fmtTime(lastReply.ts) : '—'"></span>
@@ -1208,7 +1397,7 @@
 
   <!-- CENTER -->
   <section class="central-office">
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'office'">
       <div class="panel-title">
         Operations Floor
         <span class="badge-mini">REAL-TIME</span>
@@ -1222,6 +1411,44 @@
         <div class="zone-divider left"></div>
         <div class="zone-divider right"></div>
 
+        <!-- Furniture: столы, стулья, мониторы в 3 зонах -->
+        <div class="desk" style="left: 16%;">
+          <div class="monitor chat-mon"></div>
+          <div class="desk-top"></div>
+          <div class="desk-leg-l"></div>
+          <div class="desk-leg-r"></div>
+        </div>
+        <div class="chair" style="left: 16%;">
+          <div class="back"></div>
+          <div class="seat"></div>
+          <div class="stand"></div>
+          <div class="wheels"></div>
+        </div>
+        <div class="desk" style="left: 50%;">
+          <div class="monitor lk-mon"></div>
+          <div class="desk-top"></div>
+          <div class="desk-leg-l"></div>
+          <div class="desk-leg-r"></div>
+        </div>
+        <div class="chair" style="left: 50%;">
+          <div class="back"></div>
+          <div class="seat"></div>
+          <div class="stand"></div>
+          <div class="wheels"></div>
+        </div>
+        <div class="desk" style="left: 82%;">
+          <div class="monitor fin-mon"></div>
+          <div class="desk-top"></div>
+          <div class="desk-leg-l"></div>
+          <div class="desk-leg-r"></div>
+        </div>
+        <div class="chair" style="left: 82%;">
+          <div class="back"></div>
+          <div class="seat"></div>
+          <div class="stand"></div>
+          <div class="wheels"></div>
+        </div>
+
         <!-- Client dots (mini-map) -->
         <template x-for="(d, i) in clientDots" :key="i">
           <div class="client-dot"
@@ -1231,7 +1458,8 @@
         </template>
 
         <!-- Walker AI-CHAT -->
-        <div class="walker" :class="chars.chat.state" :style="'left: ' + chars.chat.x + '%;'" @click="characterClick('chat')">
+        <div class="walker clickable" :class="chars.chat.state" :style="'left: ' + chars.chat.x + '%;'" @click="characterClick('chat')">
+          <div class="walker-hint">→ Chat Dept</div>
           <div class="walker-name">AI-CHAT</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -1249,7 +1477,8 @@
         </div>
 
         <!-- Walker AI-LK -->
-        <div class="walker" :class="chars.lk.state" :style="'left: ' + chars.lk.x + '%;'" @click="characterClick('lk')">
+        <div class="walker clickable" :class="chars.lk.state" :style="'left: ' + chars.lk.x + '%;'" @click="characterClick('lk')">
+          <div class="walker-hint">→ LK Dept</div>
           <div class="walker-name">AI-LK</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -1267,7 +1496,8 @@
         </div>
 
         <!-- Walker AI-FIN -->
-        <div class="walker" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
+        <div class="walker clickable" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
+          <div class="walker-hint">→ Finance Dept</div>
           <div class="walker-name">AI-FIN</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -1295,7 +1525,7 @@
     </div>
 
     <!-- LK Cards -->
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'lk'">
       <div class="panel-title">
         LK Cards · live
         <span class="badge-mini" x-text="filteredCards.length + ' / ' + (state.stats.lk_cards_total || 0)"></span>
@@ -1329,7 +1559,7 @@
 
   <!-- RIGHT -->
   <aside class="space-y-4">
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'fin'">
       <div class="panel-title">
         Финансы
         <span class="badge-mini">MARGIN</span>
@@ -1360,7 +1590,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'fin'">
       <div class="panel-title">
         Operators
         <span class="badge-mini" x-text="managers.length + ' active'"></span>
@@ -1391,7 +1621,7 @@
     </div>
 
     <!-- ===== BRAIN NOTES (LEO) ===== -->
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="['lk','fin'].includes(currentView)">
       <div class="panel-title">
         Brain Notes
         <span class="badge-mini" x-text="(notesPreview.length) + (notesPreview.length > 0 ? ' · LEO' : '')"></span>
@@ -1451,7 +1681,7 @@
     </div>
 
     <!-- ===== OUTREACH ===== -->
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'fin'">
       <div class="panel-title">
         Outreach
         <span class="badge-mini" x-text="outreachCampaigns.length + ' camp · ' + outreachBots.length + ' bots'"></span>
@@ -1688,6 +1918,8 @@ function jarvis() {
   return {
     booted: false,
     bootStatus: 'CONNECTING',
+    // Vкладки: office (главная — сцена) / chat / lk / fin
+    currentView: (window.location.hash || '#office').replace('#', '') || 'office',
     theme: localStorage.getItem('jarvis-theme') || 'jarvis',
     soundOn: localStorage.getItem('jarvis-sound') === '1',
     state: {
@@ -1808,6 +2040,10 @@ function jarvis() {
       this.generateClientDots();
       this.initLion();
       if (this.soundOn) this.initAudio();
+      // Router — реагируем на смену хеша
+      window.addEventListener('hashchange', () => {
+        this.currentView = (location.hash || '#office').replace('#', '') || 'office';
+      });
       this.startCmdResultsPoller();
       this.refreshNotes();
       this.refreshOutreach();
@@ -2348,16 +2584,15 @@ function jarvis() {
     },
 
     characterClick(key) {
+      // Кликаешь по человечку → переходишь в его департамент
       this.playBeep(900);
-      const messages = {
-        chat: ['готов помочь!', 'жду клиентов', 'AI online'],
-        lk:   ['слежу за ЛК', 'карточки в порядке', 'мониторю статусы'],
-        accounting: ['заявки в работе', 'считаю маржу', 'отчёты готовы'],
-      };
-      const c = this.chars[key];
-      const arr = messages[key] || [''];
-      c.bubble = arr[Math.floor(Math.random() * arr.length)];
-      setTimeout(() => { c.bubble = ''; }, 2500);
+      const viewMap = {chat: 'chat', lk: 'lk', accounting: 'fin'};
+      const view = viewMap[key];
+      if (view) this.goToView(view);
+    },
+    goToView(view) {
+      this.currentView = view;
+      location.hash = '#' + view;
     },
 
     generateClientDots() {
