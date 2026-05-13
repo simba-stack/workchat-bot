@@ -406,6 +406,17 @@ async def tg_callback(request: Request):
     # просто рендерил дашборд внутри popup — а родительское окно оставалось
     # на /login. Вместо редиректа отдаём HTML с JS-обработкой.
     cookie_val = _sign_session(uid)
+    # Сохраняем профиль админа (имя/аватарка/юзернейм) для Discord-хаба
+    try:
+        await storage.record_tg_user_info(
+            user_id=uid,
+            username=data.get("username", "") or "",
+            first_name=data.get("first_name", "") or "",
+            last_name=data.get("last_name", "") or "",
+            photo_url=data.get("photo_url", "") or "",
+        )
+    except Exception as e:
+        logger.warning("record_tg_user_info failed: %s", e)
     success_html = """<!DOCTYPE html><html><head>
 <meta charset='UTF-8'><title>JARVIS · auth ok</title>
 <style>
@@ -914,6 +925,10 @@ async def api_discord_messages(
     msgs = storage.list_discord_messages(
         channel_id, limit=max(1, min(limit, 500)), before_ts=before_ts,
     )
+    # Inline reactions for each message
+    all_reacts = storage.get_all_discord_reactions()
+    for m in msgs:
+        m["_reacts"] = all_reacts.get(m.get("id")) or {}
     return {"messages": msgs, "channel_id": channel_id}
 
 
@@ -927,23 +942,28 @@ async def api_discord_send_message(
     text = (req.text or "").strip()
     if not text and not req.attachments:
         raise HTTPException(status_code=400, detail="text or attachments required")
-    # Резолвим автора из cookie/сессии
-    author = "admin"
+    author = _resolve_discord_user(request)
+    # Загружаем avatar из TG-info
+    author_avatar = ""
     try:
-        cookie = request.cookies.get("tg_user")
-        if cookie:
-            data = json.loads(cookie) if cookie.startswith("{") else {}
-            author = (
-                data.get("username") or data.get("first_name") or "admin"
-            )
+        uid = _try_session_auth(request)
+        if uid:
+            info = storage.get_tg_user_info(uid) or {}
+            author_avatar = info.get("photo_url") or ""
     except Exception:
         pass
+    # Парсим mentions из текста если не переданы (@username, @ассистент)
+    mentions = req.mentions or []
+    if not mentions:
+        import re as _re_local
+        mentions = list(set(_re_local.findall(r"@([\w_]+)", text)))
     msg = await storage.add_discord_message(
         channel_id=req.channel_id,
         author=author,
+        author_avatar=author_avatar,
         text=text,
         attachments=req.attachments or [],
-        mentions=req.mentions or [],
+        mentions=mentions,
         reply_to=req.reply_to,
     )
     try:
@@ -978,52 +998,489 @@ async def api_discord_delete_message(
     return {"ok": True}
 
 
-@app.post("/api/discord/calls/{channel_id}/join")
-async def api_discord_call_join(
-    channel_id: str, request: Request, _: None = Depends(_auth),
+# Удалены legacy endpoints /api/discord/calls/{id}/{join|leave}.
+# Голосовые звонки теперь через WebSocket /ws-discord (см. ниже).
+
+
+# ===== /api/me — текущий админ для frontend =====
+
+@app.get("/api/me")
+async def api_me(request: Request, _: None = Depends(_auth)):
+    """Информация о текущем залогиненном админе:
+    user_id, username, first_name, photo_url. Используется Discord-хабом
+    для аватарок и для voice-сигналинга."""
+    uid = _try_session_auth(request)
+    if not uid:
+        # Basic-auth — нет TG-данных, возвращаем минимум
+        return {
+            "user_id": 0,
+            "username": "admin",
+            "first_name": "Admin",
+            "photo_url": "",
+            "auth_mode": "basic",
+        }
+    info = storage.get_tg_user_info(uid) or {}
+    return {
+        "user_id": uid,
+        "username": info.get("username") or "",
+        "first_name": info.get("first_name") or "",
+        "last_name": info.get("last_name") or "",
+        "photo_url": info.get("photo_url") or "",
+        "auth_mode": "telegram",
+    }
+
+
+# ===== Discord reactions + pins =====
+
+class DiscordReactionReq(BaseModel):
+    emoji: str
+
+
+@app.post("/api/discord/messages/{message_id}/reactions")
+async def api_discord_add_reaction(
+    message_id: str, req: DiscordReactionReq,
+    request: Request, _: None = Depends(_auth),
 ):
-    user = "admin"
-    try:
-        cookie = request.cookies.get("tg_user")
-        if cookie:
-            data = json.loads(cookie) if cookie.startswith("{") else {}
-            user = data.get("username") or data.get("first_name") or "admin"
-    except Exception:
-        pass
-    entry = await storage.discord_call_join(channel_id, user)
+    user = _resolve_discord_user(request)
+    reacts = await storage.add_discord_reaction(message_id, req.emoji, user)
     try:
         event_bus.emit_event(
-            "discord-call-join",
-            {"channel_id": channel_id, "user": user,
-             "participants": entry.get("participants") or []},
+            "discord-reaction",
+            {"message_id": message_id, "emoji": req.emoji,
+             "user": user, "reactions": reacts},
         )
     except Exception:
         pass
-    return {"ok": True, "call": entry}
+    return {"ok": True, "reactions": reacts}
 
 
-@app.post("/api/discord/calls/{channel_id}/leave")
-async def api_discord_call_leave(
-    channel_id: str, request: Request, _: None = Depends(_auth),
+@app.delete("/api/discord/messages/{message_id}/reactions/{emoji}")
+async def api_discord_remove_reaction(
+    message_id: str, emoji: str,
+    request: Request, _: None = Depends(_auth),
 ):
-    user = "admin"
-    try:
-        cookie = request.cookies.get("tg_user")
-        if cookie:
-            data = json.loads(cookie) if cookie.startswith("{") else {}
-            user = data.get("username") or data.get("first_name") or "admin"
-    except Exception:
-        pass
-    entry = await storage.discord_call_leave(channel_id, user)
+    user = _resolve_discord_user(request)
+    reacts = await storage.remove_discord_reaction(message_id, emoji, user)
     try:
         event_bus.emit_event(
-            "discord-call-leave",
-            {"channel_id": channel_id, "user": user,
-             "participants": entry.get("participants") or []},
+            "discord-reaction-removed",
+            {"message_id": message_id, "emoji": emoji,
+             "user": user, "reactions": reacts},
         )
     except Exception:
         pass
-    return {"ok": True, "call": entry}
+    return {"ok": True, "reactions": reacts}
+
+
+@app.post("/api/discord/messages/{message_id}/pin")
+async def api_discord_pin(
+    message_id: str, request: Request, _: None = Depends(_auth),
+):
+    # Найдём channel_id сообщения
+    msgs = storage.state.get("discord_messages") or []
+    m = next((x for x in msgs if x.get("id") == message_id), None)
+    if not m:
+        raise HTTPException(status_code=404, detail="message not found")
+    ok = await storage.pin_discord_message(m["channel_id"], message_id)
+    return {"ok": ok}
+
+
+@app.post("/api/discord/messages/{message_id}/unpin")
+async def api_discord_unpin(
+    message_id: str, request: Request, _: None = Depends(_auth),
+):
+    msgs = storage.state.get("discord_messages") or []
+    m = next((x for x in msgs if x.get("id") == message_id), None)
+    if not m:
+        raise HTTPException(status_code=404, detail="message not found")
+    ok = await storage.unpin_discord_message(m["channel_id"], message_id)
+    return {"ok": ok}
+
+
+@app.get("/api/discord/channels/{channel_id}/pins")
+async def api_discord_pins(channel_id: str, _: None = Depends(_auth)):
+    pins_ids = storage.get_pinned_messages(channel_id)
+    msgs = storage.state.get("discord_messages") or []
+    pinned = [m for m in msgs if m.get("id") in pins_ids]
+    return {"pinned": pinned}
+
+
+def _resolve_discord_user(request: Request) -> str:
+    """Резолвит username текущего залогиненного админа."""
+    uid = _try_session_auth(request)
+    if uid:
+        info = storage.get_tg_user_info(uid) or {}
+        if info.get("username"):
+            return info["username"]
+        if info.get("first_name"):
+            return info["first_name"]
+        return f"user_{uid}"
+    return "admin"
+
+
+# ===== Per-session activity tracking =====
+# Каждый браузер дашборда — независимая сессия. Здесь храним недавнюю
+# активность для отладки и отображения в dashboard «кто сейчас что делает».
+# В памяти api.py (не персистится), макс 50 активностей на пользователя.
+
+_session_activity: dict = {}   # {user: [{ts, action, payload}, ...]}
+_session_last_seen: dict = {}  # {user: ts}
+
+
+def _record_session_activity(
+    request: Request, action: str, payload: Optional[dict] = None,
+):
+    """Запишет активность конкретного админа. Используется для
+    отображения «кто что делает» и для отладки кросс-сессионных конфликтов."""
+    user = _resolve_discord_user(request)
+    entry = {
+        "ts": time.time(),
+        "action": action,
+        "payload": payload or {},
+    }
+    lst = _session_activity.setdefault(user, [])
+    lst.append(entry)
+    # Cap 50 на пользователя
+    if len(lst) > 50:
+        _session_activity[user] = lst[-50:]
+    _session_last_seen[user] = entry["ts"]
+
+
+@app.get("/api/sessions")
+async def api_sessions(_: None = Depends(_auth)):
+    """Кто сейчас активен в дашборде + что они делают.
+    Объединяет:
+      - WebSocket-connected (Discord-хаб): сейчас открыта вкладка
+      - Recent activity: кто что недавно делал
+    """
+    online_ws = _online_users_total()
+    now = time.time()
+    recent = []
+    for user, last_ts in _session_last_seen.items():
+        idle = now - last_ts
+        if idle > 600:  # 10 мин — считается offline
+            continue
+        activity_list = _session_activity.get(user, [])
+        recent.append({
+            "user": user,
+            "last_seen_ts": last_ts,
+            "idle_sec": int(idle),
+            "recent_actions": activity_list[-5:],
+        })
+    recent.sort(key=lambda x: x["idle_sec"])
+    return {
+        "ws_online": online_ws,
+        "recent": recent,
+        "total_sessions_tracked": len(_session_activity),
+    }
+
+
+# ===== Discord WebSocket: presence + voice signaling =====
+# В памяти api.py (не персистится — теряется при рестарте).
+# Структура:
+#   _ws_sessions: {session_id: {ws, user_info, voice_channel_id}}
+#   _voice_rooms: {channel_id: {session_id: user_info}}
+
+_ws_sessions: dict = {}
+_voice_rooms: dict = {}
+
+
+def _online_users_in_voice(channel_id: str) -> list:
+    """Список пользователей сейчас в голосовом канале."""
+    room = _voice_rooms.get(channel_id) or {}
+    out = []
+    for sid, info in room.items():
+        out.append({
+            "session_id": sid,
+            "user_id": info.get("user_id"),
+            "username": info.get("username"),
+            "first_name": info.get("first_name"),
+            "photo_url": info.get("photo_url"),
+            "muted": info.get("muted", False),
+            "deafened": info.get("deafened", False),
+        })
+    return out
+
+
+def _online_users_total() -> list:
+    """Кто сейчас подключён к дашборду (имеет открытый WS)."""
+    out = []
+    seen_users = set()
+    for sid, sess in _ws_sessions.items():
+        info = sess.get("user_info") or {}
+        uname = info.get("username") or info.get("first_name") or sid
+        if uname in seen_users:
+            continue
+        seen_users.add(uname)
+        out.append({
+            "user_id": info.get("user_id"),
+            "username": info.get("username"),
+            "first_name": info.get("first_name"),
+            "photo_url": info.get("photo_url"),
+            "in_voice": sess.get("voice_channel_id"),
+        })
+    return out
+
+
+@app.get("/api/discord/online")
+async def api_discord_online(_: None = Depends(_auth)):
+    """Кто сейчас онлайн (имеет открытый WS) + кто в каких voice-каналах."""
+    voice_state = {}
+    for ch_id in _voice_rooms.keys():
+        voice_state[ch_id] = _online_users_in_voice(ch_id)
+    return {
+        "online_users": _online_users_total(),
+        "voice_channels": voice_state,
+    }
+
+
+async def _ws_broadcast_to_room(
+    channel_id: str, message: dict, exclude_session: Optional[str] = None,
+):
+    """Послать message всем в voice-канале кроме exclude_session."""
+    room = _voice_rooms.get(channel_id) or {}
+    for sid in list(room.keys()):
+        if sid == exclude_session:
+            continue
+        sess = _ws_sessions.get(sid)
+        if not sess or not sess.get("ws"):
+            continue
+        try:
+            await sess["ws"].send_json(message)
+        except Exception as e:
+            logger.debug("ws broadcast to %s failed: %s", sid, e)
+
+
+async def _ws_send_to_session(session_id: str, message: dict) -> bool:
+    sess = _ws_sessions.get(session_id)
+    if not sess or not sess.get("ws"):
+        return False
+    try:
+        await sess["ws"].send_json(message)
+        return True
+    except Exception:
+        return False
+
+
+@app.websocket("/ws-discord")
+async def discord_ws(ws: WebSocket):
+    """WebSocket для Discord-хаба: presence + WebRTC signaling.
+
+    Протокол сообщений (JSON):
+      Клиент → Сервер:
+        { type: "hello" } — после подключения, сервер ответит { type: "ready", session_id, peers }
+        { type: "join-voice", channel_id }
+        { type: "leave-voice" }
+        { type: "signal", target, payload } — WebRTC offer/answer/ICE
+        { type: "mute", muted: bool }
+        { type: "deaf", deafened: bool }
+        { type: "typing", channel_id }
+
+      Сервер → Клиент:
+        { type: "ready", session_id, me }
+        { type: "peer-joined", session_id, user } — другой юзер зашёл в твой voice
+        { type: "peer-left", session_id }
+        { type: "signal", from, payload }
+        { type: "voice-state", channel_id, participants }
+        { type: "typing", channel_id, user }
+        { type: "presence", online }
+    """
+    # Auth — читаем session cookie
+    user_info = {}
+    uid = None
+    try:
+        cookie_val = ws.cookies.get(SESSION_COOKIE)
+        if cookie_val:
+            uid = _verify_session(cookie_val)
+        if uid:
+            info = storage.get_tg_user_info(uid) or {}
+            user_info = {
+                "user_id": uid,
+                "username": info.get("username") or "",
+                "first_name": info.get("first_name") or f"user_{uid}",
+                "photo_url": info.get("photo_url") or "",
+            }
+    except Exception as e:
+        logger.warning("ws auth check failed: %s", e)
+    if not user_info:
+        # Если basic-auth — даём гостевую сессию
+        user_info = {
+            "user_id": 0, "username": "admin",
+            "first_name": "Admin", "photo_url": "",
+        }
+    await ws.accept()
+    import uuid as _uuid
+    session_id = _uuid.uuid4().hex[:12]
+    _ws_sessions[session_id] = {
+        "ws": ws,
+        "user_info": user_info,
+        "voice_channel_id": None,
+        "connected_at": time.time(),
+    }
+    # Активность для tracking
+    try:
+        _session_activity.setdefault(
+            user_info.get("username") or user_info.get("first_name") or "admin", [],
+        ).append({
+            "ts": time.time(),
+            "action": "ws-connect",
+            "payload": {"session_id": session_id},
+        })
+        _session_last_seen[user_info.get("username") or user_info.get("first_name") or "admin"] = time.time()
+    except Exception:
+        pass
+    # Сообщаем клиенту его session_id + кто он
+    try:
+        await ws.send_json({
+            "type": "ready",
+            "session_id": session_id,
+            "me": user_info,
+        })
+    except Exception:
+        pass
+    # Эмитим presence-update всем
+    try:
+        event_bus.emit_event(
+            "discord-presence-update",
+            {"online": _online_users_total()},
+        )
+    except Exception:
+        pass
+    try:
+        while True:
+            data = await ws.receive_json()
+            t = data.get("type")
+            if t == "join-voice":
+                ch_id = data.get("channel_id") or ""
+                if not ch_id:
+                    continue
+                # Если был в другом канале — выйти
+                prev = _ws_sessions[session_id].get("voice_channel_id")
+                if prev and prev != ch_id:
+                    await _leave_voice(session_id)
+                _ws_sessions[session_id]["voice_channel_id"] = ch_id
+                room = _voice_rooms.setdefault(ch_id, {})
+                room[session_id] = user_info
+                # Сообщаем всем остальным в этом канале о новом пире
+                await _ws_broadcast_to_room(
+                    ch_id,
+                    {"type": "peer-joined", "session_id": session_id, "user": user_info},
+                    exclude_session=session_id,
+                )
+                # Шлём новому пиру список существующих пиров (чтобы он сделал offer)
+                existing = [
+                    {"session_id": sid, "user": info}
+                    for sid, info in room.items() if sid != session_id
+                ]
+                await ws.send_json({
+                    "type": "voice-state",
+                    "channel_id": ch_id,
+                    "participants": _online_users_in_voice(ch_id),
+                    "existing_peers": existing,
+                })
+                try:
+                    event_bus.emit_event(
+                        "discord-voice-state",
+                        {"channel_id": ch_id,
+                         "participants": _online_users_in_voice(ch_id)},
+                    )
+                except Exception:
+                    pass
+            elif t == "leave-voice":
+                await _leave_voice(session_id)
+            elif t == "signal":
+                target = data.get("target")
+                payload = data.get("payload")
+                if target:
+                    await _ws_send_to_session(target, {
+                        "type": "signal",
+                        "from": session_id,
+                        "payload": payload,
+                    })
+            elif t == "mute":
+                muted = bool(data.get("muted"))
+                ch_id = _ws_sessions[session_id].get("voice_channel_id")
+                if ch_id:
+                    room = _voice_rooms.get(ch_id) or {}
+                    if session_id in room:
+                        room[session_id]["muted"] = muted
+                        await _ws_broadcast_to_room(
+                            ch_id,
+                            {"type": "voice-state",
+                             "channel_id": ch_id,
+                             "participants": _online_users_in_voice(ch_id)},
+                        )
+            elif t == "deaf":
+                deafened = bool(data.get("deafened"))
+                ch_id = _ws_sessions[session_id].get("voice_channel_id")
+                if ch_id:
+                    room = _voice_rooms.get(ch_id) or {}
+                    if session_id in room:
+                        room[session_id]["deafened"] = deafened
+                        await _ws_broadcast_to_room(
+                            ch_id,
+                            {"type": "voice-state",
+                             "channel_id": ch_id,
+                             "participants": _online_users_in_voice(ch_id)},
+                        )
+            elif t == "typing":
+                ch_id = data.get("channel_id") or ""
+                if ch_id:
+                    try:
+                        event_bus.emit_event(
+                            "discord-typing",
+                            {"channel_id": ch_id,
+                             "user": user_info.get("username") or user_info.get("first_name")},
+                        )
+                    except Exception:
+                        pass
+            elif t == "ping":
+                try:
+                    await ws.send_json({"type": "pong"})
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("ws-discord loop error: %s", e)
+    finally:
+        await _leave_voice(session_id)
+        _ws_sessions.pop(session_id, None)
+        try:
+            event_bus.emit_event(
+                "discord-presence-update",
+                {"online": _online_users_total()},
+            )
+        except Exception:
+            pass
+
+
+async def _leave_voice(session_id: str):
+    """Удалить сессию из voice-канала и оповестить остальных."""
+    sess = _ws_sessions.get(session_id)
+    if not sess:
+        return
+    ch_id = sess.get("voice_channel_id")
+    if not ch_id:
+        return
+    sess["voice_channel_id"] = None
+    room = _voice_rooms.get(ch_id) or {}
+    if session_id in room:
+        del room[session_id]
+    if not room:
+        _voice_rooms.pop(ch_id, None)
+    await _ws_broadcast_to_room(
+        ch_id,
+        {"type": "peer-left", "session_id": session_id},
+    )
+    try:
+        event_bus.emit_event(
+            "discord-voice-state",
+            {"channel_id": ch_id,
+             "participants": _online_users_in_voice(ch_id)},
+        )
+    except Exception:
+        pass
 
 
 # === Sparklines (per-day series for any metric) ===
@@ -1345,10 +1802,9 @@ class LeoAskReq(BaseModel):
 
 
 @app.post("/api/leo/realtime_session")
-async def leo_realtime_session(_: None = Depends(_auth)):
+async def leo_realtime_session(request: Request, _: None = Depends(_auth)):
     """Выдаёт ephemeral client token от OpenAI Realtime API.
-    Фронтенд использует его для прямого WebRTC соединения с OpenAI —
-    голос в обе стороны, низкая латентность, натуральный голос.
+    Каждый админ получает СВОЮ независимую сессию — не конфликтуют между собой.
 
     Требует env OPENAI_API_KEY. Стоимость ~$0.06/мин разговора.
     """
@@ -1358,12 +1814,24 @@ async def leo_realtime_session(_: None = Depends(_auth)):
             status_code=503,
             detail="OPENAI_API_KEY не задан в env Railway. Без него Realtime не работает.",
         )
+    # Регистрируем активность по этому юзеру (для отображения в dashboard)
+    user = _resolve_discord_user(request)
+    _record_session_activity(request, "leo-voice-start", {"user": user})
     # Готовим инструкции с актуальным снимком состояния + knowledge graph
+    # Используем CACHED snapshot чтобы не блокировать event loop при одновременных вызовах
     try:
         import leo as leo_mod
-        state_snap = leo_mod._build_state_snapshot()
-        knowledge = leo_mod._load_knowledge_summary(max_chars=8000)
-    except Exception:
+        # Тяжёлые операции — в thread pool чтобы не блокировать API
+        import asyncio as _aio
+        loop = _aio.get_running_loop()
+        state_snap = await loop.run_in_executor(
+            None, leo_mod._build_state_snapshot_cached,
+        )
+        knowledge = await loop.run_in_executor(
+            None, leo_mod._load_knowledge_summary, 8000,
+        )
+    except Exception as e:
+        logger.warning("leo realtime prep failed: %s", e)
         state_snap, knowledge = {}, ""
 
     instructions = (
@@ -1929,17 +2397,26 @@ async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth)):
 
 
 @app.post("/api/commands")
-async def api_command_enqueue(req: CommandReq, _: None = Depends(_auth)):
+async def api_command_enqueue(
+    req: CommandReq, request: Request, _: None = Depends(_auth),
+):
     """Очередь команд для userbot. Дашборд отправляет сюда команды
-    free-form, userbot опрашивает каждые 5 сек и выполняет."""
+    free-form, userbot опрашивает каждые 5 сек и выполняет.
+
+    Источник команды (source) включает username админа, чтобы можно было
+    отличить кто что отправил в общую очередь (важно для tracking)."""
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="empty text")
-    entry = await storage.enqueue_dashboard_command(text, source="dashboard")
+    user = _resolve_discord_user(request)
+    entry = await storage.enqueue_dashboard_command(
+        text, source=f"dashboard:{user}",
+    )
+    _record_session_activity(request, "command", {"text": text[:120], "cmd_id": entry.get("id")})
     try:
         event_bus.emit_event(
             "dashboard-command",
-            {"text": text[:200], "cmd_id": entry.get("id")},
+            {"text": text[:200], "cmd_id": entry.get("id"), "by": user},
             severity="info",
         )
     except Exception:
