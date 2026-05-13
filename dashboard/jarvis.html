@@ -1449,8 +1449,155 @@
         <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="archiveOld()" title="старше 30 дней → archive">🗄 архив</button>
       </div>
     </div>
+
+    <!-- ===== OUTREACH ===== -->
+    <div class="jarvis-panel">
+      <div class="panel-title">
+        Outreach
+        <span class="badge-mini" x-text="outreachCampaigns.length + ' camp · ' + outreachBots.length + ' bots'"></span>
+      </div>
+      <!-- Bots list -->
+      <div style="padding: 8px 12px; border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);">
+        <div class="text-xs mb-1" style="color: var(--text-dim); letter-spacing: 1px;">USERBOTS</div>
+        <template x-if="outreachBots.length === 0">
+          <div class="text-xs" style="color: var(--text-dim);">боты не добавлены</div>
+        </template>
+        <template x-for="b in outreachBots" :key="b.id">
+          <div class="text-xs flex items-center gap-2" style="padding: 3px 0;">
+            <span style="display:inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--hud-emerald);"></span>
+            <span x-text="'@' + (b.tg_username || b.phone)"></span>
+            <span style="color: var(--text-dim);" x-text="'·' + (b.sent_today || 0) + 'msg'"></span>
+            <button class="btn danger" style="margin-left: auto; padding: 2px 6px; font-size: 9px;"
+                    @click="deleteOutreachBot(b.id)">×</button>
+          </div>
+        </template>
+        <button class="btn success" style="font-size: 10px; padding: 4px 10px; margin-top: 6px; width: 100%;"
+                @click="outreachAddBotOpen = true">+ добавить юзербот</button>
+      </div>
+
+      <!-- Campaigns list -->
+      <div style="max-height: 320px; overflow-y: auto;">
+        <template x-if="outreachCampaigns.length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Нет кампаний. Создай первую ↓
+          </div>
+        </template>
+        <template x-for="c in outreachCampaigns" :key="c.id">
+          <div class="metric" style="padding: 8px 14px;">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold" x-text="c.name"></span>
+              <span class="badge" style="font-size: 9px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 2px;"
+                    :style="'color: ' + (c.status === 'running' ? 'var(--hud-emerald)' : (c.status === 'paused' ? 'var(--hud-amber)' : 'var(--hud-dim)'))"
+                    x-text="c.status"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim);">
+              <span x-text="(c.stats.sent || 0) + ' отпр · ' + (c.stats.replied || 0) + ' отв · ' + (c.stats.transferred || 0) + '✓'"></span>
+              <span style="float: right;" x-text="'→ @' + c.manager_username"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim);">
+              <span x-text="(c.targets || []).length + ' таргетов'"></span>
+              <span style="float: right;" x-text="c.rate_per_hour + '/час'"></span>
+            </div>
+            <div class="flex gap-1 mt-2" style="font-size: 9px;">
+              <button class="btn success" style="padding: 2px 6px; font-size: 9px;"
+                      x-show="c.status === 'draft' || c.status === 'paused'"
+                      @click="outreachStart(c.id)">▶</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 9px;"
+                      x-show="c.status === 'running'"
+                      @click="outreachPause(c.id)">⏸</button>
+              <button class="btn" style="padding: 2px 6px; font-size: 9px;"
+                      x-show="c.status === 'running' || c.status === 'paused'"
+                      @click="outreachStopCampaign(c.id)">🛑</button>
+              <button class="btn danger" style="padding: 2px 6px; font-size: 9px;"
+                      @click="deleteCampaign(c.id)">×</button>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
+        <button class="btn success" style="font-size: 10px; padding: 4px 10px; flex: 1;"
+                @click="outreachCampaignOpen = true">+ новая кампания</button>
+        <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="refreshOutreach()">↻</button>
+      </div>
+    </div>
   </aside>
 </main>
+
+<!-- ===== MODAL: add outreach bot ===== -->
+<template x-if="outreachAddBotOpen">
+  <div class="modal-mask" @click="outreachAddBotOpen = false">
+    <div class="modal" @click.stop style="min-width: 360px;">
+      <h3>Добавить юзербот</h3>
+      <template x-if="outreachAuthStep === 'phone'">
+        <div>
+          <div class="text-xs mb-2" style="color: var(--text-dim);">Телефон (с +)</div>
+          <input class="cmd-input" style="width: 100%; padding: 6px 10px;" placeholder="+79..." x-model="outreachPhone">
+          <div class="modal-actions">
+            <button class="btn" @click="outreachAddBotOpen = false">Отмена</button>
+            <button class="btn success" @click="outreachAuthStart()">Получить код</button>
+          </div>
+        </div>
+      </template>
+      <template x-if="outreachAuthStep === 'code'">
+        <div>
+          <div class="text-xs mb-2" style="color: var(--text-dim);">SMS-код (или код в Telegram)</div>
+          <input class="cmd-input" style="width: 100%; padding: 6px 10px;" placeholder="12345" x-model="outreachCode">
+          <div class="text-xs mt-2 mb-1" style="color: var(--text-dim);">Пароль 2FA (если есть)</div>
+          <input class="cmd-input" style="width: 100%; padding: 6px 10px;" type="password" placeholder="опц." x-model="outreachPassword">
+          <div class="modal-actions">
+            <button class="btn" @click="outreachAddBotOpen = false">Отмена</button>
+            <button class="btn success" @click="outreachAuthConfirm()">Подтвердить</button>
+          </div>
+        </div>
+      </template>
+      <template x-if="outreachAuthStep === 'error'">
+        <div>
+          <div class="text-xs" style="color: var(--hud-rose);" x-text="outreachAuthError"></div>
+          <div class="modal-actions">
+            <button class="btn" @click="outreachAddBotOpen = false">Закрыть</button>
+            <button class="btn" @click="outreachAuthStep = 'phone'">Попробовать снова</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</template>
+
+<!-- ===== MODAL: new campaign ===== -->
+<template x-if="outreachCampaignOpen">
+  <div class="modal-mask" @click="outreachCampaignOpen = false">
+    <div class="modal" @click.stop style="min-width: 480px; max-width: 90vw;">
+      <h3>Новая кампания</h3>
+      <div class="text-xs mb-1" style="color: var(--text-dim);">Название</div>
+      <input class="cmd-input" style="width: 100%; padding: 4px 8px;" x-model="newCampaign.name" placeholder="Outreach #1">
+      <div class="text-xs mt-2 mb-1" style="color: var(--text-dim);">Менеджер (@username, куда переводить заинтересованных)</div>
+      <input class="cmd-input" style="width: 100%; padding: 4px 8px;" x-model="newCampaign.manager_username" placeholder="timonskupc1">
+      <div class="text-xs mt-2 mb-1" style="color: var(--text-dim);">Текст объявления</div>
+      <textarea class="cmd-input" style="width: 100%; padding: 6px 10px; min-height: 90px; font-family: inherit; resize: vertical;"
+                x-model="newCampaign.text" placeholder="Привет! Мы — PRIDE..."></textarea>
+      <div class="text-xs mt-2 mb-1" style="color: var(--text-dim);">Чаты (chat_id или @username, по строке)</div>
+      <textarea class="cmd-input" style="width: 100%; padding: 6px 10px; min-height: 80px; font-family: monospace; resize: vertical;"
+                x-model="newCampaign.targetsRaw" placeholder="@somechat&#10;-1001234567890"></textarea>
+      <div class="flex gap-2 mt-3">
+        <div style="flex:1">
+          <div class="text-xs" style="color: var(--text-dim);">Rate/час</div>
+          <input class="cmd-input" style="width: 100%; padding: 4px 8px;" type="number" x-model="newCampaign.rate_per_hour" placeholder="20">
+        </div>
+        <div style="flex:1">
+          <div class="text-xs" style="color: var(--text-dim);">Часы (от-до)</div>
+          <div class="flex gap-1">
+            <input class="cmd-input" style="width: 50%; padding: 4px 8px;" type="number" x-model="newCampaign.active_hours_from" placeholder="9">
+            <input class="cmd-input" style="width: 50%; padding: 4px 8px;" type="number" x-model="newCampaign.active_hours_to" placeholder="21">
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" @click="outreachCampaignOpen = false">Отмена</button>
+        <button class="btn success" @click="createCampaign()">Создать</button>
+      </div>
+    </div>
+  </div>
+</template>
 
 <!-- FEED -->
 <section class="jarvis-panel" style="margin: 0 14px 14px;">
@@ -1580,6 +1727,21 @@ function jarvis() {
     // Brain notes (LEO)
     notesPreview: [],
     notesCategory: '',
+    // Outreach
+    outreachBots: [],
+    outreachCampaigns: [],
+    outreachAddBotOpen: false,
+    outreachCampaignOpen: false,
+    outreachAuthStep: 'phone',  // phone / code / error
+    outreachAuthError: '',
+    outreachPhone: '',
+    outreachCode: '',
+    outreachPassword: '',
+    newCampaign: {
+      name: '', text: '', manager_username: '',
+      targetsRaw: '',
+      rate_per_hour: 20, active_hours_from: 9, active_hours_to: 21,
+    },
     // Voice chat (OpenAI Realtime API via WebRTC)
     voiceActive: false,
     voiceState: 'не активно',
@@ -1648,7 +1810,9 @@ function jarvis() {
       if (this.soundOn) this.initAudio();
       this.startCmdResultsPoller();
       this.refreshNotes();
+      this.refreshOutreach();
       setInterval(() => this.refreshNotes(), 20000);
+      setInterval(() => this.refreshOutreach(), 25000);
     },
 
     startClock() {
@@ -2437,6 +2601,132 @@ function jarvis() {
         alert('Архивировано: ' + (data.archived || 0));
         this.refreshNotes();
       } catch (e) { alert(String(e)); }
+    },
+
+    // === Outreach ===
+    async refreshOutreach() {
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch('/api/outreach/bots', {credentials: 'include'}),
+          fetch('/api/outreach/campaigns', {credentials: 'include'}),
+        ]);
+        if (r1.ok) this.outreachBots = (await r1.json()).bots || [];
+        if (r2.ok) this.outreachCampaigns = (await r2.json()).campaigns || [];
+      } catch (e) {}
+    },
+    async outreachAuthStart() {
+      const phone = (this.outreachPhone || '').trim();
+      if (!phone) return alert('Введи телефон');
+      try {
+        const r = await fetch('/api/outreach/bots/auth/start', {
+          method: 'POST', credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({phone}),
+        });
+        const data = await r.json();
+        if (data.ok) {
+          this.outreachAuthStep = 'code';
+        } else {
+          this.outreachAuthStep = 'error';
+          this.outreachAuthError = data.error || 'не получилось';
+        }
+      } catch (e) {
+        this.outreachAuthStep = 'error';
+        this.outreachAuthError = String(e);
+      }
+    },
+    async outreachAuthConfirm() {
+      const code = (this.outreachCode || '').trim();
+      if (!code) return alert('Введи код');
+      try {
+        const r = await fetch('/api/outreach/bots/auth/confirm', {
+          method: 'POST', credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            phone: this.outreachPhone,
+            code: code,
+            password: this.outreachPassword || '',
+          }),
+        });
+        const data = await r.json();
+        if (data.ok) {
+          this.outreachAddBotOpen = false;
+          this.outreachPhone = '';
+          this.outreachCode = '';
+          this.outreachPassword = '';
+          this.outreachAuthStep = 'phone';
+          this.refreshOutreach();
+        } else {
+          if (data.error === '2fa_required') {
+            alert('Введи пароль 2FA в поле ниже');
+            return;
+          }
+          this.outreachAuthStep = 'error';
+          this.outreachAuthError = data.error || 'не получилось';
+        }
+      } catch (e) {
+        this.outreachAuthStep = 'error';
+        this.outreachAuthError = String(e);
+      }
+    },
+    async deleteOutreachBot(id) {
+      if (!confirm('Удалить юзербота?')) return;
+      try {
+        await fetch(`/api/outreach/bots/${id}`, {
+          method: 'DELETE', credentials: 'include',
+        });
+        this.refreshOutreach();
+      } catch (e) {}
+    },
+    async createCampaign() {
+      const targets = (this.newCampaign.targetsRaw || '').split('\n')
+        .map(s => s.trim()).filter(Boolean)
+        .map(s => /^-?\d+$/.test(s) ? parseInt(s, 10) : s);
+      if (!this.newCampaign.name || !this.newCampaign.text || !targets.length) {
+        return alert('Заполни имя, текст и хотя бы один таргет');
+      }
+      try {
+        const r = await fetch('/api/outreach/campaigns', {
+          method: 'POST', credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            name: this.newCampaign.name,
+            text: this.newCampaign.text,
+            manager_username: this.newCampaign.manager_username,
+            targets: targets,
+            rate_per_hour: parseInt(this.newCampaign.rate_per_hour) || 20,
+            active_hours_from: parseInt(this.newCampaign.active_hours_from) || 9,
+            active_hours_to: parseInt(this.newCampaign.active_hours_to) || 21,
+          }),
+        });
+        if (r.ok) {
+          this.outreachCampaignOpen = false;
+          this.newCampaign = {
+            name: '', text: '', manager_username: '',
+            targetsRaw: '',
+            rate_per_hour: 20, active_hours_from: 9, active_hours_to: 21,
+          };
+          this.refreshOutreach();
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async outreachStart(id) {
+      await fetch(`/api/outreach/campaigns/${id}/start`, {method: 'POST', credentials: 'include'});
+      this.refreshOutreach();
+    },
+    async outreachPause(id) {
+      await fetch(`/api/outreach/campaigns/${id}/pause`, {method: 'POST', credentials: 'include'});
+      this.refreshOutreach();
+    },
+    async outreachStopCampaign(id) {
+      if (!confirm('Остановить кампанию?')) return;
+      await fetch(`/api/outreach/campaigns/${id}/stop`, {method: 'POST', credentials: 'include'});
+      this.refreshOutreach();
+    },
+    async deleteCampaign(id) {
+      if (!confirm('Удалить кампанию?')) return;
+      await fetch(`/api/outreach/campaigns/${id}`, {method: 'DELETE', credentials: 'include'});
+      this.refreshOutreach();
     },
 
     async requestSyncLK() {

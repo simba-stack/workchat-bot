@@ -1331,6 +1331,162 @@ async def leo_archive_old(days: int = 30, _: None = Depends(_auth)):
     return {"archived": len(old), "url": url}
 
 
+# ============== OUTREACH (рассылочный отдел) ==============
+
+class OutreachAuthStartReq(BaseModel):
+    phone: str
+
+
+class OutreachAuthConfirmReq(BaseModel):
+    phone: str
+    code: str
+    password: str = ""  # для 2FA
+
+
+@app.post("/api/outreach/bots/auth/start")
+async def outreach_auth_start(req: OutreachAuthStartReq, _: None = Depends(_auth)):
+    """Шаг 1: запросить SMS-код для нового юзербота."""
+    import outreach
+    res = await outreach.manager.start_auth(req.phone)
+    return res
+
+
+@app.post("/api/outreach/bots/auth/confirm")
+async def outreach_auth_confirm(req: OutreachAuthConfirmReq, _: None = Depends(_auth)):
+    """Шаг 2: подтвердить SMS-код (+ password если 2FA)."""
+    import outreach
+    res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
+    return res
+
+
+@app.get("/api/outreach/bots")
+async def outreach_list_bots(_: None = Depends(_auth)):
+    storage.reload_sync()
+    bots = storage.list_outreach_bots()
+    # Не отдаём session_string наружу
+    safe = [{k: v for k, v in b.items() if k != "session_string"} for b in bots]
+    return {"bots": safe}
+
+
+@app.delete("/api/outreach/bots/{bot_id}")
+async def outreach_delete_bot(bot_id: int, _: None = Depends(_auth)):
+    import outreach
+    await outreach.manager.disconnect_bot(bot_id)
+    ok = await storage.delete_outreach_bot(bot_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="bot not found")
+    return {"ok": True}
+
+
+class CampaignReq(BaseModel):
+    name: str
+    text: str
+    targets: list  # список chat_ids (числа или @username каналов)
+    manager_username: str
+    rate_per_hour: int = 20
+    jitter_min_sec: int = 90
+    jitter_max_sec: int = 240
+    active_hours_from: int = 9
+    active_hours_to: int = 21
+
+
+class CampaignPatchReq(BaseModel):
+    name: Optional[str] = None
+    text: Optional[str] = None
+    targets: Optional[list] = None
+    manager_username: Optional[str] = None
+    rate_per_hour: Optional[int] = None
+    jitter_min_sec: Optional[int] = None
+    jitter_max_sec: Optional[int] = None
+    active_hours_from: Optional[int] = None
+    active_hours_to: Optional[int] = None
+
+
+@app.get("/api/outreach/campaigns")
+async def outreach_list_campaigns(_: None = Depends(_auth)):
+    storage.reload_sync()
+    return {"campaigns": storage.list_outreach_campaigns()}
+
+
+@app.post("/api/outreach/campaigns")
+async def outreach_create_campaign(req: CampaignReq, _: None = Depends(_auth)):
+    entry = await storage.add_outreach_campaign(**req.dict())
+    return {"ok": True, "campaign": entry}
+
+
+@app.patch("/api/outreach/campaigns/{campaign_id}")
+async def outreach_patch_campaign(
+    campaign_id: int, req: CampaignPatchReq, _: None = Depends(_auth),
+):
+    fields = {k: v for k, v in req.dict().items() if v is not None}
+    ok = await storage.update_outreach_campaign(campaign_id, **fields)
+    if not ok:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return {"ok": True}
+
+
+@app.delete("/api/outreach/campaigns/{campaign_id}")
+async def outreach_delete_campaign(campaign_id: int, _: None = Depends(_auth)):
+    import outreach
+    await outreach.manager.stop_campaign(campaign_id)
+    ok = await storage.delete_outreach_campaign(campaign_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return {"ok": True}
+
+
+@app.post("/api/outreach/campaigns/{campaign_id}/start")
+async def outreach_start(campaign_id: int, _: None = Depends(_auth)):
+    import outreach
+    ok = await outreach.manager.start_campaign(campaign_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="cannot start")
+    return {"ok": True}
+
+
+@app.post("/api/outreach/campaigns/{campaign_id}/pause")
+async def outreach_pause(campaign_id: int, _: None = Depends(_auth)):
+    import outreach
+    await outreach.manager.pause_campaign(campaign_id)
+    return {"ok": True}
+
+
+@app.post("/api/outreach/campaigns/{campaign_id}/stop")
+async def outreach_stop(campaign_id: int, _: None = Depends(_auth)):
+    import outreach
+    await outreach.manager.stop_campaign(campaign_id)
+    return {"ok": True}
+
+
+@app.get("/api/outreach/messages")
+async def outreach_messages(
+    campaign_id: Optional[int] = None, limit: int = 200,
+    _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    return {"messages": storage.list_outreach_messages(campaign_id, limit)}
+
+
+@app.get("/api/outreach/responses")
+async def outreach_responses(
+    handled: Optional[bool] = None,
+    intent: Optional[str] = None,
+    limit: int = 200,
+    _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    return {"responses": storage.list_outreach_responses(handled, intent, limit)}
+
+
+@app.post("/api/outreach/responses/{resp_id}/handle")
+async def outreach_handle_response(resp_id: int, _: None = Depends(_auth)):
+    """Пометить ответ как обработанный вручную."""
+    ok = await storage.mark_outreach_response(resp_id, handled=True)
+    if not ok:
+        raise HTTPException(status_code=404, detail="response not found")
+    return {"ok": True}
+
+
 @app.post("/api/leo/voice_command")
 async def leo_voice_command(req: CommandReq, _: None = Depends(_auth)):
     """Принимает команду от голосового Льва (через OpenAI tool-call) —

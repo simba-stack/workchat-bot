@@ -233,6 +233,13 @@ class UserbotService:
             logger.info("dashboard_command_worker started")
         except Exception as e:
             logger.warning("dashboard_command_worker start failed: %s", e)
+        # Подключаем outreach-юзерботы (если есть в storage)
+        try:
+            import outreach
+            asyncio.create_task(outreach.manager.connect_all())
+            logger.info("outreach manager connect_all scheduled")
+        except Exception as e:
+            logger.warning("outreach connect_all start failed: %s", e)
         for label, cid in (
             ("brain_chat", storage.get_brain_chat_id()),
             ("coord_chat", storage.get_coordination_chat_id()),

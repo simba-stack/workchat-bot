@@ -150,6 +150,18 @@ def _default_state() -> dict:
         #              tags[], synced_to_knowledge: bool, knowledge_url}]
         # Категории: fact / rule / task / idea / correction / client / deal
         "leo_notes": [],
+        # ==== Outreach (рассылочный отдел) ====
+        # Юзерботы для рассылки. Каждый = отдельный Telethon session.
+        "outreach_bots": [],
+        # Кампании рассылки.
+        "outreach_campaigns": [],
+        # Отправленные сообщения (для дедупликации + статистики).
+        "outreach_messages": [],
+        # Входящие ответы — для обработки/перевода менеджеру.
+        "outreach_responses": [],
+        # Временное состояние авторизации (phone -> session-data) пока юзер
+        # вводит SMS-код. Очищается после успешной авторизации.
+        "outreach_pending_auth": {},
     }
 
 
@@ -1484,6 +1496,199 @@ class Storage:
             self.state["leo_notes"] = new
             await self._save_unlocked()
             return True
+
+
+    # ===== OUTREACH HELPERS =====
+
+    async def add_outreach_bot(self, **fields) -> dict:
+        async with _lock:
+            bots = self.state.setdefault("outreach_bots", [])
+            entry = {
+                "id": int(time.time() * 1000),
+                "phone": fields.get("phone") or "",
+                "session_string": fields.get("session_string") or "",
+                "name": fields.get("name") or "",
+                "tg_user_id": fields.get("tg_user_id") or 0,
+                "tg_username": fields.get("tg_username") or "",
+                "status": fields.get("status") or "active",
+                "sent_today": 0,
+                "last_send_ts": 0,
+                "flood_wait_until": 0,
+                "created_at": time.time(),
+            }
+            bots.append(entry)
+            await self._save_unlocked()
+            return dict(entry)
+
+    def list_outreach_bots(self) -> list:
+        return list(self.state.get("outreach_bots") or [])
+
+    def get_outreach_bot(self, bot_id: int) -> Optional[dict]:
+        for b in self.state.get("outreach_bots") or []:
+            if int(b.get("id", 0)) == int(bot_id):
+                return dict(b)
+        return None
+
+    async def update_outreach_bot(self, bot_id: int, **fields) -> bool:
+        async with _lock:
+            for b in self.state.get("outreach_bots") or []:
+                if int(b.get("id", 0)) == int(bot_id):
+                    for k, v in fields.items():
+                        b[k] = v
+                    await self._save_unlocked()
+                    return True
+            return False
+
+    async def delete_outreach_bot(self, bot_id: int) -> bool:
+        async with _lock:
+            bots = self.state.get("outreach_bots") or []
+            new = [b for b in bots if int(b.get("id", 0)) != int(bot_id)]
+            if len(new) == len(bots):
+                return False
+            self.state["outreach_bots"] = new
+            await self._save_unlocked()
+            return True
+
+    async def set_pending_auth(self, phone: str, data: dict):
+        async with _lock:
+            pa = self.state.setdefault("outreach_pending_auth", {})
+            pa[phone] = {**data, "ts": time.time()}
+            await self._save_unlocked()
+
+    def get_pending_auth(self, phone: str) -> Optional[dict]:
+        return (self.state.get("outreach_pending_auth") or {}).get(phone)
+
+    async def clear_pending_auth(self, phone: str):
+        async with _lock:
+            pa = self.state.setdefault("outreach_pending_auth", {})
+            pa.pop(phone, None)
+            await self._save_unlocked()
+
+    # === Campaigns ===
+
+    async def add_outreach_campaign(self, **fields) -> dict:
+        async with _lock:
+            campaigns = self.state.setdefault("outreach_campaigns", [])
+            entry = {
+                "id": int(time.time() * 1000),
+                "name": fields.get("name") or f"Campaign #{len(campaigns)+1}",
+                "text": fields.get("text") or "",
+                "targets": list(fields.get("targets") or []),
+                "manager_username": (fields.get("manager_username") or "").lstrip("@"),
+                "rate_per_hour": int(fields.get("rate_per_hour") or 20),
+                "jitter_min_sec": int(fields.get("jitter_min_sec") or 90),
+                "jitter_max_sec": int(fields.get("jitter_max_sec") or 240),
+                "active_hours_from": int(fields.get("active_hours_from") or 9),
+                "active_hours_to": int(fields.get("active_hours_to") or 21),
+                "status": "draft",  # draft / running / paused / done
+                "stats": {
+                    "sent": 0, "errors": 0, "replied": 0,
+                    "transferred": 0, "skipped": 0,
+                },
+                "created_at": time.time(),
+                "started_at": 0,
+                "finished_at": 0,
+            }
+            campaigns.append(entry)
+            await self._save_unlocked()
+            return dict(entry)
+
+    def list_outreach_campaigns(self) -> list:
+        return list(self.state.get("outreach_campaigns") or [])
+
+    def get_outreach_campaign(self, cid: int) -> Optional[dict]:
+        for c in self.state.get("outreach_campaigns") or []:
+            if int(c.get("id", 0)) == int(cid):
+                return dict(c)
+        return None
+
+    async def update_outreach_campaign(self, cid: int, **fields) -> bool:
+        async with _lock:
+            for c in self.state.get("outreach_campaigns") or []:
+                if int(c.get("id", 0)) == int(cid):
+                    for k, v in fields.items():
+                        if k == "stats" and isinstance(v, dict):
+                            stats = c.setdefault("stats", {})
+                            for sk, sv in v.items():
+                                stats[sk] = (stats.get(sk, 0) or 0) + (sv if isinstance(sv, (int, float)) else 0)
+                        else:
+                            c[k] = v
+                    await self._save_unlocked()
+                    return True
+            return False
+
+    async def delete_outreach_campaign(self, cid: int) -> bool:
+        async with _lock:
+            campaigns = self.state.get("outreach_campaigns") or []
+            new = [c for c in campaigns if int(c.get("id", 0)) != int(cid)]
+            if len(new) == len(campaigns):
+                return False
+            self.state["outreach_campaigns"] = new
+            await self._save_unlocked()
+            return True
+
+    # === Messages & responses ===
+
+    async def add_outreach_message(self, **fields):
+        async with _lock:
+            msgs = self.state.setdefault("outreach_messages", [])
+            msgs.append({
+                "id": int(time.time() * 1000),
+                "ts": time.time(),
+                **fields,
+            })
+            if len(msgs) > 5000:
+                self.state["outreach_messages"] = msgs[-5000:]
+            await self._save_unlocked()
+
+    def list_outreach_messages(self, campaign_id: int = None, limit: int = 200) -> list:
+        msgs = list(self.state.get("outreach_messages") or [])
+        if campaign_id is not None:
+            msgs = [m for m in msgs if int(m.get("campaign_id", 0)) == int(campaign_id)]
+        return msgs[-limit:][::-1]
+
+    def was_target_sent(self, campaign_id: int, target_chat_id) -> bool:
+        for m in self.state.get("outreach_messages") or []:
+            if (int(m.get("campaign_id", 0)) == int(campaign_id)
+                    and str(m.get("target_chat_id")) == str(target_chat_id)
+                    and m.get("status") == "sent"):
+                return True
+        return False
+
+    async def add_outreach_response(self, **fields) -> dict:
+        async with _lock:
+            resps = self.state.setdefault("outreach_responses", [])
+            entry = {
+                "id": int(time.time() * 1000),
+                "ts": time.time(),
+                "handled": False,
+                **fields,
+            }
+            resps.append(entry)
+            if len(resps) > 5000:
+                self.state["outreach_responses"] = resps[-5000:]
+            await self._save_unlocked()
+            return dict(entry)
+
+    def list_outreach_responses(
+        self, handled: bool = None, intent: str = None, limit: int = 200,
+    ) -> list:
+        resps = list(self.state.get("outreach_responses") or [])
+        if handled is not None:
+            resps = [r for r in resps if bool(r.get("handled")) == handled]
+        if intent:
+            resps = [r for r in resps if (r.get("ai_intent") or "") == intent]
+        return resps[-limit:][::-1]
+
+    async def mark_outreach_response(self, resp_id: int, **fields) -> bool:
+        async with _lock:
+            for r in self.state.get("outreach_responses") or []:
+                if int(r.get("id", 0)) == int(resp_id):
+                    for k, v in fields.items():
+                        r[k] = v
+                    await self._save_unlocked()
+                    return True
+            return False
 
 
 storage = Storage(config.STORAGE_PATH)
