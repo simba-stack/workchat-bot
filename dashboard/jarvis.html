@@ -1075,7 +1075,7 @@
   /* ===== Discord-like hub ===== */
   .discord-shell {
     display: grid;
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: 240px 1fr 200px;
     gap: 0;
     background: rgba(8, 12, 28, 0.6);
     border: 1px solid rgba(var(--primary-rgb), 0.12);
@@ -1084,6 +1084,28 @@
     min-height: 520px;
     overflow: hidden;
     margin-top: 12px;
+  }
+  .discord-shell.expanded {
+    position: fixed;
+    inset: 0;
+    z-index: 998;
+    border-radius: 0;
+    margin: 0;
+    height: 100vh;
+    grid-template-columns: 260px 1fr 220px;
+  }
+  .dc-ws-status {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--hud-rose);
+    margin-left: 8px;
+    box-shadow: 0 0 6px var(--hud-rose);
+  }
+  .dc-ws-status.online {
+    background: var(--hud-emerald);
+    box-shadow: 0 0 6px var(--hud-emerald);
   }
   .dc-rail {
     background: rgba(5, 8, 18, 0.85);
@@ -1230,6 +1252,210 @@
     border-color: var(--hud-primary);
     box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.25);
   }
+  .dc-avatar-img {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+  }
+  .dc-avatar-img.big {
+    width: 36px;
+    height: 36px;
+  }
+  .dc-avatar.tiny {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+  }
+  .dc-avatar.large {
+    width: 64px;
+    height: 64px;
+    font-size: 26px;
+  }
+  .dc-msg-spacer { width: 32px; }
+  .dc-mention {
+    background: rgba(var(--primary-rgb), 0.18);
+    color: var(--hud-primary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+  .dc-link {
+    color: var(--hud-cyan);
+    text-decoration: underline;
+  }
+
+  /* Voice members under voice channel name */
+  .dc-voice-members {
+    padding: 2px 14px 4px 28px;
+  }
+  .dc-voice-member {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .dc-voice-member.muted .dc-vm-name { color: var(--hud-amber); }
+  .dc-vm-name {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  /* Voice stage (full voice channel view) */
+  .dc-voice-stage {
+    padding: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+    align-items: center;
+    background: rgba(8, 14, 30, 0.4);
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);
+    min-height: 180px;
+  }
+  .dc-stage-user {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 18px;
+    background: rgba(var(--primary-rgb), 0.04);
+    border-radius: 8px;
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    min-width: 120px;
+    position: relative;
+  }
+  .dc-stage-user.is-muted {
+    border-color: rgba(251, 146, 60, 0.4);
+  }
+  .dc-stage-user.is-me {
+    border-color: var(--hud-amber);
+    box-shadow: 0 0 12px rgba(251, 146, 60, 0.2);
+  }
+  .dc-stage-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--hud-primary);
+    box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.4);
+  }
+  .dc-stage-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    text-align: center;
+  }
+  .dc-stage-flags {
+    display: flex;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .dc-voice-info {
+    padding: 60px 20px;
+    text-align: center;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Online users right rail */
+  .dc-online {
+    background: rgba(5, 8, 18, 0.7);
+    border-left: 1px solid rgba(var(--primary-rgb), 0.1);
+    overflow-y: auto;
+  }
+  .dc-online-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.1);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+  }
+  .dc-online-row {
+    padding: 6px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .dc-online-row:hover {
+    background: rgba(var(--primary-rgb), 0.04);
+  }
+
+  /* Me bar at bottom of rail */
+  .dc-me-bar {
+    margin-top: auto;
+    padding: 8px 12px;
+    border-top: 1px solid rgba(var(--primary-rgb), 0.1);
+    background: rgba(5, 8, 18, 0.95);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dc-me-btn {
+    background: transparent;
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    color: var(--text-dim);
+    padding: 4px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .dc-me-btn:hover { background: rgba(var(--primary-rgb), 0.08); }
+  .dc-me-btn.active {
+    color: var(--hud-rose);
+    border-color: var(--hud-rose);
+    background: rgba(251, 113, 133, 0.1);
+  }
+
+  /* Reactions */
+  .dc-reactions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .dc-reaction {
+    background: rgba(var(--primary-rgb), 0.08);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .dc-reaction:hover { background: rgba(var(--primary-rgb), 0.15); }
+  .dc-reaction.mine {
+    background: rgba(var(--primary-rgb), 0.25);
+    border-color: var(--hud-primary);
+  }
+  .dc-msg-actions {
+    opacity: 0;
+    transition: opacity 0.15s;
+    margin-top: 4px;
+    display: flex;
+    gap: 2px;
+  }
+  .dc-msg:hover .dc-msg-actions { opacity: 1; }
+  .dc-act-btn {
+    background: rgba(5, 8, 18, 0.6);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .dc-act-btn:hover { background: rgba(var(--primary-rgb), 0.15); }
 
   .save-flash {
     position: absolute;
@@ -2208,28 +2434,68 @@
 </section>
 
 <!-- ===== DISCORD TAB ===== -->
-<section x-show="currentView === 'discord'" class="discord-shell">
+<section x-show="currentView === 'discord'" class="discord-shell" :class="discordExpanded ? 'expanded' : ''">
   <!-- LEFT: channel rail -->
   <aside class="dc-rail">
     <div class="dc-rail-head">
       <span style="color: var(--hud-primary); font-weight: 700; letter-spacing: 2px;">PRIDE</span>
-      <span style="font-size: 9px; color: var(--text-dim); margin-left: auto;">внутр. хаб</span>
+      <span class="dc-ws-status" :class="dcWsConnected ? 'online' : 'offline'" :title="dcWsConnected ? 'WS online' : 'WS offline'"></span>
+      <span style="font-size: 9px; color: var(--text-dim); margin-left: auto;">хаб</span>
     </div>
     <template x-for="cat in discordCategories" :key="cat.name">
       <div class="dc-cat">
         <div class="dc-cat-title" x-text="cat.name"></div>
         <template x-for="ch in cat.channels" :key="ch.id">
-          <div class="dc-channel" :class="discordActiveChannel?.id === ch.id ? 'active' : ''"
-               @click="openDiscordChannel(ch)">
-            <span class="dc-ch-icon" x-text="ch.type === 'voice' ? '🔊' : '#'"></span>
-            <span x-text="ch.name"></span>
-            <span class="dc-call-badge" x-show="ch.call && ch.call.participants && ch.call.participants.length > 0"
-                  x-text="(ch.call?.participants?.length || 0)" title="В звонке"></span>
+          <div>
+            <div class="dc-channel" :class="discordActiveChannel?.id === ch.id ? 'active' : ''"
+                 @click="openDiscordChannel(ch)">
+              <span class="dc-ch-icon" x-text="ch.type === 'voice' ? '🔊' : '#'"></span>
+              <span x-text="ch.name"></span>
+              <span class="dc-call-badge" x-show="(ch.voice_participants?.length || 0) > 0"
+                    x-text="(ch.voice_participants?.length || 0)" title="В звонке"></span>
+            </div>
+            <!-- Voice participants под voice-каналом -->
+            <template x-if="ch.type === 'voice' && (ch.voice_participants?.length || 0) > 0">
+              <div class="dc-voice-members">
+                <template x-for="p in (ch.voice_participants || [])" :key="p.session_id">
+                  <div class="dc-voice-member" :class="p.muted ? 'muted' : ''">
+                    <template x-if="p.photo_url">
+                      <img :src="p.photo_url" class="dc-avatar-img" :alt="p.username || p.first_name"/>
+                    </template>
+                    <template x-if="!p.photo_url">
+                      <div class="dc-avatar tiny" x-text="(p.username || p.first_name || '?')[0].toUpperCase()"></div>
+                    </template>
+                    <span class="dc-vm-name" x-text="p.username || p.first_name || 'guest'"></span>
+                    <span x-show="p.muted" title="muted">🔇</span>
+                    <span x-show="p.deafened" title="deafened">🔕</span>
+                  </div>
+                </template>
+              </div>
+            </template>
           </div>
         </template>
       </div>
     </template>
     <button class="btn" style="margin: 12px; font-size: 10px;" @click="openCreateChannel()">+ канал</button>
+
+    <!-- ME panel внизу -->
+    <div class="dc-me-bar">
+      <template x-if="me.photo_url">
+        <img :src="me.photo_url" class="dc-avatar-img" :alt="me.username"/>
+      </template>
+      <template x-if="!me.photo_url">
+        <div class="dc-avatar tiny" x-text="(me.username || me.first_name || 'A')[0].toUpperCase()"></div>
+      </template>
+      <div style="font-size: 10px; min-width: 0; flex: 1;">
+        <div style="font-weight: 700; color: var(--hud-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"
+             x-text="me.username ? '@' + me.username : (me.first_name || 'admin')"></div>
+        <div style="color: var(--text-dim); font-size: 9px;" x-text="dcCurrentVoiceChannel ? '🎙 in voice' : 'online'"></div>
+      </div>
+      <button class="dc-me-btn" :class="dcMuted ? 'active' : ''" @click="toggleMute()" x-show="dcCurrentVoiceChannel"
+              :title="dcMuted ? 'unmute' : 'mute'" x-text="dcMuted ? '🔇' : '🎙'"></button>
+      <button class="dc-me-btn" :class="dcDeafened ? 'active' : ''" @click="toggleDeafen()" x-show="dcCurrentVoiceChannel"
+              :title="dcDeafened ? 'undeaf' : 'deafen'" x-text="dcDeafened ? '🔕' : '🔊'"></button>
+    </div>
   </aside>
 
   <!-- MAIN: messages -->
@@ -2238,50 +2504,92 @@
       <span class="dc-ch-icon" style="font-size: 16px;" x-text="discordActiveChannel?.type === 'voice' ? '🔊' : '#'"></span>
       <span style="font-weight: 700;" x-text="discordActiveChannel?.name || ''"></span>
       <span style="font-size: 10px; color: var(--text-dim); margin-left: 8px;" x-text="discordActiveChannel?.topic || ''"></span>
-      <div style="margin-left: auto; display: flex; gap: 8px;">
+      <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
         <button x-show="discordActiveChannel?.type === 'voice'" class="btn"
-                @click="toggleDiscordCall()"
-                :class="discordInCall ? 'danger' : 'success'"
-                x-text="discordInCall ? '🚪 Выйти' : '🎙 Зайти'"></button>
+                @click="isInVoiceChannel(discordActiveChannel.id) ? leaveDiscordVoice() : joinDiscordVoice()"
+                :class="isInVoiceChannel(discordActiveChannel?.id) ? 'danger' : 'success'"
+                x-text="isInVoiceChannel(discordActiveChannel?.id) ? '🚪 Выйти' : '🎙 Зайти'"></button>
+        <button class="btn" @click="toggleDiscordExpanded()"
+                :title="discordExpanded ? 'Свернуть' : 'Развернуть'"
+                x-text="discordExpanded ? '⊟' : '⊞'"></button>
         <button class="btn" @click="refreshDiscordMessages()" title="Обновить">↻</button>
       </div>
     </div>
 
-    <!-- Voice call participants -->
-    <div class="dc-call-bar" x-show="discordActiveChannel?.type === 'voice' && (discordActiveChannel?.call?.participants?.length || 0) > 0">
-      <span style="color: var(--hud-emerald);">🎙 В голосе:</span>
-      <template x-for="p in (discordActiveChannel?.call?.participants || [])" :key="p">
-        <span class="dc-avatar" x-text="(p[0] || '?').toUpperCase()" :title="'@' + p"></span>
-      </template>
-      <span style="margin-left: auto; font-size: 9px; color: var(--text-dim);">
-        ⚠ голос/видео — в разработке (next iteration)
-      </span>
-    </div>
-
-    <div class="dc-messages" x-ref="dcMessages">
-      <template x-if="discordMessages.length === 0">
-        <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
-          Сообщений нет. Начни обсуждение —
-          канал «<span x-text="discordActiveChannel?.name || ''"></span>»
-        </div>
-      </template>
-      <template x-for="(m, idx) in discordMessages" :key="m.id">
-        <div class="dc-msg" :class="(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300) ? 'compact' : ''">
-          <div class="dc-avatar" x-show="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)"
-               x-text="(m.author[0] || '?').toUpperCase()"></div>
-          <div class="dc-msg-body">
-            <div class="dc-msg-head" x-show="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)">
-              <span style="font-weight: 700; color: var(--hud-primary);" x-text="'@' + m.author"></span>
-              <span style="font-size: 9px; color: var(--text-dim);" x-text="fmtTime(m.ts)"></span>
-            </div>
-            <div class="dc-msg-text" x-text="m.text"></div>
-            <div x-show="m.edited" style="font-size: 9px; color: var(--text-dim);">(edited)</div>
+    <!-- Voice participants (inside voice-channel view) -->
+    <div class="dc-voice-stage" x-show="discordActiveChannel?.type === 'voice' && (dcVoiceParticipants?.length || 0) > 0">
+      <template x-for="p in dcVoiceParticipants" :key="p.session_id">
+        <div class="dc-stage-user" :class="(p.muted ? 'is-muted ' : '') + (p.session_id === dcSessionId ? 'is-me' : '')">
+          <template x-if="p.photo_url">
+            <img :src="p.photo_url" class="dc-stage-avatar" :alt="p.username || p.first_name"/>
+          </template>
+          <template x-if="!p.photo_url">
+            <div class="dc-avatar large" x-text="(p.username || p.first_name || '?')[0].toUpperCase()"></div>
+          </template>
+          <div class="dc-stage-name" x-text="p.username ? '@' + p.username : (p.first_name || 'guest')"></div>
+          <div class="dc-stage-flags">
+            <span x-show="p.muted">🔇</span>
+            <span x-show="p.deafened">🔕</span>
+            <span x-show="p.session_id === dcSessionId" style="font-size: 9px; color: var(--hud-amber);">YOU</span>
           </div>
         </div>
       </template>
     </div>
 
-    <div class="dc-input-wrap">
+    <div class="dc-voice-info" x-show="discordActiveChannel?.type === 'voice' && !isInVoiceChannel(discordActiveChannel?.id)">
+      <div style="font-size: 28px; opacity: 0.4;">🔊</div>
+      <div style="font-size: 12px; color: var(--text-dim); margin-top: 6px;"
+           x-text="(dcVoiceParticipants?.length || 0) > 0 ? `В канале ${dcVoiceParticipants.length} участников` : 'Никого в канале'"></div>
+      <button class="btn success" @click="joinDiscordVoice()" style="margin-top: 12px;">🎙 Зайти в голос</button>
+    </div>
+
+    <!-- Text messages -->
+    <div class="dc-messages" x-ref="dcMessages" x-show="discordActiveChannel?.type === 'text' || (discordActiveChannel?.type === 'voice' && isInVoiceChannel(discordActiveChannel?.id))">
+      <template x-if="discordMessages.length === 0 && discordActiveChannel?.type === 'text'">
+        <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+          Сообщений нет. Начни обсуждение в #<span x-text="discordActiveChannel?.name || ''"></span>
+        </div>
+      </template>
+      <template x-for="(m, idx) in discordMessages" :key="m.id">
+        <div class="dc-msg" :class="(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300) ? 'compact' : ''">
+          <template x-if="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)">
+            <template x-if="m.author_avatar">
+              <img :src="m.author_avatar" class="dc-avatar-img big"/>
+            </template>
+          </template>
+          <template x-if="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300) && !m.author_avatar">
+            <div class="dc-avatar" x-text="(m.author[0] || '?').toUpperCase()"></div>
+          </template>
+          <div class="dc-msg-spacer" x-show="(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)"></div>
+          <div class="dc-msg-body">
+            <div class="dc-msg-head" x-show="!(idx > 0 && discordMessages[idx-1].author === m.author && (m.ts - discordMessages[idx-1].ts) < 300)">
+              <span style="font-weight: 700; color: var(--hud-primary);" x-text="'@' + m.author"></span>
+              <span style="font-size: 9px; color: var(--text-dim);" x-text="fmtTime(m.ts)"></span>
+            </div>
+            <div class="dc-msg-text" x-html="renderMessageText(m.text)"></div>
+            <div x-show="m.edited" style="font-size: 9px; color: var(--text-dim);">(edited)</div>
+            <!-- Reactions row -->
+            <div class="dc-reactions" x-show="m._reacts && Object.keys(m._reacts).length > 0">
+              <template x-for="[emoji, users] in Object.entries(m._reacts || {})" :key="emoji">
+                <span class="dc-reaction" @click="toggleReaction(m.id, emoji)"
+                      :class="users.includes(me.username || me.first_name) ? 'mine' : ''">
+                  <span x-text="emoji"></span> <span x-text="users.length"></span>
+                </span>
+              </template>
+            </div>
+            <!-- Reaction picker (on hover) -->
+            <div class="dc-msg-actions">
+              <button class="dc-act-btn" @click="toggleReaction(m.id, '👍')" title="like">👍</button>
+              <button class="dc-act-btn" @click="toggleReaction(m.id, '❤️')" title="love">❤️</button>
+              <button class="dc-act-btn" @click="toggleReaction(m.id, '🔥')" title="fire">🔥</button>
+              <button class="dc-act-btn" @click="toggleReaction(m.id, '✅')" title="ok">✅</button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="dc-input-wrap" x-show="discordActiveChannel?.type === 'text' || (discordActiveChannel?.type === 'voice' && isInVoiceChannel(discordActiveChannel?.id))">
       <input
         class="dc-input"
         type="text"
@@ -2289,7 +2597,7 @@
         @keydown.enter="sendDiscordMessage()"
         :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
       />
-      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">Отправить</button>
+      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">↑</button>
     </div>
   </main>
 
@@ -2299,6 +2607,29 @@
       Выбери канал слева чтобы начать
     </div>
   </main>
+
+  <!-- RIGHT: online users -->
+  <aside class="dc-online" x-show="!discordExpanded">
+    <div class="dc-online-head">ОНЛАЙН — <span x-text="discordOnlineUsers.length"></span></div>
+    <template x-for="u in discordOnlineUsers" :key="(u.user_id || u.username || u.first_name)">
+      <div class="dc-online-row">
+        <template x-if="u.photo_url">
+          <img :src="u.photo_url" class="dc-avatar-img"/>
+        </template>
+        <template x-if="!u.photo_url">
+          <div class="dc-avatar tiny" x-text="(u.username || u.first_name || '?')[0].toUpperCase()"></div>
+        </template>
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-size: 11px; color: var(--text); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"
+               x-text="u.username ? '@' + u.username : (u.first_name || 'guest')"></div>
+          <div style="font-size: 9px; color: var(--text-dim);" x-text="u.in_voice ? '🎙 в голосе' : '🟢 online'"></div>
+        </div>
+      </div>
+    </template>
+    <div x-show="discordOnlineUsers.length === 0" style="padding: 12px; text-align: center; font-size: 10px; color: var(--text-dim);">
+      Никого онлайн
+    </div>
+  </aside>
 </section>
 
 <!-- ===== Create channel modal ===== -->
@@ -2633,13 +2964,27 @@ function jarvis() {
     // === Modals ===
     statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
     deleteModal: { open: false, card_id: '', card: {} },
-    // Discord-hub state
+    // === Discord-hub state ===
+    me: { user_id: 0, username: '', first_name: '', photo_url: '', auth_mode: 'basic' },
     discordChannels: [],
     discordActiveChannel: null,
     discordMessages: [],
     discordDraft: '',
-    discordInCall: false,
     discordChannelModal: { open: false, name: '', type: 'text', category: 'general', topic: '' },
+    discordExpanded: false,
+    discordOnlineUsers: [],
+    discordTyping: {},     // {channel_id: {username: ts}}
+    discordReactions: {},  // {message_id: {emoji: [users]}}
+    // WebRTC voice
+    dcWs: null,
+    dcWsConnected: false,
+    dcSessionId: '',
+    dcLocalStream: null,
+    dcPeers: {},           // {session_id: {pc, audioEl, user}}
+    dcVoiceParticipants: [],   // [{session_id, user, muted, deafened}]
+    dcCurrentVoiceChannel: null,
+    dcMuted: false,
+    dcDeafened: false,
     detailModal: {
       open: false, card_id: '', loading: false, saving: false, flash: '',
       original: {}, draft: {},
@@ -2667,14 +3012,17 @@ function jarvis() {
       this.startCmdResultsPoller();
       this.refreshNotes();
       this.refreshOutreach();
+      this.refreshMe();
       this.refreshDiscordChannels();
+      this.refreshDiscordOnline();
+      this.connectDiscordWS();
       setInterval(() => this.refreshNotes(), 20000);
       setInterval(() => this.refreshOutreach(), 25000);
-      // Discord: каналы каждые 15 сек (для звонков и новых каналов),
-      // сообщения активного канала — каждые 5 сек
+      // Discord auto-refresh
       setInterval(() => this.refreshDiscordChannels(), 15000);
+      setInterval(() => this.refreshDiscordOnline(), 8000);
       setInterval(() => {
-        if (this.currentView === 'discord' && this.discordActiveChannel) {
+        if (this.currentView === 'discord' && this.discordActiveChannel && this.discordActiveChannel.type === 'text') {
           this.refreshDiscordMessages();
         }
       }, 5000);
@@ -3163,14 +3511,22 @@ function jarvis() {
       if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
         setTimeout(() => this.refresh(), 500);
       }
-      // Discord events — обновляем что нужно
+      // Discord events
       if (t === 'discord-message' && p.channel_id) {
         if (this.discordActiveChannel?.id === p.channel_id) {
           setTimeout(() => this.refreshDiscordMessages(), 200);
         }
       }
-      if (['discord-channel-created','discord-channel-deleted','discord-call-join','discord-call-leave'].includes(t)) {
+      if (['discord-channel-created','discord-channel-deleted'].includes(t)) {
         setTimeout(() => this.refreshDiscordChannels(), 200);
+      }
+      if (['discord-voice-state','discord-presence-update'].includes(t)) {
+        setTimeout(() => this.refreshDiscordOnline(), 100);
+      }
+      if (['discord-reaction','discord-reaction-removed'].includes(t)) {
+        if (this.discordActiveChannel?.id) {
+          setTimeout(() => this.refreshDiscordMessages(), 100);
+        }
       }
 
       // Lion narrator — озвучить важное событие
@@ -3376,18 +3732,23 @@ function jarvis() {
       });
     },
 
+    async refreshMe() {
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) this.me = await r.json();
+      } catch (e) {}
+    },
+
     async refreshDiscordChannels() {
       try {
         const r = await fetch('/api/discord/channels', { credentials: 'include' });
         if (r.ok) {
           const data = await r.json();
           this.discordChannels = data.channels || [];
-          // Если активный канал ещё существует — обнови его call-info
           if (this.discordActiveChannel) {
             const cur = this.discordChannels.find(c => c.id === this.discordActiveChannel.id);
             if (cur) this.discordActiveChannel = cur;
           }
-          // Авто-выбор первого текстового канала если ничего не открыто
           if (!this.discordActiveChannel && this.discordChannels.length > 0) {
             const first = this.discordChannels.find(c => c.type === 'text') || this.discordChannels[0];
             if (first) await this.openDiscordChannel(first);
@@ -3396,11 +3757,34 @@ function jarvis() {
       } catch (e) { console.warn('discord channels failed', e); }
     },
 
+    async refreshDiscordOnline() {
+      try {
+        const r = await fetch('/api/discord/online', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.discordOnlineUsers = data.online_users || [];
+          const voiceState = data.voice_channels || {};
+          // Update channel voice participants for sidebar
+          for (const ch of this.discordChannels) {
+            ch.voice_participants = voiceState[ch.id] || [];
+          }
+          // Update active channel and dcVoiceParticipants for any active voice channel
+          if (this.discordActiveChannel && this.discordActiveChannel.type === 'voice') {
+            this.dcVoiceParticipants = voiceState[this.discordActiveChannel.id] || [];
+          }
+        }
+      } catch (e) {}
+    },
+
     async openDiscordChannel(ch) {
       this.discordActiveChannel = ch;
       this.discordMessages = [];
-      this.discordInCall = false;
-      if (ch.type === 'text') await this.refreshDiscordMessages();
+      if (ch.type === 'text') {
+        await this.refreshDiscordMessages();
+      } else if (ch.type === 'voice') {
+        // Сразу подтянуть список участников голосового канала
+        await this.refreshDiscordOnline();
+      }
     },
 
     async refreshDiscordMessages() {
@@ -3413,7 +3797,10 @@ function jarvis() {
         if (r.ok) {
           const data = await r.json();
           this.discordMessages = data.messages || [];
-          // Прокрутка в конец
+          // Reactions для отображения
+          for (const m of this.discordMessages) {
+            if (!m._reactions_loaded) m._reactions_loaded = true;
+          }
           this.$nextTick(() => {
             const el = this.$refs.dcMessages;
             if (el) el.scrollTop = el.scrollHeight;
@@ -3466,20 +3853,414 @@ function jarvis() {
       } catch (e) { console.warn('create channel failed', e); }
     },
 
-    async toggleDiscordCall() {
-      if (!this.discordActiveChannel) return;
-      const endpoint = this.discordInCall ? 'leave' : 'join';
+    toggleDiscordExpanded() {
+      this.discordExpanded = !this.discordExpanded;
+    },
+
+    // === Reactions ===
+    async toggleReaction(messageId, emoji) {
       try {
-        const r = await fetch(
-          `/api/discord/calls/${encodeURIComponent(this.discordActiveChannel.id)}/${endpoint}`,
-          { method: 'POST', credentials: 'include' },
-        );
-        if (r.ok) {
-          this.discordInCall = !this.discordInCall;
-          this.playBeep(this.discordInCall ? 700 : 300);
-          await this.refreshDiscordChannels();
+        const myName = this.me.username || this.me.first_name || 'admin';
+        const existing = (this.discordReactions[messageId] || {})[emoji] || [];
+        const hasMine = existing.includes(myName);
+        const method = hasMine ? 'DELETE' : 'POST';
+        const url = hasMine
+          ? `/api/discord/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`
+          : `/api/discord/messages/${messageId}/reactions`;
+        const body = hasMine ? null : JSON.stringify({ emoji });
+        await fetch(url, {
+          method, credentials: 'include',
+          headers: body ? { 'Content-Type': 'application/json' } : {},
+          body,
+        });
+      } catch (e) {}
+    },
+
+    // === WebRTC Voice ===
+    connectDiscordWS() {
+      // Если уже подключён или коннектится — не дублируем
+      if (this.dcWs && (this.dcWs.readyState === 0 || this.dcWs.readyState === 1)) {
+        console.log('[discord-ws] already connecting/connected, skip');
+        return;
+      }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/ws-discord`;
+      console.log('[discord-ws] connecting to', url);
+      try {
+        this.dcWs = new WebSocket(url);
+      } catch (e) {
+        console.warn('[discord-ws] connect throw:', e);
+        return;
+      }
+      this.dcWs.onopen = () => {
+        console.log('[discord-ws] connected');
+        this.dcWsConnected = true;
+        if (this.dcKeepAlive) clearInterval(this.dcKeepAlive);
+        this.dcKeepAlive = setInterval(() => {
+          try { this.dcWs.send(JSON.stringify({ type: 'ping' })); } catch {}
+        }, 25000);
+      };
+      this.dcWs.onclose = (ev) => {
+        console.log('[discord-ws] closed', ev.code, ev.reason);
+        this.dcWsConnected = false;
+        this.dcSessionId = '';
+        if (this.dcKeepAlive) clearInterval(this.dcKeepAlive);
+        // Если были в голосе — почистим
+        if (this.dcCurrentVoiceChannel) {
+          for (const sid of Object.keys(this.dcPeers)) this.cleanupPeer(sid);
+          if (this.dcLocalStream) {
+            for (const t of this.dcLocalStream.getTracks()) t.stop();
+            this.dcLocalStream = null;
+          }
+          this.dcCurrentVoiceChannel = null;
+          this.dcVoiceParticipants = [];
         }
-      } catch (e) { console.warn('discord call toggle failed', e); }
+        // авто-реконнект через 3 сек если страница ещё открыта
+        setTimeout(() => {
+          if (document.visibilityState === 'visible' || this.currentView === 'discord') {
+            this.connectDiscordWS();
+          }
+        }, 3000);
+      };
+      this.dcWs.onerror = (e) => {
+        console.warn('[discord-ws] error event:', e);
+      };
+      this.dcWs.onmessage = async (e) => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch (err) {
+          console.warn('[discord-ws] bad json:', e.data); return;
+        }
+        await this.handleDiscordWS(msg);
+      };
+    },
+
+    async handleDiscordWS(msg) {
+      console.log('[discord-ws]', msg.type, msg);
+      if (msg.type === 'ready') {
+        this.dcSessionId = msg.session_id;
+        if (msg.me) this.me = Object.assign({}, this.me, msg.me);
+      } else if (msg.type === 'peer-joined') {
+        // Я уже в канале → новый пир зашёл → Я инициирую offer ему.
+        // Это единственное место где мы делаем initiator=true — таким
+        // образом избегаем glare (обе стороны одновременно делают offer).
+        if (this.dcCurrentVoiceChannel) {
+          console.log('[voice] new peer joined, sending offer:', msg.session_id);
+          await this.createPeerConnection(msg.session_id, msg.user, /*initiator=*/ true);
+        }
+      } else if (msg.type === 'peer-left') {
+        console.log('[voice] peer left:', msg.session_id);
+        this.cleanupPeer(msg.session_id);
+      } else if (msg.type === 'voice-state') {
+        this.dcVoiceParticipants = msg.participants || [];
+        // Я только что зашёл → НЕ делаю offer'ы существующим (они сами
+        // сделают offer мне через peer-joined event на их стороне).
+        // Это устраняет glare. existing_peers тут только для UI/инфы.
+        this.refreshDiscordOnline();
+      } else if (msg.type === 'signal') {
+        await this.handleSignal(msg.from, msg.payload);
+      }
+    },
+
+    _getIceServers() {
+      // STUN серверы Google + Cloudflare. TURN — openrelay (бесплатный,
+      // ограниченный по трафику, но рабочий для small group calls).
+      // Для production стоит поставить свой coturn или Twilio TURN.
+      return [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        // OpenRelay TURN (Metered.ca бесплатный tier)
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject',
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject',
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelayproject',
+          credential: 'openrelayproject',
+        },
+      ];
+    },
+
+    async createPeerConnection(remoteSessionId, remoteUser, initiator) {
+      if (this.dcPeers[remoteSessionId]) {
+        console.log('[voice] peer already exists:', remoteSessionId);
+        return this.dcPeers[remoteSessionId];
+      }
+      const pc = new RTCPeerConnection({
+        iceServers: this._getIceServers(),
+      });
+      const audioEl = document.createElement('audio');
+      audioEl.autoplay = true;
+      audioEl.playsInline = true;
+      audioEl.muted = this.dcDeafened;
+      document.body.appendChild(audioEl);
+      this.dcPeers[remoteSessionId] = {
+        pc, audioEl, user: remoteUser, pendingIce: [], initiator,
+      };
+      // Добавляем локальный mic ДО createOffer чтобы offer включал
+      // audio m-line
+      if (this.dcLocalStream) {
+        for (const track of this.dcLocalStream.getTracks()) {
+          try { pc.addTrack(track, this.dcLocalStream); } catch (e) {
+            console.warn('[voice] addTrack failed:', e);
+          }
+        }
+      } else {
+        console.warn('[voice] no local stream when creating peer!');
+      }
+      pc.ontrack = (ev) => {
+        console.log('[voice] remote track received from', remoteSessionId, ev.streams);
+        if (ev.streams && ev.streams[0]) {
+          audioEl.srcObject = ev.streams[0];
+          // Браузер может блокировать autoplay — пытаемся принудительно
+          const playPromise = audioEl.play();
+          if (playPromise) {
+            playPromise.catch(err => {
+              console.warn('[voice] audio play blocked, will retry on interaction:', err);
+            });
+          }
+        }
+      };
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate) {
+          this.sendSignal(remoteSessionId, { type: 'ice', candidate: ev.candidate });
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        console.log('[voice] pc state →', pc.connectionState, 'for', remoteSessionId);
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+          this.cleanupPeer(remoteSessionId);
+        }
+      };
+      pc.oniceconnectionstatechange = () => {
+        console.log('[voice] ice state →', pc.iceConnectionState, 'for', remoteSessionId);
+      };
+      if (initiator) {
+        try {
+          const offer = await pc.createOffer({ offerToReceiveAudio: true });
+          await pc.setLocalDescription(offer);
+          console.log('[voice] sending offer to', remoteSessionId);
+          this.sendSignal(remoteSessionId, { type: 'offer', sdp: offer });
+        } catch (e) {
+          console.error('[voice] createOffer failed:', e);
+        }
+      }
+      return this.dcPeers[remoteSessionId];
+    },
+
+    async handleSignal(fromSessionId, payload) {
+      let peer = this.dcPeers[fromSessionId];
+      if (!peer) {
+        // Не было peer'а — значит мне прислали offer (я не инициатор).
+        console.log('[voice] no peer yet for', fromSessionId, '— creating as non-initiator');
+        peer = await this.createPeerConnection(fromSessionId, {}, /*initiator=*/ false);
+      }
+      const pc = peer.pc;
+      try {
+        if (payload.type === 'offer') {
+          console.log('[voice] received offer from', fromSessionId);
+          await pc.setRemoteDescription(payload.sdp);
+          // Применяем накопленные ICE кандидаты
+          for (const c of (peer.pendingIce || [])) {
+            try { await pc.addIceCandidate(c); } catch {}
+          }
+          peer.pendingIce = [];
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          console.log('[voice] sending answer to', fromSessionId);
+          this.sendSignal(fromSessionId, { type: 'answer', sdp: answer });
+        } else if (payload.type === 'answer') {
+          console.log('[voice] received answer from', fromSessionId);
+          if (pc.signalingState === 'stable') {
+            console.warn('[voice] got answer in stable state — ignoring');
+            return;
+          }
+          await pc.setRemoteDescription(payload.sdp);
+          for (const c of (peer.pendingIce || [])) {
+            try { await pc.addIceCandidate(c); } catch {}
+          }
+          peer.pendingIce = [];
+        } else if (payload.type === 'ice' && payload.candidate) {
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(payload.candidate);
+          } else {
+            // ICE прилетел до setRemoteDescription — буферим
+            peer.pendingIce = peer.pendingIce || [];
+            peer.pendingIce.push(payload.candidate);
+          }
+        }
+      } catch (e) {
+        console.error('[voice] handleSignal error:', e, payload);
+      }
+    },
+
+    sendSignal(target, payload) {
+      if (!this.dcWs || this.dcWs.readyState !== 1) return;
+      try {
+        this.dcWs.send(JSON.stringify({ type: 'signal', target, payload }));
+      } catch {}
+    },
+
+    cleanupPeer(sessionId) {
+      const peer = this.dcPeers[sessionId];
+      if (!peer) return;
+      try { peer.pc.close(); } catch {}
+      try { if (peer.audioEl) peer.audioEl.remove(); } catch {}
+      delete this.dcPeers[sessionId];
+    },
+
+    async joinDiscordVoice() {
+      if (!this.discordActiveChannel || this.discordActiveChannel.type !== 'voice') return;
+      if (this.dcCurrentVoiceChannel) await this.leaveDiscordVoice();
+      // Проверка: WebRTC доступен только на HTTPS (или localhost)
+      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (!isSecure) {
+        alert(
+          'Голос работает только по HTTPS.\n' +
+          'Текущий протокол: ' + location.protocol + '\n' +
+          'Открой сайт через https:// чтобы использовать voice chat.',
+        );
+        return;
+      }
+      // Проверка: браузер поддерживает getUserMedia
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Браузер не поддерживает getUserMedia. Обнови Chrome/Firefox.');
+        return;
+      }
+      // Получаем mic (с улучшенной обработкой ошибок)
+      try {
+        console.log('[voice] requesting microphone access...');
+        this.dcLocalStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: false,
+        });
+        console.log('[voice] mic granted, tracks:', this.dcLocalStream.getTracks().map(t => t.kind + ':' + t.label));
+      } catch (e) {
+        let msg = 'Не удалось получить микрофон: ' + (e.name || '') + ' ' + (e.message || '');
+        if (e.name === 'NotAllowedError') msg = '⛔ Микрофон заблокирован. Разреши доступ в настройках браузера (замочек в адресной строке).';
+        if (e.name === 'NotFoundError') msg = '⛔ Микрофон не найден. Подключи микрофон.';
+        if (e.name === 'NotReadableError') msg = '⛔ Микрофон занят другим приложением.';
+        alert(msg);
+        console.error('[voice] getUserMedia failed:', e);
+        return;
+      }
+      // Подключаем WS если ещё не подключён
+      if (!this.dcWs || this.dcWs.readyState !== 1) {
+        console.log('[voice] WS not connected, connecting...');
+        this.connectDiscordWS();
+      }
+      // Ждём пока WS поднимется И мы получим ready (session_id)
+      const waitWs = async () => {
+        for (let i = 0; i < 50; i++) {  // 5 sec max
+          if (this.dcWs && this.dcWs.readyState === 1 && this.dcSessionId) return true;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        return false;
+      };
+      const ok = await waitWs();
+      if (!ok) {
+        // Cleanup
+        if (this.dcLocalStream) {
+          for (const t of this.dcLocalStream.getTracks()) t.stop();
+          this.dcLocalStream = null;
+        }
+        alert('Не удалось подключиться к серверу голоса.\nПроверь сетевое подключение и refresh страницы.');
+        return;
+      }
+      this.dcCurrentVoiceChannel = this.discordActiveChannel.id;
+      this.dcMuted = false;
+      this.dcDeafened = false;
+      try {
+        this.dcWs.send(JSON.stringify({
+          type: 'join-voice',
+          channel_id: this.discordActiveChannel.id,
+        }));
+        console.log('[voice] sent join-voice for channel', this.discordActiveChannel.id);
+      } catch (e) {
+        console.error('[voice] failed to send join-voice:', e);
+      }
+      this.playBeep(800);
+    },
+
+    async leaveDiscordVoice() {
+      if (!this.dcCurrentVoiceChannel) return;
+      try {
+        this.dcWs && this.dcWs.send(JSON.stringify({ type: 'leave-voice' }));
+      } catch {}
+      // Закрыть peers
+      for (const sid of Object.keys(this.dcPeers)) this.cleanupPeer(sid);
+      // Остановить mic
+      if (this.dcLocalStream) {
+        for (const tr of this.dcLocalStream.getTracks()) tr.stop();
+        this.dcLocalStream = null;
+      }
+      this.dcCurrentVoiceChannel = null;
+      this.dcVoiceParticipants = [];
+      this.playBeep(300);
+    },
+
+    toggleMute() {
+      if (!this.dcLocalStream) return;
+      this.dcMuted = !this.dcMuted;
+      for (const track of this.dcLocalStream.getAudioTracks()) {
+        track.enabled = !this.dcMuted;
+      }
+      try {
+        this.dcWs && this.dcWs.send(JSON.stringify({ type: 'mute', muted: this.dcMuted }));
+      } catch {}
+      this.playBeep(this.dcMuted ? 300 : 700);
+    },
+
+    toggleDeafen() {
+      this.dcDeafened = !this.dcDeafened;
+      // Mute all remote audio elements
+      for (const sid of Object.keys(this.dcPeers)) {
+        const peer = this.dcPeers[sid];
+        if (peer.audioEl) peer.audioEl.muted = this.dcDeafened;
+      }
+      // Also mute self mic
+      if (this.dcDeafened && !this.dcMuted) this.toggleMute();
+      try {
+        this.dcWs && this.dcWs.send(JSON.stringify({ type: 'deaf', deafened: this.dcDeafened }));
+      } catch {}
+    },
+
+    isInVoiceChannel(channelId) {
+      return this.dcCurrentVoiceChannel === channelId;
+    },
+
+    avatarUrl(u) {
+      if (u && u.photo_url) return u.photo_url;
+      return '';
+    },
+    avatarInitial(u) {
+      if (!u) return '?';
+      const name = u.username || u.first_name || '';
+      return (name[0] || '?').toUpperCase();
+    },
+
+    renderMessageText(text) {
+      if (!text) return '';
+      // Escape HTML
+      let safe = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      // Подсветка @mentions
+      safe = safe.replace(/@(\w+)/g, '<span class="dc-mention">@$1</span>');
+      // URLs → links (только http/https)
+      safe = safe.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        '<a href="$1" target="_blank" rel="noopener" class="dc-link">$1</a>',
+      );
+      return safe;
     },
 
     // === Control actions ===
