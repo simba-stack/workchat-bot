@@ -406,6 +406,138 @@ def _build_system_prompt(brain_notes: str = "", client_context: Optional[dict] =
     return "\n\n".join(parts)
 
 
+# Локальная утилита для срезания markdown ```json ... ``` если есть
+def _strip_code_fences(text: str) -> str:
+    if not text:
+        return text
+    t = text.strip()
+    if t.startswith("```"):
+        # снять первую и последнюю строки если это fence
+        lines = t.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines)
+    return t
+
+
+_RELEVANCE_SYSTEM = (
+    "Ты — фильтр релевантности для PRIDE workchat-bot (Telegram-CRM для скупки "
+    "банковских счетов).\n\n"
+    "Задача: посмотри ПОСЛЕДНЕЕ сообщение клиента (в контексте 3 предыдущих) и "
+    "решить — нужно ли AI-ассистенту ответить на него или лучше промолчать.\n\n"
+    "ОТВЕЧАЕМ (respond), если:\n"
+    "• Клиент задаёт вопрос (явный или подразумеваемый)\n"
+    "• Клиент сообщает что-то новое по сделке/счёту/банку (ФИО, банк, цена, статус)\n"
+    "• Клиент просит инструкцию, статус, помощь, выплату\n"
+    "• Упоминает 'Ассистент' / 'ассистент' / '@ассистент'\n"
+    "• Упоминает банк (Альфа, Озон, Точка, ТБанк, ВТБ, Уралсиб, Райффайзен, Локо, БКС, ДЕЛО, Убрир)\n"
+    "• Упоминает деньги, USDT, гарант, сделку, выплату, ИП, счёт, р/с\n"
+    "• Упоминает блок/брак/отказ/задержку\n"
+    "• Жалоба, претензия, недоумение по бизнесу\n\n"
+    "МОЛЧИМ (skip), если:\n"
+    "• Шутки, мемы, эмодзи без смысла: 😂😂, лол, кек, хаха, ыыы\n"
+    "• Болтовня не по делу: про погоду, политику, личное без связи со сделкой\n"
+    "• Реакции на чужие сообщения: 'ага', 'понятно', 'ну да', 'жесть', 'воу', 'окей'\n"
+    "• Просто соглашается с тем что уже было сказано — без нового вопроса\n"
+    "• Очень короткие реплики которые не требуют ответа\n"
+    "• Случайные сообщения, опечатки, бессмысленный набор букв\n\n"
+    "Верни СТРОГО JSON одной строкой, без markdown-обёртки, без объяснений:\n"
+    '{"action": "respond"} или {"action": "skip"}'
+)
+
+
+async def classify_relevance(
+    last_messages: list[dict],
+    model: Optional[str] = None,
+) -> str:
+    """Дешёвый классификатор: нужно ли AI отвечать на последнее сообщение?
+
+    Args:
+        last_messages: список {role, content} последних 3-5 сообщений.
+                       Последнее обязательно от клиента.
+        model: можно переопределить (по умолчанию Haiku 4.5).
+
+    Returns:
+        "respond" — нужен полноценный AI-ответ
+        "skip"    — пропустить, не отвечать (экономия токенов)
+        "respond" по умолчанию при любых ошибках (fail-safe — лучше ответить
+        чем промолчать когда нужно).
+    """
+    cli = _get_client()
+    if not cli:
+        return "respond"
+    mdl = model or "claude-haiku-4-5-20251001"
+    # Берём только последние 4 сообщения чтобы экономить токены
+    msgs = last_messages[-4:] if last_messages else []
+    if not msgs:
+        return "respond"
+    # Конвертируем в простой текст для промпта (без tool-use, без caching —
+    # классификатор зовётся один раз перед основным AI)
+    convo_lines = []
+    for m in msgs:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            # вытащим текст из tool-use блоков
+            parts = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    parts.append(b.get("text", ""))
+                elif isinstance(b, str):
+                    parts.append(b)
+            content = " ".join(parts)
+        content = str(content or "").strip()
+        if not content:
+            continue
+        # Обрезаем длинные сообщения (релевантность можно понять из первых 200 символов)
+        if len(content) > 300:
+            content = content[:300] + "..."
+        convo_lines.append(f"[{role}] {content}")
+    if not convo_lines:
+        return "respond"
+    convo_text = "\n".join(convo_lines)
+    user_prompt = (
+        f"Диалог (последние сообщения):\n\n{convo_text}\n\n"
+        f"Нужно ли AI отвечать на последнее сообщение клиента? Верни JSON."
+    )
+    try:
+        resp = await cli.messages.create(
+            model=mdl,
+            max_tokens=32,
+            system=_RELEVANCE_SYSTEM,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+    except APIError as e:
+        logger.warning("classify_relevance API error: %s — fail-safe respond", e)
+        return "respond"
+    except Exception as e:
+        logger.warning("classify_relevance unexpected error: %s — fail-safe respond", e)
+        return "respond"
+    raw = "".join(b.text for b in resp.content if hasattr(b, "text"))
+    raw = _strip_code_fences(raw.strip())
+    # Простой regex поиск action
+    m_skip = re.search(r'"action"\s*:\s*"skip"', raw, re.I)
+    if m_skip:
+        # Метрика
+        try:
+            usage = getattr(resp, "usage", None)
+            if usage:
+                in_tok = int(getattr(usage, "input_tokens", 0) or 0)
+                out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+                # Haiku 4.5: input $1/MTok, output $5/MTok
+                cost = (in_tok * 1.0 + out_tok * 5.0) / 1_000_000
+                logger.debug(
+                    "classify_relevance: SKIP (in=%d out=%d ~$%.5f)",
+                    in_tok, out_tok, cost,
+                )
+        except Exception:
+            pass
+        return "skip"
+    return "respond"
+
+
 async def generate_reply(
     history: list[dict],
     brain_notes: str = "",

@@ -572,6 +572,39 @@ class Storage:
                 info["welcome_sent"] = True
             await self._save_unlocked()
 
+    def was_assistant_hint_sent(self, chat_id) -> bool:
+        """True если в этом чате уже отправляли подсказку «напиши Ассистент»."""
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        return bool(info.get("assistant_hint_sent"))
+
+    async def mark_assistant_hint_sent(self, chat_id) -> bool:
+        """Помечает, что подсказка «напишите Ассистент» отправлена в чат.
+        Возвращает True если флаг был обновлён (False — уже стоял)."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state.get("managed_chats", {}).get(key)
+            if info is None:
+                return False
+            if info.get("assistant_hint_sent"):
+                return False
+            info["assistant_hint_sent"] = True
+            info["assistant_hint_sent_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    async def bump_ai_relevance_stats(
+        self, skipped: int = 0, responded: int = 0,
+    ):
+        """Метрика классификатора релевантности."""
+        async with _lock:
+            stats = self.state.setdefault("ai_stats", {})
+            if skipped:
+                stats["relevance_skipped"] = int(stats.get("relevance_skipped", 0)) + skipped
+            if responded:
+                stats["relevance_responded"] = int(stats.get("relevance_responded", 0)) + responded
+            await self._save_unlocked()
+
     async def remove_managed_chat(self, chat_id) -> bool:
         """Удаляет чат из managed_chats — AI перестаёт там отвечать.
         Используется командой 'Ассистент забудь этот чат'."""

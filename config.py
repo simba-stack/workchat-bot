@@ -30,6 +30,19 @@ AI_BRAIN_NOTES_LIMIT = int(os.getenv("CLAUDE_BRAIN_NOTES_LIMIT", "10"))
 AI_TYPING_DELAY_MIN = float(os.getenv("CLAUDE_TYPING_DELAY_MIN", "3"))
 AI_TYPING_DELAY_MAX = float(os.getenv("CLAUDE_TYPING_DELAY_MAX", "8"))
 
+# === Фильтр релевантности (экономия токенов) ===
+# Перед основным AI-вызовом запускается дешёвый Haiku-классификатор:
+# нужно ли вообще отвечать на это сообщение (или это болтовня/шутки/реакции).
+# ~$0.0001 за вызов, отсекает ~30-40% бесполезных запросов.
+AI_RELEVANCE_CHECK_ENABLED = os.getenv("AI_RELEVANCE_CHECK", "1") not in ("0", "false", "no")
+# Подсказка отправляется один раз на чат при первом «skip»:
+# «Если я вам понадоблюсь — напишите Ассистент и дальше свой вопрос»
+AI_ASSISTANT_HINT_ENABLED = os.getenv("AI_ASSISTANT_HINT", "1") not in ("0", "false", "no")
+AI_ASSISTANT_HINT_TEXT = os.getenv(
+    "AI_ASSISTANT_HINT_TEXT",
+    "Если я вам понадоблюсь — просто напишите «Ассистент» и дальше свой вопрос.",
+)
+
 # === GitHub writeback (memory.py) ===
 # Token used to commit knowledge/*.md updates back to the repo.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")

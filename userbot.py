@@ -143,6 +143,54 @@ _FORBIDDEN_RX = [
 ]
 
 
+# Прямые триггеры — если в сообщении есть, AI отвечает СРАЗУ
+# (минуя классификатор релевантности).
+_DIRECT_TRIGGER_PATTERNS = [
+    # Явный вызов ассистента
+    r"\bассистент\w*\b",
+    r"@ассистент\w*\b",
+    r"@assistant\b",
+    # Любой вопрос
+    r"\?",
+    # Банки и счета
+    r"\bальфа\b", r"\bтбанк\b", r"\bт[\s-]?банк\b", r"\bтинькоф\w*\b",
+    r"\bозон\b", r"\bточк\w*\b", r"\bвтб\b", r"\bуралсиб\b",
+    r"\bраиф\w*\b", r"\bрайф\w*\b", r"\bлоко\b", r"\bбкс\b",
+    r"\bдело\b", r"\bубрир\b", r"\bсбер\w*\b",
+    # Деньги / выплаты / сделки
+    r"\bусдт\b", r"\busdt\b", r"\btrc[-_ ]?20\b", r"\btrx\b",
+    r"\bгарант\w*\b", r"\bсделк\w*\b", r"\bвыплат\w*\b", r"\bоплат\w*\b",
+    r"\bденьг\w+\b", r"\bкомпенсаци\w+\b", r"\bвозврат\w*\b",
+    r"\bдеп(?:озит)?\w*\b",
+    # Процессы
+    r"\bотработ\w+\b", r"\bперевяз\w+\b", r"\bхолд\w*\b",
+    r"\bблок\w*\b", r"\bбрак\w*\b", r"\bотказ\w*\b",
+    r"\bстатус\w*\b", r"\bкогда\b", r"\bсколько\b",
+    # Счета / ИП
+    r"\bип\b", r"\bр/?с\b", r"\bсч[её]т\w*\b", r"\bдоговор\w*\b",
+    r"\bпасспорт\w*\b", r"\bинн\b", r"\bокпо\b",
+    # Команды
+    r"^/clients\b", r"\b\+\s*партн[её]р\b",
+    # Сильные эмоциональные триггеры (жалоба/претензия)
+    r"\bкид(?:ало|ок|нул)\b", r"\bжалоб\w*\b", r"\bпретенз\w*\b",
+    r"\bобман\w*\b", r"\bсуд\w*\b", r"\bполиц\w*\b",
+]
+_DIRECT_TRIGGER_RX = [
+    re.compile(p, re.IGNORECASE | re.MULTILINE)
+    for p in _DIRECT_TRIGGER_PATTERNS
+]
+
+
+def _should_force_respond(text: str) -> bool:
+    """True если в тексте есть прямой триггер — отвечаем без классификатора."""
+    if not text:
+        return False
+    for rx in _DIRECT_TRIGGER_RX:
+        if rx.search(text):
+            return True
+    return False
+
+
 def _has_forbidden_topic(text: str) -> tuple:
     """Возвращает (True, matched_pattern) если в тексте есть запрещённая
     тема для клиентского чата. Иначе (False, "")."""
@@ -1045,10 +1093,16 @@ class UserbotService:
 
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
         chat_id = event.chat_id
+        # Извлекаем текст один раз — используется в ack-фильтре, классификаторе
+        # релевантности и логах.
+        text_now = ""
+        try:
+            text_now = ((event.message and event.message.text) or "").strip()
+        except Exception:
+            pass
 
         # === ECONOMY GUARD: пропуск ack-сообщений ===
         try:
-            text_now = ((event.message and event.message.text) or "").strip()
             if self._is_ack_message(text_now):
                 logger.info(
                     "AI: chat=%s — ack '%s', пропуск (экономия токенов)",
@@ -1091,6 +1145,67 @@ class UserbotService:
         if not history or history[-1]["role"] != "user":
             logger.info("AI: chat=%s — empty/invalid history", chat_id)
             return
+
+        # === ECONOMY GUARD #2: классификатор релевантности ===
+        # Дёшевый Haiku-вызов решает «нужен ли ответ?». Отсекает шуточки/болтовню/
+        # реакции до основного AI-вызова. ~$0.0001 за фильтрацию, экономия ~30-40%
+        # вызовов основного брейна.
+        # Direct-триггеры (Ассистент / банки / деньги / вопрос) минуют классификатор.
+        try:
+            force_respond = _should_force_respond(text_now)
+            if (
+                config.AI_RELEVANCE_CHECK_ENABLED
+                and not force_respond
+            ):
+                # Берём только последние 4 сообщения чтобы классификатор был дёшев
+                tail = history[-4:] if len(history) >= 1 else history
+                action = await brain.classify_relevance(tail)
+                if action == "skip":
+                    logger.info(
+                        "AI: chat=%s — relevance=SKIP (%.40s...) экономия токенов",
+                        chat_id, text_now[:50],
+                    )
+                    try:
+                        await storage.bump_ai_relevance_stats(skipped=1)
+                    except Exception:
+                        pass
+                    _e("ai-relevance-skip", {
+                        "chat_id": chat_id,
+                        "text": text_now[:120],
+                    }, severity="info")
+                    # Один раз на чат — подсказка про «Ассистент»
+                    if (
+                        config.AI_ASSISTANT_HINT_ENABLED
+                        and not storage.was_assistant_hint_sent(chat_id)
+                    ):
+                        try:
+                            marked = await storage.mark_assistant_hint_sent(chat_id)
+                            if marked:
+                                await self.client.send_message(
+                                    chat_id,
+                                    config.AI_ASSISTANT_HINT_TEXT,
+                                )
+                                logger.info(
+                                    "AI: chat=%s — отправлена подсказка про Ассистента",
+                                    chat_id,
+                                )
+                                _e("ai-assistant-hint-sent", {
+                                    "chat_id": chat_id,
+                                }, severity="info")
+                        except Exception as e:
+                            logger.warning(
+                                "send assistant hint failed: %s", e,
+                            )
+                    return
+                else:
+                    # relevance="respond" — продолжаем как обычно
+                    try:
+                        await storage.bump_ai_relevance_stats(responded=1)
+                    except Exception:
+                        pass
+        except Exception as e:
+            # Любая ошибка классификатора — fail-safe, продолжаем основной AI
+            logger.warning("relevance classifier failed: %s — fallback respond", e)
 
         brain_notes = await self._fetch_brain_notes()
 
