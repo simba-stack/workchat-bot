@@ -887,6 +887,21 @@ class LKStatusReq(BaseModel):
     new_status: str
 
 
+class LKUpdateReq(BaseModel):
+    """Редактируемые поля карточки ЛК через дашборд."""
+    bank: Optional[str] = None
+    fio: Optional[str] = None
+    price_usdt: Optional[float] = None
+    payment_method: Optional[str] = None
+    deal_id: Optional[str] = None
+    usdt_address: Optional[str] = None
+    supplier: Optional[str] = None
+    client_username: Optional[str] = None
+    block_amount_rub: Optional[float] = None
+    block_note: Optional[str] = None
+    brak_reason: Optional[str] = None
+
+
 @app.post("/api/control/ai_toggle")
 async def control_ai_toggle(req: AIToggleReq, _: None = Depends(_auth)):
     """Включить/выключить AI глобально."""
@@ -935,10 +950,16 @@ async def control_lk_status(
         )
     except Exception:
         pass
-    # Side-effects при БЛОК_БЕЗ_ОТРАБОТКИ — userbot должен:
-    # 1) отменить сделку (если есть deal_id)
-    # 2) написать клиенту в work_chat про блок без отработки
-    # 3) reply на анкету в Группе 1 с инструкцией работнику
+    # Полная синхронизация: userbot должен обновить анкету в Группе 1 ЛК.
+    # Если статус БЛОК_БЕЗ_ОТРАБОТКИ — также запустит side-effects
+    # (отмена сделки + уведомление клиента в work_chat + reply работнику).
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__sync_lk_card {card_id}",
+            source="dashboard-status-change",
+        )
+    except Exception:
+        pass
     if new_status == "БЛОК_БЕЗ_ОТРАБОТКИ":
         try:
             await storage.enqueue_dashboard_command(
@@ -948,6 +969,117 @@ async def control_lk_status(
         except Exception:
             pass
     return {"ok": True, "card_id": card_id, "new_status": new_status}
+
+
+@app.get("/api/lk_card/{card_id}")
+async def api_lk_card_detail(card_id: str, _: None = Depends(_auth)):
+    """Полная информация по карточке ЛК — все поля + история статусов."""
+    storage.reload_sync()
+    card_id = card_id.lower().lstrip("#")
+    c = storage.get_lk_card(card_id) or {}
+    if not c:
+        raise HTTPException(status_code=404, detail="card not found")
+    history = list(c.get("history") or [])
+    # Доп. контекст: связанная сделка
+    deal = None
+    did = (c.get("deal_id") or "").strip().lstrip("#")
+    if did:
+        d = storage.get_deal(did)
+        if d:
+            deal = {
+                "deal_id": did,
+                "status": d.get("status"),
+                "amount": d.get("amount"),
+                "fee": d.get("fee"),
+                "method": d.get("method"),
+                "fio": d.get("fio"),
+                "bank": d.get("bank"),
+                "client_username": d.get("client_username"),
+            }
+    return {
+        "card_id": card_id,
+        "supplier": c.get("supplier"),
+        "bank": c.get("bank"),
+        "fio": c.get("fio"),
+        "price_usdt": c.get("price_usdt"),
+        "payment_method": c.get("payment_method"),
+        "status": c.get("status"),
+        "deal_id": c.get("deal_id"),
+        "usdt_address": c.get("usdt_address"),
+        "client_username": c.get("client_username"),
+        "work_chat_id": c.get("work_chat_id"),
+        "block_amount_rub": c.get("block_amount_rub"),
+        "block_note": c.get("block_note"),
+        "brak_reason": c.get("brak_reason"),
+        "lk_group_msg_id": c.get("lk_group_msg_id"),
+        "post_action_reply_msg_id": c.get("post_action_reply_msg_id"),
+        "last_application_id": c.get("last_application_id"),
+        "created_at": c.get("created_at"),
+        "created_by": (history[0].get("by") if history else None),
+        "history": history,
+        "deal": deal,
+    }
+
+
+@app.post("/api/control/lk/{card_id}/update")
+async def control_lk_update(
+    card_id: str, req: LKUpdateReq, _: None = Depends(_auth),
+):
+    """Обновить редактируемые поля карточки ЛК (банк, ФИО, цена,
+    метод, deal_id, usdt_address, supplier, …).
+
+    После обновления:
+    - emit события `lk-card-updated` для real-time подписчиков
+    - enqueue `__sync_lk_card lkNNN` чтобы userbot обновил анкету в Группе 1
+    """
+    storage.reload_sync()
+    card_id = card_id.lower().lstrip("#")
+    if not storage.get_lk_card(card_id):
+        raise HTTPException(status_code=404, detail="card not found")
+    updates: dict = {}
+    payload = req.model_dump(exclude_unset=True) if hasattr(req, "model_dump") \
+        else req.dict(exclude_unset=True)
+    for k, v in payload.items():
+        if v is None:
+            continue
+        if isinstance(v, str):
+            v_clean = v.strip()
+            if k == "deal_id":
+                v_clean = v_clean.lstrip("#")
+            if k == "supplier":
+                v_clean = v_clean.lstrip("@")
+            if k == "client_username":
+                v_clean = v_clean.lstrip("@")
+            if k == "payment_method":
+                v_clean = v_clean.upper()
+            updates[k] = v_clean
+        else:
+            updates[k] = v
+    if not updates:
+        return {"ok": True, "card_id": card_id, "updated": []}
+    ok = await storage.update_lk_card(card_id, **updates)
+    if not ok:
+        raise HTTPException(status_code=500, detail="update failed")
+    try:
+        event_bus.emit_event(
+            "lk-card-updated",
+            {
+                "card_id": card_id,
+                "fields": list(updates.keys()),
+                "by": "dashboard",
+            },
+        )
+    except Exception:
+        pass
+    # Sync: userbot обновит анкету в Группе 1 ЛК
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__sync_lk_card {card_id}",
+            source="dashboard-card-update",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "card_id": card_id, "updated": list(updates.keys())}
 
 
 @app.post("/api/control/lk/{card_id}/delete")

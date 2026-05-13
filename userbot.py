@@ -5251,7 +5251,8 @@ class UserbotService:
                         pass
             except Exception as e:
                 logger.warning("_dashboard_command_worker tick failed: %s", e)
-            await asyncio.sleep(5)
+            # 1.5s poll — для быстрой синхронизации дашборд↔ТГ
+            await asyncio.sleep(1.5)
 
     async def _execute_dashboard_command(self, text: str) -> str:
         """Парсит и выполняет одну команду из дашборда. Возвращает текст
@@ -5405,6 +5406,26 @@ class UserbotService:
                         "block_no_work side-effects card=%s: %s", cid, e,
                     )
             return f"✅ #{cid} → {new_status}"
+
+        # ===== INTERNAL: sync LK card (от api.py — после правок в дашборде) =====
+        m = re.match(r"^__sync_lk_card\s+(lk\d+)\s*$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            try:
+                storage.reload_sync()
+            except Exception:
+                pass
+            try:
+                ok = await self._refresh_lk_card_post(cid)
+                return (
+                    f"✅ #{cid} sync ok" if ok
+                    else f"⚠️ #{cid}: sync не удался (нет lk_group/msg_id?)"
+                )
+            except Exception as e:
+                logger.warning(
+                    "sync_lk_card card=%s: %s", cid, e,
+                )
+                return f"⚠️ sync #{cid} ошибка: {e}"
 
         # ===== INTERNAL: block-no-work side-effects (от api.py) =====
         m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)

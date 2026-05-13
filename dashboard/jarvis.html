@@ -1000,6 +1000,100 @@
     margin-top: 8px;
   }
 
+  /* ===== LK Card detail modal ===== */
+  .modal.detail {
+    min-width: 540px;
+    max-width: 90vw;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 22px 26px;
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 8px 12px;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 11px;
+  }
+  .detail-grid label {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 10px;
+  }
+  .detail-grid input,
+  .detail-grid select {
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    width: 100%;
+  }
+  .detail-grid input:focus,
+  .detail-grid select:focus {
+    border-color: var(--hud-primary);
+    outline: none;
+    box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.25);
+  }
+  .detail-grid .static {
+    color: var(--text);
+    padding: 5px 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .detail-section {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(var(--primary-rgb), 0.15);
+  }
+  .detail-section-title {
+    color: var(--hud-primary);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .history-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .history-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 60px;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px dotted rgba(var(--primary-rgb), 0.07);
+    color: var(--text-dim);
+  }
+  .history-row .h-st { color: var(--hud-amber); }
+  .history-row .h-by { color: var(--text-dim); font-style: italic; text-align: right; }
+  .save-flash {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    padding: 4px 10px;
+    background: var(--hud-emerald);
+    color: #0a1421;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    animation: flash-fade 1.6s ease-out forwards;
+    z-index: 1000;
+  }
+  @keyframes flash-fade {
+    0% { opacity: 0; transform: translateY(-6px); }
+    20% { opacity: 1; transform: translateY(0); }
+    80% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-6px); }
+  }
+
   /* ===== Lion narrator sphere ===== */
   /* ===== JARVIS Core Sphere ===== */
   .jarvis-sphere {
@@ -1541,7 +1635,7 @@
           </div>
         </template>
         <template x-for="c in filteredCards.slice(0, 40)" :key="c.card_id">
-          <div class="lk-chip">
+          <div class="lk-chip" @click="openDetailModal(c)" style="cursor: pointer;" title="Открыть карточку">
             <div class="cid" x-text="'#' + c.card_id"></div>
             <div class="info">
               <div class="top" x-text="(c.bank || '—') + ' · ' + (c.fio || '—')"></div>
@@ -1549,8 +1643,8 @@
             </div>
             <span class="badge" :class="'s-' + (c.status || '').toLowerCase()" x-text="(c.status || '—').replace(/_/g,' ')"></span>
             <div class="lk-actions">
-              <button title="Сменить статус" @click="openStatusModal(c)">⚙</button>
-              <button title="Удалить" class="danger" @click="confirmDelete(c)">×</button>
+              <button title="Сменить статус" @click.stop="openStatusModal(c)">⚙</button>
+              <button title="Удалить" class="danger" @click.stop="confirmDelete(c)">×</button>
             </div>
           </div>
         </template>
@@ -2007,6 +2101,138 @@
   </div>
 </template>
 
+<!-- ===== LK Card detail/edit modal ===== -->
+<template x-if="detailModal.open">
+  <div class="modal-mask" @click="closeDetailModal()">
+    <div class="modal detail" @click.stop>
+      <template x-if="detailModal.flash">
+        <div class="save-flash" x-text="detailModal.flash"></div>
+      </template>
+      <h3>
+        Карточка <span x-text="'#' + detailModal.card_id"></span>
+        <span class="badge" style="margin-left: 8px;" :class="'s-' + (detailModal.draft.status || '').toLowerCase()" x-text="(detailModal.draft.status || '—').replace(/_/g,' ')"></span>
+      </h3>
+
+      <div class="detail-section-title">Основное</div>
+      <div class="detail-grid">
+        <label>Банк</label>
+        <input type="text" x-model="detailModal.draft.bank" placeholder="ОЗОН / ТБАНК / ...">
+
+        <label>ФИО</label>
+        <input type="text" x-model="detailModal.draft.fio" placeholder="Иванов Иван Иванович">
+
+        <label>Цена USDT</label>
+        <input type="number" step="0.01" x-model.number="detailModal.draft.price_usdt">
+
+        <label>Метод</label>
+        <select x-model="detailModal.draft.payment_method">
+          <option value="">—</option>
+          <option value="USDT_TRC20">USDT_TRC20</option>
+          <option value="GUARANTOR_BEFORE">GUARANTOR_BEFORE</option>
+          <option value="GUARANTOR_AFTER">GUARANTOR_AFTER</option>
+          <option value="GUARANTOR_AFTER_WORK">GUARANTOR_AFTER_WORK</option>
+        </select>
+
+        <label>Статус</label>
+        <select x-model="detailModal.draft.status">
+          <option>В_РАБОТЕ</option>
+          <option>ОТРАБОТАН</option>
+          <option>ПОПОЛНИТЬ_И_ОТПУСТИТЬ</option>
+          <option>ЗАВЕРШЁН</option>
+          <option>БРАК</option>
+          <option>БЛОК</option>
+          <option>БЛОК_БЕЗ_ОТРАБОТКИ</option>
+        </select>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Сделка / выплата</div>
+        <div class="detail-grid">
+          <label>Deal ID</label>
+          <input type="text" x-model="detailModal.draft.deal_id" placeholder="12345">
+
+          <label>USDT адрес</label>
+          <input type="text" x-model="detailModal.draft.usdt_address" placeholder="TXxx...">
+
+          <label>Поставщик</label>
+          <input type="text" x-model="detailModal.draft.supplier" placeholder="username">
+
+          <label>Клиент</label>
+          <input type="text" x-model="detailModal.draft.client_username" placeholder="username">
+        </div>
+        <template x-if="detailModal.original.deal">
+          <div class="text-sm mt-2" style="color: var(--text-dim);">
+            🤝 Сделка <b x-text="'#' + detailModal.original.deal.deal_id"></b> ·
+            статус: <span x-text="detailModal.original.deal.status"></span> ·
+            сумма: <span x-text="detailModal.original.deal.amount + '₽'"></span>
+          </div>
+        </template>
+      </div>
+
+      <template x-if="(detailModal.draft.status || '').startsWith('БЛОК')">
+        <div class="detail-section">
+          <div class="detail-section-title">Блок</div>
+          <div class="detail-grid">
+            <label>Сумма блока ₽</label>
+            <input type="number" step="1" x-model.number="detailModal.draft.block_amount_rub">
+
+            <label>Причина / что надо</label>
+            <input type="text" x-model="detailModal.draft.block_note" placeholder="...">
+          </div>
+        </div>
+      </template>
+
+      <template x-if="(detailModal.draft.status || '') === 'БРАК'">
+        <div class="detail-section">
+          <div class="detail-section-title">Брак</div>
+          <div class="detail-grid">
+            <label>Причина брака</label>
+            <input type="text" x-model="detailModal.draft.brak_reason" placeholder="...">
+          </div>
+        </div>
+      </template>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Системное</div>
+        <div class="detail-grid">
+          <label>work_chat_id</label>
+          <span class="static" x-text="detailModal.original.work_chat_id || '—'"></span>
+
+          <label>lk_group_msg_id</label>
+          <span class="static" x-text="detailModal.original.lk_group_msg_id || '—'"></span>
+
+          <label>Создана</label>
+          <span class="static" x-text="fmtTime(detailModal.original.created_at) + ' · ' + (detailModal.original.created_by || '—')"></span>
+
+          <label>Last application</label>
+          <span class="static" x-text="detailModal.original.last_application_id || '—'"></span>
+        </div>
+      </div>
+
+      <template x-if="(detailModal.original.history || []).length > 0">
+        <div class="detail-section">
+          <div class="detail-section-title">История статусов (<span x-text="detailModal.original.history.length"></span>)</div>
+          <div class="history-list">
+            <template x-for="(h, i) in (detailModal.original.history || []).slice().reverse()" :key="i">
+              <div class="history-row">
+                <span x-text="fmtTime(h.ts)"></span>
+                <span class="h-st" x-text="h.status"></span>
+                <span class="h-by" x-text="h.by || '—'"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <div class="modal-actions">
+        <button class="btn danger" @click="closeDetailModal(); confirmDelete({card_id: detailModal.card_id, ...detailModal.original})">🗑 Удалить</button>
+        <button class="btn" @click="closeDetailModal()">Закрыть</button>
+        <button class="btn success" @click="saveDetailCard()" :disabled="detailModal.saving" x-text="detailModal.saving ? 'Сохраняю...' : '💾 Сохранить'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
 <script>
 function jarvis() {
   return {
@@ -2118,6 +2344,10 @@ function jarvis() {
     // === Modals ===
     statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
     deleteModal: { open: false, card_id: '', card: {} },
+    detailModal: {
+      open: false, card_id: '', loading: false, saving: false, flash: '',
+      original: {}, draft: {},
+    },
 
     async init() {
       this.bootStatus = 'FETCHING STATE';
@@ -2605,10 +2835,28 @@ function jarvis() {
         };
       }
 
-      // refresh cards on lk events
-      if (charKey === 'lk') setTimeout(() => this.refreshCards(), 700);
-      if (['ai-reply','application-processed','lk-created','lk-status-changed'].includes(t)) {
-        setTimeout(() => this.refresh(), 600);
+      // refresh cards on lk events (включая правки из дашборда и ТГ-группы)
+      if (charKey === 'lk' || t === 'lk-card-updated') {
+        setTimeout(() => this.refreshCards(), 400);
+        // Если открыта детальная карточка и обновили её же — пере-подтянуть детали
+        if (this.detailModal.open && p.card_id === this.detailModal.card_id) {
+          setTimeout(async () => {
+            try {
+              const r = await fetch(`/api/lk_card/${this.detailModal.card_id}`, { credentials: 'include' });
+              if (r.ok) {
+                const full = await r.json();
+                this.detailModal.original = full;
+                // не затираем draft если идёт редактирование
+                if (!this.detailModal.saving) {
+                  // sync только статус и историю в original — оставляем draft нетронутым
+                }
+              }
+            } catch {}
+          }, 600);
+        }
+      }
+      if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
+        setTimeout(() => this.refresh(), 500);
       }
 
       // Lion narrator — озвучить важное событие
@@ -3136,6 +3384,99 @@ function jarvis() {
         }
       } catch (e) {}
       this.closeDeleteModal();
+    },
+
+    // ===== LK Card detail modal =====
+    async openDetailModal(c) {
+      this.detailModal = {
+        open: true, card_id: c.card_id, loading: true, saving: false,
+        flash: '', original: { ...c }, draft: { ...c },
+      };
+      this.playBeep(540);
+      try {
+        const r = await fetch(`/api/lk_card/${c.card_id}`, { credentials: 'include' });
+        if (r.ok) {
+          const full = await r.json();
+          this.detailModal.original = full;
+          this.detailModal.draft = {
+            bank: full.bank || '',
+            fio: full.fio || '',
+            price_usdt: full.price_usdt || 0,
+            payment_method: full.payment_method || '',
+            status: full.status || 'В_РАБОТЕ',
+            deal_id: full.deal_id || '',
+            usdt_address: full.usdt_address || '',
+            supplier: full.supplier || '',
+            client_username: full.client_username || '',
+            block_amount_rub: full.block_amount_rub || 0,
+            block_note: full.block_note || '',
+            brak_reason: full.brak_reason || '',
+          };
+        }
+      } catch (e) { console.warn('detail load failed', e); }
+      this.detailModal.loading = false;
+    },
+    closeDetailModal() { this.detailModal.open = false; this.detailModal.flash = ''; },
+
+    async saveDetailCard() {
+      const { card_id, draft, original } = this.detailModal;
+      if (!card_id) return;
+      this.detailModal.saving = true;
+      try {
+        // 1) Сохраняем редактируемые поля (всё кроме статуса)
+        const updates = {};
+        const editableKeys = [
+          'bank', 'fio', 'price_usdt', 'payment_method', 'deal_id',
+          'usdt_address', 'supplier', 'client_username',
+          'block_amount_rub', 'block_note', 'brak_reason',
+        ];
+        for (const k of editableKeys) {
+          if (draft[k] !== undefined && draft[k] !== (original[k] || (typeof draft[k] === 'number' ? 0 : ''))) {
+            updates[k] = draft[k];
+          }
+        }
+        let anySaved = false;
+        if (Object.keys(updates).length > 0) {
+          const r = await fetch(`/api/control/lk/${card_id}/update`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates),
+          });
+          if (r.ok) anySaved = true;
+        }
+
+        // 2) Если статус изменился — отдельный endpoint (триггерит side-effects)
+        const newStatus = draft.status || '';
+        if (newStatus && newStatus !== (original.status || '')) {
+          const r2 = await fetch(`/api/control/lk/${card_id}/status`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_status: newStatus }),
+          });
+          if (r2.ok) anySaved = true;
+        }
+
+        if (anySaved) {
+          this.playBeep(880);
+          this.detailModal.flash = '✓ СОХРАНЕНО · СИНХ С TG';
+          await this.refreshCards();
+          await this.refresh();
+          // обновим original чтобы повторное сохранение не слало те же поля
+          this.detailModal.original = { ...this.detailModal.original, ...draft };
+          setTimeout(() => { this.detailModal.flash = ''; }, 1600);
+        } else {
+          this.detailModal.flash = 'Без изменений';
+          setTimeout(() => { this.detailModal.flash = ''; }, 1200);
+        }
+      } catch (e) {
+        console.warn('save card failed', e);
+        this.detailModal.flash = '✗ ошибка';
+        setTimeout(() => { this.detailModal.flash = ''; }, 1600);
+      } finally {
+        this.detailModal.saving = false;
+      }
     },
   };
 }
