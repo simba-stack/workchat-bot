@@ -158,7 +158,18 @@ def _default_state() -> dict:
         #              attachments[], mentions[], reply_to}]
         "discord_messages": [],
         # Активные звонки: {channel_id: {started_at, participants[]}}
+        # ⚠ Устарело: presence идёт через WebSocket-сессии в памяти api.py.
+        # Здесь не пишем — только legacy.
         "discord_calls": {},
+        # Профили админов из Telegram OAuth: {user_id: {username,
+        # first_name, last_name, photo_url, last_seen_ts}}
+        "tg_user_info": {},
+        # Реакции на сообщения Discord: {message_id: {emoji: [user1, user2]}}
+        "discord_reactions": {},
+        # Закреплённые сообщения: {channel_id: [message_id, ...]}
+        "discord_pins": {},
+        # Прочитанные сообщения: {user: {channel_id: last_read_ts}}
+        "discord_reads": {},
         # Заметки от LEO (через голосовой чат или вручную через API).
         # Структура: [{id, ts, category, priority, text, source, author,
         #              tags[], synced_to_knowledge: bool, knowledge_url}]
@@ -743,7 +754,10 @@ class Storage:
             "edited": False,
         }
         async with _lock:
-            msgs = self.state.setdefault("discord_messages", [])
+            msgs = self.state.get("discord_messages")
+            if not isinstance(msgs, list):
+                msgs = []
+                self.state["discord_messages"] = msgs
             msgs.append(msg)
             # Cap: храним максимум 5000 последних сообщений (защита от роста)
             if len(msgs) > 5000:
@@ -755,9 +769,21 @@ class Storage:
         self, channel_id: str, limit: int = 100, before_ts: Optional[float] = None,
     ) -> list:
         msgs = self.state.get("discord_messages") or []
-        filtered = [m for m in msgs if m.get("channel_id") == channel_id]
-        if before_ts:
-            filtered = [m for m in filtered if (m.get("ts") or 0) < before_ts]
+        # Защита от corrupted state (если кто-то записал dict вместо list)
+        if not isinstance(msgs, list):
+            try:
+                msgs = list(msgs.values()) if isinstance(msgs, dict) else []
+            except Exception:
+                msgs = []
+        filtered = []
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            if m.get("channel_id") != channel_id:
+                continue
+            if before_ts and (m.get("ts") or 0) >= before_ts:
+                continue
+            filtered.append(m)
         filtered.sort(key=lambda m: m.get("ts") or 0)
         return filtered[-limit:] if limit else filtered
 
@@ -785,37 +811,118 @@ class Storage:
                     return True
             return False
 
-    async def discord_call_join(self, channel_id: str, user: str) -> dict:
-        """Зайти в голосовой канал. Возвращает обновлённое состояние."""
+    # === TG user info (для аватарок и имён в Discord-хабе) ===
+
+    async def record_tg_user_info(
+        self, user_id: int, username: str = "", first_name: str = "",
+        last_name: str = "", photo_url: str = "",
+    ):
+        """Сохранить профиль админа из Telegram OAuth."""
+        if not user_id:
+            return
         async with _lock:
-            calls = self.state.setdefault("discord_calls", {})
-            entry = calls.setdefault(channel_id, {
-                "channel_id": channel_id,
-                "started_at": time.time(),
-                "participants": [],
-            })
-            u = (user or "").lstrip("@")
-            if u and u not in entry["participants"]:
-                entry["participants"].append(u)
+            info = self.state.setdefault("tg_user_info", {})
+            entry = info.setdefault(str(user_id), {})
+            entry["user_id"] = int(user_id)
+            if username:
+                entry["username"] = username.lstrip("@")
+            if first_name:
+                entry["first_name"] = first_name
+            if last_name:
+                entry["last_name"] = last_name
+            if photo_url:
+                entry["photo_url"] = photo_url
+            entry["last_seen_ts"] = time.time()
             await self._save_unlocked()
-            return dict(entry)
 
-    async def discord_call_leave(self, channel_id: str, user: str) -> dict:
+    def get_tg_user_info(self, user_id) -> dict:
+        info = self.state.get("tg_user_info") or {}
+        return dict(info.get(str(user_id)) or {})
+
+    def list_tg_user_info(self) -> dict:
+        return dict(self.state.get("tg_user_info") or {})
+
+    # === Реакции на сообщения Discord ===
+
+    async def add_discord_reaction(
+        self, message_id: str, emoji: str, user: str,
+    ) -> dict:
         async with _lock:
-            calls = self.state.setdefault("discord_calls", {})
-            entry = calls.get(channel_id) or {}
-            if entry:
-                u = (user or "").lstrip("@")
-                entry["participants"] = [
-                    p for p in (entry.get("participants") or []) if p != u
-                ]
-                if not entry["participants"]:
-                    calls.pop(channel_id, None)
-                await self._save_unlocked()
-            return dict(entry)
+            reactions = self.state.setdefault("discord_reactions", {})
+            msg_reacts = reactions.setdefault(message_id, {})
+            lst = msg_reacts.setdefault(emoji, [])
+            u = (user or "").lstrip("@")
+            if u and u not in lst:
+                lst.append(u)
+            await self._save_unlocked()
+            return dict(msg_reacts)
 
-    def list_discord_calls(self) -> dict:
-        return dict(self.state.get("discord_calls") or {})
+    async def remove_discord_reaction(
+        self, message_id: str, emoji: str, user: str,
+    ) -> dict:
+        async with _lock:
+            reactions = self.state.setdefault("discord_reactions", {})
+            msg_reacts = reactions.get(message_id) or {}
+            if emoji in msg_reacts:
+                u = (user or "").lstrip("@")
+                msg_reacts[emoji] = [x for x in msg_reacts[emoji] if x != u]
+                if not msg_reacts[emoji]:
+                    del msg_reacts[emoji]
+            if not msg_reacts and message_id in reactions:
+                del reactions[message_id]
+            await self._save_unlocked()
+            return dict(msg_reacts)
+
+    def get_discord_reactions(self, message_id: str) -> dict:
+        reactions = self.state.get("discord_reactions") or {}
+        return dict(reactions.get(message_id) or {})
+
+    def get_all_discord_reactions(self) -> dict:
+        return dict(self.state.get("discord_reactions") or {})
+
+    # === Pin / unread ===
+
+    async def pin_discord_message(self, channel_id: str, message_id: str) -> bool:
+        async with _lock:
+            pins = self.state.setdefault("discord_pins", {})
+            arr = pins.setdefault(channel_id, [])
+            if message_id in arr:
+                return False
+            arr.append(message_id)
+            await self._save_unlocked()
+            return True
+
+    async def unpin_discord_message(self, channel_id: str, message_id: str) -> bool:
+        async with _lock:
+            pins = self.state.get("discord_pins") or {}
+            arr = pins.get(channel_id) or []
+            if message_id not in arr:
+                return False
+            pins[channel_id] = [m for m in arr if m != message_id]
+            await self._save_unlocked()
+            return True
+
+    def get_pinned_messages(self, channel_id: str) -> list:
+        pins = self.state.get("discord_pins") or {}
+        return list(pins.get(channel_id) or [])
+
+    async def mark_channel_read(
+        self, user: str, channel_id: str, ts: Optional[float] = None,
+    ):
+        u = (user or "").lstrip("@")
+        if not u:
+            return
+        async with _lock:
+            reads = self.state.setdefault("discord_reads", {})
+            per_user = reads.setdefault(u, {})
+            per_user[channel_id] = float(ts or time.time())
+            await self._save_unlocked()
+
+    def get_last_read_ts(self, user: str, channel_id: str) -> float:
+        u = (user or "").lstrip("@")
+        reads = self.state.get("discord_reads") or {}
+        per_user = reads.get(u) or {}
+        return float(per_user.get(channel_id) or 0)
 
     async def remove_managed_chat(self, chat_id) -> bool:
         """Удаляет чат из managed_chats — AI перестаёт там отвечать.

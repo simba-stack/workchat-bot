@@ -2534,6 +2534,16 @@
           </div>
         </div>
       </template>
+      <!-- Подсказка если ты один в канале -->
+      <div x-show="isInVoiceChannel(discordActiveChannel?.id) && (dcVoiceParticipants?.length || 0) === 1"
+           style="width: 100%; text-align: center; padding: 20px; font-size: 12px; color: var(--text-dim);">
+        Ты сейчас один в комнате. Дождись когда другой админ зайдёт — тогда услышите друг друга.
+        <br>
+        <button class="btn" style="margin-top: 8px; font-size: 10px;"
+                @click="navigator.clipboard.writeText(location.origin + '/?goto=discord&channel=' + (discordActiveChannel?.id || '')); alert('Ссылка скопирована — отправь другому админу')">
+          📋 Скопировать ссылку на комнату
+        </button>
+      </div>
     </div>
 
     <div class="dc-voice-info" x-show="discordActiveChannel?.type === 'voice' && !isInVoiceChannel(discordActiveChannel?.id)">

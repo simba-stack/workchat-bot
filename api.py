@@ -924,15 +924,33 @@ async def api_discord_messages(
     before_ts: Optional[float] = None,
     _: None = Depends(_auth),
 ):
-    storage.reload_sync()
-    msgs = storage.list_discord_messages(
-        channel_id, limit=max(1, min(limit, 500)), before_ts=before_ts,
-    )
-    # Inline reactions for each message
-    all_reacts = storage.get_all_discord_reactions()
+    try:
+        storage.reload_sync()
+    except Exception as e:
+        logger.warning("discord_messages reload_sync failed: %s", e)
+    try:
+        msgs = storage.list_discord_messages(
+            channel_id, limit=max(1, min(limit, 500)), before_ts=before_ts,
+        ) or []
+    except Exception as e:
+        logger.warning("list_discord_messages failed for %s: %s", channel_id, e)
+        msgs = []
+    # Reactions — каждое падение ловим отдельно
+    try:
+        all_reacts = storage.get_all_discord_reactions() or {}
+    except Exception as e:
+        logger.warning("get_all_discord_reactions failed: %s", e)
+        all_reacts = {}
+    safe_msgs = []
     for m in msgs:
-        m["_reacts"] = all_reacts.get(m.get("id")) or {}
-    return {"messages": msgs, "channel_id": channel_id}
+        try:
+            if not isinstance(m, dict):
+                continue
+            m["_reacts"] = all_reacts.get(m.get("id")) or {}
+            safe_msgs.append(m)
+        except Exception as e:
+            logger.debug("discord message skip (bad shape): %s", e)
+    return {"messages": safe_msgs, "channel_id": channel_id}
 
 
 @app.post("/api/discord/messages")
