@@ -3472,6 +3472,93 @@ class UserbotService:
             )
             return False
 
+    async def _resolve_work_chat_for_card(self, card: dict) -> Optional[int]:
+        """Резолвит work_chat_id для карточки ЛК, даже если поле пустое.
+        Порядок:
+          1) card.work_chat_id (если есть)
+          2) card.client_username → managed_chats (find_chat_by_client_username)
+          3) Поиск среди managed_chats по совпадению ФИО
+          4) Поиск среди сделок (deal.work_chat_id) по client_username/fio
+
+        Если резолв сработал и в карточке поле пустое — сохраняет найденное
+        обратно в карточку.
+        """
+        if not card:
+            return None
+        card_id = card.get("card_id") or card.get("id") or ""
+        # 1) Уже есть
+        wc = card.get("work_chat_id")
+        if wc:
+            try:
+                return int(wc)
+            except Exception:
+                return None
+        resolved = None
+        # 2) Через client_username
+        uname = (card.get("client_username") or "").lstrip("@").strip()
+        if uname:
+            try:
+                wc_key = storage.find_chat_by_client_username(uname)
+                if wc_key:
+                    resolved = int(wc_key)
+            except Exception as e:
+                logger.debug("resolve_wc: by username %s failed: %s", uname, e)
+        # 2b) Через supplier (= username клиента в managed_chats для нашего флоу)
+        if not resolved:
+            sup = (card.get("supplier") or "").lstrip("@").strip()
+            if sup:
+                try:
+                    wc_key = storage.find_chat_by_client_username(sup)
+                    if wc_key:
+                        resolved = int(wc_key)
+                except Exception as e:
+                    logger.debug("resolve_wc: by supplier %s failed: %s", sup, e)
+        # 3) Через ФИО — перебираем managed_chats
+        if not resolved:
+            fio_norm = (card.get("fio") or "").strip().lower()
+            if fio_norm:
+                try:
+                    managed = storage.state.get("managed_chats") or {}
+                    for k, info in managed.items():
+                        name = (info.get("client_name") or "").strip().lower()
+                        if not name:
+                            continue
+                        # совпадение ФИО или fio попадает в client_name
+                        if name == fio_norm or fio_norm in name or name in fio_norm:
+                            try:
+                                resolved = int(k)
+                                break
+                            except Exception:
+                                continue
+                except Exception as e:
+                    logger.debug("resolve_wc: by fio failed: %s", e)
+        # 4) Через deals — ищем сделку с тем же ФИО/username
+        if not resolved:
+            try:
+                deals = storage.list_deals() or {}
+                for did, d in deals.items():
+                    if not d.get("work_chat_id"):
+                        continue
+                    if uname and (d.get("client_username") or "").lstrip("@").lower() == uname.lower():
+                        resolved = int(d["work_chat_id"])
+                        break
+                    if fio_norm and (d.get("fio") or "").strip().lower() == fio_norm:
+                        resolved = int(d["work_chat_id"])
+                        break
+            except Exception as e:
+                logger.debug("resolve_wc: via deals failed: %s", e)
+        # Сохраняем найденный work_chat_id в карточку
+        if resolved and card_id:
+            try:
+                await storage.update_lk_card(card_id, work_chat_id=int(resolved))
+                logger.info(
+                    "resolve_wc: saved work_chat_id=%s to card=%s",
+                    resolved, card_id,
+                )
+            except Exception as e:
+                logger.warning("resolve_wc: save back failed: %s", e)
+        return resolved
+
     async def _handle_block_no_work_actions(self, card_id: str) -> bool:
         """Side-effects при переходе ЛК в статус БЛОК_БЕЗ_ОТРАБОТКИ:
           1) Отменяем сделку (если есть deal_id) — статус ОТМЕНЁНА_БЛОК
@@ -3489,12 +3576,16 @@ class UserbotService:
         if not card:
             logger.warning("block_no_work: card #%s not found", card_id)
             return False
+        # Карточке нужен card_id для save-back
+        card_with_id = dict(card)
+        card_with_id["card_id"] = card_id
 
         bank = card.get("bank") or ""
         fio = card.get("fio") or ""
-        deal_id = (card.get("deal_id") or "").strip().lstrip("#")
+        deal_id = (card.get("deal_id") or "").strip().lstrip("#").strip("-—")
         method = (card.get("payment_method") or "").upper()
-        wc = card.get("work_chat_id")
+        # Резолвим work_chat с фоллбэками
+        wc = await self._resolve_work_chat_for_card(card_with_id)
         did_anything = False
 
         # 1) Отменяем сделку, если она есть

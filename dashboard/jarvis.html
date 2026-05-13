@@ -2196,7 +2196,7 @@
         <div class="detail-section-title">Системное</div>
         <div class="detail-grid">
           <label>work_chat_id</label>
-          <span class="static" x-text="detailModal.original.work_chat_id || '—'"></span>
+          <input type="number" step="1" x-model.number="detailModal.draft.work_chat_id" placeholder="чтобы клиент получал уведомления">
 
           <label>lk_group_msg_id</label>
           <span class="static" x-text="detailModal.original.lk_group_msg_id || '—'"></span>
@@ -3408,6 +3408,7 @@ function jarvis() {
             usdt_address: full.usdt_address || '',
             supplier: full.supplier || '',
             client_username: full.client_username || '',
+            work_chat_id: full.work_chat_id || 0,
             block_amount_rub: full.block_amount_rub || 0,
             block_note: full.block_note || '',
             brak_reason: full.brak_reason || '',
@@ -3427,7 +3428,7 @@ function jarvis() {
         const updates = {};
         const editableKeys = [
           'bank', 'fio', 'price_usdt', 'payment_method', 'deal_id',
-          'usdt_address', 'supplier', 'client_username',
+          'usdt_address', 'supplier', 'client_username', 'work_chat_id',
           'block_amount_rub', 'block_note', 'brak_reason',
         ];
         for (const k of editableKeys) {

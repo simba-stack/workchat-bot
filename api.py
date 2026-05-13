@@ -897,6 +897,7 @@ class LKUpdateReq(BaseModel):
     usdt_address: Optional[str] = None
     supplier: Optional[str] = None
     client_username: Optional[str] = None
+    work_chat_id: Optional[int] = None
     block_amount_rub: Optional[float] = None
     block_note: Optional[str] = None
     brak_reason: Optional[str] = None
