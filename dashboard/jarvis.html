@@ -1974,6 +1974,14 @@
      =================================================================== */
   [x-cloak] { display: none !important; }
 
+  /* Desktop-shell — обёртка не должна влиять на layout.
+     display: contents делает div «прозрачным» — все дети ведут себя
+     как прямые потомки body (что и было до обёртки).
+     Alpine x-show всё равно может выставить display:none для скрытия. */
+  .desktop-shell {
+    display: contents;
+  }
+
   .mobile-shell {
     display: none;
   }
@@ -4689,11 +4697,15 @@ function jarvis() {
     dcWsConnected: false,
     dcSessionId: '',
     dcLocalStream: null,
-    dcPeers: {},           // {session_id: {pc, audioEl, user}}
-    dcVoiceParticipants: [],   // [{session_id, user, muted, deafened}]
+    dcPeers: {},                  // {session_id: {pc, user, pendingIce, initiator}}
+    dcVoiceParticipants: [],      // [{session_id, user, muted, deafened}]
     dcCurrentVoiceChannel: null,
     dcMuted: false,
     dcDeafened: false,
+    // Общий поток для удалённых аудио — один <audio> для всех peer'ов
+    // (обход autoplay-блокировки iOS/Android)
+    dcRemoteStream: null,
+    dcRemoteAudioEl: null,
     detailModal: {
       open: false, card_id: '', loading: false, saving: false, flash: '',
       original: {}, draft: {},
@@ -5784,13 +5796,8 @@ function jarvis() {
       const pc = new RTCPeerConnection({
         iceServers: this._getIceServers(),
       });
-      const audioEl = document.createElement('audio');
-      audioEl.autoplay = true;
-      audioEl.playsInline = true;
-      audioEl.muted = this.dcDeafened;
-      document.body.appendChild(audioEl);
       this.dcPeers[remoteSessionId] = {
-        pc, audioEl, user: remoteUser, pendingIce: [], initiator,
+        pc, user: remoteUser, pendingIce: [], initiator,
       };
       // Добавляем локальный mic ДО createOffer чтобы offer включал
       // audio m-line
@@ -5804,19 +5811,28 @@ function jarvis() {
         console.warn('[voice] no local stream when creating peer!');
       }
       pc.ontrack = (ev) => {
-        console.log('[voice] remote track received from', remoteSessionId, ev.streams);
-        if (ev.streams && ev.streams[0]) {
-          audioEl.srcObject = ev.streams[0];
-          // КРИТИЧНО для мобилок: audioEl должен быть НЕ muted и иметь
-          // правильные атрибуты ДО play()
-          audioEl.muted = this.dcDeafened || false;
-          audioEl.volume = 1.0;
-          audioEl.autoplay = true;
-          audioEl.playsInline = true;
-          audioEl.setAttribute('playsinline', '');  // legacy iOS
-          audioEl.setAttribute('webkit-playsinline', '');
-          // Запускаем
-          this._tryPlayAudio(audioEl, remoteSessionId);
+        console.log('[voice] remote track received from', remoteSessionId, 'kind=' + ev.track.kind);
+        // НЕ создаём новый audio element — добавляем track в ОБЩИЙ stream,
+        // который уже играет с момента когда юзер тапнул «Зайти».
+        // Это обход autoplay-блокировки iOS/Android: новые tracks
+        // в уже-играющем stream'е сразу слышны.
+        if (this.dcRemoteStream && ev.track.kind === 'audio') {
+          this.dcRemoteStream.addTrack(ev.track);
+          console.log('[voice] track added to shared remote stream, total tracks:',
+                      this.dcRemoteStream.getTracks().length);
+          // На всякий случай — re-play (если был paused)
+          if (this.dcRemoteAudioEl) {
+            this.dcRemoteAudioEl.muted = this.dcDeafened || false;
+            this.dcRemoteAudioEl.volume = 1.0;
+            const p = this.dcRemoteAudioEl.play();
+            if (p) p.catch(err => {
+              console.warn('[voice] re-play failed:', err);
+              this._audioBlocked = true;
+              if (!this._pendingAudio.includes(this.dcRemoteAudioEl)) {
+                this._pendingAudio.push(this.dcRemoteAudioEl);
+              }
+            });
+          }
         }
       };
       pc.onicecandidate = (ev) => {
@@ -5902,7 +5918,19 @@ function jarvis() {
     cleanupPeer(sessionId) {
       const peer = this.dcPeers[sessionId];
       if (!peer) return;
+      // Удалим receiver-tracks этого peer'а из общего remote stream
+      try {
+        if (this.dcRemoteStream && peer.pc) {
+          const receivers = peer.pc.getReceivers ? peer.pc.getReceivers() : [];
+          for (const r of receivers) {
+            if (r.track) {
+              try { this.dcRemoteStream.removeTrack(r.track); } catch {}
+            }
+          }
+        }
+      } catch (e) { console.debug('[voice] cleanup track removal:', e); }
       try { peer.pc.close(); } catch {}
+      // legacy per-peer audioEl (если когда-то были) — удалить
       try { if (peer.audioEl) peer.audioEl.remove(); } catch {}
       delete this.dcPeers[sessionId];
     },
@@ -5910,9 +5938,50 @@ function jarvis() {
     async joinDiscordVoice() {
       if (!this.discordActiveChannel || this.discordActiveChannel.type !== 'voice') return;
       if (this.dcCurrentVoiceChannel) await this.leaveDiscordVoice();
-      // КРИТИЧНО: вызываем audio unlock СИНХРОННО внутри user-gesture
-      // (клик/тап на кнопку «Зайти»). После await эта возможность теряется.
+
+      // === КРИТИЧНО: вся подготовка audio — синхронно внутри user-gesture ===
+      // 1) Audio unlock (silent buffer)
       this._unlockAudio();
+
+      // 2) Создаём ОДИН общий audio-элемент + пустой MediaStream СРАЗУ.
+      // Все удалённые tracks будут добавляться в этот stream — он уже играет
+      // (silent) с момента тапа, поэтому новые tracks воспроизводятся
+      // без блокировки autoplay.
+      try {
+        this.dcRemoteStream = new MediaStream();
+        if (!this.dcRemoteAudioEl) {
+          this.dcRemoteAudioEl = document.createElement('audio');
+          this.dcRemoteAudioEl.id = 'dc-remote-audio';
+          this.dcRemoteAudioEl.autoplay = true;
+          this.dcRemoteAudioEl.controls = false;
+          this.dcRemoteAudioEl.playsInline = true;
+          this.dcRemoteAudioEl.setAttribute('playsinline', '');
+          this.dcRemoteAudioEl.setAttribute('webkit-playsinline', '');
+          this.dcRemoteAudioEl.muted = false;
+          this.dcRemoteAudioEl.volume = 1.0;
+          // На iOS для громкого вывода (динамик вместо разговорного):
+          // нет надёжного API, но playsInline=true помогает.
+          document.body.appendChild(this.dcRemoteAudioEl);
+        }
+        this.dcRemoteAudioEl.srcObject = this.dcRemoteStream;
+        // СИНХРОННО внутри user-gesture запускаем play() — это unlock'ает
+        // дальнейшее воспроизведение для этого элемента до конца сессии.
+        const startPlay = this.dcRemoteAudioEl.play();
+        if (startPlay) {
+          startPlay.then(() => {
+            console.log('[voice] shared audio element started (within gesture)');
+          }).catch(err => {
+            console.warn('[voice] shared audio play failed:', err);
+            this._audioBlocked = true;
+            if (!this._pendingAudio.includes(this.dcRemoteAudioEl)) {
+              this._pendingAudio.push(this.dcRemoteAudioEl);
+            }
+          });
+        }
+      } catch (e) {
+        console.error('[voice] failed to prepare shared audio:', e);
+      }
+
       // Проверка: WebRTC доступен только на HTTPS (или localhost)
       const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       if (!isSecure) {
@@ -5995,6 +6064,24 @@ function jarvis() {
         for (const tr of this.dcLocalStream.getTracks()) tr.stop();
         this.dcLocalStream = null;
       }
+      // Очистить shared remote stream + остановить audio element
+      try {
+        if (this.dcRemoteStream) {
+          for (const tr of this.dcRemoteStream.getTracks()) {
+            try { tr.stop(); } catch {}
+            try { this.dcRemoteStream.removeTrack(tr); } catch {}
+          }
+          this.dcRemoteStream = null;
+        }
+        if (this.dcRemoteAudioEl) {
+          try { this.dcRemoteAudioEl.pause(); } catch {}
+          this.dcRemoteAudioEl.srcObject = null;
+          // Сам элемент не удаляем — оставляем чтобы при следующем заходе
+          // не пришлось снова добиваться user-gesture для play()
+        }
+      } catch (e) {
+        console.warn('[voice] remote audio cleanup error:', e);
+      }
       this.dcCurrentVoiceChannel = null;
       this.dcVoiceParticipants = [];
       this.playBeep(300);
@@ -6014,12 +6101,16 @@ function jarvis() {
 
     toggleDeafen() {
       this.dcDeafened = !this.dcDeafened;
-      // Mute all remote audio elements
+      // Mute общий remote audio element (новая модель)
+      if (this.dcRemoteAudioEl) {
+        this.dcRemoteAudioEl.muted = this.dcDeafened;
+      }
+      // Legacy per-peer audioEls — если остались
       for (const sid of Object.keys(this.dcPeers)) {
         const peer = this.dcPeers[sid];
         if (peer.audioEl) peer.audioEl.muted = this.dcDeafened;
       }
-      // Also mute self mic
+      // При deafen также мьютим свой mic
       if (this.dcDeafened && !this.dcMuted) this.toggleMute();
       try {
         this.dcWs && this.dcWs.send(JSON.stringify({ type: 'deaf', deafened: this.dcDeafened }));
