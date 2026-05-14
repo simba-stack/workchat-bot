@@ -2242,7 +2242,7 @@
       <span class="dot"></span><span x-text="connText"></span>
     </div>
     <div class="stat-pill sound-toggle" :class="soundOn ? 'active' : ''" @click="toggleSound()">
-      <span x-text="soundOn ? '🔊 SOUND' : '🔇 SOUND'"></span>
+      <span x-text="soundOn ? '🔊 ЗВУК' : '🔇 ЗВУК'"></span>
     </div>
     <div class="stat-pill" @click="cycleTheme()" :title="'Тема: ' + theme">
       <span x-text="theme === 'jarvis' ? '🟦 JARVIS' : (theme === 'ironman' ? '🟥 IRON' : '⬜ STEALTH')"></span>
@@ -2252,19 +2252,19 @@
     </div>
     <div class="stat-pill" @click="goToView('office')" :class="currentView === 'office' ? 'active' : ''" title="Главная">🏢</div>
     <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
-    <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 LOGOUT</div>
+    <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 ВЫХОД</div>
     <div class="stat-pill"><span x-text="clockText"></span></div>
   </div>
 </header>
 
 <!-- TABS -->
 <nav class="view-tabs">
-  <button class="view-tab" :class="currentView === 'office' ? 'active' : ''" @click="goToView('office')">🏢 Office</button>
-  <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Chat Dept</button>
-  <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 LK Dept</button>
-  <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Finance Dept</button>
+  <button class="view-tab" :class="currentView === 'office' ? 'active' : ''" @click="goToView('office')">🏢 Главная</button>
+  <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Беседы</button>
+  <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 ЛК Отдел</button>
+  <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Финансы</button>
   <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
-  <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Discord</button>
+  <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
 
@@ -2284,8 +2284,8 @@
     <!-- ===== JARVIS CORE SPHERE ===== -->
     <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
-        JARVIS CORE
-        <span class="badge-mini" x-text="voiceActive ? 'LIVE' : 'STANDBY'"></span>
+        ЯДРО JARVIS
+        <span class="badge-mini" x-text="voiceActive ? 'В ЭФИРЕ' : 'ПОКОЙ'"></span>
       </div>
       <div style="padding: 12px;">
         <div class="jarvis-sphere" :class="voiceActive ? 'sphere-live' : (lionSpeaking ? 'sphere-speaking' : 'sphere-idle')">
@@ -2357,13 +2357,13 @@
             </g>
           </svg>
         </div>
-        <div class="lion-status" :class="lionSpeaking || voiceActive ? 'speaking' : ''" x-text="voiceActive ? 'VOICE LIVE' : (voiceState !== 'не активно' ? voiceState : 'STANDBY')"></div>
+        <div class="lion-status" :class="lionSpeaking || voiceActive ? 'speaking' : ''" x-text="voiceActive ? 'ГОЛОС' : (voiceState !== 'не активно' ? voiceState : 'ПОКОЙ')"></div>
         <div style="text-align: center; margin-top: 8px;">
           <button class="btn"
                   :class="voiceActive ? 'danger' : 'success'"
                   @click="toggleVoice()"
                   style="font-size: 11px; padding: 6px 14px; cursor: pointer;">
-            <span x-text="voiceActive ? 'STOP VOICE' : 'VOICE CHAT'"></span>
+            <span x-text="voiceActive ? 'СТОП ГОЛОС' : 'ГОЛОСОВОЙ ЧАТ'"></span>
           </button>
           <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 9px;"
                x-text="voiceState"></div>
@@ -2375,7 +2375,7 @@
     <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
         Command Console
-        <span class="badge-mini">FREE-FORM</span>
+        <span class="badge-mini">СВОБОДНО</span>
       </div>
       <div class="cmd-chat-log" x-ref="cmdlog">
         <template x-if="cmdLog.length === 0">
@@ -2403,7 +2403,7 @@
         <span class="badge-mini" x-text="state.stats.ai.replies_total || 0"></span>
       </div>
       <div class="metric">
-        <div class="label">Replies <span class="trend" :class="trendClass('ai_replies')" x-text="trendStr('ai_replies')"></span></div>
+        <div class="label">Ответов <span class="trend" :class="trendClass('ai_replies')" x-text="trendStr('ai_replies')"></span></div>
         <div class="value cyan" x-text="state.stats.ai.replies_total || 0"></div>
         <div class="sub" x-text="'токенов in: ' + (state.stats.ai.input_tokens_total || 0)"></div>
         <svg class="spark" :viewBox="'0 0 100 30'" preserveAspectRatio="none">
@@ -2430,7 +2430,7 @@
     <div class="jarvis-panel" x-show="['office','chat'].includes(currentView)">
       <div class="panel-title">
         Воронка · 7 дней
-        <span class="badge-mini">CONVERSION</span>
+        <span class="badge-mini">ВОРОНКА</span>
       </div>
       <template x-for="step in funnelSteps" :key="step.key">
         <div class="funnel-bar">
@@ -2465,9 +2465,9 @@
       <div class="office-stage" x-ref="stage">
         <div class="office-wall"></div>
         <div class="office-floor-3d"></div>
-        <div class="zone-label left">CHAT</div>
-        <div class="zone-label center">LK</div>
-        <div class="zone-label right">FINANCE</div>
+        <div class="zone-label left">ЧАТ</div>
+        <div class="zone-label center">ЛК</div>
+        <div class="zone-label right">ФИНАНСЫ</div>
         <div class="zone-divider left"></div>
         <div class="zone-divider right"></div>
 
@@ -2519,7 +2519,7 @@
 
         <!-- Walker AI-CHAT -->
         <div class="walker clickable" :class="chars.chat.state" :style="'left: ' + chars.chat.x + '%;'" @click="characterClick('chat')">
-          <div class="walker-hint">→ Chat Dept</div>
+          <div class="walker-hint">→ Беседы</div>
           <div class="walker-name">AI-CHAT</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -2538,7 +2538,7 @@
 
         <!-- Walker AI-LK -->
         <div class="walker clickable" :class="chars.lk.state" :style="'left: ' + chars.lk.x + '%;'" @click="characterClick('lk')">
-          <div class="walker-hint">→ LK Dept</div>
+          <div class="walker-hint">→ ЛК Отдел</div>
           <div class="walker-name">AI-LK</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -2557,7 +2557,7 @@
 
         <!-- Walker AI-FIN -->
         <div class="walker clickable" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
-          <div class="walker-hint">→ Finance Dept</div>
+          <div class="walker-hint">→ Финансы</div>
           <div class="walker-name">AI-FIN</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -2620,7 +2620,7 @@
     <div class="jarvis-panel" x-show="currentView === 'chat'">
       <div class="panel-title">
         AI Activity (последние)
-        <span class="badge-mini">CHAT</span>
+        <span class="badge-mini">ЧАТ</span>
       </div>
       <div style="max-height: 280px; overflow-y: auto;">
         <template x-if="logs.filter(l => (l.type||'').startsWith('ai-')).length === 0">
@@ -2663,7 +2663,7 @@
     <div class="jarvis-panel" x-show="currentView === 'lk'">
       <div class="panel-title">
         ЛК по банкам
-        <span class="badge-mini">DISTRIBUTION</span>
+        <span class="badge-mini">РАСПРЕДЕЛЕНИЕ</span>
       </div>
       <div style="padding: 8px 14px; max-height: 240px; overflow-y: auto;">
         <template x-for="[bank, count] in Object.entries(banksFromCards()).sort((a,b) => b[1] - a[1])" :key="bank">
@@ -2709,7 +2709,7 @@
     <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Финансы
-        <span class="badge-mini">MARGIN</span>
+        <span class="badge-mini">МАРЖА</span>
       </div>
       <div class="metric">
         <div class="label">Маржа сегодня <span class="trend" :class="trendClass('margin')" x-text="trendStr('margin')"></span></div>
@@ -2745,7 +2745,7 @@
     <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Operators
-        <span class="badge-mini" x-text="managers.length + ' active'"></span>
+        <span class="badge-mini" x-text="managers.length + ' акт.'"></span>
       </div>
       <div style="max-height: 320px; overflow-y: auto;">
         <template x-if="managers.length === 0">
@@ -2849,7 +2849,7 @@
       </div>
       <!-- Bots list -->
       <div style="padding: 8px 12px; border-bottom: 1px solid rgba(var(--primary-rgb), 0.08);">
-        <div class="text-xs mb-1" style="color: var(--text-dim); letter-spacing: 1px;">USERBOTS</div>
+        <div class="text-xs mb-1" style="color: var(--text-dim); letter-spacing: 1px;">ЮЗЕРБОТЫ</div>
         <template x-if="outreachBots.length === 0">
           <div class="text-xs" style="color: var(--text-dim);">боты не добавлены</div>
         </template>
@@ -3018,14 +3018,14 @@
     <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">🤝 ПАРТНЁРЫ CRM</h2>
     <div style="display: flex; gap: 6px; flex-wrap: wrap;">
       <button class="btn" @click="refreshCrm()" :disabled="crmLoading">↻</button>
-      <button class="btn" @click="crmExportCsv()">📥 CSV</button>
+      <button class="btn" @click="crmExportCsv()">📥 Экспорт CSV</button>
       <select x-model="crmFilter" class="btn" style="padding: 6px 10px;">
-        <option value="all">все</option>
-        <option value="draft">draft</option>
-        <option value="pending">pending</option>
-        <option value="accepted">accepted</option>
-        <option value="done">done</option>
-        <option value="brak">brak</option>
+        <option value="all">все статусы</option>
+        <option value="draft">черновики</option>
+        <option value="pending">ожидают</option>
+        <option value="accepted">в работе</option>
+        <option value="done">завершённые</option>
+        <option value="brak">брак</option>
       </select>
     </div>
   </div>
@@ -3040,7 +3040,7 @@
       <div style="height: 170px; position: relative;"><canvas id="crm-chart-top"></canvas></div>
     </div>
     <div class="jarvis-panel" style="padding: 12px; height: 220px;">
-      <div class="panel-title">14 дней</div>
+      <div class="panel-title">Динамика 14 дней</div>
       <div style="height: 170px; position: relative;"><canvas id="crm-chart-trend"></canvas></div>
     </div>
   </div>
@@ -3103,7 +3103,7 @@
                 </div>
               </div>
               <button class="btn" style="padding: 4px 10px; font-size: 11px;" @click="crmSelectedDrop = (crmSelectedDrop === d.drop_id) ? null : d.drop_id">
-                <span x-text="crmSelectedDrop === d.drop_id ? '▲' : '▼ ЛК'"></span>
+                <span x-text="crmSelectedDrop === d.drop_id ? '▲ скрыть' : '▼ ЛК'"></span>
               </button>
             </div>
             <div x-show="crmSelectedDrop === d.drop_id" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1);">
@@ -3127,7 +3127,7 @@
   <!-- OWNER DETAIL MODAL -->
   <div x-show="crmOwnerModal.open" @keydown.escape.window="closeOwnerModal()" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;" @click.self="closeOwnerModal()">
     <div style="background: var(--bg-panel, #14181f); border: 1px solid var(--hud-primary); border-radius: 8px; max-width: 900px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 20px;">
-      <div x-show="crmOwnerModal.loading" style="text-align: center; padding: 40px; color: var(--text-dim);">loading...</div>
+      <div x-show="crmOwnerModal.loading" style="text-align: center; padding: 40px; color: var(--text-dim);">загружаю...</div>
       <template x-if="crmOwnerModal.data && !crmOwnerModal.loading">
         <div>
           <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; margin-bottom: 12px;">
@@ -3148,23 +3148,23 @@
               <div style="font-size: 22px; font-weight: bold; color: var(--hud-primary);" x-text="crmOwnerModal.data.stats.total_drops"></div>
             </div>
             <div class="jarvis-panel" style="padding: 10px; text-align: center;">
-              <div style="font-size: 10px; color: var(--text-dim);">Done</div>
+              <div style="font-size: 10px; color: var(--text-dim);">Готово</div>
               <div style="font-size: 22px; font-weight: bold; color: #06b6d4;" x-text="crmOwnerModal.data.stats.by_status.done || 0"></div>
             </div>
             <div class="jarvis-panel" style="padding: 10px; text-align: center;">
-              <div style="font-size: 10px; color: var(--text-dim);">%</div>
+              <div style="font-size: 10px; color: var(--text-dim);">% завершения</div>
               <div style="font-size: 22px; font-weight: bold;" x-text="(crmOwnerModal.data.stats.completion_rate_pct || 0) + '%'"></div>
             </div>
             <div class="jarvis-panel" style="padding: 10px; text-align: center;">
-              <div style="font-size: 10px; color: var(--text-dim);">Revenue</div>
+              <div style="font-size: 10px; color: var(--text-dim);">Выручка</div>
               <div style="font-size: 22px; font-weight: bold; color: #2a9d8f;" x-text="'$' + crmOwnerModal.data.stats.total_revenue_usdt"></div>
             </div>
             <div class="jarvis-panel" style="padding: 10px; text-align: center;">
-              <div style="font-size: 10px; color: var(--text-dim);">Avg $</div>
+              <div style="font-size: 10px; color: var(--text-dim);">Ср. цена</div>
               <div style="font-size: 22px; font-weight: bold;" x-text="'$' + crmOwnerModal.data.stats.avg_revenue_usdt"></div>
             </div>
             <div class="jarvis-panel" style="padding: 10px; text-align: center;">
-              <div style="font-size: 10px; color: var(--text-dim);">Avg h</div>
+              <div style="font-size: 10px; color: var(--text-dim);">Ср. время</div>
               <div style="font-size: 22px; font-weight: bold;" x-text="crmOwnerModal.data.stats.avg_time_to_done_hours + 'ч'"></div>
             </div>
           </div>
@@ -3182,7 +3182,7 @@
                 <div style="margin-top: 4px; font-size: 10px; color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap;">
                   <span x-text="'создан: ' + crmFormatTs(d.created_at)"></span>
                   <span x-show="d.accept_ts > 0" x-text="'принят: ' + crmFormatTs(d.accept_ts)"></span>
-                  <span x-show="d.done_ts > 0" x-text="'done: ' + crmFormatTs(d.done_ts)"></span>
+                  <span x-show="d.done_ts > 0" x-text="'завершён: ' + crmFormatTs(d.done_ts)"></span>
                 </div>
                 <div x-show="d.lks && d.lks.length > 0" style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
                   <template x-for="lk in d.lks" :key="lk.droplk_id">
@@ -3387,7 +3387,7 @@
           <div class="dc-stage-flags">
             <span x-show="p.muted">🔇</span>
             <span x-show="p.deafened">🔕</span>
-            <span x-show="p.session_id === dcSessionId" style="font-size: 9px; color: var(--hud-amber);">YOU</span>
+            <span x-show="p.session_id === dcSessionId" style="font-size: 9px; color: var(--hud-amber);">ВЫ</span>
           </div>
         </div>
       </template>
@@ -3635,7 +3635,7 @@
       <div class="detail-section">
         <div class="detail-section-title">Сделка / выплата</div>
         <div class="detail-grid">
-          <label>Deal ID</label>
+          <label>ID сделки</label>
           <input type="text" x-model="detailModal.draft.deal_id" placeholder="12345">
 
           <label>USDT адрес</label>
@@ -3691,7 +3691,7 @@
           <label>Создана</label>
           <span class="static" x-text="fmtTime(detailModal.original.created_at) + ' · ' + (detailModal.original.created_by || '—')"></span>
 
-          <label>Last application</label>
+          <label>Последняя заявка</label>
           <span class="static" x-text="detailModal.original.last_application_id || '—'"></span>
         </div>
       </div>
@@ -3827,14 +3827,14 @@ function jarvis() {
       { id: 'theme_jarvis', icon: '🟦', label: 'Тема: JARVIS (cyan)',  hint: 'theme', action: () => this.setTheme('jarvis') },
       { id: 'theme_ironman', icon: '🟥', label: 'Тема: IRON MAN (red)', hint: 'theme', action: () => this.setTheme('ironman') },
       { id: 'theme_stealth', icon: '⬜', label: 'Тема: STEALTH (grey)', hint: 'theme', action: () => this.setTheme('stealth') },
-      { id: 'sound_toggle', icon: '🔊', label: 'Toggle sound on/off',   hint: 's', action: () => this.toggleSound() },
-      { id: 'ai_on',  icon: '✓', label: 'AI: ON (включить)',  hint: 'ctrl', action: () => this.setAI(true) },
-      { id: 'ai_off', icon: '✗', label: 'AI: OFF (выключить)', hint: 'ctrl', action: () => this.setAI(false) },
-      { id: 'refresh', icon: '↻', label: 'Refresh всё', hint: 'r', action: () => this.refreshAll() },
+      { id: 'sound_toggle', icon: '🔊', label: 'Включить/выключить звук',   hint: 's', action: () => this.toggleSound() },
+      { id: 'ai_on',  icon: '✓', label: 'AI: ВКЛ',  hint: 'ctrl', action: () => this.setAI(true) },
+      { id: 'ai_off', icon: '✗', label: 'AI: ВЫКЛ', hint: 'ctrl', action: () => this.setAI(false) },
+      { id: 'refresh', icon: '↻', label: 'Обновить всё', hint: 'r', action: () => this.refreshAll() },
       { id: 'classic', icon: '◧', label: 'Открыть классический дашборд', action: () => location.href = '/classic' },
-      { id: 'health', icon: '♥', label: 'Healthcheck', action: () => window.open('/healthz', '_blank') },
-      { id: 'logout', icon: '🚪', label: 'Выйти (logout)', action: () => location.href = '/logout' },
-      { id: 'login', icon: '🔑', label: 'Telegram login', action: () => location.href = '/login' },
+      { id: 'health', icon: '♥', label: 'Проверка здоровья', action: () => window.open('/healthz', '_blank') },
+      { id: 'logout', icon: '🚪', label: 'Выйти', action: () => location.href = '/logout' },
+      { id: 'login', icon: '🔑', label: 'Telegram вход', action: () => location.href = '/login' },
       { id: 'sync_lk', icon: '↻', label: 'Запросить sync карточек ЛК', action: () => this.requestSyncLK() },
     ],
 
@@ -5971,33 +5971,33 @@ function jarvis() {
     crmLksForDrop(drop_id) { return this.crmDropLks.filter(l => l.drop_id === drop_id); },
     crmStatusBadge(status) {
       const map = {
-        draft:    {icon: '✏️', label: 'draft',    color: '#888'},
-        pending:  {icon: '⏳', label: 'pending',  color: '#e9c46a'},
-        accepted: {icon: '✅', label: 'work', color: '#2a9d8f'},
-        done:     {icon: '🏁', label: 'done',   color: '#06b6d4'},
-        brak:     {icon: '❌', label: 'brak',     color: '#e76f51'},
-        in_review:{icon: '👀', label: 'review',   color: '#a78bfa'},
+        draft:    {icon: '✏️', label: 'черновик', color: '#888'},
+        pending:  {icon: '⏳', label: 'ожидает',  color: '#e9c46a'},
+        accepted: {icon: '✅', label: 'в работе', color: '#2a9d8f'},
+        done:     {icon: '🏁', label: 'готово',  color: '#06b6d4'},
+        brak:     {icon: '❌', label: 'брак',     color: '#e76f51'},
+        in_review:{icon: '👀', label: 'проверка', color: '#a78bfa'},
       };
       return map[status] || {icon: '•', label: status || '?', color: '#777'};
     },
     crmExportCsv() { window.open('/api/crm/export.csv', '_blank'); },
     async crmBanOwner(oid) {
-      const days = prompt('Ban for how many days?', '7');
+      const days = prompt('Бан на сколько дней?', '7');
       if (!days || isNaN(parseInt(days, 10))) return;
       try {
         const r = await fetch('/api/crm/owners/' + oid + '/ban?days=' + parseInt(days, 10), { method: 'POST', credentials: 'include' });
-        if (r.ok) { alert('banned'); await this.refreshCrm(); } else alert('err ' + r.status);
+        if (r.ok) { alert('Партнёр забанен'); await this.refreshCrm(); } else alert('Ошибка: ' + r.status);
       } catch (e) { alert(String(e)); }
     },
     async crmUnbanOwner(oid) {
-      if (!confirm('Unban?')) return;
+      if (!confirm('Снять бан?')) return;
       try {
         const r = await fetch('/api/crm/owners/' + oid + '/unban', { method: 'POST', credentials: 'include' });
         if (r.ok) await this.refreshCrm();
       } catch (e) { alert(String(e)); }
     },
     async crmWarnOwner(oid) {
-      if (!confirm('+1 warn?')) return;
+      if (!confirm('+1 предупреждение?')) return;
       try {
         const r = await fetch('/api/crm/owners/' + oid + '/warn', { method: 'POST', credentials: 'include' });
         if (r.ok) await this.refreshCrm();
@@ -6045,7 +6045,7 @@ function jarvis() {
         this.crmCharts.top = new Chart(elTop, {
           type: 'bar',
           data: { labels: top.map(o => '@' + (o.username || o.owner_id).slice(0, 12)),
-            datasets: [{ label: 'Revenue $', data: top.map(o => o.total_price_done || 0), backgroundColor: '#00e5ff' }] },
+            datasets: [{ label: 'Выручка $', data: top.map(o => o.total_price_done || 0), backgroundColor: '#00e5ff' }] },
           options: { responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: { x: { ticks: { color: '#aaa', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -6068,7 +6068,7 @@ function jarvis() {
         this.crmCharts.trend = new Chart(elTrend, {
           type: 'line',
           data: { labels: Object.keys(buckets).map(s => s.slice(5)),
-            datasets: [{ label: 'Drops/day', data: Object.values(buckets),
+            datasets: [{ label: 'Клиентов/день', data: Object.values(buckets),
               borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,0.12)', fill: true, tension: 0.35, pointRadius: 3 }] },
           options: { responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
