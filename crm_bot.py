@@ -1350,7 +1350,8 @@ async def _render_admin_text(drop: dict) -> str:
 
 
 def _admin_keyboard(drop: dict) -> InlineKeyboardMarkup:
-    """Кнопки для контрольного сообщения в admin-чате."""
+    """Кнопки для контрольного сообщения в admin-чате.
+    Для accepted-дропа — SMS-flow кнопки прямо под анкетой (без tracker)."""
     status = drop.get("status")
     if status in ("draft", "pending"):
         return InlineKeyboardMarkup(inline_keyboard=[[
@@ -1358,19 +1359,22 @@ def _admin_keyboard(drop: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"declinedrop:{drop['drop_id']}"),
         ]])
     if status == "accepted":
-        # Кнопки SMS на каждый ЛК + изменить цену
+        # SMS-flow stage-aware кнопки на каждый ЛК
         lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
         rows = []
         for lk in lks.values():
-            if lk.get("status") == "ready":
+            bank = lk.get("bank") or "—"
+            stage = lk.get("sms_stage") or ""
+            label, next_label = _SMS_STAGE_LABELS.get(stage, ("?", None))
+            if next_label:
                 rows.append([InlineKeyboardButton(
-                    text=f"[{lk.get('bank')}] Запросить SMS",
-                    callback_data=f"takesmscodedrop:{lk['droplk_id']}",
+                    text=f"[{bank}] {next_label}",
+                    callback_data=f"smsadv:{lk['droplk_id']}",
                 )])
             else:
                 rows.append([InlineKeyboardButton(
-                    text=f"[{lk.get('bank')}] Запросить код",
-                    callback_data=f"takecodedrop:{lk['droplk_id']}",
+                    text=f"[{bank}] {label}",
+                    callback_data=f"smsreset:{lk['droplk_id']}",
                 )])
         rows.append([InlineKeyboardButton(
             text="💰 Изменить цену",
@@ -2030,15 +2034,14 @@ async def cb_dropproblem(call: CallbackQuery):
 #  done            — перевязка финализирована
 
 _SMS_STAGE_LABELS = {
-    "":                 ("⚪ Старт", "❓ Спросить готовность"),
-    "asking_ready":     ("⏳ Спросили готовность", "✅ Клиент готов"),
-    "client_ready":     ("✅ Клиент готов", "📩 Дать код входа"),
-    "awaiting_login":   ("⏳ Ждём код входа", "✏️ Ввести код входа"),
-    "login_received":   ("📩 Код входа получен", "✅ Успешный вход"),
-    "login_success":    ("✅ Вход успешен", "📩 Дать код перевяза"),
-    "awaiting_perevyaz":("⏳ Ждём код перевяза", "✏️ Ввести код перевяза"),
-    "perevyaz_received":("📩 Код перевяза получен", "✅ Перевязка успешна"),
-    "done":             ("🏁 Завершено", None),
+    "":                  ("⚪ Старт",          "❓ Спросить готовность"),
+    "asking_ready":      ("⏳ Спросили готовность", "✅ Клиент готов"),
+    "client_ready":      ("✅ Клиент готов",   "📩 Дать код входа"),
+    "login_asked":       ("⏳ Ждём код входа от клиента", "✅ Вход успешен"),
+    "login_success":     ("✅ Вход выполнен",  "📩 Дать код перевязки"),
+    "perevyaz_asked":    ("⏳ Ждём код перевязки от клиента", "✅ Перевязка успешна"),
+    "perevyaz_success":  ("✅ Перевязка выполнена", "🏁 Завершить"),
+    "done":              ("🏁 Завершено",      None),
 }
 
 
@@ -2093,32 +2096,28 @@ async def _send_to_client_chat(bot, drop, owner, text):
 
 
 async def _post_or_update_sms_tracker(bot, droplk_id):
-    """Создаёт/апдейтит сообщение SMS-трекера в admin-чате CRM."""
+    """Обновляет ОСНОВНУЮ анкету дропа в admin-чате (кнопки SMS под ней).
+    Отдельного tracker-сообщения больше нет — всё в анкете."""
     lk = crm_storage.get_crm_drop_lk(droplk_id)
     if not lk:
         return None
     drop = crm_storage.get_crm_drop(lk.get("drop_id"))
-    admin_chat = await get_admin_chat_resolved(bot)
-    if not admin_chat:
+    if not drop:
         return None
-    text = _sms_flow_text(lk, drop)
-    kb = _sms_flow_keyboard(lk)
-    msg_id = lk.get("sms_tracker_msg_id")
-    if msg_id:
-        try:
-            await bot.edit_message_text(
-                text, chat_id=admin_chat, message_id=msg_id,
-                reply_markup=kb, disable_web_page_preview=True,
-            )
-            return msg_id
-        except Exception:
-            pass  # message may be deleted, post new
+    admin_chat = await get_admin_chat_resolved(bot)
+    if not admin_chat or not drop.get("admin_msg_id"):
+        return None
     try:
-        sent = await bot.send_message(admin_chat, text, reply_markup=kb)
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_tracker_msg_id=sent.message_id)
-        return sent.message_id
+        await bot.edit_message_text(
+            await _render_admin_text(drop),
+            chat_id=admin_chat,
+            message_id=drop["admin_msg_id"],
+            reply_markup=_admin_keyboard(drop),
+            disable_web_page_preview=True,
+        )
+        return drop["admin_msg_id"]
     except Exception as e:
-        logger.warning("post sms tracker failed: %s", e)
+        logger.debug("admin anketa edit failed: %s", e)
         return None
 
 
@@ -2141,7 +2140,8 @@ async def cb_takesmscodedrop(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("smsadv:"))
 async def cb_smsadv(call: CallbackQuery, state: FSMContext):
-    """Продвинуть SMS-flow на следующую стадию."""
+    """Продвинуть SMS-flow на следующую стадию. Коды клиент пишет сам в свой
+    work_chat, менеджер ТОЛЬКО подтверждает успешность кнопкой."""
     droplk_id = call.data.split(":", 1)[1]
     lk = crm_storage.get_crm_drop_lk(droplk_id)
     if not lk:
@@ -2154,7 +2154,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
     bank = lk.get("bank") or "—"
 
     if stage == "":
-        # Старт — спрашиваем готовность у клиента
+        # Спрашиваем готовность у клиента
         await _send_to_client_chat(
             bot, drop, owner,
             f"Готовы дать код для входа в ЛК <b>{bank}</b>?",
@@ -2162,56 +2162,45 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="asking_ready")
         await call.answer("✅ Спросили клиента")
     elif stage == "asking_ready":
-        # Менеджер видит что клиент готов → переход
+        # Менеджер подтверждает что клиент согласен
         await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="client_ready")
-        await call.answer("✅ Отмечено: клиент готов")
+        await call.answer("✅ Клиент готов")
     elif stage == "client_ready":
-        # Просим код входа
+        # Просим у клиента код входа в его чате
         await _send_to_client_chat(
             bot, drop, owner,
             f"Пришлите <b>код входа в ЛК {bank}</b> следующим сообщением.",
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="awaiting_login")
-        await call.answer("📩 Запросили код входа")
-    elif stage == "awaiting_login":
-        # Менеджер вводит код вручную
-        await state.set_state(SMSForm.waiting_code)
-        await state.update_data(droplk_id=droplk_id, sms_kind="login")
-        await call.message.reply(
-            f"📩 Введите код <b>входа</b> для {bank} следующим сообщением:"
-        )
-        await call.answer()
-    elif stage == "login_received":
-        # Подтвердить успешный вход
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_asked")
+        await call.answer("📩 Клиента попросили код входа")
+    elif stage == "login_asked":
+        # Менеджер видит код в чате клиента, прокликивает «успешный вход»
         await _send_to_client_chat(
             bot, drop, owner,
             f"✅ Вход в ЛК <b>{bank}</b> выполнен успешно.",
         )
         await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_success")
-        await call.answer("✅ Клиента уведомили")
+        await call.answer("✅ Клиента уведомили о входе")
     elif stage == "login_success":
-        # Просим код перевязки
+        # Просим у клиента код перевязки
         await _send_to_client_chat(
             bot, drop, owner,
             f"Пришлите <b>код перевязки для ЛК {bank}</b> следующим сообщением.",
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="awaiting_perevyaz")
-        await call.answer("📩 Запросили код перевяза")
-    elif stage == "awaiting_perevyaz":
-        await state.set_state(SMSForm.waiting_code)
-        await state.update_data(droplk_id=droplk_id, sms_kind="perevyaz")
-        await call.message.reply(
-            f"📩 Введите код <b>перевязки</b> для {bank} следующим сообщением:"
-        )
-        await call.answer()
-    elif stage == "perevyaz_received":
-        # Финал
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_asked")
+        await call.answer("📩 Клиента попросили код перевязки")
+    elif stage == "perevyaz_asked":
+        # Перевязка выполнена — менеджер подтверждает
         await _send_to_client_chat(
             bot, drop, owner,
             f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
         )
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_success")
+        await call.answer("✅ Клиента уведомили о перевязке")
+    elif stage == "perevyaz_success":
+        # Финал
         await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="done")
-        await call.answer("🏁 Перевязка завершена")
+        await call.answer("🏁 SMS-flow завершён")
     else:
         await call.answer()
     await _post_or_update_sms_tracker(bot, droplk_id)
