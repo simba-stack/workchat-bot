@@ -4798,17 +4798,29 @@ function jarvis() {
             this.dcRemoteScreens = { ...this.dcRemoteScreens, [remoteSessionId]: stream };
           }
           stream.addTrack(ev.track);
-          // Авто-показать ему когда трек закончится (юзер выключил шеринг)
-          ev.track.onended = () => {
-            console.log('[screen] remote ended for', remoteSessionId);
+          const cleanupRemoteScreen = () => {
+            console.log('[screen] remote ended/muted for', remoteSessionId);
             try { stream.removeTrack(ev.track); } catch {}
             const updated = { ...this.dcRemoteScreens };
             delete updated[remoteSessionId];
             this.dcRemoteScreens = updated;
             if (this.dcActiveScreenSession === remoteSessionId) {
               this.dcActiveScreenSession = this._pickActiveScreen();
+              if (this.dcActiveScreenSession === '__local__') {
+                this.$nextTick(() => this._bindLocalScreenVideo());
+              } else if (this.dcActiveScreenSession) {
+                this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
+              } else {
+                const screenEl = document.getElementById('dc-screen-video');
+                if (screenEl) try { screenEl.srcObject = null; } catch {}
+              }
             }
           };
+          // 'ended' — когда сам трек закрылся (full track.stop())
+          ev.track.onended = cleanupRemoteScreen;
+          // 'mute' — когда sender сделал replaceTrack(null) — трек жив, но без данных
+          // Это наш основной сигнал что шеринг прекратился
+          ev.track.onmute = cleanupRemoteScreen;
           // Авто-переключаемся на просмотр этого экрана
           this.dcActiveScreenSession = remoteSessionId;
           // Привязать к video элементу после render
@@ -5321,9 +5333,14 @@ function jarvis() {
         alert('Зайди в голос сначала.');
         return;
       }
+      if (this._screenBusy) {
+        console.log('[screen] busy — ignoring click');
+        return;
+      }
       if (this.dcScreenSharing) {
         return this._stopScreenShare();
       }
+      this._screenBusy = true;
       try {
         this.dcScreenStream = await navigator.mediaDevices.getDisplayMedia({
           video: { frameRate: 30 },
@@ -5333,33 +5350,85 @@ function jarvis() {
         if (!videoTrack) throw new Error('no video track');
         // Авто-стоп когда юзер сам кнопкой "стоп шеринг" в браузере
         videoTrack.onended = () => this._stopScreenShare();
-        // Добавим video track ко всем peer connections
-        for (const sid of Object.keys(this.dcPeers)) {
-          const peer = this.dcPeers[sid];
-          try {
-            peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
-          } catch (e) {
-            console.warn('[screen] addTrack failed for', sid, e);
-          }
-          // Renegotiate
-          try {
-            const offer = await peer.pc.createOffer();
-            await peer.pc.setLocalDescription(offer);
-            this.sendSignal(sid, { type: 'offer', sdp: offer });
-          } catch (e) {
-            console.warn('[screen] renegotiate failed for', sid, e);
-          }
-        }
+
+        // СНАЧАЛА флаги + UI — мгновенно
         this.dcScreenSharing = true;
-        // Покажем себе свой превью
         this.dcActiveScreenSession = '__local__';
         this.$nextTick(() => this._bindLocalScreenVideo());
-        console.log('[screen] sharing started');
+
+        // ПАРАЛЛЕЛЬНО добавляем track во все peer'ы + negotiate
+        const promises = [];
+        for (const sid of Object.keys(this.dcPeers)) {
+          const peer = this.dcPeers[sid];
+          promises.push(this._addScreenSenderTo(sid, peer, videoTrack));
+        }
+        await Promise.allSettled(promises);
+        console.log('[screen] sharing started, peers updated:', promises.length);
       } catch (e) {
         if (e.name !== 'NotAllowedError') {
           alert('Не удалось расшарить экран: ' + e.message);
         }
         console.warn('[screen] start failed', e);
+        // Cleanup if we partially set state
+        if (this.dcScreenStream) {
+          try {
+            for (const t of this.dcScreenStream.getTracks()) t.stop();
+          } catch {}
+          this.dcScreenStream = null;
+        }
+        this.dcScreenSharing = false;
+        if (this.dcActiveScreenSession === '__local__') {
+          this.dcActiveScreenSession = this._pickActiveScreen();
+        }
+      } finally {
+        this._screenBusy = false;
+      }
+    },
+
+    async _addScreenSenderTo(sid, peer, videoTrack) {
+      try {
+        if (!peer.pc || peer.pc.signalingState === 'closed') return;
+        // Правильный WebRTC pattern: переиспользуем существующий transceiver
+        // вместо addTrack заново. Это избегает дубликатов transceiver'ов
+        // и решает проблему «второй раз не запускается»
+        if (peer.screenSender && peer.screenSender.replaceTrack) {
+          await peer.screenSender.replaceTrack(videoTrack);
+          console.log('[screen] reused sender for', sid);
+        } else {
+          peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
+          console.log('[screen] new sender for', sid);
+        }
+      } catch (e) {
+        console.warn('[screen] addTrack failed for', sid, e);
+        return;
+      }
+      // Очередь negotiation чтобы не было glare
+      await this._safeRenegotiate(sid, peer);
+    },
+
+    async _safeRenegotiate(sid, peer) {
+      if (!peer || !peer.pc) return;
+      if (peer.pc.signalingState === 'closed') return;
+      // Очередь: если уже идёт negotiation для этого peer'а — ждём
+      if (peer._negotiating) {
+        peer._needsRenegotiate = true;
+        return;
+      }
+      peer._negotiating = true;
+      try {
+        const offer = await peer.pc.createOffer();
+        if (peer.pc.signalingState === 'closed') return;
+        await peer.pc.setLocalDescription(offer);
+        this.sendSignal(sid, { type: 'offer', sdp: offer });
+      } catch (e) {
+        console.warn('[screen] renegotiate failed for', sid, e);
+      } finally {
+        peer._negotiating = false;
+        // Если за время negotiation накопилась ещё одна попытка — ререндер
+        if (peer._needsRenegotiate) {
+          peer._needsRenegotiate = false;
+          setTimeout(() => this._safeRenegotiate(sid, peer), 100);
+        }
       }
     },
 
@@ -5419,36 +5488,76 @@ function jarvis() {
     },
 
     async _stopScreenShare() {
-      if (!this.dcScreenStream) return;
-      // Удалим video sender из всех peer connections
-      for (const sid of Object.keys(this.dcPeers)) {
-        const peer = this.dcPeers[sid];
-        if (peer.screenSender) {
-          try { peer.pc.removeTrack(peer.screenSender); } catch {}
-          peer.screenSender = null;
-          // Renegotiate
-          try {
-            const offer = await peer.pc.createOffer();
-            await peer.pc.setLocalDescription(offer);
-            this.sendSignal(sid, { type: 'offer', sdp: offer });
-          } catch (e) {
-            console.warn('[screen] renegotiate stop failed', e);
+      if (!this.dcScreenStream && !this.dcScreenSharing) return;
+      if (this._screenBusy) {
+        console.log('[screen] busy — stop deferred');
+        return;
+      }
+      this._screenBusy = true;
+      try {
+        // === 1) СНАЧАЛА — флаги + UI (мгновенно, без await) ===
+        const streamToStop = this.dcScreenStream;
+        this.dcScreenStream = null;
+        this.dcScreenSharing = false;
+        // Очистим video element
+        const screenEl = document.getElementById('dc-screen-video');
+        if (screenEl) {
+          try { screenEl.srcObject = null; } catch {}
+        }
+        // Переключаемся на другой шеринг (если есть)
+        if (this.dcActiveScreenSession === '__local__') {
+          this.dcActiveScreenSession = this._pickActiveScreen();
+          if (this.dcActiveScreenSession) {
+            this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
           }
         }
-      }
-      try {
-        for (const t of this.dcScreenStream.getTracks()) t.stop();
-      } catch {}
-      this.dcScreenStream = null;
-      this.dcScreenSharing = false;
-      // Переключаемся на другой шеринг (если есть) или закрываем экран
-      if (this.dcActiveScreenSession === '__local__') {
-        this.dcActiveScreenSession = this._pickActiveScreen();
-        if (this.dcActiveScreenSession) {
-          this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
+
+        // === 2) Стопаем local track — освобождает getDisplayMedia ===
+        if (streamToStop) {
+          try {
+            for (const t of streamToStop.getTracks()) {
+              t.onended = null;  // отвязка чтоб не было повторного _stopScreenShare
+              try { t.stop(); } catch {}
+            }
+          } catch {}
         }
+
+        // === 3) ПАРАЛЛЕЛЬНО replaceTrack(null) + renegotiate всех peer'ов ===
+        // NB: peer.screenSender НЕ обнуляем — transceiver останется в pc
+        // и переиспользуется при следующем шаринге. Так быстрее и стабильнее.
+        const promises = [];
+        for (const sid of Object.keys(this.dcPeers)) {
+          const peer = this.dcPeers[sid];
+          if (!peer.screenSender) continue;
+          promises.push(this._removeSenderAndRenegotiate(sid, peer, peer.screenSender));
+        }
+        // Не блокируемся — пусть renegotiate идёт в фоне
+        await Promise.allSettled(promises);
+        console.log('[screen] sharing stopped, peers cleaned:', promises.length);
+      } finally {
+        this._screenBusy = false;
       }
-      console.log('[screen] sharing stopped');
+    },
+
+    async _removeSenderAndRenegotiate(sid, peer, sender) {
+      try {
+        if (!peer || !peer.pc || peer.pc.signalingState === 'closed') return;
+        // ВАЖНО: replaceTrack(null) вместо removeTrack — transceiver
+        // остаётся в pc, можно переиспользовать при следующем шаринге.
+        // removeTrack делал transceiver инактивным навсегда, и addTrack
+        // создавал новый → дубликаты transceiver'ов = всё ломалось.
+        try {
+          if (sender.replaceTrack) {
+            await sender.replaceTrack(null);
+          }
+        } catch (e) {
+          console.debug('[screen] replaceTrack(null) failed:', e);
+        }
+        // Renegotiate через очередь — transceiver direction станет recvonly/inactive
+        await this._safeRenegotiate(sid, peer);
+      } catch (e) {
+        console.warn('[screen] cleanup for', sid, 'failed:', e);
+      }
     },
 
     // ====== STATUS ======
