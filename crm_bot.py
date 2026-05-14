@@ -1268,13 +1268,11 @@ async def cb_lkview(call: CallbackQuery):
         f"<b>Данные ЛК:</b>\n<code>{lk.get('value') or '—'}</code>\n\n"
         f"<b>Сделка:</b> {lk.get('deal') or '—'}\n"
     )
+    # 🔒 БЕЗОПАСНОСТЬ: new_password / new_mail / ded_ip / ded_pass и т.п. —
+    # это данные операционистов и сервера. Они НЕ должны попадать в чаты партнёров
+    # (включая ЛС CRM-бота и work-чаты). Видны только в группе «PRIDE | Пароли».
     if lk.get("new_password") or lk.get("ded_ip"):
-        text += (
-            f"\n<b>Заполнено админом:</b>\n"
-            f"Новый пароль: {lk.get('new_password') or '—'}\n"
-            f"Новая почта: {lk.get('new_mail') or '—'}\n"
-            f"Дедик IP: {lk.get('ded_ip') or '—'}\n"
-        )
+        text += "\n<i>🔒 Данные перевязки заполнены операционистами.</i>\n"
     if lk.get("sms_history"):
         text += "\n<b>📩 SMS:</b>\n"
         for s in lk["sms_history"][-10:]:
@@ -2694,6 +2692,7 @@ async def run_crm_bot():
             await bot.session.close()
         except Exception:
             pass
+
 
 
 # Запуск как standalone (для отладки локально)
