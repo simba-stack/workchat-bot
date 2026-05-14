@@ -1265,21 +1265,19 @@ async def cb_lkview(call: CallbackQuery):
     text = (
         f"{status_e} <b>{lk.get('bank')}</b>\n"
         f"клиент: <b>{drop and drop.get('fio') or '—'}</b>\n\n"
-        f"<b>Данные ЛК:</b>\n<code>{lk.get('value') or '—'}</code>\n\n"
-        f"<b>Сделка:</b> {lk.get('deal') or '—'}\n"
+        f"<b>Данные ЛК:</b>\n<code>{lk.get('value') or '—'}</code>\n"
     )
+    # Сделка показывается только если она реально привязана (auto-set от AI)
+    if lk.get("deal"):
+        text += f"\n<b>Сделка:</b> #{lk.get('deal')}\n"
     # 🔒 БЕЗОПАСНОСТЬ: new_password / new_mail / ded_ip / ded_pass и т.п. —
     # это данные операционистов и сервера. Они НЕ должны попадать в чаты партнёров
     # (включая ЛС CRM-бота и work-чаты). Видны только в группе «PRIDE | Пароли».
     if lk.get("new_password") or lk.get("ded_ip"):
         text += "\n<i>🔒 Данные перевязки заполнены операционистами.</i>\n"
-    if lk.get("sms_history"):
-        text += "\n<b>📩 SMS:</b>\n"
-        for s in lk["sms_history"][-10:]:
-            text += f"  • {s.get('code')} — {s.get('time')}\n"
+    # SMS history также — операционные данные, скрываем от партнёра
     kb = [
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"lkeditvalue:{droplk_id}")],
-        [InlineKeyboardButton(text="🤝 Номер сделки", callback_data=f"lkeditdeal:{droplk_id}")],
         [InlineKeyboardButton(text="🗑 Удалить ЛК", callback_data=f"lkdelete:{droplk_id}")],
         [InlineKeyboardButton(text="◀️ К списку ЛК", callback_data=f"droplk:{lk.get('drop_id')}")],
     ]
@@ -1723,6 +1721,29 @@ async def cb_declinedrop(call: CallbackQuery):
             pass
 
 
+async def _fill_ask_step(message, state, prompt_text: str, next_state):
+    """Удалить ответ оператора и предыдущий вопрос бота, спросить новый шаг.
+    Используется в fill-flow чтобы НЕ засорять чат паролей (там лежат
+    реальные пароли/коды — их видеть в истории нельзя)."""
+    data = await state.get_data()
+    fill_msgs = list(data.get("fill_msgs") or [])
+    # 1) Удалить ответ оператора (с конфиденциальным значением)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    # 2) Удалить предыдущий prompt бота
+    for mid in fill_msgs:
+        try:
+            await message.bot.delete_message(message.chat.id, mid)
+        except Exception:
+            pass
+    # 3) Отправить новый prompt и запомнить его msg_id
+    sent = await message.bot.send_message(message.chat.id, prompt_text)
+    await state.update_data(fill_msgs=[sent.message_id])
+    await state.set_state(next_state)
+
+
 # ════════════════════════════════════════════════════════════════
 # ЭТАП 5 — Заполнение admin'ом в password-чате (FSM 5 шагов)
 # ════════════════════════════════════════════════════════════════
@@ -1736,11 +1757,16 @@ async def cb_filldrop(call: CallbackQuery, state: FSMContext):
         return
     await call.answer()
     await state.set_state(FillForm.waiting_new_login)
-    await state.update_data(droplk_id=droplk_id, fill_data={})
     drop = crm_storage.get_crm_drop(lk["drop_id"])
-    await call.message.reply(
+    # Шлём первый вопрос обычным send_message чтобы запомнить его id
+    sent = await call.message.bot.send_message(
+        call.message.chat.id,
         f"<b>✏️ Заполнение {lk.get('bank')} ({drop.get('fio')})</b>\n\n"
         f"<b>Шаг 1/8:</b> Новый логин (или «-»):"
+    )
+    await state.update_data(
+        droplk_id=droplk_id, fill_data={},
+        fill_msgs=[sent.message_id],
     )
 
 
@@ -1749,8 +1775,7 @@ async def fill_login(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["new_login"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_new_password)
-    await message.reply("<b>Шаг 2/8:</b> Новый пароль (или «-»):")
+    await _fill_ask_step(message, state, "<b>Шаг 2/8:</b> Новый пароль (или «-»):", FillForm.waiting_new_password)
 
 
 @router.message(FillForm.waiting_new_password, F.text & ~F.text.startswith("/"))
@@ -1758,8 +1783,7 @@ async def fill_pass(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["new_password"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_new_mail)
-    await message.reply("<b>Шаг 3/8:</b> Новая почта (или «-»):")
+    await _fill_ask_step(message, state, "<b>Шаг 3/8:</b> Новая почта (или «-»):", FillForm.waiting_new_mail)
 
 
 @router.message(FillForm.waiting_new_mail, F.text & ~F.text.startswith("/"))
@@ -1767,8 +1791,7 @@ async def fill_mail(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["new_mail"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_new_number)
-    await message.reply("<b>Шаг 4/8:</b> Новый номер (или «-»):")
+    await _fill_ask_step(message, state, "<b>Шаг 4/8:</b> Новый номер (или «-»):", FillForm.waiting_new_number)
 
 
 @router.message(FillForm.waiting_new_number, F.text & ~F.text.startswith("/"))
@@ -1776,8 +1799,7 @@ async def fill_number(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["new_number"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_code_word)
-    await message.reply("<b>Шаг 5/8:</b> Кодовое слово (или «-»):")
+    await _fill_ask_step(message, state, "<b>Шаг 5/8:</b> Кодовое слово (или «-»):", FillForm.waiting_code_word)
 
 
 @router.message(FillForm.waiting_code_word, F.text & ~F.text.startswith("/"))
@@ -1785,11 +1807,7 @@ async def fill_code_word(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["code_word"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_ded_location)
-    await message.reply(
-        "<b>Шаг 6/8:</b> Где установлен дедик "
-        "(город / провайдер / своя машина / VPS):"
-    )
+    await _fill_ask_step(message, state, "<b>Шаг 6/8:</b> Где установлен дедик (город / провайдер / своя машина / VPS):", FillForm.waiting_ded_location)
 
 
 @router.message(FillForm.waiting_ded_location, F.text & ~F.text.startswith("/"))
@@ -1797,8 +1815,7 @@ async def fill_ded_location(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["ded_location"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_ded_ip)
-    await message.reply("<b>Шаг 7/8:</b> IP дедика:")
+    await _fill_ask_step(message, state, "<b>Шаг 7/8:</b> IP дедика:", FillForm.waiting_ded_ip)
 
 
 @router.message(FillForm.waiting_ded_ip, F.text & ~F.text.startswith("/"))
@@ -1806,8 +1823,7 @@ async def fill_ip(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["ded_ip"] = (message.text or "").strip()
     await state.update_data(**data)
-    await state.set_state(FillForm.waiting_ded_pass)
-    await message.reply("<b>Шаг 8/8:</b> Пароль дедика:")
+    await _fill_ask_step(message, state, "<b>Шаг 8/8:</b> Пароль дедика:", FillForm.waiting_ded_pass)
 
 
 @router.message(FillForm.waiting_ded_pass, F.text & ~F.text.startswith("/"))
@@ -1816,8 +1832,17 @@ async def fill_pass2(message: Message, state: FSMContext):
     fd = data.setdefault("fill_data", {})
     fd["ded_pass"] = (message.text or "").strip()
     droplk_id = data.get("droplk_id")
+    # Удалить ответ оператора (с паролем!) и последний вопрос бота
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    for mid in (data.get("fill_msgs") or []):
+        try:
+            await message.bot.delete_message(message.chat.id, mid)
+        except Exception:
+            pass
     if not droplk_id:
-        await message.reply("❌ Сессия истекла")
         await state.clear()
         return
     # Сохраняем все 8 полей
@@ -2282,18 +2307,12 @@ async def handle_lk_edit_value(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("lkeditdeal:"))
 async def cb_lkeditdeal(call: CallbackQuery, state: FSMContext):
-    droplk_id = call.data.split(":", 1)[1]
-    lk = crm_storage.get_crm_drop_lk(droplk_id)
-    if not lk:
-        await call.answer("Не найден", show_alert=True)
-        return
-    await call.answer()
-    await state.set_state(EditForm.waiting_lk_deal)
-    await state.update_data(droplk_id=droplk_id)
-    await call.message.reply(
-        f"<b>✏️ Номер сделки для {lk.get('bank')}</b>\n\n"
-        f"Текущий: <code>{lk.get('deal') or '—'}</code>\n\n"
-        f"Введите номер сделки (или «-» чтобы очистить):"
+    """DEPRECATED: ручной ввод номера сделки больше не используется.
+    Сделки создаются автоматически через AI-ассистента (record_deal).
+    Хэндлер оставлен только чтобы старые кнопки в чатах не падали с ошибкой."""
+    await call.answer(
+        "ℹ️ Номера сделок теперь привязываются автоматически через ассистента.",
+        show_alert=True,
     )
 
 
