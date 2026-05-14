@@ -140,7 +140,15 @@ def _is_strict_telegram() -> bool:
 
 _HTML_PATH = Path(__file__).parent / "dashboard" / "index.html"
 _JARVIS_PATH = Path(__file__).parent / "dashboard" / "jarvis.html"
+_JARVIS_MOBILE_PATH = Path(__file__).parent / "dashboard" / "jarvis-mobile.html"
 DASHBOARD_DEFAULT = (os.getenv("DASHBOARD_DEFAULT", "jarvis") or "").lower()
+
+
+def _is_mobile_ua(request: Request) -> bool:
+    """Простая UA-детекция мобильных устройств."""
+    ua = (request.headers.get("user-agent") or "").lower()
+    mobile_markers = ["mobile", "android", "iphone", "ipad", "ipod"]
+    return any(m in ua for m in mobile_markers)
 
 
 def _sign_session(user_id: int) -> str:
@@ -499,7 +507,24 @@ async def root(
     if _is_strict_telegram() and _try_session_auth(request) is None:
         return RedirectResponse(url="/login", status_code=302)
     _check_auth(request, credentials)
+    # UA-детект: телефон → мобильный дашборд
+    if _is_mobile_ua(request) and _JARVIS_MOBILE_PATH.exists():
+        return HTMLResponse(_JARVIS_MOBILE_PATH.read_text(encoding="utf-8"))
     return HTMLResponse(_load_html(DASHBOARD_DEFAULT))
+
+
+@app.get("/mobile", response_class=HTMLResponse)
+async def mobile_root(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    """Явный /mobile эндпоинт для тестирования мобильного дашборда с десктопа."""
+    if _is_strict_telegram() and _try_session_auth(request) is None:
+        return RedirectResponse(url="/login", status_code=302)
+    _check_auth(request, credentials)
+    if _JARVIS_MOBILE_PATH.exists():
+        return HTMLResponse(_JARVIS_MOBILE_PATH.read_text(encoding="utf-8"))
+    raise HTTPException(404, "mobile dashboard not found")
 
 
 @app.get("/classic", response_class=HTMLResponse)

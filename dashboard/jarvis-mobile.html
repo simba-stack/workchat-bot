@@ -1,0 +1,3216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRIDE · J.A.R.V.I.S. · Mobile</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  /* ===========================
+     THEMES
+     =========================== */
+  :root,
+  [data-theme="jarvis"] {
+    --bg-deep: #050818;
+    --bg-card: rgba(8, 14, 30, 0.82);
+    --bg-soft: rgba(18, 28, 56, 0.6);
+    --hud-primary: #00e5ff;
+    --hud-secondary: #4f9fff;
+    --hud-accent: #b478ff;
+    --hud-emerald: #4ade80;
+    --hud-amber: #fbbf24;
+    --hud-rose: #fb7185;
+    --hud-dim: #4a6594;
+    --text: #d6e3ff;
+    --text-dim: #5b7299;
+    --grid: rgba(0, 229, 255, 0.06);
+    --primary-rgb: 0, 229, 255;
+  }
+  [data-theme="ironman"] {
+    --bg-deep: #1a0405;
+    --bg-card: rgba(28, 8, 14, 0.85);
+    --bg-soft: rgba(50, 14, 20, 0.6);
+    --hud-primary: #ff3344;
+    --hud-secondary: #ffaa55;
+    --hud-accent: #ff77aa;
+    --hud-emerald: #80ff80;
+    --hud-amber: #ffdd44;
+    --hud-rose: #ff5577;
+    --hud-dim: #6e2a35;
+    --text: #ffd9d9;
+    --text-dim: #a4595e;
+    --grid: rgba(255, 51, 68, 0.06);
+    --primary-rgb: 255, 51, 68;
+  }
+  [data-theme="stealth"] {
+    --bg-deep: #0a0a0a;
+    --bg-card: rgba(20, 20, 20, 0.85);
+    --bg-soft: rgba(30, 30, 30, 0.6);
+    --hud-primary: #c0c0c0;
+    --hud-secondary: #a0a0a0;
+    --hud-accent: #d0d0d0;
+    --hud-emerald: #80c080;
+    --hud-amber: #c0a040;
+    --hud-rose: #c08080;
+    --hud-dim: #404040;
+    --text: #e0e0e0;
+    --text-dim: #606060;
+    --grid: rgba(200, 200, 200, 0.04);
+    --primary-rgb: 192, 192, 192;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100vh; overflow-x: hidden; }
+  body {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    color: var(--text);
+    background:
+      radial-gradient(ellipse at 30% 10%, rgba(var(--primary-rgb), 0.10) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 90%, rgba(var(--primary-rgb), 0.06) 0%, transparent 50%),
+      linear-gradient(135deg, var(--bg-deep) 0%, #080b22 50%, var(--bg-deep) 100%);
+    transition: background 0.5s;
+  }
+
+  /* Boot */
+  .boot-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--bg-deep);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--hud-primary);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 2px;
+    transition: opacity 0.6s, visibility 0.6s;
+  }
+  .boot-mask.gone { opacity: 0; visibility: hidden; }
+  .boot-mask .boot-logo {
+    font-size: 38px; font-weight: 900;
+    letter-spacing: 12px;
+    text-shadow: 0 0 18px var(--hud-primary);
+    margin-bottom: 14px;
+  }
+  .boot-mask .boot-bar {
+    width: 280px; height: 3px;
+    background: rgba(var(--primary-rgb),0.15);
+    border-radius: 2px;
+    margin: 18px auto 8px;
+    position: relative;
+    overflow: hidden;
+  }
+  .boot-mask .boot-bar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: -30%;
+    width: 30%; height: 100%;
+    background: var(--hud-primary);
+    box-shadow: 0 0 10px var(--hud-primary);
+    animation: boot-scan 1.2s ease-in-out infinite;
+  }
+  @keyframes boot-scan { 0%{left:-30%;} 100%{left:100%;} }
+  @keyframes hud-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  /* Sparkline */
+  .sparkline-defs { display: none; }
+
+  /* Command palette */
+  .cmd-palette-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 24, 0.75);
+    backdrop-filter: blur(6px);
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 80px;
+  }
+  .cmd-palette {
+    width: 520px;
+    max-width: 90vw;
+    background: var(--bg-card);
+    border: 1px solid var(--hud-primary);
+    border-radius: 6px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px rgba(var(--primary-rgb), 0.3);
+    overflow: hidden;
+  }
+  .cmd-input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    padding: 12px 16px;
+    outline: none;
+  }
+  .cmd-input::placeholder { color: var(--text-dim); }
+  .cmd-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .cmd-item {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .cmd-item.active,
+  .cmd-item:hover { background: rgba(var(--primary-rgb), 0.1); }
+  .cmd-item .icon {
+    width: 16px; height: 16px;
+    color: var(--hud-primary);
+  }
+  .cmd-item .hint {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-dim);
+    border: 1px solid var(--text-dim);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* Modal */
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 24, 0.85);
+    backdrop-filter: blur(6px);
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal {
+    background: var(--bg-card);
+    border: 1px solid var(--hud-primary);
+    border-radius: 6px;
+    padding: 22px;
+    min-width: 320px;
+    max-width: 90vw;
+    box-shadow: 0 0 40px rgba(var(--primary-rgb), 0.3);
+  }
+  .modal h3 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--hud-primary);
+    margin: 0 0 14px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+  .btn {
+    background: transparent;
+    border: 1px solid var(--hud-primary);
+    color: var(--hud-primary);
+    padding: 6px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.15s;
+  }
+  .btn:hover { background: rgba(var(--primary-rgb), 0.15); }
+  .btn.danger { color: var(--hud-rose); border-color: var(--hud-rose); }
+  .btn.danger:hover { background: rgba(251, 113, 133, 0.15); }
+  .btn.success { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+
+  .status-select {
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  /* Detail modal */
+  .modal.detail {
+    min-width: 540px;
+    max-width: 90vw;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 22px 26px;
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 8px 12px;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 11px;
+  }
+  .detail-grid label {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 10px;
+  }
+  .detail-grid input,
+  .detail-grid select {
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    width: 100%;
+  }
+  .detail-grid input:focus,
+  .detail-grid select:focus {
+    border-color: var(--hud-primary);
+    outline: none;
+    box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.25);
+  }
+  .detail-grid .static {
+    color: var(--text);
+    padding: 5px 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .detail-section {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(var(--primary-rgb), 0.15);
+  }
+  .detail-section-title {
+    color: var(--hud-primary);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .history-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .history-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 60px;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px dotted rgba(var(--primary-rgb), 0.07);
+    color: var(--text-dim);
+  }
+  .history-row .h-st { color: var(--hud-amber); }
+  .history-row .h-by { color: var(--text-dim); font-style: italic; text-align: right; }
+
+  /* Badge generic */
+  .badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border: 1px solid;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .badge.s-в_работе  { color: var(--hud-primary); border-color: var(--hud-primary); }
+  .badge.s-отработан { color: var(--hud-amber);   border-color: var(--hud-amber); }
+  .badge.s-завершён,
+  .badge.s-завершен,
+  .badge.s-пополнить_и_отпустить { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+  .badge.s-блок,
+  .badge.s-блок_без_отработки,
+  .badge.s-брак { color: var(--hud-rose); border-color: var(--hud-rose); }
+
+  .save-flash {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    padding: 4px 10px;
+    background: var(--hud-emerald);
+    color: #0a1421;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    animation: flash-fade 1.6s ease-out forwards;
+    z-index: 1000;
+  }
+  @keyframes flash-fade {
+    0% { opacity: 0; transform: translateY(-6px); }
+    20% { opacity: 1; transform: translateY(0); }
+    80% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-6px); }
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(var(--primary-rgb),0.04); }
+  ::-webkit-scrollbar-thumb { background: rgba(var(--primary-rgb),0.3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(var(--primary-rgb),0.5); }
+
+  /* x-cloak — needed for mobile to avoid flash during Alpine init */
+  [x-cloak] { display: none !important; }
+
+  /* iOS notch safety */
+  @supports (padding: max(0px)) {
+    body {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+
+  /* iOS input zoom guard */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+  .cmd-input { font-size: 16px !important; }
+
+  /* ===================================================================
+     MOBILE SHELL — single-purpose layout (this file is mobile-only)
+     =================================================================== */
+  .mobile-shell {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(8, 12, 28, 1) 0%, rgba(5, 8, 18, 1) 100%);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  /* TOP HEADER */
+  .m-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+    background: rgba(5, 8, 18, 0.95);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.12);
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  .m-header-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .m-app-name {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--hud-primary);
+    text-shadow: 0 0 8px rgba(var(--primary-rgb), 0.6);
+  }
+  .m-header-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: lowercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .m-icon-btn {
+    background: transparent;
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    color: var(--hud-primary);
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .m-icon-btn:active {
+    background: rgba(var(--primary-rgb), 0.15);
+    transform: scale(0.96);
+  }
+  .m-conn-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--hud-rose);
+    box-shadow: 0 0 6px var(--hud-rose);
+  }
+  .m-conn-dot.online {
+    background: var(--hud-emerald);
+    box-shadow: 0 0 6px var(--hud-emerald);
+  }
+
+  /* MAIN CONTENT */
+  .m-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 0 calc(72px + env(safe-area-inset-bottom)) 0;
+  }
+  .m-tab {
+    padding: 12px;
+    min-height: 100%;
+  }
+
+  /* HERO */
+  .m-hero {
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.12), rgba(var(--primary-rgb), 0.04));
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 14px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  .m-hero.pos { border-color: rgba(74, 222, 128, 0.35); background: linear-gradient(135deg, rgba(74, 222, 128, 0.12), rgba(74, 222, 128, 0.03)); }
+  .m-hero.neg { border-color: rgba(251, 113, 133, 0.35); background: linear-gradient(135deg, rgba(251, 113, 133, 0.12), rgba(251, 113, 133, 0.03)); }
+  .m-hero-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .m-hero-value {
+    font-size: 42px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .m-hero.pos .m-hero-value { color: var(--hud-emerald); }
+  .m-hero.neg .m-hero-value { color: var(--hud-rose); }
+  .m-hero-sub {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* STAT GRID */
+  .m-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .m-stat-card {
+    background: rgba(var(--primary-rgb), 0.05);
+    border: 1px solid rgba(var(--primary-rgb), 0.12);
+    border-radius: 12px;
+    padding: 12px 8px;
+    text-align: center;
+    transition: transform 0.1s;
+  }
+  .m-stat-card:active { transform: scale(0.96); }
+  .m-stat-card.warn {
+    background: rgba(251, 113, 133, 0.08);
+    border-color: rgba(251, 113, 133, 0.3);
+  }
+  .m-stat-icon {
+    font-size: 18px;
+    color: var(--hud-primary);
+    margin-bottom: 4px;
+  }
+  .m-stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+  }
+  .m-stat-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 3px;
+  }
+
+  /* SECTION TITLES */
+  .m-section-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 0 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+  }
+  .m-section-count {
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .m-cat-label {
+    padding: 10px 0 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+  }
+  .m-empty {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  /* EVENT LIST */
+  .m-event-list {
+    background: rgba(var(--primary-rgb), 0.03);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .m-event-row {
+    display: grid;
+    grid-template-columns: 50px 60px 1fr;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(var(--primary-rgb), 0.06);
+    font-size: 11px;
+    align-items: center;
+  }
+  .m-event-row:last-child { border-bottom: 0; }
+  .m-event-time { color: var(--text-dim); font-size: 10px; }
+  .m-event-tag {
+    color: var(--hud-primary);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .m-event-msg {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-event-row.sev-warning { background: rgba(251, 191, 36, 0.04); }
+  .m-event-row.sev-error { background: rgba(251, 113, 133, 0.04); }
+  .m-event-row.sev-alert { background: rgba(251, 113, 133, 0.08); }
+
+  /* DISCORD MOBILE */
+  .m-discord-me-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.1), rgba(var(--primary-rgb), 0.02));
+    border-radius: 16px;
+    margin-bottom: 14px;
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+  }
+  .m-discord-me-avatar, .m-discord-me-avatar-fallback {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(var(--primary-rgb), 0.4);
+  }
+  .m-discord-me-avatar-fallback {
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .m-discord-me-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-discord-me-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+  .m-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--hud-rose);
+  }
+  .m-status-dot.online {
+    background: var(--hud-emerald);
+    box-shadow: 0 0 6px var(--hud-emerald);
+  }
+  .m-status-dot.idle { background: var(--hud-amber); }
+  .m-status-dot.offline { background: var(--text-dim); }
+
+  .m-channel-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: rgba(var(--primary-rgb), 0.04);
+    border: 1px solid rgba(var(--primary-rgb), 0.08);
+    border-radius: 12px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .m-channel-row:active {
+    background: rgba(var(--primary-rgb), 0.12);
+    transform: scale(0.98);
+  }
+  .m-channel-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .m-channel-info { flex: 1; min-width: 0; }
+  .m-channel-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-channel-topic {
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-channel-meta { flex-shrink: 0; }
+  .m-channel-badge {
+    background: var(--hud-emerald);
+    color: #0a1421;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 10px;
+  }
+
+  /* CHAT */
+  .m-chat {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 60px - 72px - env(safe-area-inset-bottom) - env(safe-area-inset-top));
+    margin: -12px;
+  }
+  .m-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .m-msg { display: grid; grid-template-columns: 32px 1fr; gap: 10px; }
+  .m-msg-avatar, .m-msg-avatar-fallback {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .m-msg-avatar-fallback {
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .m-msg-body { min-width: 0; }
+  .m-msg-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+  .m-msg-author { font-size: 13px; font-weight: 700; color: var(--hud-primary); }
+  .m-msg-time { font-size: 10px; color: var(--text-dim); }
+  .m-msg-text {
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text);
+    word-wrap: break-word;
+  }
+  .m-msg-text .dc-mention {
+    background: rgba(var(--primary-rgb), 0.2);
+    color: var(--hud-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .m-msg-text .dc-link { color: var(--hud-primary); text-decoration: underline; }
+  .m-reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .m-reaction {
+    background: rgba(var(--primary-rgb), 0.08);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    border-radius: 12px;
+    padding: 3px 9px;
+    font-size: 12px;
+    display: inline-flex;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .m-reaction.mine {
+    background: rgba(var(--primary-rgb), 0.25);
+    border-color: var(--hud-primary);
+  }
+
+  .m-chat-input-row {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(5, 8, 18, 0.95);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(var(--primary-rgb), 0.12);
+    flex-shrink: 0;
+  }
+  .m-chat-input {
+    flex: 1;
+    background: rgba(var(--primary-rgb), 0.06);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    color: var(--text);
+    padding: 12px 14px;
+    border-radius: 22px;
+    font-size: 14px !important;
+    outline: none;
+  }
+  .m-chat-input:focus {
+    border-color: var(--hud-primary);
+    background: rgba(var(--primary-rgb), 0.1);
+  }
+  .m-send-btn {
+    width: 44px;
+    height: 44px;
+    background: var(--hud-primary);
+    color: #0a1421;
+    border: none;
+    border-radius: 50%;
+    font-size: 20px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.4);
+  }
+  .m-send-btn:active { transform: scale(0.94); }
+  .m-send-btn:disabled { opacity: 0.4; box-shadow: none; }
+
+  /* VOICE ROOM */
+  .m-voice-room { padding: 12px; }
+  .m-voice-header { text-align: center; padding: 20px 0; }
+  .m-voice-channel-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .m-voice-channel-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+  .m-voice-participants {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 14px 0;
+  }
+  .m-voice-user {
+    background: rgba(var(--primary-rgb), 0.05);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    border-radius: 16px;
+    padding: 18px 12px;
+    text-align: center;
+    position: relative;
+  }
+  .m-voice-user.is-me {
+    border-color: var(--hud-amber);
+    box-shadow: 0 0 16px rgba(251, 191, 36, 0.2);
+  }
+  .m-voice-user.muted {
+    opacity: 0.7;
+    border-color: rgba(251, 146, 60, 0.4);
+  }
+  .m-voice-avatar, .m-voice-avatar-fallback {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    margin: 0 auto 10px;
+    object-fit: cover;
+    border: 3px solid var(--hud-primary);
+    box-shadow: 0 0 12px rgba(var(--primary-rgb), 0.4);
+  }
+  .m-voice-avatar-fallback {
+    background: rgba(var(--primary-rgb), 0.2);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 700;
+  }
+  .m-voice-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .m-voice-flags {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 14px;
+  }
+  .m-voice-you {
+    font-size: 9px;
+    background: var(--hud-amber);
+    color: #0a1421;
+    padding: 2px 7px;
+    border-radius: 8px;
+    font-weight: 700;
+  }
+  .m-voice-actions { padding: 20px 0; }
+  .m-voice-join-btn {
+    display: block;
+    width: 100%;
+    background: linear-gradient(135deg, var(--hud-emerald), #10b981);
+    color: #0a1421;
+    border: none;
+    padding: 18px;
+    border-radius: 16px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(74, 222, 128, 0.3);
+  }
+  .m-voice-join-btn:active { transform: scale(0.97); }
+  .m-voice-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .m-voice-ctrl {
+    background: rgba(var(--primary-rgb), 0.08);
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    color: var(--text);
+    padding: 14px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .m-voice-ctrl span:first-child { font-size: 22px; }
+  .m-voice-ctrl.active {
+    background: rgba(251, 113, 133, 0.15);
+    border-color: var(--hud-rose);
+    color: var(--hud-rose);
+  }
+  .m-voice-leave-btn {
+    grid-column: 1 / -1;
+    background: rgba(251, 113, 133, 0.12);
+    border: 1px solid var(--hud-rose);
+    color: var(--hud-rose);
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+
+  /* LK CARDS */
+  .m-search { margin-bottom: 10px; }
+  .m-search-input {
+    width: 100%;
+    background: rgba(var(--primary-rgb), 0.06);
+    border: 1px solid rgba(var(--primary-rgb), 0.15);
+    color: var(--text);
+    padding: 11px 14px;
+    border-radius: 12px;
+    font-size: 14px !important;
+    outline: none;
+  }
+  .m-search-input:focus { border-color: var(--hud-primary); }
+
+  .m-card-list { display: flex; flex-direction: column; gap: 8px; }
+  .m-lk-card {
+    background: rgba(var(--primary-rgb), 0.04);
+    border: 1px solid rgba(var(--primary-rgb), 0.1);
+    border-radius: 12px;
+    padding: 12px;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .m-lk-card:active { transform: scale(0.98); background: rgba(var(--primary-rgb), 0.1); }
+  .m-lk-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .m-lk-id {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--hud-primary);
+    letter-spacing: 1px;
+  }
+  .m-badge {
+    font-size: 9px;
+    padding: 3px 8px;
+    border: 1px solid;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .m-badge.s-в_работе  { color: var(--hud-primary); border-color: var(--hud-primary); }
+  .m-badge.s-отработан { color: var(--hud-amber);   border-color: var(--hud-amber); }
+  .m-badge.s-завершён,
+  .m-badge.s-завершен,
+  .m-badge.s-пополнить_и_отпустить { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+  .m-badge.s-блок,
+  .m-badge.s-блок_без_отработки,
+  .m-badge.s-брак { color: var(--hud-rose); border-color: var(--hud-rose); }
+  .m-lk-bank-fio {
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-lk-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    display: flex;
+    gap: 10px;
+  }
+
+  /* FIN */
+  .m-fin-hero {
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.12), rgba(var(--primary-rgb), 0.04));
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+  .m-fin-hero.pos { border-color: rgba(74, 222, 128, 0.35); }
+  .m-fin-hero.neg { border-color: rgba(251, 113, 133, 0.35); }
+  .m-fin-row { display: flex; justify-content: space-between; gap: 20px; }
+  .m-fin-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .m-fin-value-big {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 4px;
+  }
+  .m-fin-hero.pos .m-fin-value-big { color: var(--hud-emerald); }
+  .m-fin-hero.neg .m-fin-value-big { color: var(--hud-rose); }
+
+  .m-app-card {
+    background: rgba(var(--primary-rgb), 0.04);
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .m-app-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .m-app-id {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--hud-primary);
+  }
+  .m-app-date { font-size: 11px; color: var(--text-dim); }
+  .m-app-margin {
+    font-size: 13px;
+    font-weight: 700;
+    margin-left: auto;
+  }
+  .m-app-margin.pos { color: var(--hud-emerald); }
+  .m-app-margin.neg { color: var(--hud-rose); }
+  .m-app-info {
+    font-size: 11px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* MORE TAB */
+  .m-more-profile { text-align: center; padding: 24px 16px 16px; }
+  .m-more-avatar, .m-more-avatar-fallback {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    margin: 0 auto 12px;
+    object-fit: cover;
+    border: 3px solid var(--hud-primary);
+    box-shadow: 0 0 20px rgba(var(--primary-rgb), 0.4);
+  }
+  .m-more-avatar-fallback {
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 700;
+  }
+  .m-more-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .m-more-uid {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .m-manager-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(var(--primary-rgb), 0.04);
+    border-radius: 12px;
+    margin-bottom: 6px;
+  }
+  .m-mgr-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .m-mgr-meta {
+    font-size: 10px;
+    color: var(--text-dim);
+    display: flex;
+    gap: 10px;
+    margin-top: 2px;
+  }
+  .m-mgr-idle { font-size: 10px; color: var(--text-dim); }
+
+  .m-action-list { display: flex; flex-direction: column; gap: 4px; }
+  .m-action-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 14px;
+    background: rgba(var(--primary-rgb), 0.04);
+    border: none;
+    border-radius: 12px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 14px;
+    text-decoration: none;
+  }
+  .m-action-row:active { background: rgba(var(--primary-rgb), 0.12); }
+  .m-action-icon { font-size: 20px; }
+  .m-action-text { flex: 1; text-align: left; }
+  .m-action-chev { color: var(--text-dim); font-size: 18px; }
+
+  .m-version {
+    text-align: center;
+    padding: 24px 12px 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+
+  /* Audio unlock banner */
+  .m-audio-unlock {
+    position: fixed;
+    bottom: calc(80px + env(safe-area-inset-bottom));
+    left: 12px;
+    right: 12px;
+    background: linear-gradient(135deg, var(--hud-amber), #f59e0b);
+    color: #0a1421;
+    padding: 14px 18px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 700;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(251, 191, 36, 0.4);
+    z-index: 200;
+    animation: pulse-unlock 1.5s ease-in-out infinite;
+    cursor: pointer;
+  }
+  @keyframes pulse-unlock {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.03); }
+  }
+
+  /* BOTTOM NAV */
+  .m-bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    background: rgba(5, 8, 18, 0.95);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(var(--primary-rgb), 0.15);
+    padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
+    z-index: 100;
+  }
+  .m-nav-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 6px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+    transition: color 0.12s;
+    position: relative;
+  }
+  .m-nav-btn.active { color: var(--hud-primary); }
+  .m-nav-btn.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 25%;
+    right: 25%;
+    height: 2px;
+    background: var(--hud-primary);
+    border-radius: 2px;
+    box-shadow: 0 0 8px var(--hud-primary);
+  }
+  .m-nav-icon { font-size: 22px; line-height: 1; }
+  .m-nav-label { font-size: 10px; font-weight: 500; letter-spacing: 0.3px; }
+  .m-nav-btn:active { transform: scale(0.92); }
+
+  /* Mobile-friendly modal sizing */
+  .modal {
+    min-width: 0 !important;
+    width: 95vw !important;
+    max-width: 95vw !important;
+    max-height: 90vh !important;
+    padding: 16px !important;
+    overflow-y: auto;
+  }
+  .modal.detail {
+    min-width: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0;
+  }
+  .detail-grid {
+    grid-template-columns: 1fr !important;
+    gap: 4px 0 !important;
+  }
+  .detail-grid label { margin-top: 6px; }
+</style>
+</head>
+<body x-data="jarvis()" x-init="init()" :data-theme="theme">
+
+<!-- SVG defs for sparkline gradient -->
+<svg class="sparkline-defs"><defs>
+  <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%"  stop-color="currentColor" stop-opacity="0.6"/>
+    <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+  </linearGradient>
+</defs></svg>
+
+<!-- Boot -->
+<div class="boot-mask" :class="booted ? 'gone' : ''">
+  <div style="text-align: center;">
+    <div class="boot-logo">JARVIS</div>
+    <div>PRIDE OPERATIONS · INITIALIZING</div>
+    <div class="boot-bar"></div>
+    <div x-text="bootStatus"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- MOBILE shell — отдельный layout для телефонов                -->
+<!-- ============================================================ -->
+<div class="mobile-shell" x-cloak>
+
+  <!-- TOP header -->
+  <header class="m-header">
+    <button class="m-icon-btn" @click="mobileBack()" x-show="mobileBackVisible" title="Назад">←</button>
+    <div class="m-header-title">
+      <span class="m-app-name">PRIDE</span>
+      <span class="m-header-sub" x-text="mobileHeaderTitle"></span>
+    </div>
+    <div class="m-header-actions">
+      <span class="m-conn-dot" :class="connState"></span>
+      <button class="m-icon-btn" @click="toggleSound()" :title="soundOn ? 'звук вкл' : 'звук выкл'"
+              x-text="soundOn ? '🔊' : '🔇'"></button>
+    </div>
+  </header>
+
+  <!-- MAIN content area -->
+  <main class="m-content">
+
+    <!-- TAB: HOME (Office) -->
+    <div class="m-tab" x-show="mobileTab === 'home'">
+      <div class="m-hero" :class="(state.stats.margin_today_usdt || 0) >= 0 ? 'pos' : 'neg'">
+        <div class="m-hero-label">Маржа сегодня</div>
+        <div class="m-hero-value" x-text="fmtUsd(state.stats.margin_today_usdt || 0)"></div>
+        <div class="m-hero-sub" x-text="'неделя: ' + fmtUsd(state.stats.margin_week_usdt || 0)"></div>
+      </div>
+
+      <div class="m-stat-grid">
+        <div class="m-stat-card" @click="mobileTab = 'lk'">
+          <div class="m-stat-icon">📋</div>
+          <div class="m-stat-value" x-text="state.stats.lk_cards_total || 0"></div>
+          <div class="m-stat-label">ЛК карточек</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-emerald);">✓</div>
+          <div class="m-stat-value" x-text="state.stats.lk_done || 0"></div>
+          <div class="m-stat-label">отработано</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-amber);">⏳</div>
+          <div class="m-stat-value" x-text="state.stats.lk_in_work || 0"></div>
+          <div class="m-stat-label">в работе</div>
+        </div>
+        <div class="m-stat-card" :class="(state.stats.lk_blocks || 0) > 0 ? 'warn' : ''">
+          <div class="m-stat-icon" style="color: var(--hud-rose);">🚫</div>
+          <div class="m-stat-value" x-text="state.stats.lk_blocks || 0"></div>
+          <div class="m-stat-label">блоков</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-primary);">💬</div>
+          <div class="m-stat-value" x-text="state.stats.ai_replies_today || 0"></div>
+          <div class="m-stat-label">AI ответов</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon">🤝</div>
+          <div class="m-stat-value" x-text="state.stats.deals_total || 0"></div>
+          <div class="m-stat-label">сделок</div>
+        </div>
+      </div>
+
+      <div class="m-section-title">
+        <span>Лента событий</span>
+        <span class="m-section-count" x-text="logs.length + ' events'"></span>
+      </div>
+      <div class="m-event-list">
+        <template x-if="logs.length === 0">
+          <div class="m-empty">Пока тихо...</div>
+        </template>
+        <template x-for="(log, i) in logs.slice(0, 15)" :key="i + ':' + log.ts">
+          <div class="m-event-row" :class="'sev-' + (log.severity || 'info')">
+            <span class="m-event-time" x-text="fmtTime(log.ts)"></span>
+            <span class="m-event-tag" x-text="(log.character || log.type || 'sys').substring(0, 8)"></span>
+            <span class="m-event-msg" x-text="formatEvent(log)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: DISCORD -->
+    <div class="m-tab" x-show="mobileTab === 'discord'">
+      <!-- Уровень 1: список каналов -->
+      <div x-show="!discordActiveChannel">
+        <div class="m-discord-me-row" x-show="me.user_id">
+          <template x-if="me.photo_url">
+            <img :src="me.photo_url" class="m-discord-me-avatar"/>
+          </template>
+          <template x-if="!me.photo_url">
+            <div class="m-discord-me-avatar-fallback" x-text="(me.username || me.first_name || 'A')[0].toUpperCase()"></div>
+          </template>
+          <div style="flex: 1; min-width: 0;">
+            <div class="m-discord-me-name" x-text="me.username ? '@' + me.username : (me.first_name || 'admin')"></div>
+            <div class="m-discord-me-status">
+              <span class="m-status-dot" :class="dcWsConnected ? 'online' : 'offline'"></span>
+              <span x-text="dcCurrentVoiceChannel ? 'в голосе' : (dcWsConnected ? 'online' : 'offline')"></span>
+            </div>
+          </div>
+        </div>
+        <div class="m-section-title">
+          <span>Каналы</span>
+          <button class="m-icon-btn" @click="openCreateChannel()">+</button>
+        </div>
+        <template x-for="cat in discordCategories" :key="cat.name">
+          <div>
+            <div class="m-cat-label" x-text="cat.name"></div>
+            <template x-for="ch in cat.channels" :key="ch.id">
+              <div class="m-channel-row" @click="openDiscordChannel(ch)">
+                <div class="m-channel-icon" x-text="ch.type === 'voice' ? '🔊' : '#'"></div>
+                <div class="m-channel-info">
+                  <div class="m-channel-name" x-text="ch.name"></div>
+                  <div class="m-channel-topic" x-text="ch.topic || (ch.type === 'voice' ? 'голосовая комната' : 'текстовый канал')"></div>
+                </div>
+                <div class="m-channel-meta">
+                  <span x-show="(ch.voice_participants?.length || 0) > 0"
+                        class="m-channel-badge"
+                        x-text="(ch.voice_participants?.length || 0) + ' 🎙'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Уровень 2: текстовый чат -->
+      <div class="m-chat" x-show="discordActiveChannel && discordActiveChannel.type === 'text'">
+        <div class="m-chat-messages" x-ref="mDcMessages">
+          <template x-if="discordMessages.length === 0">
+            <div class="m-empty" style="padding: 40px 20px;">
+              Сообщений нет.<br/>Начни обсуждение.
+            </div>
+          </template>
+          <template x-for="(m, idx) in discordMessages" :key="m.id">
+            <div class="m-msg">
+              <template x-if="m.author_avatar">
+                <img :src="m.author_avatar" class="m-msg-avatar"/>
+              </template>
+              <template x-if="!m.author_avatar">
+                <div class="m-msg-avatar-fallback" x-text="(m.author[0] || '?').toUpperCase()"></div>
+              </template>
+              <div class="m-msg-body">
+                <div class="m-msg-head">
+                  <span class="m-msg-author" x-text="'@' + m.author"></span>
+                  <span class="m-msg-time" x-text="fmtTime(m.ts)"></span>
+                </div>
+                <div class="m-msg-text" x-html="renderMessageText(m.text)"></div>
+                <div class="m-reactions" x-show="m._reacts && Object.keys(m._reacts).length > 0">
+                  <template x-for="[emoji, users] in Object.entries(m._reacts || {})" :key="emoji">
+                    <span class="m-reaction" @click="toggleReaction(m.id, emoji)"
+                          :class="users.includes(me.username || me.first_name) ? 'mine' : ''">
+                      <span x-text="emoji"></span>
+                      <span x-text="users.length"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="m-chat-input-row">
+          <input
+            class="m-chat-input"
+            type="text"
+            x-model="discordDraft"
+            @keydown.enter="sendDiscordMessage()"
+            :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
+          />
+          <button class="m-send-btn" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">↑</button>
+        </div>
+      </div>
+
+      <!-- Уровень 3: голосовая комната -->
+      <div class="m-voice-room" x-show="discordActiveChannel && discordActiveChannel.type === 'voice'">
+        <div class="m-voice-header">
+          <div class="m-voice-channel-name">
+            🔊 <span x-text="discordActiveChannel?.name"></span>
+          </div>
+          <div class="m-voice-channel-sub" x-text="discordActiveChannel?.topic || 'голосовая комната'"></div>
+        </div>
+
+        <div class="m-voice-participants">
+          <template x-for="p in dcVoiceParticipants" :key="p.session_id">
+            <div class="m-voice-user" :class="(p.muted ? 'muted ' : '') + (p.session_id === dcSessionId ? 'is-me' : '')">
+              <template x-if="p.photo_url">
+                <img :src="p.photo_url" class="m-voice-avatar"/>
+              </template>
+              <template x-if="!p.photo_url">
+                <div class="m-voice-avatar-fallback" x-text="(p.username || p.first_name || '?')[0].toUpperCase()"></div>
+              </template>
+              <div class="m-voice-name" x-text="p.username ? '@' + p.username : (p.first_name || 'guest')"></div>
+              <div class="m-voice-flags">
+                <span x-show="p.muted">🔇</span>
+                <span x-show="p.session_id === dcSessionId" class="m-voice-you">ТЫ</span>
+              </div>
+            </div>
+          </template>
+          <div x-show="dcVoiceParticipants.length === 0" class="m-empty" style="padding: 30px; grid-column: 1 / -1;">
+            Никого нет — будь первым
+          </div>
+        </div>
+
+        <div class="m-voice-actions">
+          <template x-if="!isInVoiceChannel(discordActiveChannel?.id)">
+            <button class="m-voice-join-btn" @click="joinDiscordVoice()">
+              🎙 Зайти в голос
+            </button>
+          </template>
+          <template x-if="isInVoiceChannel(discordActiveChannel?.id)">
+            <div class="m-voice-controls">
+              <button class="m-voice-ctrl" :class="dcMuted ? 'active' : ''" @click="toggleMute()">
+                <span x-text="dcMuted ? '🔇' : '🎙'"></span>
+                <span x-text="dcMuted ? 'mic off' : 'mic on'"></span>
+              </button>
+              <button class="m-voice-ctrl" :class="dcDeafened ? 'active' : ''" @click="toggleDeafen()">
+                <span x-text="dcDeafened ? '🔕' : '🔊'"></span>
+                <span x-text="dcDeafened ? 'наушники' : 'слушаю'"></span>
+              </button>
+              <button class="m-voice-leave-btn" @click="leaveDiscordVoice()">
+                🚪 Выйти
+              </button>
+            </div>
+          </template>
+        </div>
+
+        <div x-show="(dcVoiceParticipants?.length || 0) === 1 && isInVoiceChannel(discordActiveChannel?.id)"
+             style="padding: 16px; text-align: center; font-size: 12px; color: var(--text-dim);">
+          Один в комнате. Дождись пока другой админ зайдёт.
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: LK -->
+    <div class="m-tab" x-show="mobileTab === 'lk'">
+      <div class="m-section-title">
+        <span>ЛК карточки</span>
+        <span class="m-section-count" x-text="filteredCards.length + '/' + (state.stats.lk_cards_total || 0)"></span>
+      </div>
+      <div class="m-search">
+        <input class="m-search-input" placeholder="🔍 банк / ФИО / статус..." x-model="cardFilter"/>
+      </div>
+      <div class="m-card-list">
+        <template x-if="filteredCards.length === 0">
+          <div class="m-empty">Карточек нет</div>
+        </template>
+        <template x-for="c in filteredCards.slice(0, 40)" :key="c.card_id">
+          <div class="m-lk-card" @click="openDetailModal(c)">
+            <div class="m-lk-head">
+              <span class="m-lk-id" x-text="'#' + c.card_id"></span>
+              <span class="m-badge" :class="'s-' + (c.status || '').toLowerCase()"
+                    x-text="(c.status || '—').replace(/_/g, ' ')"></span>
+            </div>
+            <div class="m-lk-bank-fio">
+              <strong x-text="c.bank || '—'"></strong>
+              <span x-text="' · ' + (c.fio || '—')"></span>
+            </div>
+            <div class="m-lk-meta">
+              <span x-text="(c.payment_method || '—').replace('GUARANTOR_', 'GUAR.')"></span>
+              <span x-text="(c.price_usdt || 0) + '$'"></span>
+              <span x-show="c.supplier" x-text="'@' + c.supplier"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: FIN -->
+    <div class="m-tab" x-show="mobileTab === 'fin'">
+      <div class="m-fin-hero" :class="(state.stats.margin_today_usdt || 0) >= 0 ? 'pos' : 'neg'">
+        <div class="m-fin-row">
+          <div>
+            <div class="m-fin-label">Сегодня</div>
+            <div class="m-fin-value-big" x-text="fmtUsd(state.stats.margin_today_usdt || 0)"></div>
+          </div>
+          <div>
+            <div class="m-fin-label">Неделя</div>
+            <div class="m-fin-value-big" x-text="fmtUsd(state.stats.margin_week_usdt || 0)"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-stat-grid">
+        <div class="m-stat-card">
+          <div class="m-stat-value" x-text="state.recent_applications.length || 0"></div>
+          <div class="m-stat-label">заявок V2</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-value" x-text="state.stats.deals_total || 0"></div>
+          <div class="m-stat-label">сделок</div>
+        </div>
+      </div>
+
+      <div class="m-section-title">Последние заявки</div>
+      <div class="m-card-list">
+        <template x-if="(state.recent_applications || []).length === 0">
+          <div class="m-empty">Заявок нет</div>
+        </template>
+        <template x-for="app in (state.recent_applications || []).slice(0, 20)" :key="app.date + ':' + app.id">
+          <div class="m-app-card">
+            <div class="m-app-head">
+              <span class="m-app-id" x-text="'#' + app.id"></span>
+              <span class="m-app-date" x-text="app.date"></span>
+              <span class="m-app-margin"
+                    :class="(app.margin_usdt || 0) >= 0 ? 'pos' : 'neg'"
+                    x-text="fmtUsd(app.margin_usdt)"></span>
+            </div>
+            <div class="m-app-info">
+              <span x-text="(app.intake_bank || '—') + ' · ' + (app.intake_fio || '—')"></span>
+              <span x-text="(app.outputs_count || 0) + ' выводов'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: MORE -->
+    <div class="m-tab" x-show="mobileTab === 'more'">
+      <div class="m-more-profile" x-show="me.user_id">
+        <template x-if="me.photo_url">
+          <img :src="me.photo_url" class="m-more-avatar"/>
+        </template>
+        <template x-if="!me.photo_url">
+          <div class="m-more-avatar-fallback" x-text="(me.username || me.first_name || 'A')[0].toUpperCase()"></div>
+        </template>
+        <div class="m-more-name" x-text="me.username ? '@' + me.username : (me.first_name || 'admin')"></div>
+        <div class="m-more-uid" x-text="'ID: ' + (me.user_id || 0)"></div>
+      </div>
+
+      <div class="m-section-title">Менеджеры</div>
+      <div class="m-card-list">
+        <template x-for="m in managers.slice(0, 10)" :key="m.username">
+          <div class="m-manager-row">
+            <span class="m-status-dot" :class="m.online"></span>
+            <div style="flex: 1; min-width: 0;">
+              <div class="m-mgr-name" x-text="'@' + m.username"></div>
+              <div class="m-mgr-meta">
+                <span x-text="'💬 ' + m.messages"></span>
+                <span x-text="'💸 ' + m.payments_made"></span>
+                <span x-show="m.tags_received > 0" x-text="'🔔 ' + m.tags_received"></span>
+              </div>
+            </div>
+            <span class="m-mgr-idle" x-text="formatIdle(m.idle_sec)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="m-section-title">Действия</div>
+      <div class="m-action-list">
+        <button class="m-action-row" @click="toggleVoice()">
+          <span class="m-action-icon" x-text="voiceActive ? '🔴' : '🎤'"></span>
+          <span class="m-action-text" x-text="voiceActive ? 'Закончить голос с LEO' : 'Голос с LEO'"></span>
+          <span class="m-action-chev">›</span>
+        </button>
+        <button class="m-action-row" @click="refreshAll()">
+          <span class="m-action-icon">🔄</span>
+          <span class="m-action-text">Обновить всё</span>
+          <span class="m-action-chev">›</span>
+        </button>
+        <a class="m-action-row" href="/logout">
+          <span class="m-action-icon">🚪</span>
+          <span class="m-action-text">Выйти</span>
+          <span class="m-action-chev">›</span>
+        </a>
+      </div>
+
+      <div class="m-version">JARVIS · v2.0 · PRIDE Operations</div>
+    </div>
+  </main>
+
+  <!-- Audio unlock banner -->
+  <div class="m-audio-unlock" x-show="_audioBlocked"
+       @click="_unlockAudio(); for(const el of _pendingAudio){try{el.muted=false;el.play().catch(()=>{});}catch{}}; _pendingAudio=[]; _audioBlocked=false;">
+    🔊 Нажми чтобы включить звук
+  </div>
+
+  <!-- BOTTOM nav -->
+  <nav class="m-bottom-nav">
+    <button class="m-nav-btn" :class="mobileTab === 'home' ? 'active' : ''" @click="setMobileTab('home')">
+      <span class="m-nav-icon">🏢</span>
+      <span class="m-nav-label">Главная</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'discord' ? 'active' : ''" @click="setMobileTab('discord')">
+      <span class="m-nav-icon">💬</span>
+      <span class="m-nav-label">Чат</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'lk' ? 'active' : ''" @click="setMobileTab('lk')">
+      <span class="m-nav-icon">📋</span>
+      <span class="m-nav-label">ЛК</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'fin' ? 'active' : ''" @click="setMobileTab('fin')">
+      <span class="m-nav-icon">💰</span>
+      <span class="m-nav-label">Финансы</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'more' ? 'active' : ''" @click="setMobileTab('more')">
+      <span class="m-nav-icon">⚙</span>
+      <span class="m-nav-label">Ещё</span>
+    </button>
+  </nav>
+</div>
+<!-- ============================================================ -->
+<!-- /MOBILE shell                                                 -->
+<!-- ============================================================ -->
+
+<!-- ===== Command palette ===== -->
+<template x-if="paletteOpen">
+  <div class="cmd-palette-mask" @click="closePalette()">
+    <div class="cmd-palette" @click.stop>
+      <input class="cmd-input" placeholder="Команда / поиск..." x-model="paletteQuery" @keydown.escape="closePalette()" @keydown.enter="runActivePaletteItem()" @keydown.down.prevent="paletteIdx = Math.min(paletteIdx+1, filteredPalette.length-1)" @keydown.up.prevent="paletteIdx = Math.max(paletteIdx-1, 0)" x-init="$nextTick(() => $el.focus())"/>
+      <div class="cmd-list">
+        <template x-for="(it, i) in filteredPalette" :key="it.id">
+          <div class="cmd-item" :class="i === paletteIdx ? 'active' : ''" @click="runCmd(it)">
+            <span class="icon" x-text="it.icon || '·'"></span>
+            <span x-text="it.label"></span>
+            <span class="hint" x-text="it.hint" x-show="it.hint"></span>
+          </div>
+        </template>
+        <template x-if="filteredPalette.length === 0">
+          <div class="cmd-item" style="color: var(--text-dim);">Ничего не найдено</div>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Status modal ===== -->
+<template x-if="statusModal.open">
+  <div class="modal-mask" @click="closeStatusModal()">
+    <div class="modal" @click.stop>
+      <h3>Сменить статус карточки</h3>
+      <div class="text-sm" style="color: var(--text-dim)">
+        <span x-text="'#' + statusModal.card_id + ' · ' + (statusModal.card.bank || '')"></span>
+      </div>
+      <select class="status-select" x-model="statusModal.new_status">
+        <option>В_РАБОТЕ</option>
+        <option>ОТРАБОТАН</option>
+        <option>ПОПОЛНИТЬ_И_ОТПУСТИТЬ</option>
+        <option>ЗАВЕРШЁН</option>
+        <option>БРАК</option>
+        <option>БЛОК</option>
+        <option>БЛОК_БЕЗ_ОТРАБОТКИ</option>
+      </select>
+      <div class="modal-actions">
+        <button class="btn" @click="closeStatusModal()">Отмена</button>
+        <button class="btn success" @click="applyStatusChange()">Применить</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Delete confirm ===== -->
+<template x-if="deleteModal.open">
+  <div class="modal-mask" @click="closeDeleteModal()">
+    <div class="modal" @click.stop>
+      <h3 style="color: var(--hud-rose);">Удалить карточку?</h3>
+      <div class="text-sm">
+        <span x-text="'#' + deleteModal.card_id + ' · ' + (deleteModal.card.bank || '') + ' · ' + (deleteModal.card.fio || '')"></span>
+      </div>
+      <div class="text-sm mt-2" style="color: var(--text-dim)">Операция необратима.</div>
+      <div class="modal-actions">
+        <button class="btn" @click="closeDeleteModal()">Отмена</button>
+        <button class="btn danger" @click="applyDelete()">Удалить</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== LK Card detail/edit modal ===== -->
+<template x-if="detailModal.open">
+  <div class="modal-mask" @click="closeDetailModal()">
+    <div class="modal detail" @click.stop>
+      <template x-if="detailModal.flash">
+        <div class="save-flash" x-text="detailModal.flash"></div>
+      </template>
+      <h3>
+        Карточка <span x-text="'#' + detailModal.card_id"></span>
+        <span class="badge" style="margin-left: 8px;" :class="'s-' + (detailModal.draft.status || '').toLowerCase()" x-text="(detailModal.draft.status || '—').replace(/_/g,' ')"></span>
+      </h3>
+
+      <div class="detail-section-title">Основное</div>
+      <div class="detail-grid">
+        <label>Банк</label>
+        <input type="text" x-model="detailModal.draft.bank" placeholder="ОЗОН / ТБАНК / ...">
+
+        <label>ФИО</label>
+        <input type="text" x-model="detailModal.draft.fio" placeholder="Иванов Иван Иванович">
+
+        <label>Цена USDT</label>
+        <input type="number" step="0.01" x-model.number="detailModal.draft.price_usdt">
+
+        <label>Метод</label>
+        <select x-model="detailModal.draft.payment_method">
+          <option value="">—</option>
+          <option value="USDT_TRC20">USDT_TRC20</option>
+          <option value="GUARANTOR_BEFORE">GUARANTOR_BEFORE</option>
+          <option value="GUARANTOR_AFTER">GUARANTOR_AFTER</option>
+          <option value="GUARANTOR_AFTER_WORK">GUARANTOR_AFTER_WORK</option>
+        </select>
+
+        <label>Статус</label>
+        <select x-model="detailModal.draft.status">
+          <option>В_РАБОТЕ</option>
+          <option>ОТРАБОТАН</option>
+          <option>ПОПОЛНИТЬ_И_ОТПУСТИТЬ</option>
+          <option>ЗАВЕРШЁН</option>
+          <option>БРАК</option>
+          <option>БЛОК</option>
+          <option>БЛОК_БЕЗ_ОТРАБОТКИ</option>
+        </select>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Сделка / выплата</div>
+        <div class="detail-grid">
+          <label>Deal ID</label>
+          <input type="text" x-model="detailModal.draft.deal_id" placeholder="12345">
+
+          <label>USDT адрес</label>
+          <input type="text" x-model="detailModal.draft.usdt_address" placeholder="TXxx...">
+
+          <label>Поставщик</label>
+          <input type="text" x-model="detailModal.draft.supplier" placeholder="username">
+
+          <label>Клиент</label>
+          <input type="text" x-model="detailModal.draft.client_username" placeholder="username">
+        </div>
+        <template x-if="detailModal.original.deal">
+          <div class="text-sm mt-2" style="color: var(--text-dim);">
+            🤝 Сделка <b x-text="'#' + detailModal.original.deal.deal_id"></b> ·
+            статус: <span x-text="detailModal.original.deal.status"></span> ·
+            сумма: <span x-text="detailModal.original.deal.amount + '₽'"></span>
+          </div>
+        </template>
+      </div>
+
+      <template x-if="(detailModal.draft.status || '').startsWith('БЛОК')">
+        <div class="detail-section">
+          <div class="detail-section-title">Блок</div>
+          <div class="detail-grid">
+            <label>Сумма блока ₽</label>
+            <input type="number" step="1" x-model.number="detailModal.draft.block_amount_rub">
+
+            <label>Причина / что надо</label>
+            <input type="text" x-model="detailModal.draft.block_note" placeholder="...">
+          </div>
+        </div>
+      </template>
+
+      <template x-if="(detailModal.draft.status || '') === 'БРАК'">
+        <div class="detail-section">
+          <div class="detail-section-title">Брак</div>
+          <div class="detail-grid">
+            <label>Причина брака</label>
+            <input type="text" x-model="detailModal.draft.brak_reason" placeholder="...">
+          </div>
+        </div>
+      </template>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Системное</div>
+        <div class="detail-grid">
+          <label>work_chat_id</label>
+          <input type="number" step="1" x-model.number="detailModal.draft.work_chat_id" placeholder="чтобы клиент получал уведомления">
+
+          <label>lk_group_msg_id</label>
+          <span class="static" x-text="detailModal.original.lk_group_msg_id || '—'"></span>
+
+          <label>Создана</label>
+          <span class="static" x-text="fmtTime(detailModal.original.created_at) + ' · ' + (detailModal.original.created_by || '—')"></span>
+
+          <label>Last application</label>
+          <span class="static" x-text="detailModal.original.last_application_id || '—'"></span>
+        </div>
+      </div>
+
+      <template x-if="(detailModal.original.history || []).length > 0">
+        <div class="detail-section">
+          <div class="detail-section-title">История статусов (<span x-text="detailModal.original.history.length"></span>)</div>
+          <div class="history-list">
+            <template x-for="(h, i) in (detailModal.original.history || []).slice().reverse()" :key="i">
+              <div class="history-row">
+                <span x-text="fmtTime(h.ts)"></span>
+                <span class="h-st" x-text="h.status"></span>
+                <span class="h-by" x-text="h.by || '—'"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <div class="modal-actions">
+        <button class="btn danger" @click="closeDetailModal(); confirmDelete({card_id: detailModal.card_id, ...detailModal.original})">🗑 Удалить</button>
+        <button class="btn" @click="closeDetailModal()">Закрыть</button>
+        <button class="btn success" @click="saveDetailCard()" :disabled="detailModal.saving" x-text="detailModal.saving ? 'Сохраняю...' : '💾 Сохранить'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Create discord channel modal ===== -->
+<template x-if="discordChannelModal.open">
+  <div class="modal-mask" @click="discordChannelModal.open = false">
+    <div class="modal" @click.stop>
+      <h3>Создать канал</h3>
+      <div class="detail-grid">
+        <label>Название</label>
+        <input type="text" x-model="discordChannelModal.name" placeholder="новый-канал">
+        <label>Тип</label>
+        <select x-model="discordChannelModal.type">
+          <option value="text">📝 Текст</option>
+          <option value="voice">🔊 Голос</option>
+        </select>
+        <label>Категория</label>
+        <input type="text" x-model="discordChannelModal.category" placeholder="general">
+        <label>Тема</label>
+        <input type="text" x-model="discordChannelModal.topic" placeholder="О чём канал">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" @click="discordChannelModal.open = false">Отмена</button>
+        <button class="btn success" @click="createDiscordChannel()">Создать</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+function jarvis() {
+  return {
+    booted: false,
+    bootStatus: 'CONNECTING',
+    currentView: (window.location.hash || '#office').replace('#', '') || 'office',
+    theme: localStorage.getItem('jarvis-theme') || 'jarvis',
+    soundOn: localStorage.getItem('jarvis-sound') === '1',
+    state: {
+      stats: {
+        lk_cards_total: 0, lk_cards_by_status: {}, lk_cards_by_method: {},
+        lk_in_work: 0, lk_done: 0, lk_blocks: 0,
+        managed_chats_active: 0, deals_total: 0,
+        margin_today_usdt: 0, margin_week_usdt: 0,
+        ai: {}, escalate: {}, writeback: {}, deals_stats: {},
+        ai_enabled: false, subscribers: 0,
+        funnel_today: {}, funnel_week_total: {},
+      },
+      recent_applications: [],
+      server_ts: '',
+    },
+    cards: [],
+    cardFilter: '',
+    logs: [],
+    managers: [],
+    pulseRings: [],
+    anomalies: [],
+    clientDots: [],
+    nextId: 1,
+    clockText: '--:--:--',
+    sparklines: {},
+    lastReply: { ts: 0, text: '', chat: '' },
+    lionEnabled: localStorage.getItem('jarvis-lion') !== '0',
+    lionSpeaking: false,
+    lionStatus: 'IDLE',
+    lionQueue: [],
+    lionVoice: null,
+    cmdInput: '',
+    cmdLog: [],
+    knownCmds: new Set(),
+    notesPreview: [],
+    notesCategory: '',
+    outreachBots: [],
+    outreachCampaigns: [],
+    outreachAddBotOpen: false,
+    outreachCampaignOpen: false,
+    outreachAuthStep: 'phone',
+    outreachAuthError: '',
+    outreachPhone: '',
+    outreachCode: '',
+    outreachPassword: '',
+    newCampaign: {
+      name: '', text: '', manager_username: '',
+      targetsRaw: '',
+      rate_per_hour: 20, active_hours_from: 9, active_hours_to: 21,
+    },
+    voiceActive: false,
+    voiceState: 'не активно',
+    voicePc: null,
+    voiceDc: null,
+    voiceAudio: null,
+    voiceStream: null,
+    funnelSteps: [
+      { key: 'starts',         label: 'Старт',      zone: 'left'   },
+      { key: 'chats_created',  label: 'Беседы',     zone: 'left'   },
+      { key: 'chats_active',   label: 'Початились', zone: 'left'   },
+      { key: 'chats_junk',     label: 'Мусор',      zone: 'left'   },
+      { key: 'ip_interest',    label: 'ИП',         zone: 'center' },
+      { key: 'bank_interest',  label: 'Банк',       zone: 'center' },
+      { key: 'rs_handed',      label: 'Сдали РС',   zone: 'center' },
+    ],
+    chars: {
+      chat:       { state: 'idle', bubble: '', x: 16 },
+      lk:         { state: 'idle', bubble: '', x: 50 },
+      accounting: { state: 'idle', bubble: '', x: 82 },
+    },
+    es: null,
+    ws: null,
+    connState: 'connecting',
+    connText: 'CONNECTING',
+    audioCtx: null,
+    ambientNode: null,
+
+    // === Command palette ===
+    paletteOpen: false,
+    paletteQuery: '',
+    paletteIdx: 0,
+    paletteItems: [
+      { id: 'theme_jarvis', icon: '🟦', label: 'Тема: JARVIS (cyan)',  hint: 'theme', action: () => this.setTheme('jarvis') },
+      { id: 'theme_ironman', icon: '🟥', label: 'Тема: IRON MAN (red)', hint: 'theme', action: () => this.setTheme('ironman') },
+      { id: 'theme_stealth', icon: '⬜', label: 'Тема: STEALTH (grey)', hint: 'theme', action: () => this.setTheme('stealth') },
+      { id: 'sound_toggle', icon: '🔊', label: 'Toggle sound on/off',   hint: 's', action: () => this.toggleSound() },
+      { id: 'ai_on',  icon: '✓', label: 'AI: ON (включить)',  hint: 'ctrl', action: () => this.setAI(true) },
+      { id: 'ai_off', icon: '✗', label: 'AI: OFF (выключить)', hint: 'ctrl', action: () => this.setAI(false) },
+      { id: 'refresh', icon: '↻', label: 'Refresh всё', hint: 'r', action: () => this.refreshAll() },
+      { id: 'classic', icon: '◧', label: 'Открыть классический дашборд', action: () => location.href = '/classic' },
+      { id: 'health', icon: '♥', label: 'Healthcheck', action: () => window.open('/healthz', '_blank') },
+      { id: 'logout', icon: '🚪', label: 'Выйти (logout)', action: () => location.href = '/logout' },
+      { id: 'login', icon: '🔑', label: 'Telegram login', action: () => location.href = '/login' },
+      { id: 'sync_lk', icon: '↻', label: 'Запросить sync карточек ЛК', action: () => this.requestSyncLK() },
+    ],
+
+    // === Modals ===
+    statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
+    deleteModal: { open: false, card_id: '', card: {} },
+
+    // === Mobile state (this file is mobile-only) ===
+    isMobile: true,
+    mobileTab: 'home',
+    mobileBackVisible: false,
+
+    // === Discord-hub state ===
+    me: { user_id: 0, username: '', first_name: '', photo_url: '', auth_mode: 'basic' },
+    discordChannels: [],
+    discordActiveChannel: null,
+    discordMessages: [],
+    discordDraft: '',
+    discordChannelModal: { open: false, name: '', type: 'text', category: 'general', topic: '' },
+    discordExpanded: false,
+    discordRailOpen: false,
+    discordOnlineUsers: [],
+    discordTyping: {},
+    discordReactions: {},
+    dcWs: null,
+    dcWsConnected: false,
+    dcSessionId: '',
+    dcLocalStream: null,
+    dcPeers: {},
+    dcVoiceParticipants: [],
+    dcCurrentVoiceChannel: null,
+    dcMuted: false,
+    dcDeafened: false,
+    dcRemoteStream: null,
+    dcRemoteAudioEl: null,
+    detailModal: {
+      open: false, card_id: '', loading: false, saving: false, flash: '',
+      original: {}, draft: {},
+    },
+
+    async init() {
+      this.bootStatus = 'FETCHING STATE';
+      await this.refresh();
+      await this.refreshSparklines();
+      await this.refreshAnomalies();
+      this.bootStatus = 'CONNECTING STREAM';
+      this.connectSSE();
+      setTimeout(() => { this.booted = true; }, 1100);
+      this.startPolling();
+      this.startClock();
+      this.setupHotkeys();
+      this.initLion();
+      if (this.soundOn) this.initAudio();
+      window.addEventListener('hashchange', () => {
+        this.currentView = (location.hash || '#office').replace('#', '') || 'office';
+      });
+      this.startCmdResultsPoller();
+      this.refreshNotes();
+      this.refreshOutreach();
+      this.refreshMe();
+      this._initMobileWatchers();
+      this.refreshDiscordChannels();
+      this.refreshDiscordOnline();
+      this.connectDiscordWS();
+      setInterval(() => this.refreshNotes(), 20000);
+      setInterval(() => this.refreshOutreach(), 25000);
+      setInterval(() => this.refreshDiscordChannels(), 15000);
+      setInterval(() => this.refreshDiscordOnline(), 8000);
+      setInterval(() => {
+        if (this.mobileTab === 'discord' && this.discordActiveChannel && this.discordActiveChannel.type === 'text') {
+          this.refreshDiscordMessages();
+        }
+      }, 5000);
+    },
+
+    startClock() {
+      const update = () => {
+        const d = new Date();
+        this.clockText = d.toTimeString().substring(0, 8);
+      };
+      update();
+      setInterval(update, 1000);
+    },
+
+    setupHotkeys() {
+      document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          this.openPalette();
+        }
+        if (e.key === 'Escape') {
+          this.paletteOpen = false;
+          this.statusModal.open = false;
+          this.deleteModal.open = false;
+        }
+      });
+    },
+
+    openPalette() {
+      this.paletteOpen = true;
+      this.paletteQuery = '';
+      this.paletteIdx = 0;
+    },
+    closePalette() { this.paletteOpen = false; },
+    get filteredPalette() {
+      const q = (this.paletteQuery || '').toLowerCase().trim();
+      const items = this.paletteItems;
+      if (!q) return items;
+      return items.filter(it => it.label.toLowerCase().includes(q));
+    },
+    runActivePaletteItem() {
+      const it = this.filteredPalette[this.paletteIdx];
+      if (it) this.runCmd(it);
+    },
+    runCmd(it) {
+      try { it.action(); } catch (e) { console.warn('cmd failed', e); }
+      this.closePalette();
+    },
+
+    setTheme(t) {
+      this.theme = t;
+      localStorage.setItem('jarvis-theme', t);
+      this.playBeep(t === 'ironman' ? 1200 : t === 'stealth' ? 300 : 700);
+    },
+    cycleTheme() {
+      const order = ['jarvis', 'ironman', 'stealth'];
+      const next = order[(order.indexOf(this.theme) + 1) % order.length];
+      this.setTheme(next);
+    },
+
+    initAudio() {
+      if (this.audioCtx) return;
+      try {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {
+        console.warn('audio not available', e);
+      }
+    },
+    toggleSound() {
+      this.soundOn = !this.soundOn;
+      localStorage.setItem('jarvis-sound', this.soundOn ? '1' : '0');
+      if (this.soundOn) {
+        this.initAudio();
+        this.startAmbient();
+        this.playBeep(880);
+      } else {
+        this.stopAmbient();
+      }
+    },
+    playBeep(freq) {
+      if (!this.soundOn || !this.audioCtx) return;
+      try {
+        const o = this.audioCtx.createOscillator();
+        const g = this.audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = freq;
+        g.gain.value = 0.0001;
+        o.connect(g); g.connect(this.audioCtx.destination);
+        const now = this.audioCtx.currentTime;
+        g.gain.exponentialRampToValueAtTime(0.05, now + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        o.start(now);
+        o.stop(now + 0.22);
+      } catch (e) {}
+    },
+    startAmbient() {
+      if (!this.audioCtx) return;
+      try {
+        this.stopAmbient();
+        const o = this.audioCtx.createOscillator();
+        const g = this.audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 55;
+        g.gain.value = 0.012;
+        o.connect(g); g.connect(this.audioCtx.destination);
+        o.start();
+        this.ambientNode = { o, g };
+      } catch (e) {}
+    },
+    stopAmbient() {
+      if (this.ambientNode) {
+        try { this.ambientNode.o.stop(); } catch {}
+        this.ambientNode = null;
+      }
+    },
+
+    startPolling() {
+      setInterval(() => this.refresh(), 8000);
+      setInterval(() => this.refreshCards(), 12000);
+      setInterval(() => this.refreshManagers(), 15000);
+      setInterval(() => this.refreshSparklines(), 30000);
+      setInterval(() => this.refreshAnomalies(), 30000);
+    },
+
+    async refresh() {
+      try {
+        const r = await fetch('/api/state', { credentials: 'include' });
+        if (r.ok) this.state = await r.json();
+      } catch (e) {}
+      if (this.cards.length === 0) await this.refreshCards();
+      if (this.managers.length === 0) await this.refreshManagers();
+    },
+    async refreshAll() {
+      await Promise.all([this.refresh(), this.refreshCards(), this.refreshManagers(), this.refreshSparklines(), this.refreshAnomalies()]);
+      this.playBeep(660);
+    },
+    async refreshCards() {
+      try {
+        const r = await fetch('/api/lk_cards?limit=100', { credentials: 'include' });
+        if (r.ok) this.cards = (await r.json()).cards || [];
+      } catch (e) {}
+    },
+    async refreshManagers() {
+      try {
+        const r = await fetch('/api/managers', { credentials: 'include' });
+        if (r.ok) this.managers = (await r.json()).managers || [];
+      } catch (e) {}
+    },
+    async refreshSparklines() {
+      const metrics = ['funnel.starts', 'funnel.chats_created', 'funnel.rs_handed', 'margin', 'lk_created'];
+      for (const m of metrics) {
+        try {
+          const r = await fetch('/api/sparkline?metric=' + encodeURIComponent(m) + '&days=7', { credentials: 'include' });
+          if (r.ok) this.sparklines[m] = (await r.json()).points || [];
+        } catch (e) {}
+      }
+    },
+    async refreshAnomalies() {
+      try {
+        const r = await fetch('/api/anomalies', { credentials: 'include' });
+        if (r.ok) this.anomalies = (await r.json()).anomalies || [];
+      } catch (e) {}
+    },
+
+    connectSSE() { this.connectWS(); },
+    connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/ws`;
+      this.connState = 'connecting'; this.connText = 'WS CONNECTING';
+      try {
+        this.ws = new WebSocket(url);
+        this.ws.onopen = () => {
+          this.connState = 'online'; this.connText = 'WS ONLINE';
+          this.wsPingInterval = setInterval(() => {
+            try { this.ws.send(JSON.stringify({ cmd: 'ping' })); } catch {}
+          }, 25000);
+        };
+        this.ws.onclose = () => {
+          this.connState = 'offline'; this.connText = 'WS LOST · SSE...';
+          if (this.wsPingInterval) clearInterval(this.wsPingInterval);
+          setTimeout(() => this.connectSSEFallback(), 1500);
+        };
+        this.ws.onerror = () => {};
+        this.ws.onmessage = (e) => {
+          try {
+            const m = JSON.parse(e.data);
+            if (m.kind === 'event') {
+              this.handleEvent(m);
+            } else if (m.kind === 'state') {
+              if (m.ai_enabled !== undefined) this.state.stats.ai_enabled = m.ai_enabled;
+            }
+          } catch {}
+        };
+      } catch (e) {
+        this.connectSSEFallback();
+      }
+    },
+    connectSSEFallback() {
+      try {
+        this.es = new EventSource('/api/events/stream');
+        this.es.onopen = () => { this.connState = 'online'; this.connText = 'SSE ONLINE'; };
+        this.es.onerror = () => { this.connState = 'offline'; this.connText = 'RECONNECT'; };
+        this.es.onmessage = (e) => {
+          try { this.handleEvent(JSON.parse(e.data)); } catch {}
+        };
+      } catch (e) {
+        this.connState = 'offline'; this.connText = 'OFFLINE';
+      }
+    },
+
+    async toggleVoice() {
+      if (this.voiceActive) {
+        this.stopVoice();
+      } else {
+        await this.startVoice();
+      }
+    },
+    async startVoice() {
+      this.voiceState = 'получаю токен...';
+      try {
+        const tokenRes = await fetch('/api/leo/realtime_session', { method: 'POST', credentials: 'include' });
+        if (!tokenRes.ok) {
+          const txt = await tokenRes.text();
+          throw new Error('token fetch ' + tokenRes.status + ': ' + txt.slice(0, 200));
+        }
+        const session = await tokenRes.json();
+        const key = (session.client_secret && session.client_secret.value) || '';
+        if (!key) throw new Error('no ephemeral key');
+        this.voiceState = 'WebRTC handshake...';
+        const pc = new RTCPeerConnection();
+        this.voicePc = pc;
+        const audioEl = document.createElement('audio');
+        audioEl.autoplay = true;
+        document.body.appendChild(audioEl);
+        this.voiceAudio = audioEl;
+        pc.ontrack = (e) => {
+          if (e.streams && e.streams[0]) audioEl.srcObject = e.streams[0];
+        };
+        this.voiceState = 'разрешите микрофон...';
+        const ms = await navigator.mediaDevices.getUserMedia({audio: true});
+        this.voiceStream = ms;
+        ms.getTracks().forEach(t => pc.addTrack(t, ms));
+        const dc = pc.createDataChannel('oai-events');
+        this.voiceDc = dc;
+        dc.addEventListener('message', (e) => {
+          try { this.handleVoiceEvent(JSON.parse(e.data)); } catch {}
+        });
+        dc.addEventListener('open', () => {
+          this.voiceState = 'online — говори';
+          this.cmdLog.push({who: 'LEO', body: 'Слушаю тебя.', cls: 'lion'});
+        });
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const model = 'gpt-4o-realtime-preview-2024-12-17';
+        const sdpRes = await fetch(
+          'https://api.openai.com/v1/realtime?model=' + encodeURIComponent(model),
+          { method: 'POST', body: offer.sdp, headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/sdp' } }
+        );
+        if (!sdpRes.ok) throw new Error('OpenAI SDP ' + sdpRes.status);
+        const answerSdp = await sdpRes.text();
+        await pc.setRemoteDescription({type: 'answer', sdp: answerSdp});
+        this.voiceActive = true;
+        this.voiceState = 'online — говори';
+      } catch (e) {
+        console.error('voice start failed', e);
+        this.voiceState = 'ошибка: ' + String(e).slice(0, 80);
+        this.cmdLog.push({who: 'ERR', body: 'Голос: ' + e, cls: 'err'});
+        this.stopVoice();
+      }
+    },
+    stopVoice() {
+      try { if (this.voiceDc) this.voiceDc.close(); } catch (e) {}
+      try { if (this.voicePc) this.voicePc.close(); } catch (e) {}
+      try { if (this.voiceStream) this.voiceStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      try {
+        if (this.voiceAudio) {
+          this.voiceAudio.pause();
+          this.voiceAudio.srcObject = null;
+          this.voiceAudio.remove();
+        }
+      } catch (e) {}
+      this.voicePc = null; this.voiceDc = null; this.voiceAudio = null; this.voiceStream = null;
+      this.voiceActive = false;
+      this.voiceState = 'не активно';
+      this.lionSpeaking = false;
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+    },
+    async handleVoiceEvent(ev) {
+      const t = ev.type || '';
+      if (t === 'input_audio_buffer.speech_started') this.lionStatus = 'LISTENING';
+      if (t === 'input_audio_buffer.speech_stopped') this.lionStatus = 'THINKING';
+      if (t === 'response.audio.delta' || t === 'response.audio_transcript.delta') {
+        this.lionSpeaking = true;
+        this.lionStatus = 'SPEAKING';
+      }
+      if (t === 'response.done') {
+        this.lionSpeaking = false;
+        this.lionStatus = 'online';
+      }
+      if (t === 'response.audio_transcript.done' && ev.transcript) {
+        this.cmdLog.push({who: 'LEO', body: ev.transcript, cls: 'lion'});
+      }
+      if (t === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
+        this.cmdLog.push({who: 'YOU', body: ev.transcript, cls: 'you'});
+      }
+    },
+
+    handleEvent(ev) {
+      this.logs.unshift(ev);
+      if (this.logs.length > 400) this.logs.length = 400;
+      const t = ev.type || ''; const p = ev.payload || {};
+      if (ev.severity === 'error')       this.playBeep(180);
+      else if (ev.severity === 'warning') this.playBeep(360);
+      else                                this.playBeep(720);
+      if (t === 'ai-reply') {
+        this.lastReply = { ts: ev.ts, text: p.short || '', chat: p.client_username || '' };
+      }
+      if (t === 'lk-card-updated' || (ev.character === 'lk')) {
+        setTimeout(() => this.refreshCards(), 400);
+        if (this.detailModal.open && p.card_id === this.detailModal.card_id) {
+          setTimeout(async () => {
+            try {
+              const r = await fetch(`/api/lk_card/${this.detailModal.card_id}`, { credentials: 'include' });
+              if (r.ok) {
+                const full = await r.json();
+                this.detailModal.original = full;
+              }
+            } catch {}
+          }, 600);
+        }
+      }
+      if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
+        setTimeout(() => this.refresh(), 500);
+      }
+      if (t === 'discord-message' && p.channel_id) {
+        if (this.discordActiveChannel?.id === p.channel_id) {
+          setTimeout(() => this.refreshDiscordMessages(), 200);
+        }
+      }
+      if (['discord-channel-created','discord-channel-deleted'].includes(t)) {
+        setTimeout(() => this.refreshDiscordChannels(), 200);
+      }
+      if (['discord-voice-state','discord-presence-update'].includes(t)) {
+        setTimeout(() => this.refreshDiscordOnline(), 100);
+      }
+      if (['discord-reaction','discord-reaction-removed'].includes(t)) {
+        if (this.discordActiveChannel?.id) {
+          setTimeout(() => this.refreshDiscordMessages(), 100);
+        }
+      }
+    },
+
+    formatEvent(ev) {
+      const t = ev.type || ''; const p = ev.payload || {};
+      const parts = [];
+      if (p.client_username) parts.push('@' + p.client_username);
+      if (p.card_id) parts.push('#' + p.card_id);
+      if (p.bank) parts.push(p.bank);
+      if (p.fio) parts.push(p.fio);
+      if (p.new_status) parts.push('→ ' + p.new_status);
+      if (p.margin_usdt !== undefined) parts.push('маржа $' + p.margin_usdt);
+      if (p.short) parts.push(p.short);
+      return parts.length ? parts.join(' · ') : t;
+    },
+
+    goToView(view) {
+      this.currentView = view;
+      location.hash = '#' + view;
+    },
+
+    formatIdle(sec) {
+      if (sec == null) return '—';
+      if (sec < 60)    return Math.round(sec) + 's';
+      if (sec < 3600)  return Math.round(sec/60) + 'm';
+      if (sec < 86400) return Math.round(sec/3600) + 'h';
+      return Math.round(sec/86400) + 'd';
+    },
+    fmtTime(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        return d.toTimeString().substring(0, 8);
+      } catch { return '--:--'; }
+    },
+    fmtUsd(n) {
+      if (typeof n !== 'number') n = parseFloat(n) || 0;
+      const sign = n < 0 ? '-' : '';
+      return sign + '$' + Math.abs(n).toLocaleString('en-US', {maximumFractionDigits:2});
+    },
+
+    get filteredCards() {
+      const q = (this.cardFilter || '').toLowerCase().trim();
+      if (!q) return this.cards;
+      return this.cards.filter(c =>
+        (c.bank || '').toLowerCase().includes(q) ||
+        (c.fio || '').toLowerCase().includes(q) ||
+        (c.status || '').toLowerCase().includes(q) ||
+        (c.supplier || '').toLowerCase().includes(q) ||
+        (c.card_id || '').toLowerCase().includes(q)
+      );
+    },
+
+    // ===== Discord hub =====
+    get discordCategories() {
+      const map = {};
+      for (const ch of this.discordChannels) {
+        const cat = ch.category || 'general';
+        if (!map[cat]) map[cat] = { name: cat, channels: [] };
+        map[cat].channels.push(ch);
+      }
+      const order = ['general', 'voice'];
+      return Object.values(map).sort((a, b) => {
+        const ia = order.indexOf(a.name), ib = order.indexOf(b.name);
+        if (ia >= 0 && ib >= 0) return ia - ib;
+        if (ia >= 0) return -1;
+        if (ib >= 0) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    },
+
+    async refreshMe() {
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) this.me = await r.json();
+      } catch (e) {}
+    },
+
+    async refreshDiscordChannels() {
+      try {
+        const r = await fetch('/api/discord/channels', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.discordChannels = data.channels || [];
+          if (this.discordActiveChannel) {
+            const cur = this.discordChannels.find(c => c.id === this.discordActiveChannel.id);
+            if (cur) this.discordActiveChannel = cur;
+          }
+        }
+      } catch (e) { console.warn('discord channels failed', e); }
+    },
+
+    async refreshDiscordOnline() {
+      try {
+        const r = await fetch('/api/discord/online', { credentials: 'include' });
+        if (r.ok) {
+          const data = await r.json();
+          this.discordOnlineUsers = data.online_users || [];
+          const voiceState = data.voice_channels || {};
+          for (const ch of this.discordChannels) {
+            ch.voice_participants = voiceState[ch.id] || [];
+          }
+          if (this.discordActiveChannel && this.discordActiveChannel.type === 'voice') {
+            this.dcVoiceParticipants = voiceState[this.discordActiveChannel.id] || [];
+          }
+        }
+      } catch (e) {}
+    },
+
+    async openDiscordChannel(ch) {
+      this.discordActiveChannel = ch;
+      this.discordMessages = [];
+      this.discordRailOpen = false;
+      if (ch.type === 'text') {
+        await this.refreshDiscordMessages();
+      } else if (ch.type === 'voice') {
+        await this.refreshDiscordOnline();
+      }
+    },
+
+    async refreshDiscordMessages() {
+      if (!this.discordActiveChannel) return;
+      try {
+        const r = await fetch(
+          `/api/discord/messages?channel_id=${encodeURIComponent(this.discordActiveChannel.id)}&limit=100`,
+          { credentials: 'include' },
+        );
+        if (r.ok) {
+          const data = await r.json();
+          this.discordMessages = data.messages || [];
+          for (const m of this.discordMessages) {
+            if (!m._reactions_loaded) m._reactions_loaded = true;
+          }
+          this.$nextTick(() => {
+            const el = this.$refs.mDcMessages;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
+      } catch (e) { console.warn('discord msgs failed', e); }
+    },
+
+    async sendDiscordMessage() {
+      const text = (this.discordDraft || '').trim();
+      if (!text || !this.discordActiveChannel) return;
+      try {
+        const r = await fetch('/api/discord/messages', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel_id: this.discordActiveChannel.id, text: text }),
+        });
+        if (r.ok) {
+          this.discordDraft = '';
+          this.playBeep(900);
+          await this.refreshDiscordMessages();
+        }
+      } catch (e) { console.warn('send discord msg failed', e); }
+    },
+
+    openCreateChannel() {
+      this.discordChannelModal = { open: true, name: '', type: 'text', category: 'general', topic: '' };
+    },
+
+    async createDiscordChannel() {
+      const { name, type, category, topic } = this.discordChannelModal;
+      if (!name.trim()) return;
+      try {
+        const r = await fetch('/api/discord/channels', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), type, category: category.trim() || 'general', topic: topic.trim() }),
+        });
+        if (r.ok) {
+          this.discordChannelModal.open = false;
+          await this.refreshDiscordChannels();
+        }
+      } catch (e) { console.warn('create channel failed', e); }
+    },
+
+    async toggleReaction(messageId, emoji) {
+      try {
+        const myName = this.me.username || this.me.first_name || 'admin';
+        const existing = (this.discordReactions[messageId] || {})[emoji] || [];
+        const hasMine = existing.includes(myName);
+        const method = hasMine ? 'DELETE' : 'POST';
+        const url = hasMine
+          ? `/api/discord/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`
+          : `/api/discord/messages/${messageId}/reactions`;
+        const body = hasMine ? null : JSON.stringify({ emoji });
+        await fetch(url, {
+          method, credentials: 'include',
+          headers: body ? { 'Content-Type': 'application/json' } : {},
+          body,
+        });
+      } catch (e) {}
+    },
+
+    // === WebRTC Voice ===
+    connectDiscordWS() {
+      if (this.dcWs && (this.dcWs.readyState === 0 || this.dcWs.readyState === 1)) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/ws-discord`;
+      try {
+        this.dcWs = new WebSocket(url);
+      } catch (e) {
+        console.warn('[discord-ws] connect throw:', e);
+        return;
+      }
+      this.dcWs.onopen = () => {
+        this.dcWsConnected = true;
+        if (this.dcKeepAlive) clearInterval(this.dcKeepAlive);
+        this.dcKeepAlive = setInterval(() => {
+          try { this.dcWs.send(JSON.stringify({ type: 'ping' })); } catch {}
+        }, 25000);
+      };
+      this.dcWs.onclose = () => {
+        this.dcWsConnected = false;
+        this.dcSessionId = '';
+        if (this.dcKeepAlive) clearInterval(this.dcKeepAlive);
+        if (this.dcCurrentVoiceChannel) {
+          for (const sid of Object.keys(this.dcPeers)) this.cleanupPeer(sid);
+          if (this.dcLocalStream) {
+            for (const t of this.dcLocalStream.getTracks()) t.stop();
+            this.dcLocalStream = null;
+          }
+          this.dcCurrentVoiceChannel = null;
+          this.dcVoiceParticipants = [];
+        }
+        setTimeout(() => {
+          if (document.visibilityState === 'visible' || this.mobileTab === 'discord') {
+            this.connectDiscordWS();
+          }
+        }, 3000);
+      };
+      this.dcWs.onerror = (e) => { console.warn('[discord-ws] error event:', e); };
+      this.dcWs.onmessage = async (e) => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch (err) { return; }
+        await this.handleDiscordWS(msg);
+      };
+    },
+
+    async handleDiscordWS(msg) {
+      if (msg.type === 'ready') {
+        this.dcSessionId = msg.session_id;
+        if (msg.me) this.me = Object.assign({}, this.me, msg.me);
+      } else if (msg.type === 'peer-joined') {
+        if (this.dcCurrentVoiceChannel) {
+          await this.createPeerConnection(msg.session_id, msg.user, true);
+        }
+      } else if (msg.type === 'peer-left') {
+        this.cleanupPeer(msg.session_id);
+      } else if (msg.type === 'voice-state') {
+        this.dcVoiceParticipants = msg.participants || [];
+        this.refreshDiscordOnline();
+      } else if (msg.type === 'signal') {
+        await this.handleSignal(msg.from, msg.payload);
+      }
+    },
+
+    _audioUnlocked: false,
+    _pendingAudio: [],
+    _audioBlocked: false,
+    _audioRetryHandlerAdded: false,
+
+    _unlockAudio() {
+      if (this._audioUnlocked) return;
+      try {
+        if (!window._jarvisAudioCtx) {
+          window._jarvisAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (window._jarvisAudioCtx.state === 'suspended') {
+          window._jarvisAudioCtx.resume().catch(() => {});
+        }
+        const buf = window._jarvisAudioCtx.createBuffer(1, 1, 22050);
+        const src = window._jarvisAudioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(window._jarvisAudioCtx.destination);
+        if (src.start) src.start(0); else src.noteOn(0);
+        const dummy = document.createElement('audio');
+        dummy.autoplay = true;
+        dummy.playsInline = true;
+        dummy.muted = true;
+        dummy.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAuLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uP////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAbCwq+SovgAAAAAAAAAAAAAAAAAAAAAA';
+        const p = dummy.play();
+        if (p) p.catch(() => {});
+        this._audioUnlocked = true;
+      } catch (e) {}
+    },
+
+    _getIceServers() {
+      return [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+      ];
+    },
+
+    async createPeerConnection(remoteSessionId, remoteUser, initiator) {
+      if (this.dcPeers[remoteSessionId]) return this.dcPeers[remoteSessionId];
+      const pc = new RTCPeerConnection({ iceServers: this._getIceServers() });
+      this.dcPeers[remoteSessionId] = { pc, user: remoteUser, pendingIce: [], initiator };
+      if (this.dcLocalStream) {
+        for (const track of this.dcLocalStream.getTracks()) {
+          try { pc.addTrack(track, this.dcLocalStream); } catch (e) {}
+        }
+      }
+      pc.ontrack = (ev) => {
+        if (this.dcRemoteStream && ev.track.kind === 'audio') {
+          this.dcRemoteStream.addTrack(ev.track);
+          if (this.dcRemoteAudioEl) {
+            this.dcRemoteAudioEl.muted = this.dcDeafened || false;
+            this.dcRemoteAudioEl.volume = 1.0;
+            const p = this.dcRemoteAudioEl.play();
+            if (p) p.catch(err => {
+              this._audioBlocked = true;
+              if (!this._pendingAudio.includes(this.dcRemoteAudioEl)) {
+                this._pendingAudio.push(this.dcRemoteAudioEl);
+              }
+            });
+          }
+        }
+      };
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate) this.sendSignal(remoteSessionId, { type: 'ice', candidate: ev.candidate });
+      };
+      pc.onconnectionstatechange = () => {
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+          this.cleanupPeer(remoteSessionId);
+        }
+      };
+      if (initiator) {
+        try {
+          const offer = await pc.createOffer({ offerToReceiveAudio: true });
+          await pc.setLocalDescription(offer);
+          this.sendSignal(remoteSessionId, { type: 'offer', sdp: offer });
+        } catch (e) {}
+      }
+      return this.dcPeers[remoteSessionId];
+    },
+
+    async handleSignal(fromSessionId, payload) {
+      let peer = this.dcPeers[fromSessionId];
+      if (!peer) {
+        peer = await this.createPeerConnection(fromSessionId, {}, false);
+      }
+      const pc = peer.pc;
+      try {
+        if (payload.type === 'offer') {
+          await pc.setRemoteDescription(payload.sdp);
+          for (const c of (peer.pendingIce || [])) {
+            try { await pc.addIceCandidate(c); } catch {}
+          }
+          peer.pendingIce = [];
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          this.sendSignal(fromSessionId, { type: 'answer', sdp: answer });
+        } else if (payload.type === 'answer') {
+          if (pc.signalingState === 'stable') return;
+          await pc.setRemoteDescription(payload.sdp);
+          for (const c of (peer.pendingIce || [])) {
+            try { await pc.addIceCandidate(c); } catch {}
+          }
+          peer.pendingIce = [];
+        } else if (payload.type === 'ice' && payload.candidate) {
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(payload.candidate);
+          } else {
+            peer.pendingIce = peer.pendingIce || [];
+            peer.pendingIce.push(payload.candidate);
+          }
+        }
+      } catch (e) { console.error('[voice] handleSignal error:', e); }
+    },
+
+    sendSignal(target, payload) {
+      if (!this.dcWs || this.dcWs.readyState !== 1) return;
+      try { this.dcWs.send(JSON.stringify({ type: 'signal', target, payload })); } catch {}
+    },
+
+    cleanupPeer(sessionId) {
+      const peer = this.dcPeers[sessionId];
+      if (!peer) return;
+      try {
+        if (this.dcRemoteStream && peer.pc) {
+          const receivers = peer.pc.getReceivers ? peer.pc.getReceivers() : [];
+          for (const r of receivers) {
+            if (r.track) {
+              try { this.dcRemoteStream.removeTrack(r.track); } catch {}
+            }
+          }
+        }
+      } catch (e) {}
+      try { peer.pc.close(); } catch {}
+      try { if (peer.audioEl) peer.audioEl.remove(); } catch {}
+      delete this.dcPeers[sessionId];
+    },
+
+    async joinDiscordVoice() {
+      if (!this.discordActiveChannel || this.discordActiveChannel.type !== 'voice') return;
+      if (this.dcCurrentVoiceChannel) await this.leaveDiscordVoice();
+      this._unlockAudio();
+      try {
+        this.dcRemoteStream = new MediaStream();
+        if (!this.dcRemoteAudioEl) {
+          this.dcRemoteAudioEl = document.createElement('audio');
+          this.dcRemoteAudioEl.id = 'dc-remote-audio';
+          this.dcRemoteAudioEl.autoplay = true;
+          this.dcRemoteAudioEl.controls = false;
+          this.dcRemoteAudioEl.playsInline = true;
+          this.dcRemoteAudioEl.setAttribute('playsinline', '');
+          this.dcRemoteAudioEl.setAttribute('webkit-playsinline', '');
+          this.dcRemoteAudioEl.muted = false;
+          this.dcRemoteAudioEl.volume = 1.0;
+          document.body.appendChild(this.dcRemoteAudioEl);
+        }
+        this.dcRemoteAudioEl.srcObject = this.dcRemoteStream;
+        const startPlay = this.dcRemoteAudioEl.play();
+        if (startPlay) startPlay.catch(err => {
+          this._audioBlocked = true;
+          if (!this._pendingAudio.includes(this.dcRemoteAudioEl)) {
+            this._pendingAudio.push(this.dcRemoteAudioEl);
+          }
+        });
+      } catch (e) {}
+      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (!isSecure) {
+        alert('Голос работает только по HTTPS.');
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Браузер не поддерживает getUserMedia.');
+        return;
+      }
+      try {
+        this.dcLocalStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: false,
+        });
+      } catch (e) {
+        let msg = 'Не удалось получить микрофон: ' + (e.name || '') + ' ' + (e.message || '');
+        if (e.name === 'NotAllowedError') msg = '⛔ Микрофон заблокирован.';
+        if (e.name === 'NotFoundError') msg = '⛔ Микрофон не найден.';
+        if (e.name === 'NotReadableError') msg = '⛔ Микрофон занят другим приложением.';
+        alert(msg);
+        return;
+      }
+      if (!this.dcWs || this.dcWs.readyState !== 1) this.connectDiscordWS();
+      const waitWs = async () => {
+        for (let i = 0; i < 50; i++) {
+          if (this.dcWs && this.dcWs.readyState === 1 && this.dcSessionId) return true;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        return false;
+      };
+      const ok = await waitWs();
+      if (!ok) {
+        if (this.dcLocalStream) {
+          for (const t of this.dcLocalStream.getTracks()) t.stop();
+          this.dcLocalStream = null;
+        }
+        alert('Не удалось подключиться к серверу голоса.');
+        return;
+      }
+      this.dcCurrentVoiceChannel = this.discordActiveChannel.id;
+      this.dcMuted = false;
+      this.dcDeafened = false;
+      try {
+        this.dcWs.send(JSON.stringify({ type: 'join-voice', channel_id: this.discordActiveChannel.id }));
+      } catch (e) {}
+      this.playBeep(800);
+    },
+
+    async leaveDiscordVoice() {
+      if (!this.dcCurrentVoiceChannel) return;
+      try { this.dcWs && this.dcWs.send(JSON.stringify({ type: 'leave-voice' })); } catch {}
+      for (const sid of Object.keys(this.dcPeers)) this.cleanupPeer(sid);
+      if (this.dcLocalStream) {
+        for (const tr of this.dcLocalStream.getTracks()) tr.stop();
+        this.dcLocalStream = null;
+      }
+      try {
+        if (this.dcRemoteStream) {
+          for (const tr of this.dcRemoteStream.getTracks()) {
+            try { tr.stop(); } catch {}
+            try { this.dcRemoteStream.removeTrack(tr); } catch {}
+          }
+          this.dcRemoteStream = null;
+        }
+        if (this.dcRemoteAudioEl) {
+          try { this.dcRemoteAudioEl.pause(); } catch {}
+          this.dcRemoteAudioEl.srcObject = null;
+        }
+      } catch (e) {}
+      this.dcCurrentVoiceChannel = null;
+      this.dcVoiceParticipants = [];
+      this.playBeep(300);
+    },
+
+    toggleMute() {
+      if (!this.dcLocalStream) return;
+      this.dcMuted = !this.dcMuted;
+      for (const track of this.dcLocalStream.getAudioTracks()) track.enabled = !this.dcMuted;
+      try { this.dcWs && this.dcWs.send(JSON.stringify({ type: 'mute', muted: this.dcMuted })); } catch {}
+      this.playBeep(this.dcMuted ? 300 : 700);
+    },
+    toggleDeafen() {
+      this.dcDeafened = !this.dcDeafened;
+      if (this.dcRemoteAudioEl) this.dcRemoteAudioEl.muted = this.dcDeafened;
+      for (const sid of Object.keys(this.dcPeers)) {
+        const peer = this.dcPeers[sid];
+        if (peer.audioEl) peer.audioEl.muted = this.dcDeafened;
+      }
+      if (this.dcDeafened && !this.dcMuted) this.toggleMute();
+      try { this.dcWs && this.dcWs.send(JSON.stringify({ type: 'deaf', deafened: this.dcDeafened })); } catch {}
+    },
+    isInVoiceChannel(channelId) { return this.dcCurrentVoiceChannel === channelId; },
+
+    // === Mobile navigation helpers ===
+    get mobileHeaderTitle() {
+      if (this.mobileTab === 'home') return 'центр';
+      if (this.mobileTab === 'discord') {
+        if (this.discordActiveChannel) return this.discordActiveChannel.name;
+        return 'каналы';
+      }
+      if (this.mobileTab === 'lk') return 'ЛК';
+      if (this.mobileTab === 'fin') return 'финансы';
+      if (this.mobileTab === 'more') return 'настройки';
+      return '';
+    },
+
+    setMobileTab(t) {
+      this.mobileTab = t;
+      this.mobileBackVisible = false;
+      this.$nextTick(() => {
+        const content = document.querySelector('.m-content');
+        if (content) content.scrollTop = 0;
+      });
+      this.playBeep(700);
+    },
+
+    mobileBack() {
+      if (this.mobileTab === 'discord' && this.discordActiveChannel) {
+        if (this.dcCurrentVoiceChannel) {
+          this.leaveDiscordVoice();
+        }
+        this.discordActiveChannel = null;
+        this.mobileBackVisible = false;
+        return;
+      }
+      this.mobileBackVisible = false;
+    },
+
+    _initMobileWatchers() {
+      this.$watch('discordActiveChannel', (v) => {
+        this.mobileBackVisible = !!v;
+      });
+      this.$watch('mobileTab', () => {
+        this.mobileBackVisible = !!(this.mobileTab === 'discord' && this.discordActiveChannel);
+      });
+    },
+
+    renderMessageText(text) {
+      if (!text) return '';
+      let safe = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      safe = safe.replace(/@(\w+)/g, '<span class="dc-mention">@$1</span>');
+      safe = safe.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        '<a href="$1" target="_blank" rel="noopener" class="dc-link">$1</a>',
+      );
+      return safe;
+    },
+
+    // === Lion narrator (no-op) ===
+    initLion() { this.lionStatus = 'JARVIS'; },
+    toggleLion() {},
+    lionSay(text) {},
+    lionNarrateEvent(ev) {},
+
+    // === Command console ===
+    async sendCmd() {
+      const text = (this.cmdInput || '').trim();
+      if (!text) return;
+      this.cmdLog.push({ who: 'YOU', body: text, cls: 'you' });
+      this.cmdInput = '';
+      this.lionStatus = 'THINKING';
+      try {
+        const r = await fetch('/api/leo/ask', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, auto_execute: true }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const reply = (data.reply || '').trim() || '(пусто)';
+          this.cmdLog.push({ who: 'LEO', body: reply, cls: 'lion' });
+          if (data.executed && data.executed.length) {
+            for (const e of data.executed) {
+              this.cmdLog.push({ who: 'EXEC', body: `⚙ ${e.tool} → ${e.cmd}`, cls: 'result' });
+              if (e.id) this.knownCmds.add(e.id);
+            }
+          }
+          this.playBeep(820);
+        } else {
+          this.cmdLog.push({ who: 'ERR', body: 'HTTP ' + r.status, cls: 'err' });
+        }
+      } catch (e) {
+        this.cmdLog.push({ who: 'ERR', body: String(e), cls: 'err' });
+      }
+      this.lionStatus = this.lionEnabled ? 'IDLE' : 'MUTED';
+    },
+    startCmdResultsPoller() {
+      setInterval(async () => {
+        try {
+          const r = await fetch('/api/commands?limit=30', { credentials: 'include' });
+          if (!r.ok) return;
+          const data = await r.json();
+          for (const c of (data.commands || [])) {
+            if (c.status !== 'pending' && this.knownCmds.has(c.id) && !this.knownCmds.has('done:' + c.id)) {
+              this.cmdLog.push({ who: 'LEO', body: '✅ ' + (c.result || c.status), cls: 'result' });
+              this.knownCmds.add('done:' + c.id);
+            }
+          }
+        } catch {}
+      }, 3000);
+    },
+
+    // === Brain Notes ===
+    async refreshNotes() {
+      try {
+        const params = new URLSearchParams({limit: '50'});
+        if (this.notesCategory) params.set('category', this.notesCategory);
+        const r = await fetch('/api/leo/notes?' + params.toString(), {credentials: 'include'});
+        if (r.ok) {
+          const data = await r.json();
+          this.notesPreview = data.notes || [];
+        }
+      } catch (e) {}
+    },
+
+    // === Outreach ===
+    async refreshOutreach() {
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch('/api/outreach/bots', {credentials: 'include'}),
+          fetch('/api/outreach/campaigns', {credentials: 'include'}),
+        ]);
+        if (r1.ok) this.outreachBots = (await r1.json()).bots || [];
+        if (r2.ok) this.outreachCampaigns = (await r2.json()).campaigns || [];
+      } catch (e) {}
+    },
+
+    async requestSyncLK() {
+      try {
+        const r = await fetch('/api/control/sync_lk_request', { method: 'POST', credentials: 'include' });
+        if (r.ok) this.playBeep(880);
+      } catch (e) {}
+    },
+    async toggleAI() { await this.setAI(!this.state.stats.ai_enabled); },
+    async setAI(enabled) {
+      try {
+        const r = await fetch('/api/control/ai_toggle', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (r.ok) {
+          this.state.stats.ai_enabled = enabled;
+          this.playBeep(enabled ? 880 : 220);
+        }
+      } catch (e) {}
+    },
+
+    openStatusModal(c) {
+      this.statusModal = { open: true, card_id: c.card_id, card: c, new_status: c.status || 'В_РАБОТЕ' };
+    },
+    closeStatusModal() { this.statusModal.open = false; },
+    async applyStatusChange() {
+      const { card_id, new_status } = this.statusModal;
+      try {
+        const r = await fetch(`/api/control/lk/${card_id}/status`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_status }),
+        });
+        if (r.ok) {
+          this.playBeep(660);
+          await this.refreshCards();
+          await this.refresh();
+        }
+      } catch (e) {}
+      this.closeStatusModal();
+    },
+
+    confirmDelete(c) {
+      this.deleteModal = { open: true, card_id: c.card_id, card: c };
+    },
+    closeDeleteModal() { this.deleteModal.open = false; },
+    async applyDelete() {
+      const { card_id } = this.deleteModal;
+      try {
+        const r = await fetch(`/api/control/lk/${card_id}/delete`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (r.ok) {
+          this.playBeep(220);
+          await this.refreshCards();
+          await this.refresh();
+        }
+      } catch (e) {}
+      this.closeDeleteModal();
+    },
+
+    // ===== LK Card detail modal =====
+    async openDetailModal(c) {
+      this.detailModal = {
+        open: true, card_id: c.card_id, loading: true, saving: false,
+        flash: '', original: { ...c }, draft: { ...c },
+      };
+      this.playBeep(540);
+      try {
+        const r = await fetch(`/api/lk_card/${c.card_id}`, { credentials: 'include' });
+        if (r.ok) {
+          const full = await r.json();
+          this.detailModal.original = full;
+          this.detailModal.draft = {
+            bank: full.bank || '',
+            fio: full.fio || '',
+            price_usdt: full.price_usdt || 0,
+            payment_method: full.payment_method || '',
+            status: full.status || 'В_РАБОТЕ',
+            deal_id: full.deal_id || '',
+            usdt_address: full.usdt_address || '',
+            supplier: full.supplier || '',
+            client_username: full.client_username || '',
+            work_chat_id: full.work_chat_id || 0,
+            block_amount_rub: full.block_amount_rub || 0,
+            block_note: full.block_note || '',
+            brak_reason: full.brak_reason || '',
+          };
+        }
+      } catch (e) {}
+      this.detailModal.loading = false;
+    },
+    closeDetailModal() { this.detailModal.open = false; this.detailModal.flash = ''; },
+
+    async saveDetailCard() {
+      const { card_id, draft, original } = this.detailModal;
+      if (!card_id) return;
+      this.detailModal.saving = true;
+      try {
+        const updates = {};
+        const editableKeys = [
+          'bank', 'fio', 'price_usdt', 'payment_method', 'deal_id',
+          'usdt_address', 'supplier', 'client_username', 'work_chat_id',
+          'block_amount_rub', 'block_note', 'brak_reason',
+        ];
+        for (const k of editableKeys) {
+          if (draft[k] !== undefined && draft[k] !== (original[k] || (typeof draft[k] === 'number' ? 0 : ''))) {
+            updates[k] = draft[k];
+          }
+        }
+        let anySaved = false;
+        if (Object.keys(updates).length > 0) {
+          const r = await fetch(`/api/control/lk/${card_id}/update`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates),
+          });
+          if (r.ok) anySaved = true;
+        }
+        const newStatus = draft.status || '';
+        if (newStatus && newStatus !== (original.status || '')) {
+          const r2 = await fetch(`/api/control/lk/${card_id}/status`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_status: newStatus }),
+          });
+          if (r2.ok) anySaved = true;
+        }
+        if (anySaved) {
+          this.playBeep(880);
+          this.detailModal.flash = '✓ СОХРАНЕНО · СИНХ С TG';
+          await this.refreshCards();
+          await this.refresh();
+          this.detailModal.original = { ...this.detailModal.original, ...draft };
+          setTimeout(() => { this.detailModal.flash = ''; }, 1600);
+        } else {
+          this.detailModal.flash = 'Без изменений';
+          setTimeout(() => { this.detailModal.flash = ''; }, 1200);
+        }
+      } catch (e) {
+        this.detailModal.flash = '✗ ошибка';
+        setTimeout(() => { this.detailModal.flash = ''; }, 1600);
+      } finally {
+        this.detailModal.saving = false;
+      }
+    },
+  };
+}
+</script>
+</body>
+</html>
