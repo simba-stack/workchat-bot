@@ -605,6 +605,34 @@ async def main():
     logger.info("Secret admin command: /%s", storage.get_secret_command())
     logger.info("Admins: %s", storage.get_admins())
 
+    # ── Авто-миграция из старой Node.js CRM ───────────────────────
+    # Если в репо есть crm.sql и миграция ещё не запускалась — прогоним.
+    # Флаг `crm_migration_done` хранится в state.json (per-volume).
+    try:
+        if (
+            os.path.exists("crm.sql")
+            and not storage.state.get("crm_migration_done")
+        ):
+            logger.info("🔄 CRM migration: detected crm.sql, applying...")
+            try:
+                from migrate_from_old_crm import parse_sql_dump, migrate
+                dump = parse_sql_dump("crm.sql")
+                report = migrate(storage.state, dump, dry_run=False)
+                storage.state["crm_migration_done"] = True
+                storage.state["crm_migration_report"] = report
+                await storage._save_unlocked()
+                logger.info(
+                    "✅ CRM migration: +%d owners / +%d chats / +%d drops / +%d lks",
+                    report["owners_added"], report["chats_added"],
+                    report["drops_added"], report["lks_added"],
+                )
+            except Exception as e:
+                logger.error("CRM migration failed: %s — continuing without it", e)
+        elif storage.state.get("crm_migration_done"):
+            logger.info("CRM migration: already applied (skipping)")
+    except Exception as e:
+        logger.warning("CRM migration check failed: %s", e)
+
     logger.info("Starting userbot...")
     await userbot.start()
 
@@ -638,12 +666,13 @@ async def main():
             dashboard_task.cancel()
         if crm_task and not crm_task.done():
             crm_task.cancel()
-        await userbot.stop()
-        await bot.session.close()
+        try:
+            await userbot.stop()
+        except Exception as e:
+            logger.warning("Userbot stop error: %s", e)
 
 
 async def _safe_crm_task():
-    """Запуск CRM-бота с try/except — чтоб его падение не валило main."""
     try:
         from crm_bot import run_crm_bot
         await run_crm_bot()
@@ -652,30 +681,17 @@ async def _safe_crm_task():
 
 
 async def _start_dashboard_api():
-    """Запускает FastAPI дашборд на отдельном порту. Не падает если
-    fastapi/uvicorn не установлены — просто молча выходит."""
+    """Запускает FastAPI дашборд параллельно с ботом."""
     try:
         import uvicorn
-        from api import app as fastapi_app
-    except ImportError as e:
-        logger.warning(
-            "Dashboard not started: %s. Установите fastapi+uvicorn для активации.",
-            e,
+        from api import app
+        port = int(os.getenv("PORT", "8000"))
+        config_ = uvicorn.Config(
+            app, host="0.0.0.0", port=port, log_level="info",
+            access_log=False, lifespan="on",
         )
-        return
-    port = int(os.getenv("PORT", "8080"))
-    host = "0.0.0.0"
-    logger.info("Starting FastAPI dashboard on %s:%d ...", host, port)
-    try:
-        cfg = uvicorn.Config(
-            fastapi_app, host=host, port=port,
-            log_level="warning", access_log=False, lifespan="off",
-        )
-        server = uvicorn.Server(cfg)
+        server = uvicorn.Server(config_)
         await server.serve()
-    except asyncio.CancelledError:
-        logger.info("Dashboard API stopping (cancelled)")
-        raise
     except Exception as e:
         logger.warning("Dashboard API crashed: %s", e)
 
