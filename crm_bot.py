@@ -746,8 +746,10 @@ def _check_drop_complete(drop: dict) -> dict:
 
 
 def _drop_is_ready_to_send(drop: dict) -> bool:
-    """True если можно отдать в работу — все 6 пунктов заполнены."""
-    if drop.get("status") != "draft":
+    """True если можно отдать в работу — все 6 пунктов заполнены.
+    Кнопка доступна для draft (первая подача) И для accepted
+    (повторная подача — например после добавления нового ЛК)."""
+    if drop.get("status") not in ("draft", "accepted"):
         return False
     return all(_check_drop_complete(drop).values())
 
@@ -1391,10 +1393,10 @@ async def cb_dropsend(call: CallbackQuery):
     if not drop:
         await call.answer("Клиент не найден", show_alert=True)
         return
-    if drop.get("status") not in ("draft",):
-        await call.answer("Уже отправлен или обработан", show_alert=True)
+    if drop.get("status") not in ("draft", "accepted"):
+        await call.answer("Нельзя отправить в этом статусе", show_alert=True)
         return
-    # Жёсткая проверка чек-листа
+    # Чек-лист обязателен
     if not _drop_is_ready_to_send(drop):
         check = _check_drop_complete(drop)
         missing = [k for k, v in check.items() if not v]
@@ -1403,10 +1405,9 @@ async def cb_dropsend(call: CallbackQuery):
             show_alert=True,
         )
         return
-    lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
 
+    is_resubmit = drop.get("status") == "accepted"
     bot = call.message.bot
-    # Резолв + авто-коррекция admin-чата
     admin_chat_id = await get_admin_chat_resolved(bot)
     if not admin_chat_id:
         raw = get_admin_chat_id()
@@ -1422,7 +1423,11 @@ async def cb_dropsend(call: CallbackQuery):
             ttl=30,
         )
         return
-    await call.answer("⏳ Отправляю...")
+
+    if is_resubmit:
+        await call.answer("⏳ Отправляю обновлённую анкету...")
+    else:
+        await call.answer("⏳ Отправляю...")
 
     # 1) Постим фотки
     try:
@@ -1436,30 +1441,41 @@ async def cb_dropsend(call: CallbackQuery):
     except Exception as e:
         logger.warning("dropsend photos failed: %s", e)
 
-    # 2) Контрольное сообщение
-    await crm_storage.update_crm_drop(drop_id, status="pending", send_ts=time.time())
+    # 2) Контрольное сообщение — НОВОЕ всегда, даже для accepted (обновление)
+    if not is_resubmit:
+        await crm_storage.update_crm_drop(drop_id, status="pending", send_ts=time.time())
     drop = crm_storage.get_crm_drop(drop_id)
     text = await _render_admin_text(drop)
+    if is_resubmit:
+        text = "🔄 <b>ОБНОВЛЕНИЕ АНКЕТЫ</b> (добавлены новые данные)\n\n" + text
     try:
         ctrl = await bot.send_message(admin_chat_id, text, reply_markup=_admin_keyboard(drop))
+        # Перезаписываем admin_msg_id — теперь актуально новое сообщение
         await crm_storage.update_crm_drop(drop_id, admin_msg_id=ctrl.message_id)
     except Exception as e:
         logger.error("dropsend ctrl msg failed: %s", e)
-        # Откат статуса
-        await crm_storage.update_crm_drop(drop_id, status="draft")
+        if not is_resubmit:
+            await crm_storage.update_crm_drop(drop_id, status="draft")
         await ephemeral(call.message, f"❌ Не удалось отправить в admin-чат: {e}", ttl=15)
         return
 
-    # 3) Апдейтим у партнёра
+    # 3) Апдейт партнёра
     try:
         await call.message.delete()
     except Exception:
         pass
-    await _send(
-        call.message,
-        f"🚀 <b>Клиент {drop.get('fio')} отправлен в работу.</b>\n"
-        f"<i>Ожидайте решения админов PRIDE.</i>",
-    )
+    if is_resubmit:
+        await _send(
+            call.message,
+            f"🔄 <b>Анкета {drop.get('fio')} обновлена и отправлена в админ-чат.</b>\n"
+            f"<i>Новые данные доступны менеджерам.</i>",
+        )
+    else:
+        await _send(
+            call.message,
+            f"🚀 <b>Клиент {drop.get('fio')} отправлен в работу.</b>\n"
+            f"<i>Ожидайте решения админов PRIDE.</i>",
+        )
 
 
 @router.callback_query(F.data.startswith("acceptdrop:"))
@@ -3476,6 +3492,7 @@ async def run_crm_bot():
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
+
     try:
         me = await bot.get_me()
         logger.info("CRM bot online: @%s (id=%s)", me.username, me.id)
