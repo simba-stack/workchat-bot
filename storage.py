@@ -2286,12 +2286,15 @@ class Storage:
                 "deal": "",
                 "sms_history": [],
                 "status": "new",   # new / pending / ready / done
+                "new_login": "",        # новый логин (новые данные после перевязки)
                 "new_password": "",
                 "new_mail": "",
                 "new_number": "",
+                "code_word": "",        # кодовое слово (для звонков в банк)
                 "ded_ip": "",
                 "ded_login": "Administrator",
                 "ded_pass": "",
+                "ded_location": "",     # где установлен дедик / откуда работаем
                 "link_pass": "",
                 "msgid_pass": 0,
                 "created_at": time.time(),

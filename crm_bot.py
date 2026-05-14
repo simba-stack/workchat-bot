@@ -121,6 +121,40 @@ def get_password_chat_id() -> int:
     return HARDCODED_PASSWORD_CHAT_ID
 
 
+async def get_admin_chat_resolved(bot) -> Optional[int]:
+    """Получает admin-chat_id и проверяет доступность. Авто-корректирует если нужно."""
+    cid = get_admin_chat_id()
+    if not cid:
+        return None
+    resolved = await _resolve_chat_id_variants(bot, cid)
+    if resolved and resolved != cid:
+        try:
+            await crm_storage.register_crm_chat(
+                chat_id=resolved, owner_id="_admin",
+                is_admin=True, is_password=False,
+            )
+        except Exception:
+            pass
+    return resolved
+
+
+async def get_password_chat_resolved(bot) -> Optional[int]:
+    """Получает password-chat_id и проверяет доступность. Авто-корректирует."""
+    cid = get_password_chat_id()
+    if not cid:
+        return None
+    resolved = await _resolve_chat_id_variants(bot, cid)
+    if resolved and resolved != cid:
+        try:
+            await crm_storage.register_crm_chat(
+                chat_id=resolved, owner_id="_password",
+                is_admin=False, is_password=True,
+            )
+        except Exception:
+            pass
+    return resolved
+
+
 async def _resolve_chat_id_variants(bot, raw_id: int) -> Optional[int]:
     """Пытается достучаться до чата перебором форматов id.
     Telegram bot API хочет:
@@ -172,11 +206,14 @@ class LKForm(StatesGroup):
 
 
 class FillForm(StatesGroup):
-    waiting_new_password = State()
-    waiting_new_mail = State()
-    waiting_new_number = State()
-    waiting_ded_ip = State()
-    waiting_ded_pass = State()
+    waiting_new_login = State()       # 1/8
+    waiting_new_password = State()    # 2/8
+    waiting_new_mail = State()        # 3/8
+    waiting_new_number = State()      # 4/8
+    waiting_code_word = State()       # 5/8
+    waiting_ded_location = State()    # 6/8
+    waiting_ded_ip = State()          # 7/8
+    waiting_ded_pass = State()        # 8/8
 
 
 class SMSForm(StatesGroup):
@@ -1269,42 +1306,24 @@ async def cb_dropsend(call: CallbackQuery):
         return
     lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
 
-    admin_chat_id = get_admin_chat_id()
-    if not admin_chat_id:
-        await call.answer("Admin-чат не настроен", show_alert=True)
-        return
-
-    await call.answer("⏳ Отправляю...")
     bot = call.message.bot
-
-    # Проверим что бот ИМЕЕТ ДОСТУП к admin-чату.
-    # Перебираем варианты формата ID (с -100, без, и т.д.)
-    resolved = await _resolve_chat_id_variants(bot, admin_chat_id)
-    if not resolved:
+    # Резолв + авто-коррекция admin-чата
+    admin_chat_id = await get_admin_chat_resolved(bot)
+    if not admin_chat_id:
+        raw = get_admin_chat_id()
+        await call.answer("Admin-чат недоступен", show_alert=True)
         await ephemeral(
             call.message,
-            f"❌ Бот не имеет доступа к admin-чату.\n"
-            f"Пробовал: <code>{admin_chat_id}</code>, "
-            f"<code>-100{str(admin_chat_id).lstrip('-')}</code>\n\n"
+            f"❌ <b>Бот не имеет доступа к admin-чату</b>\n"
+            f"Hardcoded: <code>{raw}</code>\n\n"
             f"<b>Что сделать:</b>\n"
-            f"1. Открой саму группу «Доступы»\n"
-            f"2. Убедись что CRM-бот в ней как админ\n"
-            f"3. Напиши в группе: <code>/crm_set_admin</code>\n"
-            f"   — бот возьмёт правильный chat_id сам.",
+            f"1. Открой группу «PRIDE | ДОСТУПЫ»\n"
+            f"2. Добавь CRM-бота как админа\n"
+            f"3. В группе пропиши <code>/crm_set_admin</code>",
             ttl=30,
         )
         return
-    if resolved != admin_chat_id:
-        # Сохраним правильный формат в storage чтоб в след. раз не угадывать
-        try:
-            await crm_storage.register_crm_chat(
-                chat_id=resolved, owner_id="_admin",
-                is_admin=True, is_password=False,
-            )
-            logger.info("Admin chat auto-corrected: %s → %s", admin_chat_id, resolved)
-        except Exception:
-            pass
-        admin_chat_id = resolved
+    await call.answer("⏳ Отправляю...")
 
     # 1) Постим фотки
     try:
@@ -1357,36 +1376,69 @@ async def cb_acceptdrop(call: CallbackQuery):
     if drop.get("status") not in ("pending", "draft"):
         await call.answer("Нельзя принять в этом статусе", show_alert=True)
         return
-    await call.answer("⏳ Принимаю...")
     bot = call.message.bot
-    pwd_chat = get_password_chat_id()
+
+    # СНАЧАЛА проверим что бот имеет доступ к password-чату
+    # (иначе принимать дроп бессмысленно)
+    pwd_chat = await get_password_chat_resolved(bot)
     if not pwd_chat:
-        await ephemeral(call.message, "❌ Password-чат не настроен")
+        raw_pwd = get_password_chat_id()
+        await call.answer("Password-чат недоступен — смотри подробности ниже", show_alert=True)
+        await bot.send_message(
+            call.message.chat.id,
+            f"❌ <b>Не могу запостить в password-чат</b>\n\n"
+            f"Hardcoded ID: <code>{raw_pwd}</code>\n"
+            f"Пробовал варианты — бот ни в один не пускают.\n\n"
+            f"<b>Что сделать:</b>\n"
+            f"1. Открой группу «PRIDE | ПАРОЛИ»\n"
+            f"2. Убедись что CRM-бот там как админ\n"
+            f"3. В группе напиши <code>/crm_set_password</code>\n"
+            f"   — бот сохранит правильный chat_id сам.",
+        )
         return
 
+    await call.answer("⏳ Принимаю...")
     await crm_storage.update_crm_drop(drop_id, status="accepted", accept_ts=time.time())
     drop = crm_storage.get_crm_drop(drop_id)
     lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
 
     # Постим в password-чат — на каждый ЛК отдельное сообщение с кнопкой «Заполнить»
+    posted = 0
+    errors = []
     for lk in lks.values():
         text2 = _render_password_text(drop, lk)
         try:
             msg = await bot.send_message(
                 pwd_chat, text2,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="✏️ Заполнить", callback_data=f"filldrop:{lk['droplk_id']}"),
+                    InlineKeyboardButton(
+                        text="✏️ Заполнить",
+                        callback_data=f"filldrop:{lk['droplk_id']}",
+                    ),
                 ]]),
             )
-            # Сформируем link_pass
-            pwd_str = str(pwd_chat).replace("-100", "")
+            # Сформируем link_pass (t.me/c/<bare_id>/<msg_id>)
+            pwd_str = str(pwd_chat).replace("-100", "").lstrip("-")
             link_pass = f"https://t.me/c/{pwd_str}/{msg.message_id}"
             await crm_storage.update_crm_drop_lk(
                 lk["droplk_id"],
                 msgid_pass=msg.message_id, link_pass=link_pass,
             )
+            posted += 1
         except Exception as e:
             logger.warning("acceptdrop password post failed for lk=%s: %s", lk["droplk_id"], e)
+            errors.append(f"{lk.get('bank')}: {e}")
+
+    if errors:
+        await bot.send_message(
+            call.message.chat.id,
+            f"⚠️ <b>Часть ЛК не запостилась в пароли:</b>\n"
+            + "\n".join(f"  • {e}" for e in errors),
+        )
+    if posted == 0:
+        # Откат
+        await crm_storage.update_crm_drop(drop_id, status="pending")
+        return
 
     # Апдейтим контрольное сообщение в admin-чате
     drop = crm_storage.get_crm_drop(drop_id)
@@ -1413,16 +1465,20 @@ async def cb_acceptdrop(call: CallbackQuery):
 
 
 def _render_password_text(drop: dict, lk: dict) -> str:
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
     return (
-        f"<b>ФИО:</b> {drop.get('fio') or '—'}\n"
-        f"<b>Банк:</b> {lk.get('bank')}\n\n"
-        f"<b>Новый пароль:</b> {lk.get('new_password') or '—'}\n"
-        f"<b>Новая почта:</b> {lk.get('new_mail') or '—'}\n"
-        f"<b>Новый номер:</b> {lk.get('new_number') or '—'}\n\n"
-        f"<b>Дедик:</b>\n"
-        f"IP: {lk.get('ded_ip') or '—'}\n"
-        f"Логин: {lk.get('ded_login') or 'Administrator'}\n"
-        f"Пароль: {lk.get('ded_pass') or '—'}"
+        f"🔐 <b>ЛК {lk.get('bank')}</b> · {drop.get('fio') or '—'}\n"
+        f"<i>поставщик: @{owner.get('username') or '—'}</i>\n\n"
+        f"<b>Новый логин:</b> <code>{lk.get('new_login') or '—'}</code>\n"
+        f"<b>Новый пароль:</b> <code>{lk.get('new_password') or '—'}</code>\n"
+        f"<b>Новая почта:</b> <code>{lk.get('new_mail') or '—'}</code>\n"
+        f"<b>Новый номер:</b> <code>{lk.get('new_number') or '—'}</code>\n"
+        f"<b>Кодовое слово:</b> <code>{lk.get('code_word') or '—'}</code>\n\n"
+        f"<b>🖥 Дедик:</b>\n"
+        f"  Где установлен: <code>{lk.get('ded_location') or '—'}</code>\n"
+        f"  IP: <code>{lk.get('ded_ip') or '—'}</code>\n"
+        f"  Логин: <code>{lk.get('ded_login') or 'Administrator'}</code>\n"
+        f"  Пароль: <code>{lk.get('ded_pass') or '—'}</code>"
     )
 
 
@@ -1479,13 +1535,22 @@ async def cb_filldrop(call: CallbackQuery, state: FSMContext):
         await call.answer("ЛК не найден", show_alert=True)
         return
     await call.answer()
-    await state.set_state(FillForm.waiting_new_password)
+    await state.set_state(FillForm.waiting_new_login)
     await state.update_data(droplk_id=droplk_id, fill_data={})
     drop = crm_storage.get_crm_drop(lk["drop_id"])
     await call.message.reply(
         f"<b>✏️ Заполнение {lk.get('bank')} ({drop.get('fio')})</b>\n\n"
-        f"<b>Шаг 1/5:</b> Новый пароль (или «-» если не меняли):"
+        f"<b>Шаг 1/8:</b> Новый логин (или «-»):"
     )
+
+
+@router.message(FillForm.waiting_new_login, F.text & ~F.text.startswith("/"))
+async def fill_login(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["new_login"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_new_password)
+    await message.reply("<b>Шаг 2/8:</b> Новый пароль (или «-»):")
 
 
 @router.message(FillForm.waiting_new_password, F.text & ~F.text.startswith("/"))
@@ -1494,7 +1559,7 @@ async def fill_pass(message: Message, state: FSMContext):
     data.setdefault("fill_data", {})["new_password"] = (message.text or "").strip()
     await state.update_data(**data)
     await state.set_state(FillForm.waiting_new_mail)
-    await message.reply("<b>Шаг 2/5:</b> Новая почта (или «-»):")
+    await message.reply("<b>Шаг 3/8:</b> Новая почта (или «-»):")
 
 
 @router.message(FillForm.waiting_new_mail, F.text & ~F.text.startswith("/"))
@@ -1503,7 +1568,7 @@ async def fill_mail(message: Message, state: FSMContext):
     data.setdefault("fill_data", {})["new_mail"] = (message.text or "").strip()
     await state.update_data(**data)
     await state.set_state(FillForm.waiting_new_number)
-    await message.reply("<b>Шаг 3/5:</b> Новый номер (или «-»):")
+    await message.reply("<b>Шаг 4/8:</b> Новый номер (или «-»):")
 
 
 @router.message(FillForm.waiting_new_number, F.text & ~F.text.startswith("/"))
@@ -1511,8 +1576,29 @@ async def fill_number(message: Message, state: FSMContext):
     data = await state.get_data()
     data.setdefault("fill_data", {})["new_number"] = (message.text or "").strip()
     await state.update_data(**data)
+    await state.set_state(FillForm.waiting_code_word)
+    await message.reply("<b>Шаг 5/8:</b> Кодовое слово (или «-»):")
+
+
+@router.message(FillForm.waiting_code_word, F.text & ~F.text.startswith("/"))
+async def fill_code_word(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["code_word"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_ded_location)
+    await message.reply(
+        "<b>Шаг 6/8:</b> Где установлен дедик "
+        "(город / провайдер / своя машина / VPS):"
+    )
+
+
+@router.message(FillForm.waiting_ded_location, F.text & ~F.text.startswith("/"))
+async def fill_ded_location(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["ded_location"] = (message.text or "").strip()
+    await state.update_data(**data)
     await state.set_state(FillForm.waiting_ded_ip)
-    await message.reply("<b>Шаг 4/5:</b> IP дедика:")
+    await message.reply("<b>Шаг 7/8:</b> IP дедика:")
 
 
 @router.message(FillForm.waiting_ded_ip, F.text & ~F.text.startswith("/"))
@@ -1521,7 +1607,7 @@ async def fill_ip(message: Message, state: FSMContext):
     data.setdefault("fill_data", {})["ded_ip"] = (message.text or "").strip()
     await state.update_data(**data)
     await state.set_state(FillForm.waiting_ded_pass)
-    await message.reply("<b>Шаг 5/5:</b> Пароль дедика:")
+    await message.reply("<b>Шаг 8/8:</b> Пароль дедика:")
 
 
 @router.message(FillForm.waiting_ded_pass, F.text & ~F.text.startswith("/"))
@@ -1534,12 +1620,15 @@ async def fill_pass2(message: Message, state: FSMContext):
         await message.reply("❌ Сессия истекла")
         await state.clear()
         return
-    # Сохраняем все 5 полей
+    # Сохраняем все 8 полей
     await crm_storage.update_crm_drop_lk(
         droplk_id,
+        new_login=fd.get("new_login") or "",
         new_password=fd.get("new_password") or "",
         new_mail=fd.get("new_mail") or "",
         new_number=fd.get("new_number") or "",
+        code_word=fd.get("code_word") or "",
+        ded_location=fd.get("ded_location") or "",
         ded_ip=fd.get("ded_ip") or "",
         ded_pass=fd.get("ded_pass") or "",
         status="ready",
