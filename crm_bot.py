@@ -3331,6 +3331,297 @@ def _collect_broadcast_targets(kind: str, value: str) -> list:
 
 
 # ════════════════════════════════════════════════════════════════
+# PAYOUT BUTTONS — inline-кнопки на карточке ЛК в Группе 1 ЛК
+# Постятся reply'ем от CRM-бота когда status=ОТРАБОТАН
+# ════════════════════════════════════════════════════════════════
+
+class PayoutFSM(StatesGroup):
+    waiting_hash = State()     # ждём TronScan хеш
+    waiting_deal_id = State()  # ждём номер сделки
+    waiting_amount = State()   # ждём сумму пополнения
+
+
+def _payout_buttons_keyboard(card: dict) -> Optional[InlineKeyboardMarkup]:
+    """Возвращает клавиатуру для карточки в зависимости от метода оплаты."""
+    method = (card.get("payment_method") or "").upper()
+    card_id = card.get("card_id") or ""
+    if not card_id:
+        return None
+    rows = []
+    if method == "USDT_TRC20":
+        rows.append([InlineKeyboardButton(
+            text="💸 Ввести TronScan хеш",
+            callback_data=f"po_usdt:{card_id}",
+        )])
+    elif method in ("GUARANTOR_AFTER_WORK", "GUARANTOR_AFTER"):
+        # Сначала номер сделки от клиента, потом сумма пополнения
+        if not (card.get("deal_id") or "").strip():
+            rows.append([InlineKeyboardButton(
+                text="📝 Номер сделки от клиента",
+                callback_data=f"po_deal:{card_id}",
+            )])
+        else:
+            rows.append([InlineKeyboardButton(
+                text="🤝 Сделка пополнена (сумма)",
+                callback_data=f"po_fund:{card_id}",
+            )])
+            rows.append([InlineKeyboardButton(
+                text="✅ Отпустить сделку",
+                callback_data=f"po_release:{card_id}",
+            )])
+    elif method == "GUARANTOR_BEFORE":
+        rows.append([InlineKeyboardButton(
+            text="✅ Отпустить сделку",
+            callback_data=f"po_release:{card_id}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+async def _post_payout_buttons(bot, card: dict) -> Optional[int]:
+    """Постит сообщение с кнопками выплаты в lk_group_id reply'ем на анкету.
+    Возвращает msg_id или None."""
+    lk_group = crm_storage.get_lk_group_id()
+    if not lk_group:
+        return None
+    card_id = card.get("card_id") or ""
+    if not card_id:
+        return None
+    kb = _payout_buttons_keyboard(card)
+    if not kb:
+        return None
+    bank = card.get("bank") or "—"
+    fio = card.get("fio") or "—"
+    method = (card.get("payment_method") or "").upper()
+    price = card.get("price_usdt") or 0
+    method_label = {
+        "USDT_TRC20": "USDT TRC20",
+        "GUARANTOR_AFTER_WORK": "гарант после отработки",
+        "GUARANTOR_AFTER": "гарант после отработки",
+        "GUARANTOR_BEFORE": "гарант (пополнено)",
+    }.get(method, method)
+    text = (
+        f"💰 <b>Готово к выплате</b> · #{card_id}\n"
+        f"<b>{bank}</b> · {fio}\n"
+        f"Сумма: <b>{price} USDT</b>\n"
+        f"Метод: {method_label}"
+    )
+    reply_to = card.get("lk_group_msg_id") or None
+    try:
+        sent = await bot.send_message(
+            lk_group, text, reply_markup=kb,
+            reply_to_message_id=reply_to,
+            disable_notification=True,
+        )
+        return sent.message_id
+    except Exception as e:
+        logger.warning("post_payout_buttons #%s failed: %s", card_id, e)
+        return None
+
+
+async def _payout_buttons_loop(bot):
+    """Раз в минуту проверяет lk_cards и постит кнопки выплат на каждый ЛК
+    в статусе ОТРАБОТАН у которого ещё нет payout_buttons_msg_id."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            cards = crm_storage.list_lk_cards(status="ОТРАБОТАН") or {}
+            for cid, c in cards.items():
+                if c.get("payout_buttons_msg_id"):
+                    continue
+                if not (c.get("payment_method") or ""):
+                    continue
+                msg_id = await _post_payout_buttons(bot, c)
+                if msg_id:
+                    try:
+                        await crm_storage.update_lk_card(
+                            cid, payout_buttons_msg_id=msg_id,
+                        )
+                    except Exception:
+                        pass
+                    logger.info("payout buttons posted card=%s msg=%s", cid, msg_id)
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.warning("payout_buttons_loop tick: %s", e)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            return
+
+
+# Callback handlers
+@router.callback_query(F.data.startswith("po_usdt:"))
+async def cb_po_usdt(call: CallbackQuery, state: FSMContext):
+    card_id = call.data.split(":", 1)[1]
+    if not is_owner(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.set_state(PayoutFSM.waiting_hash)
+    await state.update_data(card_id=card_id, source_msg_id=call.message.message_id)
+    await call.answer()
+    await call.message.reply(
+        f"💸 <b>Ввести TronScan-хеш для {card_id}</b>\n\n"
+        f"Пришли хеш транзакции одним сообщением:"
+    )
+
+
+@router.callback_query(F.data.startswith("po_deal:"))
+async def cb_po_deal(call: CallbackQuery, state: FSMContext):
+    card_id = call.data.split(":", 1)[1]
+    if not is_owner(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.set_state(PayoutFSM.waiting_deal_id)
+    await state.update_data(card_id=card_id, source_msg_id=call.message.message_id)
+    await call.answer()
+    await call.message.reply(
+        f"📝 <b>Номер сделки для {card_id}</b>\n\n"
+        f"Пришли номер сделки от клиента одним сообщением:"
+    )
+
+
+@router.callback_query(F.data.startswith("po_fund:"))
+async def cb_po_fund(call: CallbackQuery, state: FSMContext):
+    card_id = call.data.split(":", 1)[1]
+    if not is_owner(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.set_state(PayoutFSM.waiting_amount)
+    await state.update_data(card_id=card_id, source_msg_id=call.message.message_id)
+    await call.answer()
+    await call.message.reply(
+        f"🤝 <b>Сумма пополнения для {card_id}</b>\n\n"
+        f"Пришли сумму USDT (например 400):"
+    )
+
+
+@router.callback_query(F.data.startswith("po_release:"))
+async def cb_po_release(call: CallbackQuery):
+    card_id = call.data.split(":", 1)[1]
+    if not is_owner(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await call.answer("⏳ Отпускаю...")
+    # Через очередь dashboard_commands — юзербот закроет + уведомит клиента
+    try:
+        await crm_storage.enqueue_dashboard_command(
+            f"отпущено #{card_id}",
+            source="crm_bot:po_release",
+        )
+        await call.message.edit_text(
+            f"✅ Сделка #{card_id} <b>отпущена</b> — клиент уведомлён.",
+            reply_markup=None,
+        )
+    except Exception as e:
+        await call.message.reply(f"❌ Ошибка: {e}")
+
+
+@router.message(PayoutFSM.waiting_hash, F.text & ~F.text.startswith("/"))
+async def fsm_payout_hash(message: Message, state: FSMContext):
+    if not is_owner(message.from_user.id):
+        return
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    src_msg = data.get("source_msg_id")
+    tx_hash = (message.text or "").strip()
+    if len(tx_hash) < 16:
+        await message.reply("❌ Хеш слишком короткий (минимум 16 символов)")
+        return
+    await state.clear()
+    try:
+        await crm_storage.enqueue_dashboard_command(
+            f"выплачено #{card_id} {tx_hash}",
+            source="crm_bot:po_usdt",
+        )
+        await message.reply(
+            f"✅ Хеш сохранён, клиент уведомлён.\n<code>{tx_hash[:32]}...</code>"
+        )
+        if src_msg:
+            try:
+                await message.bot.edit_message_text(
+                    f"✅ #{card_id} выплачено · хеш: <code>{tx_hash[:32]}...</code>",
+                    chat_id=message.chat.id, message_id=src_msg,
+                    reply_markup=None,
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
+
+
+@router.message(PayoutFSM.waiting_deal_id, F.text & ~F.text.startswith("/"))
+async def fsm_payout_deal(message: Message, state: FSMContext):
+    if not is_owner(message.from_user.id):
+        return
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    deal_id = (message.text or "").strip().lstrip("#")
+    if not deal_id:
+        await message.reply("❌ Пустой номер")
+        return
+    await state.clear()
+    try:
+        await crm_storage.update_lk_card(card_id, deal_id=deal_id)
+        # Обновим payout очередь
+        match = crm_storage.find_payout_by_card(card_id, queue="fund_release")
+        if match:
+            q, item = match
+            await crm_storage.update_payout(q, item["id"], deal_id=deal_id)
+        # Перепостим кнопки — теперь будут «Сделка пополнена» и «Отпустить»
+        await message.reply(
+            f"✅ Номер сделки #{deal_id} сохранён для {card_id}.\n"
+            f"Теперь жми «🤝 Сделка пополнена (сумма)» после факта пополнения."
+        )
+        card = crm_storage.get_lk_card(card_id)
+        if card:
+            # Удаляем старое сообщение с кнопками и постим новое
+            old_msg = card.get("payout_buttons_msg_id")
+            lk_group = crm_storage.get_lk_group_id()
+            if old_msg and lk_group:
+                try:
+                    await message.bot.delete_message(lk_group, old_msg)
+                except Exception:
+                    pass
+            new_msg = await _post_payout_buttons(message.bot, card)
+            if new_msg:
+                await crm_storage.update_lk_card(card_id, payout_buttons_msg_id=new_msg)
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
+
+
+@router.message(PayoutFSM.waiting_amount, F.text & ~F.text.startswith("/"))
+async def fsm_payout_amount(message: Message, state: FSMContext):
+    if not is_owner(message.from_user.id):
+        return
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    try:
+        amount = float((message.text or "").strip().replace(",", "."))
+    except ValueError:
+        await message.reply("❌ Нужна сумма числом (например 400 или 400.5)")
+        return
+    if amount <= 0:
+        await message.reply("❌ Сумма должна быть > 0")
+        return
+    card = crm_storage.get_lk_card(card_id) or {}
+    deal_id = (card.get("deal_id") or "").lstrip("#").strip()
+    await state.clear()
+    if not deal_id:
+        await message.reply("❌ У карточки нет deal_id — сначала сохраните номер сделки.")
+        return
+    try:
+        await crm_storage.enqueue_dashboard_command(
+            f"сделка #{deal_id} пополнена {amount}",
+            source="crm_bot:po_fund",
+        )
+        await message.reply(
+            f"✅ Сделка #{deal_id} помечена как пополненная на {amount} USDT.\n"
+            f"Теперь после отработки жми «✅ Отпустить сделку»."
+        )
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
+
+
+# ════════════════════════════════════════════════════════════════
 # Payment-due reminders loop
 # ════════════════════════════════════════════════════════════════
 
@@ -3528,10 +3819,16 @@ async def run_crm_bot():
     except Exception:
         pass
     reminder_task = None
+    payout_task = None
     try:
         reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
     except Exception as e:
         logger.warning("reminder start failed: %s", e)
+    try:
+        payout_task = asyncio.create_task(_payout_buttons_loop(bot))
+        logger.info("CRM payout buttons loop started")
+    except Exception as e:
+        logger.warning("payout buttons loop start failed: %s", e)
     try:
         await dp.start_polling(bot, polling_timeout=30)
     except Exception as e:

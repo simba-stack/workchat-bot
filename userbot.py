@@ -396,42 +396,63 @@ class UserbotService:
 
     async def _handle_ideas_message(self, event):
         """Сохраняет сообщения из ideas-чата в storage.ideas_inbox.
-        Автоматически распознаёт «баг» / «идея» по словам.
-        Работает для ВСЕХ участников группы — без ограничения по правам."""
+        ПРАВИЛА:
+        • Сообщения от ботов (включая CRM, ассистент) — игнорируем
+        • Команды (/...) — пропускаем
+        • Записываем только если текст НАЧИНАЕТСЯ с «идея», «idea», «баг», «bug»
+        Без префикса — игнорируем (это обычная переписка, не идея)."""
         try:
             text = (event.message.text or event.message.message or "").strip()
             if not text or text.startswith("/"):
-                # Команды (/ideas, /ideas_set и т.д.) — пропускаем, их ловит CRM-бот
                 return
+            # Skip botов (CRM-бот, ассистент, любые системные)
             try:
                 sender = await event.get_sender()
+                if getattr(sender, "bot", False):
+                    return
                 uname = getattr(sender, "username", None) or ""
                 fname = getattr(sender, "first_name", "") or ""
                 author = (f"@{uname}" if uname else fname) or "?"
             except Exception:
                 author = "?"
-            low = text.lower()
-            kind = "bug" if any(w in low for w in (
-                "баг", "bug", "ошибк", "не работает", "сломал", "криво",
-                "не пашет", "глюк", "fix", "исправ",
-            )) else "idea"
+            # Триггер по началу строки: «идея …» / «idea …» / «баг …» / «bug …»
+            low = text.lower().lstrip()
+            kind = None
+            payload = None
+            triggers_idea = ("идея ", "idea ", "идея:", "idea:", "идеа ")
+            triggers_bug = ("баг ", "bug ", "баг:", "bug:")
+            for t in triggers_idea:
+                if low.startswith(t):
+                    kind = "idea"
+                    payload = text.lstrip()[len(t):].strip()
+                    break
+            if kind is None:
+                for t in triggers_bug:
+                    if low.startswith(t):
+                        kind = "bug"
+                        payload = text.lstrip()[len(t):].strip()
+                        break
+            # Особые случаи: просто «идея» или «баг» одним словом — без текста (пропускаем)
+            if kind is None:
+                stripped = low.rstrip(":.! ")
+                if stripped in ("идея", "idea", "баг", "bug"):
+                    return  # требуется текст после префикса
+            if kind is None or not payload:
+                return  # не идея — игнорируем переписку
             idea_id = await storage.add_idea(
-                text=text,
-                author=author,
+                text=payload, author=author,
                 chat_id=int(event.chat_id),
                 msg_id=int(event.message.id),
                 kind=kind,
             )
             logger.info(
                 "idea saved id=%s kind=%s by=%s chat=%s len=%d",
-                idea_id, kind, author, event.chat_id, len(text),
+                idea_id, kind, author, event.chat_id, len(payload),
             )
-            # Telegram-реакция (требует premium для бота — может не сработать)
             try:
                 emoji = "📝" if kind == "idea" else "🐛"
                 await event.message.react(emoji)
             except Exception:
-                # Fallback: reply короткий тред-ack
                 try:
                     await event.message.reply(
                         f"{'🐛' if kind == 'bug' else '💡'} <b>Сохранено #{idea_id}</b>",
@@ -3844,6 +3865,381 @@ class UserbotService:
                 logger.warning("resolve_wc: save back failed: %s", e)
         return resolved
 
+    def _do_payouts_list(self) -> str:
+        """Сводка всех 3 очередей выплат."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        rel = storage.list_payouts("release")
+        fr = storage.list_payouts("fund_release")
+        usdt = storage.list_payouts("usdt")
+        lines = ["💰 <b>Очереди выплат</b>\n"]
+        if rel:
+            lines.append(f"\n🤝 <b>ОТПУСТИТЬ СДЕЛКУ</b> (гарант уже пополнен): {len(rel)}")
+            for it in rel[:10]:
+                deal = f" #{it.get('deal_id')}" if it.get("deal_id") else ""
+                lines.append(
+                    f"  • #{it['id']} {it.get('bank')} · {it.get('fio')}{deal} · "
+                    f"<b>{it.get('amount_usdt', 0)}$</b>"
+                )
+        if fr:
+            lines.append(f"\n🤝 <b>ПОПОЛНИТЬ И ОТПУСТИТЬ</b>: {len(fr)}")
+            for it in fr[:10]:
+                deal_part = f"сделка #{it.get('deal_id')}" if it.get("deal_id") else "<i>ждём номер сделки</i>"
+                lines.append(
+                    f"  • #{it['id']} {it.get('bank')} · {it.get('fio')} · "
+                    f"<b>{it.get('amount_usdt', 0)}$</b> · {deal_part}"
+                )
+        if usdt:
+            lines.append(f"\n💸 <b>USDT TRC20 ВЫПЛАТЫ</b>: {len(usdt)}")
+            for it in usdt[:10]:
+                lines.append(
+                    f"  • #{it['id']} {it.get('bank')} · {it.get('fio')} · "
+                    f"<b>{it.get('amount_usdt', 0)} USDT</b> → <code>{it.get('usdt_address')}</code>"
+                )
+        if not (rel or fr or usdt):
+            lines.append("\n✅ <i>Очереди пусты.</i>")
+        lines.append(
+            "\n\n<b>Команды:</b>\n"
+            "• <code>сделка #ХХХХ пополнена 400</code> — фиксируем пополнение по сделке\n"
+            "• <code>отпущено #lk0001</code> — закрываем гарант-выплату (уведомление клиенту)\n"
+            "• <code>выплачено #lk0001 ХЕШ_ТРАНЗАКЦИИ</code> — USDT отправлен"
+        )
+        return "\n".join(lines)
+
+    async def _mark_payout_funded(self, deal_id: str, amount: float) -> str:
+        """Менеджер пишет «сделка #X пополнена 400» — фиксирует факт пополнения.
+        Если сделка из fund_release — двигаем в release (готова к отпуску).
+        Если из release — обновляем сумму."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        # Найти в fund_release (типичный случай)
+        for q in ("fund_release", "release"):
+            arr = storage.list_payouts(q)
+            for item in arr:
+                if str(item.get("deal_id") or "").lstrip("#") == str(deal_id):
+                    if q == "fund_release":
+                        # Двигаем в release как пополненную
+                        await storage.remove_payout(q, item["id"])
+                        new_id = await storage.add_payout("release", {
+                            **{k: v for k, v in item.items() if k not in ("id", "ts", "status")},
+                            "amount_usdt": amount,
+                            "funded_at": time.time(),
+                        })
+                        return (
+                            f"✅ Сделка #{deal_id} помечена как пополненная "
+                            f"(<b>{amount} USDT</b>) и перенесена в очередь "
+                            f"<b>ОТПУСТИТЬ СДЕЛКУ</b> (#release-{new_id})."
+                        )
+                    else:
+                        await storage.update_payout(q, item["id"],
+                                                     amount_usdt=amount,
+                                                     funded_at=time.time())
+                        return f"✅ Сделка #{deal_id} в очереди ОТПУСТИТЬ — сумма обновлена: {amount} USDT"
+        # Не найдена — добавим в release как чистое пополнение
+        new_id = await storage.add_payout("release", {
+            "card_id": "", "bank": "?", "fio": "?",
+            "deal_id": str(deal_id), "amount_usdt": amount,
+            "funded_at": time.time(),
+            "note": "manual: fund via «сделка пополнена»",
+        })
+        return f"⚠️ Сделка #{deal_id} не была в очереди — создана новая запись release-{new_id}"
+
+    async def _mark_usdt_paid(self, card_id: str, tx_hash: str) -> str:
+        """Менеджер: «выплачено #lk0001 abcdef...» — USDT отправлен.
+        Шлёт клиенту уведомление с tronscan-ссылкой + удаляет из очереди."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        match = storage.find_payout_by_card(card_id, queue="usdt")
+        if not match:
+            return f"⚠️ #{card_id} не в USDT-очереди"
+        q, item = match
+        bank = item.get("bank") or "—"
+        fio = item.get("fio") or "—"
+        addr = item.get("usdt_address") or ""
+        amount = item.get("amount_usdt") or 0
+        wc = item.get("work_chat_id")
+        tronscan_url = f"https://tronscan.org/#/transaction/{tx_hash}"
+        # Шлём клиенту
+        client_msg = (
+            f"💸 <b>Выплата отправлена</b>\n\n"
+            f"ЛК: <b>{bank}</b> ({fio})\n"
+            f"Сумма: <b>{amount} USDT</b>\n"
+            f"Адрес: <code>{addr}</code>\n\n"
+            f"🔗 <a href=\"{tronscan_url}\">Проверить на TronScan</a>\n"
+            f"Хеш: <code>{tx_hash}</code>"
+        )
+        notified = False
+        if wc:
+            try:
+                target = await self._resolve_chat_target(int(wc))
+                await self.client.send_message(target, client_msg, parse_mode="html", link_preview=False)
+                notified = True
+            except Exception as e:
+                logger.warning("usdt paid notify failed: %s", e)
+        # Удаляем из очереди
+        await storage.remove_payout(q, item["id"])
+        # Меняем статус ЛК на ЗАВЕРШЁН
+        try:
+            await storage.set_lk_card_status(card_id, "ЗАВЕРШЁН", by="leo")
+            await self._refresh_lk_card_post(card_id)
+        except Exception:
+            pass
+        result = f"✅ USDT-выплата по #{card_id} закрыта. Хеш: {tx_hash[:16]}..."
+        if notified:
+            result += " · клиент уведомлён ✓"
+        return result
+
+    async def _mark_guarantor_released(self, key: str) -> str:
+        """Менеджер: «отпущено #lk0001» или «отпущено 12345» — гарант-сделка
+        отпущена. Шлёт клиенту уведомление + удаляет из очереди + статус ЗАВЕРШЁН."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        key_l = key.lower().lstrip("#")
+        match = None
+        if key_l.startswith("lk"):
+            match = storage.find_payout_by_card(key_l)
+        else:
+            match = storage.find_payout_by_deal(key_l)
+        if not match:
+            return f"⚠️ {key} не найдено в очередях гаранта"
+        q, item = match
+        if q not in ("release", "fund_release"):
+            return f"⚠️ {key} в очереди {q}, а не гарант"
+        bank = item.get("bank") or "—"
+        fio = item.get("fio") or "—"
+        amount = item.get("amount_usdt") or 0
+        deal_id = item.get("deal_id") or ""
+        wc = item.get("work_chat_id")
+        deal_line = f" #{deal_id}" if deal_id else ""
+        client_msg = (
+            f"🤝 <b>Сделка отпущена</b>\n\n"
+            f"ЛК: <b>{bank}</b> ({fio})\n"
+            f"Сделка{deal_line} закрыта, сумма <b>{amount} USDT</b> "
+            f"должна прийти к вам в гаранте в течение нескольких минут.\n\n"
+            f"Спасибо за сотрудничество! 🙏"
+        )
+        notified = False
+        if wc:
+            try:
+                target = await self._resolve_chat_target(int(wc))
+                await self.client.send_message(target, client_msg, parse_mode="html", link_preview=False)
+                notified = True
+            except Exception as e:
+                logger.warning("guarantor released notify failed: %s", e)
+        await storage.remove_payout(q, item["id"])
+        cid = item.get("card_id")
+        if cid:
+            try:
+                await storage.set_lk_card_status(cid, "ЗАВЕРШЁН", by="leo")
+                await self._refresh_lk_card_post(cid)
+            except Exception:
+                pass
+        return f"✅ Гарант-выплата {key} закрыта" + (" · клиент уведомлён ✓" if notified else "")
+
+    async def _notify_client_status_change(self, card_id: str, new_status: str) -> bool:
+        """Уведомление клиенту при смене статуса ЛК на БЛОК / БРАК / ОТРАБОТАН / ЗАВЕРШЁН.
+        Шаблон выбирается по new_status. Целевой work_chat резолвится строго
+        через @supplier — никаких fallback (security-first)."""
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
+        card = storage.get_lk_card(card_id) or {}
+        if not card:
+            return False
+        bank = card.get("bank") or "—"
+        fio = card.get("fio") or "—"
+        supplier = (card.get("supplier") or "").lstrip("@").strip()
+        wc = None
+        if supplier:
+            try:
+                wc_key = storage.find_chat_by_client_username(supplier)
+                if wc_key:
+                    wc = int(wc_key)
+            except Exception as e:
+                logger.warning(
+                    "notify_status: supplier @%s lookup failed: %s", supplier, e,
+                )
+        if not wc:
+            logger.info(
+                "notify_status %s: card=%s wc=None — пропускаем (нет supplier match)",
+                new_status, card_id,
+            )
+            return False
+
+        # Алиас ЗАВЕРШЕН → ЗАВЕРШЁН
+        if new_status == "ЗАВЕРШЕН":
+            new_status = "ЗАВЕРШЁН"
+
+        method = (card.get("payment_method") or "").upper()
+        usdt_addr = (card.get("usdt_address") or "").strip()
+        deal_id = (card.get("deal_id") or "").lstrip("#").strip()
+
+        # ── шаблоны для БЛОК / БРАК (метод оплаты не влияет) ──
+        if new_status == "БЛОК":
+            msg = (
+                f"🚫 <b>Блокировка ЛК {bank}</b>\n\n"
+                f"К сожалению, на ваш ЛК <b>{bank}</b> ({fio}) банк наложил блокировку "
+                f"<b>после отработки</b>.\n\n"
+                f"Пожалуйста, свяжитесь с банком (горячая линия / отделение / чат) "
+                f"и выясните причину блока. Как только разберётесь — напишите нам, "
+                f"мы возобновим работу или пересчитаем условия."
+            )
+        elif new_status == "БРАК":
+            msg = (
+                f"⚠️ <b>ЛК {bank} помечен как БРАК</b>\n\n"
+                f"К сожалению, ЛК <b>{bank}</b> ({fio}) не подошёл нам по техническим "
+                f"причинам (банк не пропускает операции / счёт не активен / другие "
+                f"ограничения).\n\n"
+                f"По этому ЛК работа прекращена. Если хотите — можем оформить другой ЛК, "
+                f"напишите подробности."
+            )
+
+        # ── ОТРАБОТАН: метод оплаты определяет дальнейший шаг ──
+        elif new_status == "ОТРАБОТАН":
+            head = (
+                f"✅ <b>ЛК {bank} отработан</b>\n\n"
+                f"Работа по вашему ЛК <b>{bank}</b> ({fio}) успешно завершена.\n"
+            )
+            price_usdt = float(card.get("price_usdt") or 0)
+
+            if method == "USDT_TRC20":
+                if usdt_addr:
+                    tail = (
+                        f"\n💸 <b>Метод оплаты:</b> USDT TRC20\n"
+                        f"📍 Ваш адрес: <code>{usdt_addr}</code>\n"
+                        f"💰 Сумма: <b>{price_usdt} USDT</b>\n\n"
+                        f"Готовим перевод. Как отправим — пришлём хеш транзакции "
+                        f"(можно проверить на TronScan)."
+                    )
+                    # Добавляем в очередь USDT
+                    try:
+                        await storage.add_payout("usdt", {
+                            "card_id": card_id, "bank": bank, "fio": fio,
+                            "supplier": supplier, "work_chat_id": wc,
+                            "usdt_address": usdt_addr, "amount_usdt": price_usdt,
+                        })
+                    except Exception as e:
+                        logger.warning("add_payout usdt failed: %s", e)
+                else:
+                    tail = (
+                        f"\n💸 <b>Метод оплаты:</b> USDT TRC20\n\n"
+                        f"⚠️ <b>Пришлите ваш USDT TRC20 адрес</b> — мы оформим выплату."
+                    )
+            elif method in ("GUARANTOR_AFTER_WORK", "GUARANTOR_AFTER"):
+                tail = (
+                    f"\n🤝 <b>Метод оплаты:</b> гарант после отработки\n\n"
+                    f"<b>📝 Как создать сделку в Continental:</b>\n"
+                    f"1️⃣ Зайдите на Continental → создайте новую сделку с пользователем <b>@PRIDE_CL</b>\n"
+                    f"2️⃣ Заполните параметры:\n"
+                    f"   • <b>Сумма:</b> {price_usdt} USDT\n"
+                    f"   • <b>Назначение:</b> оплата ЛК {bank} · {fio}\n"
+                    f"   • <b>Кто пополняет:</b> @PRIDE_CL (мы)\n"
+                    f"   • <b>Получатель:</b> вы\n"
+                    f"3️⃣ В описании сделки укажите ссылку на условия:\n"
+                    f"   🔗 <a href=\"https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-rasschyotnyh-schetov-02-24\">УСЛОВИЯ ПРОВЕДЕНИЯ СДЕЛКИ PRIDE</a>\n"
+                    f"4️⃣ Создайте сделку и <b>пришлите её номер</b> одним сообщением сюда.\n\n"
+                    f"После того как пришлёте номер — мы пополним сделку и отпустим её "
+                    f"<b>в течение дня</b> после подтверждения отработки."
+                )
+                # Поставим в очередь ожидания номера сделки (deal_id пуст)
+                try:
+                    await storage.add_payout("fund_release", {
+                        "card_id": card_id, "bank": bank, "fio": fio,
+                        "supplier": supplier, "work_chat_id": wc,
+                        "amount_usdt": price_usdt,
+                        "deal_id": "",  # клиент пришлёт
+                    })
+                except Exception as e:
+                    logger.warning("add_payout fund_release failed: %s", e)
+            elif method == "GUARANTOR_BEFORE":
+                deal_line = f" <b>#{deal_id}</b>" if deal_id else ""
+                tail = (
+                    f"\n🤝 <b>Метод оплаты:</b> гарант (сделка{deal_line} уже пополнена)\n\n"
+                    f"Со своей стороны вам <b>ничего делать не нужно</b> — "
+                    f"сделка уже подтверждена и пополнена. Мы её <b>отпустим в течение дня</b>, "
+                    f"средства автоматически придут к вам."
+                )
+                # Очередь «отпустить»
+                try:
+                    existing = storage.find_payout_by_card(card_id, queue="release")
+                    if not existing:
+                        await storage.add_payout("release", {
+                            "card_id": card_id, "bank": bank, "fio": fio,
+                            "supplier": supplier, "work_chat_id": wc,
+                            "amount_usdt": price_usdt,
+                            "deal_id": deal_id,
+                        })
+                except Exception as e:
+                    logger.warning("add_payout release failed: %s", e)
+            else:
+                tail = (
+                    f"\n💳 <b>Метод оплаты ещё не зафиксирован.</b>\n\n"
+                    f"Подскажите, как удобнее получить оплату:\n"
+                    f"• <b>USDT TRC20</b> — пришлите адрес\n"
+                    f"• <b>Гарант</b> — оформим сделку через Continental @PRIDE_CL"
+                )
+            msg = head + tail
+
+        # ── ЗАВЕРШЁН: выплата подтверждена ──
+        elif new_status == "ЗАВЕРШЁН":
+            head = (
+                f"🏁 <b>ЛК {bank} полностью завершён</b>\n\n"
+                f"Работа и выплата по ЛК <b>{bank}</b> ({fio}) полностью завершены.\n"
+            )
+            if method == "USDT_TRC20" and usdt_addr:
+                tail = (
+                    f"\n💸 USDT отправлен на адрес <code>{usdt_addr}</code>.\n"
+                    f"Проверьте баланс — должно зачислиться через несколько минут.\n\n"
+                    f"Спасибо за сотрудничество! 🙏"
+                )
+            elif method in ("GUARANTOR_AFTER_WORK", "GUARANTOR_AFTER", "GUARANTOR_BEFORE"):
+                deal_line = f" #{deal_id}" if deal_id else ""
+                tail = (
+                    f"\n🤝 Гарант-сделка{deal_line} закрыта, средства выведены вам.\n\n"
+                    f"Спасибо за сотрудничество! 🙏\n"
+                    f"Будете снова продавать — пишите, оформим быстро."
+                )
+            else:
+                tail = (
+                    f"\nСпасибо за сотрудничество! 🙏\n"
+                    f"Будете снова продавать — пишите, оформим быстро."
+                )
+            msg = head + tail
+        else:
+            return False
+        try:
+            target = await self._resolve_chat_target(wc)
+            await self.client.send_message(
+                target, msg, parse_mode="html", link_preview=False,
+            )
+            logger.info(
+                "notify_status %s sent: card=%s wc=%s",
+                new_status, card_id, wc,
+            )
+            try:
+                _e("status-notify-sent", {
+                    "card_id": card_id, "status": new_status,
+                    "bank": bank, "fio": fio, "work_chat_id": wc,
+                }, character="lk")
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.warning(
+                "notify_status %s send failed: card=%s wc=%s err=%s",
+                new_status, card_id, wc, e,
+            )
+            return False
+
     async def _handle_block_no_work_actions(self, card_id: str) -> bool:
         """Side-effects при переходе ЛК в статус БЛОК_БЕЗ_ОТРАБОТКИ:
           1) Отменяем сделку (если есть deal_id) — статус ОТМЕНЁНА_БЛОК
@@ -5825,6 +6221,15 @@ class UserbotService:
                     logger.warning(
                         "block_no_work side-effects card=%s: %s", cid, e,
                     )
+            elif new_status in ("БЛОК", "БРАК", "ОТРАБОТАН", "ЗАВЕРШЁН", "ЗАВЕРШЕН"):
+                # Простое уведомление клиенту о смене статуса
+                try:
+                    await self._notify_client_status_change(cid, new_status)
+                except Exception as e:
+                    logger.warning(
+                        "status_change_notify card=%s status=%s: %s",
+                        cid, new_status, e,
+                    )
             return f"✅ #{cid} → {new_status}"
 
         # ===== INTERNAL: sync LK card (от api.py — после правок в дашборде) =====
@@ -5842,317 +6247,4 @@ class UserbotService:
                     else f"⚠️ #{cid}: sync не удался (нет lk_group/msg_id?)"
                 )
             except Exception as e:
-                logger.warning(
-                    "sync_lk_card card=%s: %s", cid, e,
-                )
-                return f"⚠️ sync #{cid} ошибка: {e}"
-
-        # ===== INTERNAL: block-no-work side-effects (от api.py) =====
-        m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)
-        if m:
-            cid = m.group(1).lower()
-            try:
-                ok = await self._handle_block_no_work_actions(cid)
-                return (
-                    f"✅ block_no_work обработан #{cid}" if ok
-                    else f"⚠️ block_no_work #{cid}: ничего не сделано"
-                )
-            except Exception as e:
-                logger.warning(
-                    "block_no_work side-effects card=%s: %s", cid, e,
-                )
-                return f"⚠️ block_no_work #{cid} ошибка: {e}"
-
-        # ===== DELETE LK via command =====
-        m = re.match(r"^(?:удалить|delete)\s+#?(lk\d+)\s*$", text, re.I)
-        if m:
-            cid = m.group(1).lower()
-            ok = await storage.delete_lk_card(cid)
-            return f"🗑 удалена #{cid}" if ok else f"⚠️ #{cid} не найдена"
-
-        # ===== PRICING =====
-        if low in ("прайс показать", "/прайс", "show pricing"):
-            prices = dict(storage.state.get("pricing") or {})
-            if not prices:
-                return "прайс пуст"
-            return "💰 " + " · ".join(f"{k}={v}$" for k, v in sorted(prices.items()))
-        m = re.match(r"^прайс\s+(\S+)\s+(\d+(?:\.\d+)?)\s*$", text, re.I)
-        if m:
-            bank = m.group(1).upper()
-            price = float(m.group(2))
-            await storage.set_pricing(bank, price)
-            return f"💰 {bank} = {price}$"
-
-        # ===== CRM: запостить анкеты в Группу 1 ЛК PRIDE =====
-        # Команда генерится crm_bot.py при принятии дропа:
-        # `__crm_post_anketa d0001`
-        m = re.match(r"^__crm_post_anketa\s+(\S+)\s*$", text, re.I)
-        if m:
-            drop_id = m.group(1).strip()
-            drop = storage.get_crm_drop(drop_id) if hasattr(storage, "get_crm_drop") else None
-            if not drop:
-                return f"⚠️ crm drop {drop_id} не найден"
-            lk_card_ids = drop.get("lk_card_ids") or []
-            if not lk_card_ids:
-                return f"⚠️ crm drop {drop_id}: нет lk_card_ids"
-            ok = 0
-            fail = 0
-            for cid in lk_card_ids:
-                try:
-                    res = await self._refresh_lk_card_post(cid)
-                    if res:
-                        ok += 1
-                    else:
-                        fail += 1
-                except Exception as e:
-                    fail += 1
-                    logger.warning("crm_post_anketa: refresh %s failed: %s", cid, e)
-            return (
-                f"📤 CRM→Группа 1: drop={drop_id} "
-                f"posted={ok} failed={fail} (total={len(lk_card_ids)})"
-            )
-
-        return f"unknown command: {text[:80]}"
-
-    def _do_audit(self) -> str:
-        """Поиск аномалий: карточки в БЛОК > 24ч, AI errors > 20%,
-        неактивные клиенты > 7 дней, и т.д."""
-        try:
-            storage.reload_sync()
-        except Exception:
-            pass
-        issues = []
-        cards = storage.list_lk_cards() or {}
-        blocks = [c for c in cards.values() if (c.get("status") or "").upper() == "БЛОК"]
-        if blocks:
-            issues.append(f"🚫 в БЛОКе: {len(blocks)} карточек")
-        blocks_nw = [c for c in cards.values() if (c.get("status") or "").upper() == "БЛОК_БЕЗ_ОТРАБОТКИ"]
-        if blocks_nw:
-            issues.append(f"⛔ в БЛОКЕ БЕЗ ОТРАБОТКИ: {len(blocks_nw)} карточек (потенциальные потери)")
-        brak = [c for c in cards.values() if (c.get("status") or "").upper() == "БРАК"]
-        if brak:
-            issues.append(f"❌ в БРАКе: {len(brak)} карточек")
-        # Долго в работе (> 7 дней)
-        cutoff = time.time() - 7 * 86400
-        stale = [
-            c for c in cards.values()
-            if (c.get("status") or "").upper() == "В_РАБОТЕ"
-            and float(c.get("created_at") or 0) < cutoff
-        ]
-        if stale:
-            issues.append(f"⏰ в работе > 7 дней: {len(stale)} карточек")
-        ai_stats = storage.state.get("ai_stats") or {}
-        replies = int(ai_stats.get("replies_total") or 0)
-        errors = int(ai_stats.get("errors_total") or 0)
-        if replies + errors > 0 and errors / max(1, replies + errors) > 0.2:
-            issues.append(f"⚠️ AI error rate: {errors}/{replies + errors}")
-        inactive = storage.list_inactive_bot_users() or []
-        if len(inactive) > 5:
-            issues.append(f"😴 не вошли в work-чат: {len(inactive)} юзеров")
-        if not issues:
-            return "✅ всё чисто — аномалий не найдено"
-        return "🔍 АУДИТ:\n• " + "\n• ".join(issues)
-
-    def _do_daily_report(self) -> str:
-        """Сводка за сегодня."""
-        try:
-            storage.reload_sync()
-        except Exception:
-            pass
-        today = time.strftime("%Y-%m-%d")
-        funnel = storage.get_funnel(today)
-        apps = storage.get_applications_v2(today) or []
-        margin = sum(float(a.get("computed", {}).get("margin_usdt", 0) or 0) for a in apps)
-        cards = storage.list_lk_cards() or {}
-        new_today = [
-            c for c in cards.values()
-            if float(c.get("created_at") or 0) > time.time() - 86400
-        ]
-        ai_stats = storage.state.get("ai_stats") or {}
-        return (
-            f"📊 СВОДКА ЗА {today}\n"
-            f"  💸 Маржа: ${margin:.2f}\n"
-            f"  📨 Заявки V2: {len(apps)}\n"
-            f"  ✨ Новых ЛК: {len(new_today)}\n"
-            f"  🆕 /start нажали: {int(funnel.get('starts', 0))}\n"
-            f"  💬 Беседы созданы: {int(funnel.get('chats_created', 0))}\n"
-            f"  📋 РС сдали: {int(funnel.get('rs_handed', 0))}\n"
-            f"  🤖 AI replies: {ai_stats.get('replies_total', 0)}"
-        )
-
-    def _do_operator_report(self, username: str) -> str:
-        """Стата конкретного оператора."""
-        uname = (username or "").lstrip("@").lower().strip()
-        if not uname:
-            return "укажи @username"
-        try:
-            storage.reload_sync()
-        except Exception:
-            pass
-        stat = storage.get_manager_stat(uname)
-        if not stat:
-            return f"@{uname} — нет данных"
-        roles = storage.state.get("worker_roles") or {}
-        role = (roles.get(uname) or {}).get("role") or "—"
-        last = float(stat.get("last_active_ts") or 0)
-        ago = int(time.time() - last) if last else None
-        ago_s = (f"{ago//60} мин" if ago and ago < 3600 else
-                 (f"{ago//3600} ч" if ago and ago < 86400 else
-                  (f"{ago//86400} дн" if ago else "—")))
-        return (
-            f"👤 @{uname} ({role})\n"
-            f"  💬 сообщений: {int(stat.get('messages') or 0)}\n"
-            f"  📋 чатов: {int(stat.get('chats_touched') or 0)}\n"
-            f"  💸 выплат: {int(stat.get('payments_made') or 0)}\n"
-            f"  ✅ закрытых ЛК: {int(stat.get('lk_completed') or 0)}\n"
-            f"  🕐 активен: {ago_s} назад"
-        )
-
-    def _do_find_card(self, query: str) -> str:
-        """Поиск карточек по любым полям."""
-        q = (query or "").lower().strip()
-        if not q:
-            return "что искать?"
-        try:
-            storage.reload_sync()
-        except Exception:
-            pass
-        cards = storage.list_lk_cards() or {}
-        found = []
-        for cid, c in cards.items():
-            hay = " ".join(str(c.get(k, "")) for k in (
-                "bank", "fio", "supplier", "status", "card_id",
-            )).lower()
-            if all(part in hay for part in q.split()):
-                found.append((cid, c))
-        if not found:
-            return f"🔍 по '{query}' ничего не найдено"
-        out = [f"🔍 найдено {len(found)}:"]
-        for cid, c in found[:10]:
-            out.append(
-                f"  • #{cid} · {c.get('bank') or '—'} · "
-                f"{c.get('fio') or '—'} · {c.get('status') or '—'}"
-            )
-        if len(found) > 10:
-            out.append(f"  ...ещё {len(found) - 10}")
-        return "\n".join(out)
-
-    async def _broadcast_workchats(self, msg: str) -> str:
-        """Рассылка в managed_chats через userbot (Telethon)."""
-        if not msg:
-            return "empty message"
-        chat_ids = storage.get_managed_chat_ids()
-        sent = 0
-        errors = 0
-        for cid in chat_ids:
-            try:
-                target = await self._resolve_chat_target(cid)
-                await self.client.send_message(target, msg, link_preview=False)
-                sent += 1
-                await asyncio.sleep(0.5)  # rate limit
-            except Exception as e:
-                errors += 1
-                logger.warning("broadcast workchat %s failed: %s", cid, e)
-        return f"📤 work-чатов отправлено: {sent}, ошибок: {errors}"
-
-    async def _broadcast_bot_users(self, msg: str, only_inactive: bool = False) -> str:
-        """Рассылка через bot.py (aiogram). Userbot не может слать сообщения
-        от лица бота, поэтому используем Bot.send_message напрямую через
-        bot_token (минимально — через HTTP API)."""
-        if not msg:
-            return "empty message"
-        if only_inactive:
-            users = storage.list_inactive_bot_users()
-        else:
-            users = [
-                {"user_id": int(uid), **info}
-                for uid, info in (storage.list_bot_users() or {}).items()
-            ]
-        if not users:
-            return "нет получателей"
-
-        # Используем httpx (уже в requirements) для прямого вызова Telegram Bot API
-        import httpx
-        sent = 0
-        errors = 0
-        token = config.BOT_TOKEN
-        if not token:
-            return "BOT_TOKEN не задан"
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            for u in users:
-                uid = u.get("user_id")
-                if not uid:
-                    continue
-                try:
-                    r = await cli.post(url, json={
-                        "chat_id": uid,
-                        "text": msg,
-                        "disable_web_page_preview": True,
-                    })
-                    if r.status_code == 200:
-                        sent += 1
-                    else:
-                        errors += 1
-                except Exception:
-                    errors += 1
-                await asyncio.sleep(0.05)
-        return f"📤 bot-юзерам отправлено: {sent}, ошибок: {errors}"
-
-    async def stop(self):
-        await self.client.disconnect()
-
-    async def create_work_chat(self, client_name: str, client_id: int = 0) -> dict:
-        title = config.CHAT_TITLE_TEMPLATE.format(client_name=client_name)
-        about = config.CHAT_DESCRIPTION_TEMPLATE.format(client_name=client_name)
-
-        result = await self.client(CreateChannelRequest(title=title, about=about, megagroup=True))
-        channel = result.chats[0]
-        logger.info("Created group '%s' (id=%s)", title, channel.id)
-
-        if client_id:
-            await storage.register_chat(channel.id, client_id, client_name)
-        # Воронка: создан work-чат
-        try:
-            await storage.bump_funnel("chats_created")
-        except Exception:
-            pass
-
-        workers = storage.get_workers()
-        statuses: dict = {}
-        users_to_invite = []
-        for username in workers:
-            uname = username.lstrip("@").strip()
-            if not uname:
-                continue
-            try:
-                ent = await self.client.get_entity(uname)
-                users_to_invite.append(ent)
-                statuses[uname] = "найден"
-            except UsernameNotOccupiedError:
-                statuses[uname] = "не существует"
-            except FloodWaitError as e:
-                logger.warning("get_entity flood wait %ds for @%s", e.seconds, uname)
-                statuses[uname] = f"flood wait {e.seconds}s"
-            except Exception as e:
-                statuses[uname] = f"ошибка резолва: {e}"
-
-        for user in users_to_invite:
-            uname_or_id = user.username or str(user.id)
-            try:
-                await self.client(InviteToChannelRequest(channel, [user]))
-                statuses[uname_or_id] = "добавлен"
-            except UserPrivacyRestrictedError:
-                statuses[uname_or_id] = "запрещены приглашения (Privacy)"
-            except UserNotMutualContactError:
-                statuses[uname_or_id] = "нет в контактах"
-            except PeerFloodError:
-                statuses[uname_or_id] = "флуд-лимит Telegram"
-            except FloodWaitError as e:
-                logger.warning("invite flood wait %ds for @%s", e.seconds, uname_or_id)
-                statuses[uname_or_id] = f"flood wait {e.seconds}s"
-            except Exception as e:
-                statuses[uname_or_id] = f"ошибка: {e}"
-
-            # Выдать админ-права с rank=role если задано в worker_roles
-            role_info = storage.get_worker_role(uname_or_id)
+                logger.warni

@@ -1348,6 +1348,77 @@ class Storage:
             self.state["lk_group_id"] = int(chat_id)
             await self._save_unlocked()
 
+    # ===== Очереди выплат (payout queues) =====
+    # 3 очереди по методу оплаты:
+    #   release        — GUARANTOR_BEFORE: сделка уже пополнена, надо отпустить
+    #   fund_release   — GUARANTOR_AFTER_WORK: клиент создал сделку, надо пополнить + отпустить
+    #   usdt           — USDT TRC20: надо отправить USDT на адрес
+
+    def _payouts_state(self) -> dict:
+        return self.state.setdefault("payout_queues", {
+            "release": [], "fund_release": [], "usdt": [],
+        })
+
+    def list_payouts(self, queue: str) -> list:
+        q = self._payouts_state().get(queue) or []
+        return list(q)
+
+    async def add_payout(self, queue: str, item: dict) -> int:
+        async with _lock:
+            qs = self._payouts_state()
+            arr = qs.setdefault(queue, [])
+            new_id = (max((i.get("id") or 0) for i in arr) + 1) if arr else 1
+            item = dict(item)
+            item["id"] = new_id
+            item["ts"] = time.time()
+            item["status"] = item.get("status") or "pending"
+            arr.append(item)
+            await self._save_unlocked()
+            return new_id
+
+    async def update_payout(self, queue: str, payout_id: int, **fields) -> bool:
+        async with _lock:
+            arr = self._payouts_state().get(queue) or []
+            for item in arr:
+                if int(item.get("id") or 0) == int(payout_id):
+                    for k, v in fields.items():
+                        item[k] = v
+                    await self._save_unlocked()
+                    return True
+            return False
+
+    async def remove_payout(self, queue: str, payout_id: int) -> bool:
+        async with _lock:
+            qs = self._payouts_state()
+            arr = qs.get(queue) or []
+            new_arr = [i for i in arr if int(i.get("id") or 0) != int(payout_id)]
+            if len(new_arr) == len(arr):
+                return False
+            qs[queue] = new_arr
+            await self._save_unlocked()
+            return True
+
+    def find_payout_by_card(self, card_id: str, queue: str = None) -> Optional[tuple]:
+        """Возвращает (queue_name, item) для первого совпадения по card_id."""
+        qs = self._payouts_state()
+        queues = [queue] if queue else ("release", "fund_release", "usdt")
+        for q in queues:
+            for item in (qs.get(q) or []):
+                if item.get("card_id") == card_id:
+                    return (q, item)
+        return None
+
+    def find_payout_by_deal(self, deal_id: str) -> Optional[tuple]:
+        """Поиск выплаты по номеру сделки в любой очереди."""
+        if not deal_id:
+            return None
+        target = str(deal_id).lstrip("#").strip()
+        for q in ("release", "fund_release"):
+            for item in (self._payouts_state().get(q) or []):
+                if str(item.get("deal_id") or "").lstrip("#").strip() == target:
+                    return (q, item)
+        return None
+
     # ===== Ideas Inbox =====
     def get_ideas_chat_id(self) -> int:
         return int(self.state.get("ideas_chat_id") or 0)
@@ -1575,6 +1646,7 @@ class Storage:
                 "client_username": (fields.get("client_username") or "").lstrip("@"),
                 "work_chat_id": fields.get("work_chat_id") or 0,
                 "lk_group_msg_id": 0,
+                "payout_buttons_msg_id": 0,  # msg_id reply'я с кнопками выплаты
                 "created_at": time.time(),
                 "history": [{
                     "ts": time.time(),
@@ -2427,24 +2499,23 @@ class Storage:
                 "new_password": "",
                 "new_mail": "",
                 "new_number": "",
-                "code_word": "",        # кодовое слово (для звонков в банк)
+                "code_word": "",
                 "ded_ip": "",
                 "ded_login": "Administrator",
                 "ded_pass": "",
-                "ded_location": "",     # где установлен дедик / откуда работаем
+                "ded_location": "",
                 "link_pass": "",
                 "msgid_pass": 0,
-                # SMS multi-stage flow
-                "sms_stage": "",            # "" → asking_ready → ... → done
-                "sms_login_code": "",       # код входа (получен от клиента)
-                "sms_perevyaz_code": "",    # код перевязки
-                "sms_tracker_msg_id": 0,    # id сообщения трекера в admin-чате
+                "sms_stage": "",
+                "sms_login_code": "",
+                "sms_perevyaz_code": "",
+                "sms_tracker_msg_id": 0,
                 "created_at": time.time(),
             }
             await self._save_unlocked()
             return lkid
 
-    async def update_crm_drop_lk(self, droplk_id: str, **fields) -> bool:
+    async def update_crm_drop_lk(self, droplk_id, **fields):
         async with _lock:
             lk = (self.state.get("crm_drop_lks") or {}).get(str(droplk_id))
             if not lk:
@@ -2454,7 +2525,7 @@ class Storage:
             await self._save_unlocked()
             return True
 
-    async def delete_crm_drop_lk(self, droplk_id: str) -> bool:
+    async def delete_crm_drop_lk(self, droplk_id):
         async with _lock:
             lks = self.state.get("crm_drop_lks") or {}
             if str(droplk_id) in lks:
@@ -2463,41 +2534,38 @@ class Storage:
                 return True
             return False
 
-    async def append_crm_sms(self, droplk_id: str, code: str, time_str: str = ""):
+    async def append_crm_sms(self, droplk_id, code, time_str=""):
         async with _lock:
             lk = (self.state.get("crm_drop_lks") or {}).get(str(droplk_id))
             if not lk:
                 return False
             sms = lk.setdefault("sms_history", [])
-            sms.append({
-                "code": code,
-                "time": time_str or time.strftime("%d.%m.%Y %H:%M"),
-            })
+            sms.append({"code": code, "time": time_str or time.strftime("%d.%m.%Y %H:%M")})
             await self._save_unlocked()
             return True
 
-    # ---- FSM состояние партнёров ----
-    def get_crm_fsm(self, tg_user_id: int) -> dict:
+    def get_crm_fsm(self, tg_user_id):
         return (self.state.get("crm_fsm") or {}).get(str(tg_user_id)) or {}
 
-    async def set_crm_fsm(self, tg_user_id: int, action=None,
-                          data=None, msg_id=None, chat_id=None):
+    async def set_crm_fsm(self, tg_user_id, action=None, data=None, msg_id=None, chat_id=None):
         async with _lock:
             fsm = self.state.setdefault("crm_fsm", {})
             if action is None:
                 fsm.pop(str(tg_user_id), None)
             else:
                 fsm[str(tg_user_id)] = {
-                    "action": action,
-                    "data": dict(data or {}),
-                    "msg_id": msg_id,
-                    "chat_id": chat_id,
+                    "action": action, "data": dict(data or {}),
+                    "msg_id": msg_id, "chat_id": chat_id,
                     "updated_at": time.time(),
                     "expires_at": time.time() + 1800,
                 }
             await self._save_unlocked()
 
-    async def clear_crm_fsm(self, tg_user_id: int):
+    async def clear_crm_fsm(self, tg_user_id):
+        await self.set_crm_fsm(tg_user_id, action=None)
+
+
+storage = Storage(config.STORAGE_PATH)
         await self.set_crm_fsm(tg_user_id, action=None)
 
 

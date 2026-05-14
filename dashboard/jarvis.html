@@ -2264,6 +2264,7 @@
   <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 ЛК Отдел</button>
   <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Финансы</button>
   <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
+  <button class="view-tab" :class="currentView === 'payouts' ? 'active' : ''" @click="goToView('payouts')">💰 Выплаты</button>
   <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
@@ -3009,6 +3010,96 @@
         <span class="msg" x-text="formatEvent(log)"></span>
       </div>
     </template>
+  </div>
+</section>
+
+<!-- ===== PAYOUTS TAB ===== -->
+<section x-show="currentView === 'payouts'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+    <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">💰 ВЫПЛАТЫ</h2>
+    <button class="btn" @click="refreshPayouts()" :disabled="payoutLoading">↻ Обновить</button>
+  </div>
+
+  <!-- USDT TRC20 -->
+  <div class="jarvis-panel" style="padding: 12px; margin-bottom: 16px;">
+    <div class="panel-title">💸 USDT TRC20 выплаты (<span x-text="payouts.usdt.length"></span>)</div>
+    <div style="max-height: 50vh; overflow-y: auto;">
+      <template x-for="p in payouts.usdt" :key="p.id">
+        <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <b style="color: var(--hud-primary);" x-text="p.bank"></b>
+            <span x-text="p.fio"></span>
+            <span style="color: var(--text-dim); font-size: 11px;" x-text="'#' + p.card_id"></span>
+            <span style="color: #2a9d8f; font-weight: bold;" x-text="p.amount_usdt + ' USDT'"></span>
+          </div>
+          <div style="margin-top: 6px; font-size: 11px; color: var(--text-dim);">
+            📍 Адрес: <code x-text="p.usdt_address"></code>
+          </div>
+          <div style="margin-top: 8px; display: flex; gap: 6px;">
+            <input type="text" placeholder="TronScan tx hash (64 hex chars)"
+                   x-model="payoutDraftHash[p.card_id]"
+                   style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-family: monospace;">
+            <button class="btn success" @click="payoutMarkUsdtPaid(p.card_id)" style="padding: 6px 14px;">💸 Выплачено</button>
+          </div>
+        </div>
+      </template>
+      <div x-show="payouts.usdt.length === 0" style="text-align: center; color: var(--text-dim); padding: 20px;">Пусто</div>
+    </div>
+  </div>
+
+  <!-- ОТПУСТИТЬ СДЕЛКУ -->
+  <div class="jarvis-panel" style="padding: 12px; margin-bottom: 16px;">
+    <div class="panel-title">🤝 ОТПУСТИТЬ СДЕЛКУ (гарант пополнен) — <span x-text="payouts.release.length"></span></div>
+    <div style="max-height: 50vh; overflow-y: auto;">
+      <template x-for="p in payouts.release" :key="p.id">
+        <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <b style="color: var(--hud-primary);" x-text="p.bank"></b>
+            <span x-text="p.fio"></span>
+            <span x-show="p.deal_id" style="color: var(--text-dim);" x-text="'сделка #' + p.deal_id"></span>
+            <span style="color: #2a9d8f; font-weight: bold;" x-text="p.amount_usdt + '$'"></span>
+          </div>
+          <div style="margin-top: 8px;">
+            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 6px 14px;">✅ Отпустить</button>
+          </div>
+        </div>
+      </template>
+      <div x-show="payouts.release.length === 0" style="text-align: center; color: var(--text-dim); padding: 20px;">Пусто</div>
+    </div>
+  </div>
+
+  <!-- ПОПОЛНИТЬ И ОТПУСТИТЬ -->
+  <div class="jarvis-panel" style="padding: 12px; margin-bottom: 16px;">
+    <div class="panel-title">🤝 ПОПОЛНИТЬ И ОТПУСТИТЬ — <span x-text="payouts.fund_release.length"></span></div>
+    <div style="max-height: 50vh; overflow-y: auto;">
+      <template x-for="p in payouts.fund_release" :key="p.id">
+        <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <b style="color: var(--hud-primary);" x-text="p.bank"></b>
+            <span x-text="p.fio"></span>
+            <span style="color: #2a9d8f; font-weight: bold;" x-text="p.amount_usdt + '$'"></span>
+          </div>
+          <!-- Шаг 1: если нет deal_id — ввести номер сделки от клиента -->
+          <div x-show="!p.deal_id" style="margin-top: 8px; display: flex; gap: 6px;">
+            <input type="text" placeholder="Номер сделки от клиента"
+                   x-model="payoutDraftDealId[p.id]"
+                   style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
+            <button class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 14px;">📝 Сохранить</button>
+          </div>
+          <!-- Шаг 2: если есть deal_id — пополнить -->
+          <div x-show="p.deal_id" style="margin-top: 8px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Сделка <b x-text="'#' + p.deal_id"></b></div>
+            <div style="display: flex; gap: 6px;">
+              <input type="number" placeholder="Сумма пополнения (USDT)"
+                     x-model="payoutDraftAmount[p.deal_id]"
+                     style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
+              <button class="btn" @click="payoutMarkFunded(p.deal_id)" style="padding: 6px 14px;">🤝 Пополнено</button>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div x-show="payouts.fund_release.length === 0" style="text-align: center; color: var(--text-dim); padding: 20px;">Пусто</div>
+    </div>
   </div>
 </section>
 
@@ -3766,6 +3857,12 @@ function jarvis() {
     // Brain notes (LEO)
     notesPreview: [],
     notesCategory: '',
+    // Выплаты
+    payouts: { release: [], fund_release: [], usdt: [] },
+    payoutDraftHash: {},   // card_id → input value
+    payoutDraftDealId: {}, // payout_id → input value
+    payoutDraftAmount: {}, // deal_id → amount value
+    payoutLoading: false,
     // CRM (Партнёры)
     crmOwners: [],
     crmDrops: [],
@@ -4510,6 +4607,7 @@ function jarvis() {
       this.currentView = view;
       location.hash = '#' + view;
       if (view === 'crm') { this.refreshCrm(); }
+      if (view === 'payouts') { this.refreshPayouts(); }
     },
     banksFromCards() {
       const out = {};
@@ -5947,6 +6045,89 @@ function jarvis() {
     },
 
     // === CRM (Партнёры) ===
+    // === Payouts ===
+    async refreshPayouts() {
+      this.payoutLoading = true;
+      try {
+        const r = await fetch("/api/payouts", {credentials: "include"});
+        if (r.ok) {
+          const d = await r.json();
+          this.payouts = {
+            release: d.release || [],
+            fund_release: d.fund_release || [],
+            usdt: d.usdt || [],
+          };
+        }
+      } catch (e) { console.error("payouts refresh fail", e); }
+      finally { this.payoutLoading = false; }
+    },
+    async payoutMarkUsdtPaid(card_id) {
+      const hash = (this.payoutDraftHash[card_id] || "").trim();
+      if (hash.length < 16) {
+        alert("Хеш слишком короткий (минимум 16 символов)");
+        return;
+      }
+      try {
+        const r = await fetch("/api/payouts/usdt_paid", {
+          method: "POST", credentials: "include",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({card_id, tx_hash: hash}),
+        });
+        if (r.ok) {
+          delete this.payoutDraftHash[card_id];
+          await this.refreshPayouts();
+          alert("✅ Хеш отправлен, клиент уведомлён");
+        } else {
+          alert("Ошибка: " + r.status);
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async payoutSetDealId(payout_id) {
+      const deal_id = (this.payoutDraftDealId[payout_id] || "").trim();
+      if (!deal_id) return alert("Введи номер сделки");
+      try {
+        const r = await fetch("/api/payouts/set_deal_id", {
+          method: "POST", credentials: "include",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({payout_id, deal_id}),
+        });
+        if (r.ok) {
+          delete this.payoutDraftDealId[payout_id];
+          await this.refreshPayouts();
+        } else { alert("Ошибка: " + r.status); }
+      } catch (e) { alert(String(e)); }
+    },
+    async payoutMarkFunded(deal_id) {
+      const amount = parseFloat(this.payoutDraftAmount[deal_id] || "0");
+      if (!(amount > 0)) return alert("Введи сумму USDT");
+      try {
+        const r = await fetch("/api/payouts/deal_funded", {
+          method: "POST", credentials: "include",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({deal_id, amount}),
+        });
+        if (r.ok) {
+          delete this.payoutDraftAmount[deal_id];
+          await this.refreshPayouts();
+          alert("✅ Сделка пополнена, перенесена в «ОТПУСТИТЬ»");
+        } else { alert("Ошибка: " + r.status); }
+      } catch (e) { alert(String(e)); }
+    },
+    async payoutRelease(card_id) {
+      if (!confirm("Отпустить сделку и уведомить клиента?")) return;
+      try {
+        const r = await fetch("/api/payouts/released", {
+          method: "POST", credentials: "include",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({card_id}),
+        });
+        if (r.ok) {
+          await this.refreshPayouts();
+          alert("✅ Сделка отпущена, клиент уведомлён");
+        } else { alert("Ошибка: " + r.status); }
+      } catch (e) { alert(String(e)); }
+    },
+
     async refreshCrm() {
       this.crmLoading = true;
       try {

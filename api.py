@@ -1561,6 +1561,93 @@ async def _leave_voice(session_id: str):
         pass
 
 
+# === Payouts queues (USDT / Guarantor) ===
+
+@app.get("/api/payouts")
+async def api_payouts(_: None = Depends(_auth)):
+    """Все 3 очереди выплат: release, fund_release, usdt."""
+    storage.reload_sync()
+    return {
+        "release": storage.list_payouts("release"),
+        "fund_release": storage.list_payouts("fund_release"),
+        "usdt": storage.list_payouts("usdt"),
+    }
+
+
+@app.post("/api/payouts/usdt_paid")
+async def api_payouts_usdt_paid(req: Request, _: None = Depends(_auth)):
+    """Менеджер ввёл TronScan хеш для USDT-выплаты.
+    body: {card_id, tx_hash}"""
+    data = await req.json()
+    card_id = (data.get("card_id") or "").lower().lstrip("#")
+    tx_hash = (data.get("tx_hash") or "").strip()
+    if not card_id or not tx_hash or len(tx_hash) < 16:
+        raise HTTPException(400, "card_id and tx_hash (>=16 chars) required")
+    try:
+        await storage.enqueue_dashboard_command(
+            f"выплачено #{card_id} {tx_hash}",
+            source="dashboard-usdt-paid",
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "card_id": card_id, "tx_hash": tx_hash}
+
+
+@app.post("/api/payouts/deal_funded")
+async def api_payouts_deal_funded(req: Request, _: None = Depends(_auth)):
+    """Менеджер: сделка пополнена. body: {deal_id, amount}"""
+    data = await req.json()
+    deal_id = (str(data.get("deal_id") or "")).lstrip("#").strip()
+    try:
+        amount = float(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount must be number")
+    if not deal_id or amount <= 0:
+        raise HTTPException(400, "deal_id and positive amount required")
+    try:
+        await storage.enqueue_dashboard_command(
+            f"сделка #{deal_id} пополнена {amount}",
+            source="dashboard-deal-funded",
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "deal_id": deal_id, "amount": amount}
+
+
+@app.post("/api/payouts/released")
+async def api_payouts_released(req: Request, _: None = Depends(_auth)):
+    """Менеджер отпустил гарант-сделку. body: {card_id} или {deal_id}"""
+    data = await req.json()
+    card_id = (data.get("card_id") or "").lower().lstrip("#")
+    deal_id = (str(data.get("deal_id") or "")).lstrip("#").strip()
+    key = card_id or deal_id
+    if not key:
+        raise HTTPException(400, "card_id or deal_id required")
+    try:
+        await storage.enqueue_dashboard_command(
+            f"отпущено #{key}",
+            source="dashboard-released",
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "key": key}
+
+
+@app.post("/api/payouts/set_deal_id")
+async def api_payouts_set_deal_id(req: Request, _: None = Depends(_auth)):
+    """Менеджер ввёл номер сделки от клиента в fund_release очередь.
+    body: {payout_id, deal_id}"""
+    data = await req.json()
+    payout_id = int(data.get("payout_id") or 0)
+    deal_id = (str(data.get("deal_id") or "")).lstrip("#").strip()
+    if not payout_id or not deal_id:
+        raise HTTPException(400, "payout_id and deal_id required")
+    ok = await storage.update_payout("fund_release", payout_id, deal_id=deal_id)
+    if not ok:
+        raise HTTPException(404, "payout not found")
+    return {"ok": True, "payout_id": payout_id, "deal_id": deal_id}
+
+
 # === CRM (Партнёры — Дропы — ЛК) ===
 
 @app.get("/api/crm/owners")
@@ -2067,6 +2154,15 @@ async def control_lk_status(
             await storage.enqueue_dashboard_command(
                 f"__handle_block_no_work {card_id}",
                 source="dashboard-block-no-work",
+            )
+        except Exception:
+            pass
+    elif new_status in ("БЛОК", "БРАК", "ОТРАБОТАН", "ЗАВЕРШЁН", "ЗАВЕРШЕН"):
+        # Простое уведомление клиенту — отдельной командой через юзербот
+        try:
+            await storage.enqueue_dashboard_command(
+                f"__notify_status {card_id} {new_status}",
+                source="dashboard-status-change",
             )
         except Exception:
             pass
@@ -2917,9 +3013,9 @@ async def control_sync_lk_request(_: None = Depends(_auth)):
     }
 
 
+
 @app.get("/api/control/info")
 async def control_info(_: None = Depends(_auth)):
-    """Текущее состояние управления — чтоб дашборд знал в каком режиме."""
     storage.reload_sync()
     return {
         "ai_enabled": storage.is_ai_enabled(),
@@ -2929,11 +3025,8 @@ async def control_info(_: None = Depends(_auth)):
     }
 
 
-# === WebSocket bidirectional ===
-
 @app.websocket("/ws")
 async def websocket_events(ws: WebSocket):
-    """WebSocket для двусторонней связи."""
     authed = False
     cookie_val = ws.cookies.get(SESSION_COOKIE)
     if cookie_val:
@@ -2949,15 +3042,11 @@ async def websocket_events(ws: WebSocket):
                 and secrets.compare_digest(pwd, DASHBOARD_PASS)
             ):
                 authed = True
-
     if not authed:
         await ws.close(code=4401, reason="unauthorized")
         return
-
     await ws.accept()
-
     stop_event = asyncio.Event()
-
     async def broadcast_loop():
         try:
             async for event in event_bus.subscribe(replay_last=20):
@@ -2969,9 +3058,7 @@ async def websocket_events(ws: WebSocket):
                     break
         except asyncio.CancelledError:
             pass
-
     broadcast_task = asyncio.create_task(broadcast_loop())
-
     try:
         while True:
             msg = await ws.receive_json()
@@ -2981,8 +3068,7 @@ async def websocket_events(ws: WebSocket):
             elif cmd == "state":
                 storage.reload_sync()
                 await ws.send_json({
-                    "kind": "state",
-                    "ai_enabled": storage.is_ai_enabled(),
+                    "kind": "state", "ai_enabled": storage.is_ai_enabled(),
                     "subscribers": event_bus.subscriber_count(),
                 })
             else:
@@ -2996,14 +3082,8 @@ async def websocket_events(ws: WebSocket):
         broadcast_task.cancel()
 
 
-# === SSE event stream ===
-
 @app.get("/api/events/stream")
-async def api_events_stream(
-    request: Request,
-    _: None = Depends(_auth),
-):
-    """Server-Sent Events стрим — push событий из event_bus."""
+async def api_events_stream(request: Request, _: None = Depends(_auth)):
     async def generator():
         try:
             async for event in event_bus.subscribe(replay_last=80):
