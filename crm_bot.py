@@ -95,7 +95,8 @@ EPHEMERAL_TTL = 5
 
 # ID групп — захардкожены по запросу владельца.
 # Чтобы переопределить — установи env CRM_ADMIN_CHAT_ID / CRM_PASSWORD_CHAT_ID.
-HARDCODED_ADMIN_CHAT_ID = -1005106011404  # «Доступы» — приёмка дропов
+# Бот должен быть В этих группах + админ.
+HARDCODED_ADMIN_CHAT_ID = -1003390329578     # «Доступы» — приёмка дропов
 HARDCODED_PASSWORD_CHAT_ID = -1005217307307  # «Пароли» — RDP + новые пароли
 
 
@@ -118,6 +119,37 @@ def get_password_chat_id() -> int:
     if fr:
         return int(fr)
     return HARDCODED_PASSWORD_CHAT_ID
+
+
+async def _resolve_chat_id_variants(bot, raw_id: int) -> Optional[int]:
+    """Пытается достучаться до чата перебором форматов id.
+    Telegram bot API хочет:
+      • supergroup: -100XXXXXXXXXX (13 цифр после знака)
+      • basic group: -XXXXXXXX (просто отрицательный)
+      • channel: -100XXXXXXXXXX
+    Если пользователь ввёл голый id без префикса — пробуем все варианты.
+    Возвращает рабочий int chat_id или None."""
+    if not bot:
+        return None
+    raw = str(raw_id).lstrip("-")
+    candidates = []
+    candidates.append(int(raw_id))                          # как есть
+    if not raw.startswith("100"):
+        candidates.append(-int(f"100{raw}"))                # -100ID
+    candidates.append(-int(raw))                            # -ID
+    candidates.append(int(raw))                             # bare positive
+    seen = set()
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        try:
+            await bot.get_chat(c)
+            logger.info("[crm] resolved admin chat: %s", c)
+            return c
+        except Exception:
+            continue
+    return None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1245,24 +1277,34 @@ async def cb_dropsend(call: CallbackQuery):
     await call.answer("⏳ Отправляю...")
     bot = call.message.bot
 
-    # Проверим что бот ИМЕЕТ ДОСТУП к admin-чату ДО постинга фоток
-    # (chat_not_found = бот не в группе)
-    try:
-        chat_info = await bot.get_chat(admin_chat_id)
-        logger.info("Admin chat OK: id=%s title=%s", admin_chat_id, chat_info.title)
-    except Exception as e:
+    # Проверим что бот ИМЕЕТ ДОСТУП к admin-чату.
+    # Перебираем варианты формата ID (с -100, без, и т.д.)
+    resolved = await _resolve_chat_id_variants(bot, admin_chat_id)
+    if not resolved:
         await ephemeral(
             call.message,
-            f"❌ Бот не имеет доступа к admin-чату (id={admin_chat_id})\n\n"
-            f"<b>Что делать:</b>\n"
-            f"1. Найди бота через @BotFather, скопируй его username\n"
-            f"2. Добавь его в группу «Доступы» (chat_id {admin_chat_id})\n"
-            f"3. Сделай бота админом группы\n"
-            f"4. В группе пропиши <code>/crm_set_admin</code>\n\n"
-            f"Telegram error: <code>{e}</code>",
+            f"❌ Бот не имеет доступа к admin-чату.\n"
+            f"Пробовал: <code>{admin_chat_id}</code>, "
+            f"<code>-100{str(admin_chat_id).lstrip('-')}</code>\n\n"
+            f"<b>Что сделать:</b>\n"
+            f"1. Открой саму группу «Доступы»\n"
+            f"2. Убедись что CRM-бот в ней как админ\n"
+            f"3. Напиши в группе: <code>/crm_set_admin</code>\n"
+            f"   — бот возьмёт правильный chat_id сам.",
             ttl=30,
         )
         return
+    if resolved != admin_chat_id:
+        # Сохраним правильный формат в storage чтоб в след. раз не угадывать
+        try:
+            await crm_storage.register_crm_chat(
+                chat_id=resolved, owner_id="_admin",
+                is_admin=True, is_password=False,
+            )
+            logger.info("Admin chat auto-corrected: %s → %s", admin_chat_id, resolved)
+        except Exception:
+            pass
+        admin_chat_id = resolved
 
     # 1) Постим фотки
     try:
