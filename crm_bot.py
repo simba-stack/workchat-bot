@@ -93,6 +93,32 @@ if _env_owner:
 
 EPHEMERAL_TTL = 5
 
+# ID групп — захардкожены по запросу владельца.
+# Чтобы переопределить — установи env CRM_ADMIN_CHAT_ID / CRM_PASSWORD_CHAT_ID.
+HARDCODED_ADMIN_CHAT_ID = -1005106011404  # «Доступы» — приёмка дропов
+HARDCODED_PASSWORD_CHAT_ID = -1005217307307  # «Пароли» — RDP + новые пароли
+
+
+def get_admin_chat_id() -> int:
+    """Резолв admin-чата. Приоритет: env → storage → hardcoded."""
+    env = os.getenv("CRM_ADMIN_CHAT_ID", "").strip()
+    if env and env.lstrip("-").isdigit():
+        return int(env)
+    fr = crm_storage.find_crm_admin_chat()
+    if fr:
+        return int(fr)
+    return HARDCODED_ADMIN_CHAT_ID
+
+
+def get_password_chat_id() -> int:
+    env = os.getenv("CRM_PASSWORD_CHAT_ID", "").strip()
+    if env and env.lstrip("-").isdigit():
+        return int(env)
+    fr = crm_storage.find_crm_password_chat()
+    if fr:
+        return int(fr)
+    return HARDCODED_PASSWORD_CHAT_ID
+
 
 # ════════════════════════════════════════════════════════════════
 # FSM States
@@ -109,12 +135,94 @@ class LKForm(StatesGroup):
     waiting_value = State()
 
 
+class FillForm(StatesGroup):
+    waiting_new_password = State()
+    waiting_new_mail = State()
+    waiting_new_number = State()
+    waiting_ded_ip = State()
+    waiting_ded_pass = State()
+
+
+class SMSForm(StatesGroup):
+    waiting_code = State()
+
+
+class PriceForm(StatesGroup):
+    waiting_price = State()
+
+
 # ════════════════════════════════════════════════════════════════
 # Helpers
 # ════════════════════════════════════════════════════════════════
 
 def is_owner(user_id: int) -> bool:
     return int(user_id) in CRM_OWNER_IDS
+
+
+def is_pride_registered(user_id: int, username: str = "") -> bool:
+    """Проверка: юзер зарегистрирован в экосистеме PRIDE.
+
+    Это обязательное условие пользования CRM-ботом.
+    True если:
+      • Юзер — владелец CRM (SIMBA и др. админы)
+      • Юзер делал /start у main-бота (есть в bot_users)
+      • У юзера @username привязан к managed_chat (взаимодействовал с ассистентом)
+      • Юзер — client_id какого-то managed_chat (т.е. создавал/состоит в work-чате)
+    """
+    if not user_id:
+        return False
+    # 1. Владельцы CRM — всегда допускаются (для настройки/тестов)
+    if int(user_id) in CRM_OWNER_IDS:
+        return True
+    # 2. Делал /start у main-бота PRIDE
+    try:
+        bot_users = crm_storage.state.get("bot_users") or {}
+        if str(user_id) in bot_users or int(user_id) in {int(k) for k in bot_users.keys() if str(k).isdigit()}:
+            return True
+    except Exception:
+        pass
+    # 3. @username в индексе клиентов ассистента
+    if username:
+        try:
+            cid = crm_storage.find_chat_by_client_username(username)
+            if cid:
+                return True
+        except Exception:
+            pass
+    # 4. user_id фигурирует как client_id в managed_chats
+    try:
+        managed = crm_storage.state.get("managed_chats") or {}
+        for info in managed.values():
+            try:
+                if int(info.get("client_id") or 0) == int(user_id):
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+async def _require_pride(message: Message) -> bool:
+    """Проверка регистрации в PRIDE; если нет — отказ + объяснение.
+    Возвращает True если можно продолжать."""
+    user = message.from_user
+    if not user:
+        return False
+    if is_pride_registered(user.id, user.username or ""):
+        return True
+    await message.reply(
+        "🔒 <b>Доступ закрыт</b>\n\n"
+        "Чтобы пользоваться CRM, нужно сначала быть зарегистрированным в "
+        "системе <b>PRIDE</b>.\n\n"
+        "<b>Что делать:</b>\n"
+        "1. Напишите боту @PrideInviteWork_bot команду /start\n"
+        "   <i>(там создаётся ваша рабочая беседа с ассистентом)</i>\n"
+        "2. Дождитесь приглашения в рабочий чат с ассистентом\n"
+        "3. Тогда вернитесь сюда и снова напишите /start\n\n"
+        "Если уже есть рабочая беседа — попросите владельца добавить вас."
+    )
+    return False
 
 
 async def ephemeral(message: Message, text: str, ttl: int = EPHEMERAL_TTL):
@@ -134,6 +242,13 @@ async def _safe_delete(bot: Bot, chat_id, message_id):
         await bot.delete_message(chat_id, message_id)
     except Exception:
         pass
+
+
+async def _send(message: Message, text: str, **kwargs):
+    """Отправить новое сообщение в тот же чат — без reply.
+    Используется ВМЕСТО message.reply() когда исходное сообщение
+    может быть удалено (FSM flow, callback delete+show)."""
+    return await message.bot.send_message(message.chat.id, text, **kwargs)
 
 
 async def _ensure_owner(message: Message) -> Optional[dict]:
@@ -187,6 +302,10 @@ router = Router(name="crm_main")
 
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start_private(message: Message):
+    # 🔒 Обязательное условие: пользователь должен быть в экосистеме PRIDE
+    # (рабочая беседа с ассистентом ИЛИ /start у main-бота).
+    if not await _require_pride(message):
+        return
     owner = await _ensure_owner(message)
     if not owner:
         return
@@ -211,6 +330,11 @@ async def cmd_start_group(message: Message):
 
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
+    # В ЛС — проверка PRIDE-регистрации. В группе — проверка только если
+    # группа не зарегистрирована (но это уже отдельная логика).
+    if message.chat.type == "private":
+        if not await _require_pride(message):
+            return
     owner = await _ensure_owner(message)
     if not owner:
         return
@@ -243,7 +367,7 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
     kb = [[InlineKeyboardButton(text="📇 Мои клиенты", callback_data="drops")]]
     if in_group:
         kb.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
-    await message.reply(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await _send(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 
 # ─── /help ──────────────────────────────────────────────────────
@@ -272,6 +396,9 @@ async def cmd_help(message: Message):
 
 @router.message(Command("clients"))
 async def cmd_clients(message: Message):
+    if message.chat.type == "private":
+        if not await _require_pride(message):
+            return
     owner = await _ensure_owner(message)
     if not owner:
         return
@@ -327,7 +454,7 @@ async def _show_clients(message: Message, owner: dict, edit_msg_id: Optional[int
             return
         except TelegramBadRequest:
             pass
-    await message.reply(text, reply_markup=markup)
+    await _send(message, text, reply_markup=markup)
 
 
 # ─── Callbacks: cancel / noop / drops / profile ─────────────────
@@ -503,7 +630,10 @@ async def _show_drop(message: Message, drop: dict):
     kb_rows.append([InlineKeyboardButton(text="◀️ К списку", callback_data="drops")])
     kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
 
-    await message.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    await _send(
+        message, "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
 
 
 # ─── Удаление дропа ────────────────────────────────────────────
@@ -548,6 +678,917 @@ async def cb_dropdelete_confirmed(call: CallbackQuery):
         pass
     if owner:
         await _show_clients(call.message, owner)
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 2 — Анкета + документы
+# ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("dropanketa:"))
+async def cb_dropanketa(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(DropForm.waiting_about)
+    await state.update_data(drop_id=drop_id, menu_msg_id=call.message.message_id)
+    try:
+        await call.message.edit_text(
+            f"<b>📝 Анкета клиента {drop.get('fio')}</b>\n\n"
+            f"Введите текст анкеты (паспортные данные, ИНН, ОГРНИП и т.д.):\n\n"
+            f"<i>⚠ Бот реагирует на ваше следующее сообщение.</i>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data=f"drop:{drop_id}"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(DropForm.waiting_about, F.text & ~F.text.startswith("/"))
+async def handle_about(message: Message, state: FSMContext):
+    data = await state.get_data()
+    about = (message.text or "").strip()
+    if len(about) < 5:
+        await ephemeral(message, "❌ Анкета слишком короткая (минимум 5 символов)")
+        return
+    drop_id = data.get("drop_id")
+    await crm_storage.update_crm_drop(drop_id, about=about)
+    drop = crm_storage.get_crm_drop(drop_id)
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    if data.get("menu_msg_id"):
+        await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
+    await _show_drop(message, drop)
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("dropdoc:"))
+async def cb_dropdoc(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(DropForm.waiting_scan)
+    await state.update_data(drop_id=drop_id, files=[], menu_msg_id=call.message.message_id)
+    try:
+        await call.message.edit_text(
+            f"<b>📎 Документы клиента {drop.get('fio')}</b>\n\n"
+            f"Отправьте фото документов (можно несколько — будут добавлены подряд).\n\n"
+            f"Когда закончите — нажмите <b>«Готово»</b>.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Готово", callback_data=f"dropdoc_done:{drop_id}")],
+                [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"drop:{drop_id}")],
+            ]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(DropForm.waiting_scan, F.photo)
+async def handle_scan_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    files = list(data.get("files") or [])
+    # Берём самое крупное фото
+    largest = message.photo[-1]
+    files.append(largest.file_id)
+    await state.update_data(files=files)
+    # ack
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    # update menu text with count
+    drop_id = data.get("drop_id")
+    menu_msg_id = data.get("menu_msg_id")
+    if drop_id and menu_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                f"<b>📎 Документы клиента</b>\n\n"
+                f"Загружено фото: <b>{len(files)}</b>\n\n"
+                f"Можешь добавить ещё или нажми «Готово».",
+                chat_id=message.chat.id,
+                message_id=menu_msg_id,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Готово", callback_data=f"dropdoc_done:{drop_id}")],
+                    [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"drop:{drop_id}")],
+                ]),
+            )
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data.startswith("dropdoc_done:"))
+async def cb_dropdoc_done(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    files = list(data.get("files") or [])
+    if not files:
+        await call.answer("Сначала прикрепи хотя бы одно фото", show_alert=True)
+        return
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        await state.clear()
+        return
+    await crm_storage.update_crm_drop(drop_id, scan_file_ids=files)
+    drop = crm_storage.get_crm_drop(drop_id)
+    await call.answer(f"✅ Сохранено {len(files)} фото")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await state.clear()
+    await _show_drop(call.message, drop)
+
+
+@router.callback_query(F.data.startswith("showdoc:"))
+async def cb_showdoc(call: CallbackQuery):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop or not drop.get("scan_file_ids"):
+        await call.answer("Документов нет", show_alert=True)
+        return
+    await call.answer()
+    files = drop["scan_file_ids"]
+    try:
+        if len(files) == 1:
+            await call.message.bot.send_photo(call.message.chat.id, files[0])
+        else:
+            from aiogram.types import InputMediaPhoto
+            media = [InputMediaPhoto(media=fid) for fid in files[:10]]
+            await call.message.bot.send_media_group(call.message.chat.id, media)
+    except Exception as e:
+        logger.warning("showdoc failed: %s", e)
+        await ephemeral(call.message, f"❌ Не удалось показать: {e}")
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 3 — ЛК банков
+# ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("droplk:"))
+async def cb_droplk(call: CallbackQuery):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    await _show_drop_lks(call.message, drop)
+
+
+async def _show_drop_lks(message: Message, drop: dict):
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
+
+    lines = [f"🏦 <b>ЛК банков клиента {drop.get('fio')}</b>", ""]
+    if not lks:
+        lines.append("<i>ЛК пока нет. Добавь первый банк.</i>")
+    else:
+        for lk in lks.values():
+            status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
+            lines.append(
+                f"{status_e} <b>{lk.get('bank')}</b>\n"
+                f"   <code>{(lk.get('value') or '—')[:80]}</code>"
+            )
+
+    kb_rows = []
+    for lk in lks.values():
+        kb_rows.append([InlineKeyboardButton(
+            text=f"🏦 {lk.get('bank')}",
+            callback_data=f"lkview:{lk['droplk_id']}",
+        )])
+    kb_rows.append([InlineKeyboardButton(text="➕ Добавить банк", callback_data=f"banklk:{drop['drop_id']}")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ К клиенту", callback_data=f"drop:{drop['drop_id']}")])
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await _send(message, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+
+@router.callback_query(F.data.startswith("banklk:"))
+async def cb_banklk(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    # Берём список банков из нашего pricing
+    pricing = crm_storage.state.get("pricing") or {}
+    banks = sorted(pricing.keys())
+    if not banks:
+        # Дефолтный список
+        banks = ["АЛЬФА", "ОЗОН", "РАЙФ", "ТОЧКА", "УРАЛСИБ", "ВТБ", "ЛОКО", "БКС", "ДЕЛО", "УБРИР"]
+    kb_rows = []
+    row = []
+    for i, b in enumerate(banks, 1):
+        row.append(InlineKeyboardButton(text=b, callback_data=f"newlk:{drop_id}:{b}"))
+        if i % 2 == 0:
+            kb_rows.append(row); row = []
+    if row:
+        kb_rows.append(row)
+    kb_rows.append([InlineKeyboardButton(text="◀️ Отмена", callback_data=f"droplk:{drop_id}")])
+    try:
+        await call.message.edit_text(
+            f"<b>🏦 Выбери банк для {drop.get('fio')}:</b>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("newlk:"))
+async def cb_newlk(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split(":", 2)
+    if len(parts) < 3:
+        await call.answer("Ошибка данных", show_alert=True)
+        return
+    drop_id, bank = parts[1], parts[2]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(LKForm.waiting_value)
+    await state.update_data(drop_id=drop_id, bank=bank, menu_msg_id=call.message.message_id)
+    try:
+        await call.message.edit_text(
+            f"<b>🏦 Новый ЛК — {bank}</b>\n\n"
+            f"Введите данные ЛК (логин/пароль, ссылку, что есть):\n\n"
+            f"<i>Можно несколькими строками.</i>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data=f"droplk:{drop_id}"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(LKForm.waiting_value, F.text & ~F.text.startswith("/"))
+async def handle_lk_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    drop_id = data.get("drop_id")
+    bank = data.get("bank")
+    value = (message.text or "").strip()
+    drop = crm_storage.get_crm_drop(drop_id) if drop_id else None
+    if not drop:
+        await message.reply("❌ Сессия истекла")
+        await state.clear()
+        return
+    droplk_id = await crm_storage.add_crm_drop_lk(
+        drop_id=drop_id, owner_id=drop["owner_id"],
+        bank=bank, value=value,
+    )
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    if data.get("menu_msg_id"):
+        await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
+    await state.clear()
+    drop = crm_storage.get_crm_drop(drop_id)
+    await _send(
+        message,
+        f"✅ ЛК <b>{bank}</b> сохранён.",
+    )
+    await _show_drop_lks(message, drop)
+
+
+@router.callback_query(F.data.startswith("lkview:"))
+async def cb_lkview(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    await call.answer()
+    status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
+    text = (
+        f"{status_e} <b>{lk.get('bank')}</b>\n"
+        f"клиент: <b>{drop and drop.get('fio') or '—'}</b>\n\n"
+        f"<b>Данные ЛК:</b>\n<code>{lk.get('value') or '—'}</code>\n\n"
+        f"<b>Сделка:</b> {lk.get('deal') or '—'}\n"
+    )
+    if lk.get("new_password") or lk.get("ded_ip"):
+        text += (
+            f"\n<b>Заполнено админом:</b>\n"
+            f"Новый пароль: {lk.get('new_password') or '—'}\n"
+            f"Новая почта: {lk.get('new_mail') or '—'}\n"
+            f"Дедик IP: {lk.get('ded_ip') or '—'}\n"
+        )
+    if lk.get("sms_history"):
+        text += "\n<b>📩 SMS:</b>\n"
+        for s in lk["sms_history"][-10:]:
+            text += f"  • {s.get('code')} — {s.get('time')}\n"
+    kb = [
+        [InlineKeyboardButton(text="🗑 Удалить ЛК", callback_data=f"lkdelete:{droplk_id}")],
+        [InlineKeyboardButton(text="◀️ К списку ЛК", callback_data=f"droplk:{lk.get('drop_id')}")],
+    ]
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _send(call.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+
+@router.callback_query(F.data.startswith("lkdelete:"))
+async def cb_lkdelete(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("Уже удалён", show_alert=True)
+        return
+    drop_id = lk.get("drop_id")
+    await crm_storage.delete_crm_drop_lk(droplk_id)
+    await call.answer("Удалено")
+    drop = crm_storage.get_crm_drop(drop_id) if drop_id else None
+    if drop:
+        await _show_drop_lks(call.message, drop)
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 4 — Отправка в admin-чат + Принять / Отклонить
+# ════════════════════════════════════════════════════════════════
+
+async def _render_admin_text(drop: dict) -> str:
+    """Текст контрольного сообщения в admin-чате."""
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
+    lines = [f"<b>ПОСТАВЩИК:</b> @{owner and owner.get('username') or '—'}\n"]
+    lines.append(f"<b>ФИО:</b> {drop.get('fio') or '—'}")
+    for lk in lks.values():
+        lines.append(f"<b>Банк:</b> {lk.get('bank')}")
+        lines.append(f"<code>{lk.get('value') or '—'}</code>")
+        lines.append(f"<b>Сделка #:</b> {lk.get('deal') or '—'}")
+    if drop.get("about"):
+        lines.append(f"\n<b>Информация:</b>\n{drop['about']}")
+    if drop.get("status") == "accepted":
+        lines.append(f"\n<b>ЗАПОЛНЕНИЕ АДМИНАМИ PRIDE:</b>")
+        for lk in lks.values():
+            if lk.get("link_pass"):
+                lines.append(f"  • {lk.get('bank')}: <a href=\"{lk['link_pass']}\">Перейти</a>")
+            else:
+                lines.append(f"  • {lk.get('bank')}: <i>заполнить</i>")
+        lines.append(f"\n<b>Цена:</b> ${drop.get('price_usdt') or 0}")
+        lines.append(f"<b>Дата перевяза:</b> {time.strftime('%d.%m.%Y', time.localtime(drop.get('accept_ts') or 0))}")
+        lines.append(f"✅ <b>Пролито:</b> {drop.get('prolit_count') or 0}")
+        # SMS list
+        lines.append("\n<b>📩 SMS-коды:</b>")
+        for lk in lks.values():
+            sms = lk.get("sms_history") or []
+            if not sms:
+                lines.append(f"СМС [{lk.get('bank')}]: <i>нет кодов</i>")
+            else:
+                lines.append(f"СМС [{lk.get('bank')}]:")
+                for s in sms[-5:]:
+                    lines.append(f"  {s.get('code')} — {s.get('time')}")
+    return "\n".join(lines)
+
+
+def _admin_keyboard(drop: dict) -> InlineKeyboardMarkup:
+    """Кнопки для контрольного сообщения в admin-чате."""
+    status = drop.get("status")
+    if status in ("draft", "pending"):
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"acceptdrop:{drop['drop_id']}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"declinedrop:{drop['drop_id']}"),
+        ]])
+    if status == "accepted":
+        # Кнопки SMS на каждый ЛК + изменить цену
+        lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
+        rows = []
+        for lk in lks.values():
+            if lk.get("status") == "ready":
+                rows.append([InlineKeyboardButton(
+                    text=f"[{lk.get('bank')}] Запросить SMS",
+                    callback_data=f"takesmscodedrop:{lk['droplk_id']}",
+                )])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text=f"[{lk.get('bank')}] Запросить код",
+                    callback_data=f"takecodedrop:{lk['droplk_id']}",
+                )])
+        rows.append([InlineKeyboardButton(
+            text="💰 Изменить цену",
+            callback_data=f"dropeditprice:{drop['drop_id']}",
+        )])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+
+@router.callback_query(F.data.startswith("dropsend:"))
+async def cb_dropsend(call: CallbackQuery):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    if drop.get("status") not in ("draft",):
+        await call.answer("Уже отправлен или обработан", show_alert=True)
+        return
+    if not drop.get("about") or not drop.get("scan_file_ids"):
+        await call.answer("Сначала заполните анкету и документы", show_alert=True)
+        return
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
+    if not lks:
+        await call.answer("Сначала добавьте хотя бы один ЛК", show_alert=True)
+        return
+
+    admin_chat_id = get_admin_chat_id()
+    if not admin_chat_id:
+        await call.answer("Admin-чат не настроен", show_alert=True)
+        return
+
+    await call.answer("⏳ Отправляю...")
+    bot = call.message.bot
+    # 1) Постим фотки
+    try:
+        files = drop["scan_file_ids"]
+        if len(files) == 1:
+            await bot.send_photo(admin_chat_id, files[0])
+        else:
+            from aiogram.types import InputMediaPhoto
+            media = [InputMediaPhoto(media=f) for f in files[:10]]
+            await bot.send_media_group(admin_chat_id, media)
+    except Exception as e:
+        logger.warning("dropsend photos failed: %s", e)
+
+    # 2) Контрольное сообщение
+    await crm_storage.update_crm_drop(drop_id, status="pending", send_ts=time.time())
+    drop = crm_storage.get_crm_drop(drop_id)
+    text = await _render_admin_text(drop)
+    try:
+        ctrl = await bot.send_message(admin_chat_id, text, reply_markup=_admin_keyboard(drop))
+        await crm_storage.update_crm_drop(drop_id, admin_msg_id=ctrl.message_id)
+    except Exception as e:
+        logger.error("dropsend ctrl msg failed: %s", e)
+        await ephemeral(call.message, f"❌ Не удалось отправить в admin-чат: {e}")
+        return
+
+    # 3) Апдейтим у партнёра
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _send(
+        call.message,
+        f"🚀 <b>Клиент {drop.get('fio')} отправлен в работу.</b>\n"
+        f"<i>Ожидайте решения админов PRIDE.</i>",
+    )
+
+
+@router.callback_query(F.data.startswith("acceptdrop:"))
+async def cb_acceptdrop(call: CallbackQuery):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    if drop.get("status") == "accepted":
+        await call.answer("Уже принят", show_alert=True)
+        return
+    if drop.get("status") not in ("pending", "draft"):
+        await call.answer("Нельзя принять в этом статусе", show_alert=True)
+        return
+    await call.answer("⏳ Принимаю...")
+    bot = call.message.bot
+    pwd_chat = get_password_chat_id()
+    if not pwd_chat:
+        await ephemeral(call.message, "❌ Password-чат не настроен")
+        return
+
+    await crm_storage.update_crm_drop(drop_id, status="accepted", accept_ts=time.time())
+    drop = crm_storage.get_crm_drop(drop_id)
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
+
+    # Постим в password-чат — на каждый ЛК отдельное сообщение с кнопкой «Заполнить»
+    for lk in lks.values():
+        text2 = _render_password_text(drop, lk)
+        try:
+            msg = await bot.send_message(
+                pwd_chat, text2,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✏️ Заполнить", callback_data=f"filldrop:{lk['droplk_id']}"),
+                ]]),
+            )
+            # Сформируем link_pass
+            pwd_str = str(pwd_chat).replace("-100", "")
+            link_pass = f"https://t.me/c/{pwd_str}/{msg.message_id}"
+            await crm_storage.update_crm_drop_lk(
+                lk["droplk_id"],
+                msgid_pass=msg.message_id, link_pass=link_pass,
+            )
+        except Exception as e:
+            logger.warning("acceptdrop password post failed for lk=%s: %s", lk["droplk_id"], e)
+
+    # Апдейтим контрольное сообщение в admin-чате
+    drop = crm_storage.get_crm_drop(drop_id)
+    text = await _render_admin_text(drop)
+    try:
+        await bot.edit_message_text(
+            text, chat_id=call.message.chat.id,
+            message_id=call.message.message_id, reply_markup=_admin_keyboard(drop),
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logger.warning("acceptdrop admin edit failed: %s", e)
+
+    # Уведомляем партнёра в его чате
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    if owner and owner.get("work_chat_id"):
+        try:
+            await bot.send_message(
+                owner["work_chat_id"],
+                f"✅ <b>Клиент {drop.get('fio')} принят в работу.</b>",
+            )
+        except Exception:
+            pass
+
+
+def _render_password_text(drop: dict, lk: dict) -> str:
+    return (
+        f"<b>ФИО:</b> {drop.get('fio') or '—'}\n"
+        f"<b>Банк:</b> {lk.get('bank')}\n\n"
+        f"<b>Новый пароль:</b> {lk.get('new_password') or '—'}\n"
+        f"<b>Новая почта:</b> {lk.get('new_mail') or '—'}\n"
+        f"<b>Новый номер:</b> {lk.get('new_number') or '—'}\n\n"
+        f"<b>Дедик:</b>\n"
+        f"IP: {lk.get('ded_ip') or '—'}\n"
+        f"Логин: {lk.get('ded_login') or 'Administrator'}\n"
+        f"Пароль: {lk.get('ded_pass') or '—'}"
+    )
+
+
+def _password_filled_keyboard(droplk_id: str, link_access: str = "") -> InlineKeyboardMarkup:
+    rows = []
+    if link_access:
+        rows.append([InlineKeyboardButton(text="🔗 Перейти", url=link_access)])
+    rows.append([
+        InlineKeyboardButton(text="+ Пул Инка", callback_data=f"addpool:{droplk_id}_inka"),
+        InlineKeyboardButton(text="+ Пул ЮР-ЮР", callback_data=f"addpool:{droplk_id}_urur"),
+    ])
+    rows.append([InlineKeyboardButton(text="✅ Успешно отработано", callback_data=f"dropdone:{droplk_id}")])
+    rows.append([InlineKeyboardButton(text="❌ Сообщить о проблеме", callback_data=f"dropproblem:{droplk_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("declinedrop:"))
+async def cb_declinedrop(call: CallbackQuery):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await crm_storage.update_crm_drop(drop_id, status="brak")
+    await call.answer("Отклонено")
+    try:
+        await call.message.edit_text(
+            f"❌ <b>Отклонено</b>\n\n<b>ПОСТАВЩИК:</b> {(crm_storage.get_crm_owner(drop.get('owner_id')) or {}).get('username')}\n"
+            f"<b>ФИО:</b> {drop.get('fio')}",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    if owner and owner.get("work_chat_id"):
+        try:
+            await call.message.bot.send_message(
+                owner["work_chat_id"],
+                f"❌ <b>Клиент {drop.get('fio')} отклонён.</b>",
+            )
+        except Exception:
+            pass
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 5 — Заполнение admin'ом в password-чате (FSM 5 шагов)
+# ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("filldrop:"))
+async def cb_filldrop(call: CallbackQuery, state: FSMContext):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(FillForm.waiting_new_password)
+    await state.update_data(droplk_id=droplk_id, fill_data={})
+    drop = crm_storage.get_crm_drop(lk["drop_id"])
+    await call.message.reply(
+        f"<b>✏️ Заполнение {lk.get('bank')} ({drop.get('fio')})</b>\n\n"
+        f"<b>Шаг 1/5:</b> Новый пароль (или «-» если не меняли):"
+    )
+
+
+@router.message(FillForm.waiting_new_password, F.text & ~F.text.startswith("/"))
+async def fill_pass(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["new_password"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_new_mail)
+    await message.reply("<b>Шаг 2/5:</b> Новая почта (или «-»):")
+
+
+@router.message(FillForm.waiting_new_mail, F.text & ~F.text.startswith("/"))
+async def fill_mail(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["new_mail"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_new_number)
+    await message.reply("<b>Шаг 3/5:</b> Новый номер (или «-»):")
+
+
+@router.message(FillForm.waiting_new_number, F.text & ~F.text.startswith("/"))
+async def fill_number(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["new_number"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_ded_ip)
+    await message.reply("<b>Шаг 4/5:</b> IP дедика:")
+
+
+@router.message(FillForm.waiting_ded_ip, F.text & ~F.text.startswith("/"))
+async def fill_ip(message: Message, state: FSMContext):
+    data = await state.get_data()
+    data.setdefault("fill_data", {})["ded_ip"] = (message.text or "").strip()
+    await state.update_data(**data)
+    await state.set_state(FillForm.waiting_ded_pass)
+    await message.reply("<b>Шаг 5/5:</b> Пароль дедика:")
+
+
+@router.message(FillForm.waiting_ded_pass, F.text & ~F.text.startswith("/"))
+async def fill_pass2(message: Message, state: FSMContext):
+    data = await state.get_data()
+    fd = data.setdefault("fill_data", {})
+    fd["ded_pass"] = (message.text or "").strip()
+    droplk_id = data.get("droplk_id")
+    if not droplk_id:
+        await message.reply("❌ Сессия истекла")
+        await state.clear()
+        return
+    # Сохраняем все 5 полей
+    await crm_storage.update_crm_drop_lk(
+        droplk_id,
+        new_password=fd.get("new_password") or "",
+        new_mail=fd.get("new_mail") or "",
+        new_number=fd.get("new_number") or "",
+        ded_ip=fd.get("ded_ip") or "",
+        ded_pass=fd.get("ded_pass") or "",
+        status="ready",
+    )
+    await state.clear()
+
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    drop = crm_storage.get_crm_drop(lk["drop_id"])
+
+    # Обновляем сообщение в password-чате (с новыми кнопками)
+    bot = message.bot
+    pwd_chat = get_password_chat_id()
+    if pwd_chat and lk.get("msgid_pass"):
+        try:
+            await bot.edit_message_text(
+                _render_password_text(drop, lk),
+                chat_id=pwd_chat, message_id=lk["msgid_pass"],
+                reply_markup=_password_filled_keyboard(droplk_id),
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.warning("password edit failed: %s", e)
+
+    # Обновляем контрольное сообщение в admin-чате
+    admin_chat = get_admin_chat_id()
+    if admin_chat and drop.get("admin_msg_id"):
+        try:
+            await bot.edit_message_text(
+                await _render_admin_text(drop),
+                chat_id=admin_chat, message_id=drop["admin_msg_id"],
+                reply_markup=_admin_keyboard(drop),
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.warning("admin edit (after fill) failed: %s", e)
+
+    await message.reply(f"✅ ЛК <b>{lk.get('bank')}</b> заполнен.")
+
+
+# Пулы Инка / ЮР-ЮР
+@router.callback_query(F.data.startswith("addpool:"))
+async def cb_addpool(call: CallbackQuery):
+    arg = call.data.split(":", 1)[1]
+    parts = arg.split("_", 1)
+    if len(parts) != 2:
+        await call.answer("Bad data", show_alert=True)
+        return
+    droplk_id, pool_type = parts
+    pool_name = {"inka": "Инка", "urur": "ЮР-ЮР"}.get(pool_type, pool_type)
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await call.answer(f"✅ Добавлено в пул {pool_name}")
+    # Простая запись в drop's history
+    drop_id = lk.get("drop_id")
+    drop = crm_storage.get_crm_drop(drop_id) if drop_id else None
+    if drop:
+        new_count = int(drop.get("prolit_count") or 0) + 1
+        await crm_storage.update_crm_drop(drop_id, prolit_count=new_count)
+        # Обновим admin message
+        admin_chat = get_admin_chat_id()
+        if admin_chat and drop.get("admin_msg_id"):
+            try:
+                drop = crm_storage.get_crm_drop(drop_id)
+                await call.message.bot.edit_message_text(
+                    await _render_admin_text(drop),
+                    chat_id=admin_chat, message_id=drop["admin_msg_id"],
+                    reply_markup=_admin_keyboard(drop),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+
+
+@router.callback_query(F.data.startswith("dropdone:"))
+async def cb_dropdone(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await crm_storage.update_crm_drop_lk(droplk_id, status="done")
+    await call.answer("✅ Отмечено")
+    # Проверка: все ЛК дропа done → drop.status = done
+    drop_id = lk.get("drop_id")
+    if drop_id:
+        all_lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
+        if all_lks and all(l.get("status") == "done" for l in all_lks.values()):
+            await crm_storage.update_crm_drop(drop_id, status="done", done_ts=time.time())
+
+
+@router.callback_query(F.data.startswith("dropproblem:"))
+async def cb_dropproblem(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await call.answer("⚠ Помечено как проблема")
+    # Уведомление в admin
+    admin_chat = get_admin_chat_id()
+    if admin_chat:
+        try:
+            await call.message.bot.send_message(
+                admin_chat,
+                f"⚠️ <b>Проблема с ЛК {lk.get('bank')}</b>\n"
+                f"droplk_id: <code>{droplk_id}</code>",
+            )
+        except Exception:
+            pass
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 6 — SMS-коды (запрос + ввод партнёром)
+# ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("takecodedrop:"))
+async def cb_takecodedrop(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    await _request_sms(call, droplk_id, label="код", first_time=True)
+
+
+@router.callback_query(F.data.startswith("takesmscodedrop:"))
+async def cb_takesmscodedrop(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    await _request_sms(call, droplk_id, label="SMS-код", first_time=False)
+
+
+async def _request_sms(call: CallbackQuery, droplk_id: str, label: str, first_time: bool):
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    if not drop:
+        await call.answer("Дроп не найден", show_alert=True)
+        return
+    owner = crm_storage.get_crm_owner(drop.get("owner_id") or "")
+    if not owner or not owner.get("work_chat_id"):
+        await call.answer("Чат партнёра не найден", show_alert=True)
+        return
+    await call.answer(f"Запрашиваю {label}...")
+    # Пост в чат партнёра
+    try:
+        msg = await call.message.bot.send_message(
+            owner["work_chat_id"],
+            f"<b>📩 Прайд запрашивает {label}</b>\n\n"
+            f"Банк: <b>{lk.get('bank')}</b>\n"
+            f"Клиент: <b>{drop.get('fio')}</b>\n\n"
+            f"Нажмите кнопку и отправьте {label} следующим сообщением.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f"📩 Отправить {label}", callback_data=f"givemecode:{droplk_id}"),
+            ]]),
+        )
+    except Exception as e:
+        logger.warning("takecode post failed: %s", e)
+
+
+@router.callback_query(F.data.startswith("givemecode:"))
+async def cb_givemecode(call: CallbackQuery, state: FSMContext):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(SMSForm.waiting_code)
+    await state.update_data(droplk_id=droplk_id)
+    try:
+        await call.message.edit_text(
+            f"<b>📩 Введите код для {lk.get('bank')}:</b>\n\n"
+            f"<i>Бот реагирует на следующее сообщение.</i>",
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(SMSForm.waiting_code, F.text & ~F.text.startswith("/"))
+async def handle_sms_code(message: Message, state: FSMContext):
+    data = await state.get_data()
+    code = (message.text or "").strip()
+    droplk_id = data.get("droplk_id")
+    if not droplk_id:
+        await state.clear()
+        return
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await state.clear()
+        return
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    # Сохраняем код
+    await crm_storage.append_crm_sms(droplk_id, code=code)
+    await state.clear()
+    await message.reply(f"✅ Код <b>{code}</b> отправлен админам PRIDE.")
+    # Обновляем сообщение в admin-чате
+    admin_chat = get_admin_chat_id()
+    if drop and admin_chat and drop.get("admin_msg_id"):
+        try:
+            drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+            await message.bot.edit_message_text(
+                await _render_admin_text(drop),
+                chat_id=admin_chat, message_id=drop["admin_msg_id"],
+                reply_markup=_admin_keyboard(drop),
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.warning("sms admin edit failed: %s", e)
+
+
+# Цена покупки (этап 4)
+@router.callback_query(F.data.startswith("dropeditprice:"))
+async def cb_dropeditprice(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(PriceForm.waiting_price)
+    await state.update_data(drop_id=drop_id)
+    await call.message.reply(
+        f"<b>💰 Новая цена для {drop.get('fio')}</b>\n\n"
+        f"Текущая: ${drop.get('price_usdt') or 0}\n"
+        f"Введите новую цену в USD:"
+    )
+
+
+@router.message(PriceForm.waiting_price, F.text & ~F.text.startswith("/"))
+async def handle_price(message: Message, state: FSMContext):
+    data = await state.get_data()
+    drop_id = data.get("drop_id")
+    try:
+        price = int((message.text or "").replace("$", "").strip())
+    except ValueError:
+        await ephemeral(message, "❌ Введи число")
+        return
+    if not drop_id:
+        await state.clear()
+        return
+    await crm_storage.update_crm_drop(drop_id, price_usdt=price)
+    await state.clear()
+    drop = crm_storage.get_crm_drop(drop_id)
+    await message.reply(f"✅ Цена обновлена: <b>${price}</b>")
+    admin_chat = get_admin_chat_id()
+    if admin_chat and drop.get("admin_msg_id"):
+        try:
+            await message.bot.edit_message_text(
+                await _render_admin_text(drop),
+                chat_id=admin_chat, message_id=drop["admin_msg_id"],
+                reply_markup=_admin_keyboard(drop),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
 
 
 # ─── Команды владельца ────────────────────────────────────────
