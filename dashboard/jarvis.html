@@ -4798,9 +4798,24 @@ function jarvis() {
             this.dcRemoteScreens = { ...this.dcRemoteScreens, [remoteSessionId]: stream };
           }
           stream.addTrack(ev.track);
-          const cleanupRemoteScreen = () => {
-            console.log('[screen] remote ended/muted for', remoteSessionId);
-            try { stream.removeTrack(ev.track); } catch {}
+
+          // === Helper: показать экран этого peer'а ===
+          const showRemoteScreen = () => {
+            let s = this.dcRemoteScreens[remoteSessionId];
+            if (!s) {
+              s = new MediaStream();
+              this.dcRemoteScreens = { ...this.dcRemoteScreens, [remoteSessionId]: s };
+            }
+            // Добавим track если ещё не добавлен
+            if (!s.getTracks().includes(ev.track)) {
+              try { s.addTrack(ev.track); } catch {}
+            }
+            this.dcActiveScreenSession = remoteSessionId;
+            this.$nextTick(() => this._bindRemoteScreenVideo(remoteSessionId));
+          };
+
+          // === Helper: скрыть экран этого peer'а ===
+          const hideRemoteScreen = () => {
             const updated = { ...this.dcRemoteScreens };
             delete updated[remoteSessionId];
             this.dcRemoteScreens = updated;
@@ -4816,11 +4831,23 @@ function jarvis() {
               }
             }
           };
-          // 'ended' — когда сам трек закрылся (full track.stop())
-          ev.track.onended = cleanupRemoteScreen;
-          // 'mute' — когда sender сделал replaceTrack(null) — трек жив, но без данных
-          // Это наш основной сигнал что шеринг прекратился
-          ev.track.onmute = cleanupRemoteScreen;
+
+          // 'ended' — sender вышел из канала или закрыл pc
+          ev.track.onended = () => {
+            console.log('[screen] remote track ended for', remoteSessionId);
+            hideRemoteScreen();
+          };
+          // 'mute' — sender сделал replaceTrack(null) (нажал Стоп)
+          ev.track.onmute = () => {
+            console.log('[screen] remote track muted for', remoteSessionId);
+            hideRemoteScreen();
+          };
+          // 'unmute' — sender повторно начал шарить через тот же transceiver
+          // (replaceTrack(newTrack)). Без этого второй заход не отображался!
+          ev.track.onunmute = () => {
+            console.log('[screen] remote track unmuted — restore for', remoteSessionId);
+            showRemoteScreen();
+          };
           // Авто-переключаемся на просмотр этого экрана
           this.dcActiveScreenSession = remoteSessionId;
           // Привязать к video элементу после render
