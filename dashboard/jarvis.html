@@ -2821,6 +2821,29 @@
       letter-spacing: 1px;
     }
 
+    /* ===== Audio unlock banner (mobile) ===== */
+    .m-audio-unlock {
+      position: fixed;
+      bottom: calc(80px + env(safe-area-inset-bottom));
+      left: 12px;
+      right: 12px;
+      background: linear-gradient(135deg, var(--hud-amber), #f59e0b);
+      color: #0a1421;
+      padding: 14px 18px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+      box-shadow: 0 8px 24px rgba(251, 191, 36, 0.4);
+      z-index: 200;
+      animation: pulse-unlock 1.5s ease-in-out infinite;
+      cursor: pointer;
+    }
+    @keyframes pulse-unlock {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+
     /* ===== BOTTOM NAV ===== */
     .m-bottom-nav {
       position: fixed;
@@ -4303,6 +4326,12 @@
     </div>
   </main>
 
+  <!-- Audio unlock banner: появляется если браузер блокирует voice audio -->
+  <div class="m-audio-unlock" x-show="_audioBlocked"
+       @click="_unlockAudio(); for(const el of _pendingAudio){try{el.muted=false;el.play().catch(()=>{});}catch{}}; _pendingAudio=[]; _audioBlocked=false;">
+    🔊 Нажми чтобы включить звук
+  </div>
+
   <!-- BOTTOM nav -->
   <nav class="m-bottom-nav">
     <button class="m-nav-btn" :class="mobileTab === 'home' ? 'active' : ''" @click="setMobileTab('home')">
@@ -5643,6 +5672,83 @@ function jarvis() {
       }
     },
 
+    // === Mobile audio unlock ===
+    // На iOS/Android autoplay для удалённых WebRTC треков блокируется.
+    // Нужно «разблокировать» аудио в обработчике user-gesture (клик «Зайти»).
+    // Создаём dummy AudioContext+silent buffer и play()'им — это unlock'ает
+    // всю страницу для последующего воспроизведения.
+    _audioUnlocked: false,
+    _pendingAudio: [],
+
+    _unlockAudio() {
+      if (this._audioUnlocked) return;
+      try {
+        // 1) Resume AudioContext (если когда-то создавался)
+        if (!window._jarvisAudioCtx) {
+          window._jarvisAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (window._jarvisAudioCtx.state === 'suspended') {
+          window._jarvisAudioCtx.resume().catch(() => {});
+        }
+        // 2) Сыграть короткий silent buffer — обходит лок iOS
+        const buf = window._jarvisAudioCtx.createBuffer(1, 1, 22050);
+        const src = window._jarvisAudioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(window._jarvisAudioCtx.destination);
+        if (src.start) src.start(0); else src.noteOn(0);
+        // 3) Создать и play() dummy <audio> — unlock'ает HTMLMediaElement
+        const dummy = document.createElement('audio');
+        dummy.autoplay = true;
+        dummy.playsInline = true;
+        dummy.muted = true;  // тихо
+        dummy.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAuLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uP////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAbCwq+SovgAAAAAAAAAAAAAAAAAAAAAA';
+        const p = dummy.play();
+        if (p) p.catch(() => {});
+        this._audioUnlocked = true;
+        console.log('[voice] audio unlocked for mobile');
+      } catch (e) {
+        console.warn('[voice] audio unlock failed:', e);
+      }
+    },
+
+    _tryPlayAudio(audioEl, sessionId) {
+      const playPromise = audioEl.play();
+      if (!playPromise) return;
+      playPromise.then(() => {
+        console.log('[voice] audio playing for', sessionId);
+      }).catch(err => {
+        console.warn('[voice] audio play blocked for', sessionId, '— will retry on next interaction:', err);
+        // Сохраняем чтобы попытаться при следующем клике
+        if (!this._pendingAudio.includes(audioEl)) this._pendingAudio.push(audioEl);
+        // Покажем плашку «Tap to enable audio»
+        this._audioBlocked = true;
+        // Глобальный one-shot handler
+        if (!this._audioRetryHandlerAdded) {
+          this._audioRetryHandlerAdded = true;
+          const retry = () => {
+            this._unlockAudio();
+            for (const el of this._pendingAudio) {
+              try {
+                el.muted = false;
+                el.volume = 1.0;
+                el.play().catch(() => {});
+              } catch {}
+            }
+            this._pendingAudio = [];
+            this._audioBlocked = false;
+            this._audioRetryHandlerAdded = false;
+            document.removeEventListener('touchend', retry, true);
+            document.removeEventListener('click', retry, true);
+          };
+          document.addEventListener('touchend', retry, true);
+          document.addEventListener('click', retry, true);
+        }
+      });
+    },
+
+    _audioBlocked: false,
+    _audioRetryHandlerAdded: false,
+
     _getIceServers() {
       // STUN серверы Google + Cloudflare. TURN — openrelay (бесплатный,
       // ограниченный по трафику, но рабочий для small group calls).
@@ -5701,13 +5807,16 @@ function jarvis() {
         console.log('[voice] remote track received from', remoteSessionId, ev.streams);
         if (ev.streams && ev.streams[0]) {
           audioEl.srcObject = ev.streams[0];
-          // Браузер может блокировать autoplay — пытаемся принудительно
-          const playPromise = audioEl.play();
-          if (playPromise) {
-            playPromise.catch(err => {
-              console.warn('[voice] audio play blocked, will retry on interaction:', err);
-            });
-          }
+          // КРИТИЧНО для мобилок: audioEl должен быть НЕ muted и иметь
+          // правильные атрибуты ДО play()
+          audioEl.muted = this.dcDeafened || false;
+          audioEl.volume = 1.0;
+          audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          audioEl.setAttribute('playsinline', '');  // legacy iOS
+          audioEl.setAttribute('webkit-playsinline', '');
+          // Запускаем
+          this._tryPlayAudio(audioEl, remoteSessionId);
         }
       };
       pc.onicecandidate = (ev) => {
@@ -5801,6 +5910,9 @@ function jarvis() {
     async joinDiscordVoice() {
       if (!this.discordActiveChannel || this.discordActiveChannel.type !== 'voice') return;
       if (this.dcCurrentVoiceChannel) await this.leaveDiscordVoice();
+      // КРИТИЧНО: вызываем audio unlock СИНХРОННО внутри user-gesture
+      // (клик/тап на кнопку «Зайти»). После await эта возможность теряется.
+      this._unlockAudio();
       // Проверка: WebRTC доступен только на HTTPS (или localhost)
       const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       if (!isSecure) {
