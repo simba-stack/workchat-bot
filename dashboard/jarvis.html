@@ -1327,6 +1327,46 @@
     flex: 1;
   }
 
+  /* ===== Voice activity pulse (Discord-like) ===== */
+  /* Когда юзер говорит — анимированное зелёное кольцо вокруг аватарки */
+  .dc-stage-user.speaking .dc-stage-avatar,
+  .dc-stage-user.speaking .dc-avatar.large,
+  .dc-voice-member.speaking .dc-avatar-img,
+  .dc-voice-member.speaking .dc-avatar.tiny,
+  .m-voice-user.speaking .m-voice-avatar,
+  .m-voice-user.speaking .m-voice-avatar-fallback {
+    box-shadow:
+      0 0 0 2px var(--hud-emerald),
+      0 0 16px rgba(74, 222, 128, 0.7),
+      0 0 32px rgba(74, 222, 128, 0.35);
+    animation: dc-speak-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes dc-speak-pulse {
+    0%, 100% {
+      box-shadow:
+        0 0 0 2px var(--hud-emerald),
+        0 0 12px rgba(74, 222, 128, 0.5),
+        0 0 24px rgba(74, 222, 128, 0.2);
+    }
+    50% {
+      box-shadow:
+        0 0 0 3px var(--hud-emerald),
+        0 0 22px rgba(74, 222, 128, 0.9),
+        0 0 40px rgba(74, 222, 128, 0.5);
+    }
+  }
+  /* Микро-индикатор «говорит» рядом с именем в правой панели */
+  .dc-voice-member.speaking::after {
+    content: '🔊';
+    margin-left: auto;
+    font-size: 10px;
+    animation: dc-speak-pulse-mini 1s ease-in-out infinite;
+  }
+  @keyframes dc-speak-pulse-mini {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
   /* Voice stage (full voice channel view) */
   .dc-voice-stage {
     padding: 24px;
@@ -2823,7 +2863,13 @@
             <template x-if="ch.type === 'voice' && (ch.voice_participants?.length || 0) > 0">
               <div class="dc-voice-members">
                 <template x-for="p in (ch.voice_participants || [])" :key="p.session_id">
-                  <div class="dc-voice-member" :class="p.muted ? 'muted' : ''">
+                  <div class="dc-voice-member"
+                       :class="{
+                         'muted': p.muted,
+                         'speaking': p.session_id === dcSessionId
+                           ? (isSpeaking('__local__') && !p.muted)
+                           : isSpeaking(p.session_id)
+                       }">
                     <template x-if="p.photo_url">
                       <img :src="p.photo_url" class="dc-avatar-img" :alt="p.username || p.first_name"/>
                     </template>
@@ -2872,6 +2918,21 @@
       <span style="font-weight: 700;" x-text="discordActiveChannel?.name || ''"></span>
       <span style="font-size: 10px; color: var(--text-dim); margin-left: 8px;" x-text="discordActiveChannel?.topic || ''"></span>
       <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+        <!-- Voice controls (только когда в голосе) -->
+        <template x-if="isInVoiceChannel(discordActiveChannel?.id)">
+          <div style="display: flex; gap: 6px;">
+            <button class="btn" :class="dcPushToTalk ? 'success' : ''"
+                    @click="togglePushToTalk()"
+                    :title="dcPushToTalk ? 'PTT вкл — зажми Space чтобы говорить' : 'Push-to-talk выкл (mic всегда открыт)'">
+              <span x-text="dcPushToTalk ? '⌨ PTT ON' : '⌨ PTT'"></span>
+            </button>
+            <button class="btn" :class="dcScreenSharing ? 'danger' : ''"
+                    @click="toggleScreenShare()"
+                    :title="dcScreenSharing ? 'Остановить шеринг экрана' : 'Поделиться экраном'">
+              <span x-text="dcScreenSharing ? '🖥 Стоп' : '🖥 Экран'"></span>
+            </button>
+          </div>
+        </template>
         <button x-show="discordActiveChannel?.type === 'voice'" class="btn"
                 @click="isInVoiceChannel(discordActiveChannel.id) ? leaveDiscordVoice() : joinDiscordVoice()"
                 :class="isInVoiceChannel(discordActiveChannel?.id) ? 'danger' : 'success'"
@@ -2886,7 +2947,14 @@
     <!-- Voice participants (inside voice-channel view) -->
     <div class="dc-voice-stage" x-show="discordActiveChannel?.type === 'voice' && (dcVoiceParticipants?.length || 0) > 0">
       <template x-for="p in dcVoiceParticipants" :key="p.session_id">
-        <div class="dc-stage-user" :class="(p.muted ? 'is-muted ' : '') + (p.session_id === dcSessionId ? 'is-me' : '')">
+        <div class="dc-stage-user"
+             :class="{
+               'is-muted': p.muted,
+               'is-me': p.session_id === dcSessionId,
+               'speaking': p.session_id === dcSessionId
+                 ? (isSpeaking('__local__') && !p.muted)
+                 : isSpeaking(p.session_id)
+             }">
           <template x-if="p.photo_url">
             <img :src="p.photo_url" class="dc-stage-avatar" :alt="p.username || p.first_name"/>
           </template>
@@ -3368,6 +3436,19 @@ function jarvis() {
     // (обход autoplay-блокировки iOS/Android)
     dcRemoteStream: null,
     dcRemoteAudioEl: null,
+    // Voice activity detection — пульсация говорящего
+    dcSpeaking: {},           // {session_id: bool} — кто сейчас говорит
+    dcVadAnimationId: null,   // requestAnimationFrame id для cleanup
+    dcVadAnalysers: {},       // {session_id: {analyser, dataArray, ctx, source}}
+    // Push-to-talk
+    dcPushToTalk: false,      // если true — mic mute'ится по умолчанию, слушаем Space
+    dcPttHeld: false,
+    // Screen share
+    dcScreenSharing: false,
+    dcScreenStream: null,
+    // Custom status
+    dcStatus: 'online',       // online | away | dnd | invisible
+    dcStatusMenuOpen: false,
     detailModal: {
       open: false, card_id: '', loading: false, saving: false, flash: '',
       original: {}, draft: {},
@@ -4481,6 +4562,14 @@ function jarvis() {
           this.dcRemoteStream.addTrack(ev.track);
           console.log('[voice] track added to shared remote stream, total tracks:',
                       this.dcRemoteStream.getTracks().length);
+          // VAD для удалённого peer — отдельный MediaStream только с его аудио,
+          // чтобы анализировать ЕГО уровень независимо
+          try {
+            const perPeerStream = new MediaStream([ev.track]);
+            this._startVad(remoteSessionId, perPeerStream);
+          } catch (e) {
+            console.warn('[vad] peer VAD setup failed:', e);
+          }
           // На всякий случай — re-play (если был paused)
           if (this.dcRemoteAudioEl) {
             this.dcRemoteAudioEl.muted = this.dcDeafened || false;
@@ -4579,6 +4668,8 @@ function jarvis() {
     cleanupPeer(sessionId) {
       const peer = this.dcPeers[sessionId];
       if (!peer) return;
+      // Stop VAD для этого peer'а
+      this._stopVad(sessionId);
       // Удалим receiver-tracks этого peer'а из общего remote stream
       try {
         if (this.dcRemoteStream && peer.pc) {
@@ -4666,6 +4757,9 @@ function jarvis() {
           video: false,
         });
         console.log('[voice] mic granted, tracks:', this.dcLocalStream.getTracks().map(t => t.kind + ':' + t.label));
+        // VAD для своего mic — пульсация моей аватарки когда я говорю
+        // (используем __local__ как session_id для себя)
+        this._startVad('__local__', this.dcLocalStream);
       } catch (e) {
         let msg = 'Не удалось получить микрофон: ' + (e.name || '') + ' ' + (e.message || '');
         if (e.name === 'NotAllowedError') msg = '⛔ Микрофон заблокирован. Разреши доступ в настройках браузера (замочек в адресной строке).';
@@ -4743,6 +4837,18 @@ function jarvis() {
       } catch (e) {
         console.warn('[voice] remote audio cleanup error:', e);
       }
+      // Stop VAD на все — мы выходим из голоса
+      this._stopAllVad();
+      // Cleanup PTT если был
+      if (this.dcPushToTalk) {
+        this._removePttListeners();
+        this.dcPushToTalk = false;
+        this.dcPttHeld = false;
+      }
+      // Stop screen share если шарили
+      if (this.dcScreenSharing) {
+        try { this._stopScreenShare(); } catch {}
+      }
       this.dcCurrentVoiceChannel = null;
       this.dcVoiceParticipants = [];
       this.playBeep(300);
@@ -4780,6 +4886,237 @@ function jarvis() {
 
     isInVoiceChannel(channelId) {
       return this.dcCurrentVoiceChannel === channelId;
+    },
+
+    isSpeaking(sessionId) {
+      return !!this.dcSpeaking[sessionId];
+    },
+
+    // ====== VOICE ACTIVITY DETECTION ======
+    // Анализируем уровень звука каждого MediaStream через AnalyserNode.
+    // Если RMS > threshold → ставим dcSpeaking[sid]=true, avatar пульсирует.
+    _startVad(sessionId, stream) {
+      if (!stream || this.dcVadAnalysers[sessionId]) return;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = window._jarvisVadCtx || new Ctx();
+        window._jarvisVadCtx = ctx;
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.4;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        this.dcVadAnalysers[sessionId] = { ctx, source, analyser, dataArray };
+        console.log('[vad] started for', sessionId);
+        this._startVadLoop();
+      } catch (e) {
+        console.warn('[vad] start failed for', sessionId, e);
+      }
+    },
+
+    _stopVad(sessionId) {
+      const a = this.dcVadAnalysers[sessionId];
+      if (!a) return;
+      try { a.source.disconnect(); } catch {}
+      delete this.dcVadAnalysers[sessionId];
+      // mutate the proxy so Alpine re-renders
+      this.dcSpeaking = { ...this.dcSpeaking, [sessionId]: false };
+      delete this.dcSpeaking[sessionId];
+    },
+
+    _stopAllVad() {
+      for (const sid of Object.keys(this.dcVadAnalysers)) this._stopVad(sid);
+      if (this.dcVadAnimationId) {
+        cancelAnimationFrame(this.dcVadAnimationId);
+        this.dcVadAnimationId = null;
+      }
+      this.dcSpeaking = {};
+    },
+
+    _startVadLoop() {
+      if (this.dcVadAnimationId) return;  // уже крутится
+      const THRESHOLD = 18;   // RMS порог (0-128 для signed)
+      const HOLD_MS = 200;    // не дёргаем избыточно
+      const lastChange = {};
+      const tick = () => {
+        const sessions = Object.keys(this.dcVadAnalysers);
+        if (sessions.length === 0) {
+          this.dcVadAnimationId = null;
+          return;
+        }
+        const now = performance.now();
+        const update = {};
+        let dirty = false;
+        for (const sid of sessions) {
+          const { analyser, dataArray } = this.dcVadAnalysers[sid];
+          analyser.getByteTimeDomainData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            const v = dataArray[i] - 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / dataArray.length);
+          const speaking = rms > THRESHOLD;
+          const prev = !!this.dcSpeaking[sid];
+          if (speaking !== prev) {
+            const last = lastChange[sid] || 0;
+            if (now - last >= HOLD_MS) {
+              update[sid] = speaking;
+              lastChange[sid] = now;
+              dirty = true;
+            }
+          }
+        }
+        if (dirty) {
+          this.dcSpeaking = { ...this.dcSpeaking, ...update };
+        }
+        this.dcVadAnimationId = requestAnimationFrame(tick);
+      };
+      this.dcVadAnimationId = requestAnimationFrame(tick);
+    },
+
+    // ====== PUSH-TO-TALK ======
+    togglePushToTalk() {
+      this.dcPushToTalk = !this.dcPushToTalk;
+      if (this.dcPushToTalk) {
+        // Включаем PTT: mic мьютится, пока не зажат Space
+        if (this.dcLocalStream && !this.dcMuted) {
+          for (const t of this.dcLocalStream.getAudioTracks()) t.enabled = false;
+        }
+        this.dcMuted = true;
+        this._installPttListeners();
+      } else {
+        this._removePttListeners();
+        // Возвращаем mic в нормальное состояние
+        if (this.dcLocalStream) {
+          for (const t of this.dcLocalStream.getAudioTracks()) t.enabled = true;
+        }
+        this.dcMuted = false;
+      }
+    },
+
+    _installPttListeners() {
+      if (this._pttDown) return;
+      this._pttDown = (e) => {
+        if (e.code !== 'Space' || e.repeat) return;
+        // Не блокируем Space в input'ах
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        e.preventDefault();
+        this.dcPttHeld = true;
+        if (this.dcLocalStream) {
+          for (const tr of this.dcLocalStream.getAudioTracks()) tr.enabled = true;
+        }
+        this.dcMuted = false;
+      };
+      this._pttUp = (e) => {
+        if (e.code !== 'Space') return;
+        this.dcPttHeld = false;
+        if (this.dcLocalStream) {
+          for (const tr of this.dcLocalStream.getAudioTracks()) tr.enabled = false;
+        }
+        this.dcMuted = true;
+      };
+      document.addEventListener('keydown', this._pttDown);
+      document.addEventListener('keyup', this._pttUp);
+    },
+
+    _removePttListeners() {
+      if (this._pttDown) {
+        document.removeEventListener('keydown', this._pttDown);
+        this._pttDown = null;
+      }
+      if (this._pttUp) {
+        document.removeEventListener('keyup', this._pttUp);
+        this._pttUp = null;
+      }
+    },
+
+    // ====== SCREEN SHARE ======
+    async toggleScreenShare() {
+      if (!this.dcCurrentVoiceChannel) {
+        alert('Зайди в голос сначала.');
+        return;
+      }
+      if (this.dcScreenSharing) {
+        return this._stopScreenShare();
+      }
+      try {
+        this.dcScreenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+          audio: false,
+        });
+        const videoTrack = this.dcScreenStream.getVideoTracks()[0];
+        if (!videoTrack) throw new Error('no video track');
+        // Авто-стоп когда юзер сам кнопкой "стоп шеринг" в браузере
+        videoTrack.onended = () => this._stopScreenShare();
+        // Добавим video track ко всем peer connections
+        for (const sid of Object.keys(this.dcPeers)) {
+          const peer = this.dcPeers[sid];
+          try {
+            peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
+          } catch (e) {
+            console.warn('[screen] addTrack failed for', sid, e);
+          }
+          // Renegotiate
+          try {
+            const offer = await peer.pc.createOffer();
+            await peer.pc.setLocalDescription(offer);
+            this.sendSignal(sid, { type: 'offer', sdp: offer });
+          } catch (e) {
+            console.warn('[screen] renegotiate failed for', sid, e);
+          }
+        }
+        this.dcScreenSharing = true;
+        console.log('[screen] sharing started');
+      } catch (e) {
+        if (e.name !== 'NotAllowedError') {
+          alert('Не удалось расшарить экран: ' + e.message);
+        }
+        console.warn('[screen] start failed', e);
+      }
+    },
+
+    async _stopScreenShare() {
+      if (!this.dcScreenStream) return;
+      // Удалим video sender из всех peer connections
+      for (const sid of Object.keys(this.dcPeers)) {
+        const peer = this.dcPeers[sid];
+        if (peer.screenSender) {
+          try { peer.pc.removeTrack(peer.screenSender); } catch {}
+          peer.screenSender = null;
+          // Renegotiate
+          try {
+            const offer = await peer.pc.createOffer();
+            await peer.pc.setLocalDescription(offer);
+            this.sendSignal(sid, { type: 'offer', sdp: offer });
+          } catch (e) {
+            console.warn('[screen] renegotiate stop failed', e);
+          }
+        }
+      }
+      try {
+        for (const t of this.dcScreenStream.getTracks()) t.stop();
+      } catch {}
+      this.dcScreenStream = null;
+      this.dcScreenSharing = false;
+      console.log('[screen] sharing stopped');
+    },
+
+    // ====== STATUS ======
+    setMyStatus(s) {
+      this.dcStatus = s;
+      this.dcStatusMenuOpen = false;
+      // Сохраним в localStorage
+      try { localStorage.setItem('jarvis-dc-status', s); } catch {}
+      // Шлём всем
+      if (this.dcWs && this.dcWs.readyState === 1) {
+        try {
+          this.dcWs.send(JSON.stringify({ type: 'status', status: s }));
+        } catch {}
+      }
     },
 
     avatarUrl(u) {
