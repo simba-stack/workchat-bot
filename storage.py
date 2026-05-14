@@ -2384,6 +2384,11 @@ class Storage:
                 "ded_location": "",     # где установлен дедик / откуда работаем
                 "link_pass": "",
                 "msgid_pass": 0,
+                # SMS multi-stage flow
+                "sms_stage": "",            # "" → asking_ready → ... → done
+                "sms_login_code": "",       # код входа (получен от клиента)
+                "sms_perevyaz_code": "",    # код перевязки
+                "sms_tracker_msg_id": 0,    # id сообщения трекера в admin-чате
                 "created_at": time.time(),
             }
             await self._save_unlocked()
@@ -2439,7 +2444,7 @@ class Storage:
                     "msg_id": msg_id,
                     "chat_id": chat_id,
                     "updated_at": time.time(),
-                    "expires_at": time.time() + 1800,  # 30 мин
+                    "expires_at": time.time() + 1800,
                 }
             await self._save_unlocked()
 

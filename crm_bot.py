@@ -2014,46 +2014,218 @@ async def cb_dropproblem(call: CallbackQuery):
 # ЭТАП 6 — SMS-коды (запрос + ввод партнёром)
 # ════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════
+# SMS multi-stage flow — управление кодами входа и перевязки.
+# 6 стадий, кнопка в admin-чате меняется по мере прохождения.
+# ════════════════════════════════════════════════════════════════
+# Stages:
+#  ""              — старт (показываем «Запросить готовность»)
+#  asking_ready    — спросили клиента «готовы дать код?»
+#  client_ready    — клиент подтвердил (или менеджер прожал руками)
+#  awaiting_login  — попросили login-код, ждём от клиента
+#  login_received  — login-код пришёл, ждём подтверждения «успешный вход»
+#  login_success   — вход подтверждён, можно спрашивать код перевяза
+#  awaiting_perevyaz — попросили перевяз-код
+#  perevyaz_received — код пришёл
+#  done            — перевязка финализирована
+
+_SMS_STAGE_LABELS = {
+    "":                 ("⚪ Старт", "❓ Спросить готовность"),
+    "asking_ready":     ("⏳ Спросили готовность", "✅ Клиент готов"),
+    "client_ready":     ("✅ Клиент готов", "📩 Дать код входа"),
+    "awaiting_login":   ("⏳ Ждём код входа", "✏️ Ввести код входа"),
+    "login_received":   ("📩 Код входа получен", "✅ Успешный вход"),
+    "login_success":    ("✅ Вход успешен", "📩 Дать код перевяза"),
+    "awaiting_perevyaz":("⏳ Ждём код перевяза", "✏️ Ввести код перевяза"),
+    "perevyaz_received":("📩 Код перевяза получен", "✅ Перевязка успешна"),
+    "done":             ("🏁 Завершено", None),
+}
+
+
+def _sms_flow_text(lk: dict, drop: dict) -> str:
+    stage = lk.get("sms_stage") or ""
+    label, _ = _SMS_STAGE_LABELS.get(stage, ("?", None))
+    bank = lk.get("bank") or "—"
+    fio = drop.get("fio") if drop else "—"
+    login_code = lk.get("sms_login_code") or ""
+    perevyaz_code = lk.get("sms_perevyaz_code") or ""
+    lines = [
+        f"📩 <b>SMS-Flow {bank}</b> · {fio}",
+        f"<b>Стадия:</b> {label}",
+    ]
+    if login_code:
+        lines.append(f"🔑 <b>Код входа:</b> <code>{login_code}</code>")
+    if perevyaz_code:
+        lines.append(f"🔑 <b>Код перевязки:</b> <code>{perevyaz_code}</code>")
+    return "\n".join(lines)
+
+
+def _sms_flow_keyboard(lk: dict) -> InlineKeyboardMarkup:
+    stage = lk.get("sms_stage") or ""
+    droplk_id = lk.get("droplk_id")
+    _, next_label = _SMS_STAGE_LABELS.get(stage, (None, None))
+    rows = []
+    if next_label:
+        rows.append([InlineKeyboardButton(
+            text=next_label, callback_data=f"smsadv:{droplk_id}",
+        )])
+    # Кнопка «Отмена» если flow ещё в процессе
+    if stage and stage != "done":
+        rows.append([InlineKeyboardButton(
+            text="❌ Сбросить flow", callback_data=f"smsreset:{droplk_id}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_to_client_chat(bot, drop, owner, text):
+    """Шлёт сообщение в work_chat клиента (там где ассистент)."""
+    if not owner:
+        return False
+    wc = owner.get("work_chat_id")
+    if not wc:
+        return False
+    try:
+        await bot.send_message(wc, text)
+        return True
+    except Exception as e:
+        logger.warning("send to client chat failed: %s", e)
+        return False
+
+
+async def _post_or_update_sms_tracker(bot, droplk_id):
+    """Создаёт/апдейтит сообщение SMS-трекера в admin-чате CRM."""
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        return None
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    admin_chat = await get_admin_chat_resolved(bot)
+    if not admin_chat:
+        return None
+    text = _sms_flow_text(lk, drop)
+    kb = _sms_flow_keyboard(lk)
+    msg_id = lk.get("sms_tracker_msg_id")
+    if msg_id:
+        try:
+            await bot.edit_message_text(
+                text, chat_id=admin_chat, message_id=msg_id,
+                reply_markup=kb, disable_web_page_preview=True,
+            )
+            return msg_id
+        except Exception:
+            pass  # message may be deleted, post new
+    try:
+        sent = await bot.send_message(admin_chat, text, reply_markup=kb)
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_tracker_msg_id=sent.message_id)
+        return sent.message_id
+    except Exception as e:
+        logger.warning("post sms tracker failed: %s", e)
+        return None
+
+
+# LEGACY компат: takecodedrop и takesmscodedrop запускают новый flow
 @router.callback_query(F.data.startswith("takecodedrop:"))
 async def cb_takecodedrop(call: CallbackQuery):
     droplk_id = call.data.split(":", 1)[1]
-    await _request_sms(call, droplk_id, label="код", first_time=True)
+    await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="")
+    await _post_or_update_sms_tracker(call.message.bot, droplk_id)
+    await call.answer("📩 SMS-flow начат")
 
 
 @router.callback_query(F.data.startswith("takesmscodedrop:"))
 async def cb_takesmscodedrop(call: CallbackQuery):
     droplk_id = call.data.split(":", 1)[1]
-    await _request_sms(call, droplk_id, label="SMS-код", first_time=False)
+    await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="")
+    await _post_or_update_sms_tracker(call.message.bot, droplk_id)
+    await call.answer("📩 SMS-flow начат")
 
 
-async def _request_sms(call: CallbackQuery, droplk_id: str, label: str, first_time: bool):
+@router.callback_query(F.data.startswith("smsadv:"))
+async def cb_smsadv(call: CallbackQuery, state: FSMContext):
+    """Продвинуть SMS-flow на следующую стадию."""
+    droplk_id = call.data.split(":", 1)[1]
     lk = crm_storage.get_crm_drop_lk(droplk_id)
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
     drop = crm_storage.get_crm_drop(lk.get("drop_id"))
-    if not drop:
-        await call.answer("Дроп не найден", show_alert=True)
-        return
-    owner = crm_storage.get_crm_owner(drop.get("owner_id") or "")
-    if not owner or not owner.get("work_chat_id"):
-        await call.answer("Чат партнёра не найден", show_alert=True)
-        return
-    await call.answer(f"Запрашиваю {label}...")
-    # Пост в чат партнёра
-    try:
-        msg = await call.message.bot.send_message(
-            owner["work_chat_id"],
-            f"<b>📩 Прайд запрашивает {label}</b>\n\n"
-            f"Банк: <b>{lk.get('bank')}</b>\n"
-            f"Клиент: <b>{drop.get('fio')}</b>\n\n"
-            f"Нажмите кнопку и отправьте {label} следующим сообщением.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=f"📩 Отправить {label}", callback_data=f"givemecode:{droplk_id}"),
-            ]]),
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
+    bot = call.message.bot
+    stage = lk.get("sms_stage") or ""
+    bank = lk.get("bank") or "—"
+
+    if stage == "":
+        # Старт — спрашиваем готовность у клиента
+        await _send_to_client_chat(
+            bot, drop, owner,
+            f"Готовы дать код для входа в ЛК <b>{bank}</b>?",
         )
-    except Exception as e:
-        logger.warning("takecode post failed: %s", e)
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="asking_ready")
+        await call.answer("✅ Спросили клиента")
+    elif stage == "asking_ready":
+        # Менеджер видит что клиент готов → переход
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="client_ready")
+        await call.answer("✅ Отмечено: клиент готов")
+    elif stage == "client_ready":
+        # Просим код входа
+        await _send_to_client_chat(
+            bot, drop, owner,
+            f"Пришлите <b>код входа в ЛК {bank}</b> следующим сообщением.",
+        )
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="awaiting_login")
+        await call.answer("📩 Запросили код входа")
+    elif stage == "awaiting_login":
+        # Менеджер вводит код вручную
+        await state.set_state(SMSForm.waiting_code)
+        await state.update_data(droplk_id=droplk_id, sms_kind="login")
+        await call.message.reply(
+            f"📩 Введите код <b>входа</b> для {bank} следующим сообщением:"
+        )
+        await call.answer()
+    elif stage == "login_received":
+        # Подтвердить успешный вход
+        await _send_to_client_chat(
+            bot, drop, owner,
+            f"✅ Вход в ЛК <b>{bank}</b> выполнен успешно.",
+        )
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_success")
+        await call.answer("✅ Клиента уведомили")
+    elif stage == "login_success":
+        # Просим код перевязки
+        await _send_to_client_chat(
+            bot, drop, owner,
+            f"Пришлите <b>код перевязки для ЛК {bank}</b> следующим сообщением.",
+        )
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="awaiting_perevyaz")
+        await call.answer("📩 Запросили код перевяза")
+    elif stage == "awaiting_perevyaz":
+        await state.set_state(SMSForm.waiting_code)
+        await state.update_data(droplk_id=droplk_id, sms_kind="perevyaz")
+        await call.message.reply(
+            f"📩 Введите код <b>перевязки</b> для {bank} следующим сообщением:"
+        )
+        await call.answer()
+    elif stage == "perevyaz_received":
+        # Финал
+        await _send_to_client_chat(
+            bot, drop, owner,
+            f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
+        )
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="done")
+        await call.answer("🏁 Перевязка завершена")
+    else:
+        await call.answer()
+    await _post_or_update_sms_tracker(bot, droplk_id)
+
+
+@router.callback_query(F.data.startswith("smsreset:"))
+async def cb_smsreset(call: CallbackQuery):
+    droplk_id = call.data.split(":", 1)[1]
+    await crm_storage.update_crm_drop_lk(
+        droplk_id, sms_stage="",
+        sms_login_code="", sms_perevyaz_code="",
+    )
+    await call.answer("🔄 Flow сброшен")
+    await _post_or_update_sms_tracker(call.message.bot, droplk_id)
 
 
 @router.callback_query(F.data.startswith("givemecode:"))
@@ -2080,6 +2252,7 @@ async def handle_sms_code(message: Message, state: FSMContext):
     data = await state.get_data()
     code = (message.text or "").strip()
     droplk_id = data.get("droplk_id")
+    sms_kind = data.get("sms_kind") or "login"
     if not droplk_id:
         await state.clear()
         return
@@ -2088,10 +2261,26 @@ async def handle_sms_code(message: Message, state: FSMContext):
         await state.clear()
         return
     drop = crm_storage.get_crm_drop(lk.get("drop_id"))
-    # Сохраняем код
     await crm_storage.append_crm_sms(droplk_id, code=code)
+    # По типу записываем в соответствующее поле + переключаем stage
+    if sms_kind == "perevyaz":
+        await crm_storage.update_crm_drop_lk(
+            droplk_id,
+            sms_perevyaz_code=code,
+            sms_stage="perevyaz_received",
+        )
+    else:
+        await crm_storage.update_crm_drop_lk(
+            droplk_id,
+            sms_login_code=code,
+            sms_stage="login_received",
+        )
     await state.clear()
-    await message.reply(f"✅ Код <b>{code}</b> отправлен админам PRIDE.")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await _post_or_update_sms_tracker(message.bot, droplk_id)
     # Обновляем сообщение в admin-чате
     admin_chat = get_admin_chat_id()
     if drop and admin_chat and drop.get("admin_msg_id"):
@@ -2504,6 +2693,425 @@ async def cmd_pending(message: Message):
     if len(pending) > 40:
         lines.append(f"\n<i>… и ещё {len(pending) - 40}</i>")
     await message.reply("\n".join(lines))
+
+
+# ════════════════════════════════════════════════════════════════
+# АДМИН-ПАНЕЛЬ CRM-бота (/admincrm)
+# Доступна только владельцам (CRM_OWNER_IDS).
+# Меню: рассылка по клиентам / модерация партнёров / регулятор.
+# ════════════════════════════════════════════════════════════════
+
+class AdminCRMFSM(StatesGroup):
+    bc_filter_value = State()    # ожидаем значение фильтра (банк/метод/статус)
+    bc_text = State()             # ожидаем текст рассылки
+    bc_confirm = State()          # ожидаем подтверждения
+    warn_reason = State()         # причина предупреждения партнёру
+
+
+def _admincrm_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Рассылка по клиентам", callback_data="ac:broadcast")],
+        [InlineKeyboardButton(text="🚫 Модерация партнёров", callback_data="ac:mod")],
+        [InlineKeyboardButton(text="📊 Регулятор CRM",       callback_data="ac:reg")],
+        [InlineKeyboardButton(text="💰 Прайс ЛК",            callback_data="ac:pricing")],
+        [InlineKeyboardButton(text="❌ Закрыть",             callback_data="ac:close")],
+    ])
+
+
+def _bc_filter_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏦 По банку ЛК",       callback_data="ac:bc_f:bank")],
+        [InlineKeyboardButton(text="📊 По статусу дропа", callback_data="ac:bc_f:status")],
+        [InlineKeyboardButton(text="💳 По методу оплаты",  callback_data="ac:bc_f:method")],
+        [InlineKeyboardButton(text="🌐 Всем активным",     callback_data="ac:bc_f:all")],
+        [InlineKeyboardButton(text="◀️ Назад",             callback_data="ac:main")],
+    ])
+
+
+@router.message(Command("admincrm"))
+async def cmd_admincrm(message: Message, state: FSMContext):
+    """Главное меню админки CRM. Доступно только для CRM_OWNER_IDS."""
+    if not is_owner(message.from_user.id):
+        return
+    await state.clear()
+    await message.reply(
+        "🛠 <b>Админ-панель CRM</b>\n\nВыбери раздел:",
+        reply_markup=_admincrm_menu_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("ac:"))
+async def cb_admincrm(call: CallbackQuery, state: FSMContext):
+    if not is_owner(call.from_user.id):
+        await call.answer("Нет прав", show_alert=True)
+        return
+    action = call.data.split(":", 1)[1]
+    await call.answer()
+
+    if action == "close":
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        return
+
+    if action == "main":
+        await state.clear()
+        try:
+            await call.message.edit_text(
+                "🛠 <b>Админ-панель CRM</b>\n\nВыбери раздел:",
+                reply_markup=_admincrm_menu_kb(),
+            )
+        except Exception:
+            await call.message.answer(
+                "🛠 <b>Админ-панель CRM</b>",
+                reply_markup=_admincrm_menu_kb(),
+            )
+        return
+
+    if action == "broadcast":
+        try:
+            await call.message.edit_text(
+                "📢 <b>Рассылка по клиентским чатам</b>\n\n"
+                "<i>Шаги: фильтр → текст → подтверждение → отправка.</i>\n\n"
+                "Выбери фильтр:",
+                reply_markup=_bc_filter_kb(),
+            )
+        except Exception:
+            pass
+        return
+
+    if action.startswith("bc_f:"):
+        kind = action.split(":", 1)[1]
+        await state.update_data(bc_filter_kind=kind, bc_filter_value=None)
+        if kind == "all":
+            await state.update_data(bc_filter_value="*")
+            await call.message.edit_text(
+                "📢 Фильтр: <b>Всем активным</b>\n\n"
+                "Пришли текст рассылки одним сообщением (или /admincrm чтобы отменить):",
+            )
+            await state.set_state(AdminCRMFSM.bc_text)
+            return
+        # Просим значение
+        prompts = {
+            "bank":   "Пришли название банка (например: <code>Альфа</code>, <code>Сбер</code>, <code>Озон</code>).",
+            "status": "Пришли статус: <code>accepted</code> / <code>done</code> / <code>pending</code> / <code>draft</code>.",
+            "method": "Пришли метод оплаты: <code>GUARANTOR_AFTER_WORK</code> / <code>USDT_TRC20</code> / <code>GUARANTOR_BEFORE</code>.",
+        }
+        await call.message.edit_text(
+            f"📢 Фильтр: <b>{kind}</b>\n\n{prompts.get(kind, '')}\n\nИли /admincrm чтобы отменить.",
+        )
+        await state.set_state(AdminCRMFSM.bc_filter_value)
+        return
+
+    if action == "mod":
+        owners = crm_storage.list_crm_owners()
+        # Топ-15 партнёров с warn/ban для быстрого доступа
+        items = []
+        for oid, o in owners.items():
+            warns = int(o.get("warnings") or 0)
+            banned = int(o.get("banned_until") or 0)
+            items.append((oid, o, warns, banned))
+        items.sort(key=lambda x: (-(x[3] > time.time()), -x[2], -(o.get("total_drops") or 0)))
+        items = items[:15]
+        text = "🚫 <b>Модерация партнёров</b> (топ-15)\n\n"
+        rows = []
+        for oid, o, warns, banned in items:
+            tag = ""
+            if banned > time.time():
+                tag = "🚫"
+            elif warns > 0:
+                tag = f"⚠️{warns}"
+            label = f"{tag} @{o.get('username') or oid}"
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"ac:mod_o:{oid}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="ac:main")])
+        try:
+            await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        except Exception:
+            pass
+        return
+
+    if action.startswith("mod_o:"):
+        oid = action.split(":", 1)[1]
+        owner = crm_storage.get_crm_owner(oid)
+        if not owner:
+            return
+        banned = int(owner.get("banned_until") or 0)
+        warns = int(owner.get("warnings") or 0)
+        banned_str = "🚫 ЗАБАНЕН" if banned > time.time() else "—"
+        text = (
+            f"👤 <b>@{owner.get('username') or oid}</b>\n"
+            f"TG ID: <code>{owner.get('tg_user_id')}</code>\n"
+            f"Warnings: <b>{warns}</b>\n"
+            f"Ban: {banned_str}\n"
+            f"Drops: <b>{owner.get('total_drops') or 0}</b>"
+        )
+        rows = [
+            [InlineKeyboardButton(text="⚠️ +1 warn", callback_data=f"ac:mod_warn:{oid}")],
+        ]
+        if banned > time.time():
+            rows.append([InlineKeyboardButton(text="↩️ Снять бан", callback_data=f"ac:mod_unban:{oid}")])
+        else:
+            rows.append([InlineKeyboardButton(text="🚫 Бан на 7 дней", callback_data=f"ac:mod_ban:{oid}")])
+        rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="ac:mod")])
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        return
+
+    if action.startswith("mod_warn:"):
+        oid = action.split(":", 1)[1]
+        o = crm_storage.get_crm_owner(oid) or {}
+        warns = int(o.get("warnings") or 0) + 1
+        await crm_storage.update_crm_owner(oid, warnings=warns)
+        await call.answer(f"⚠️ Warns: {warns}")
+        # Уведомим партнёра
+        try:
+            if o.get("tg_user_id"):
+                await call.message.bot.send_message(
+                    o["tg_user_id"],
+                    f"⚠️ Получено предупреждение от админа. Всего warnings: <b>{warns}</b>",
+                )
+        except Exception:
+            pass
+        return
+
+    if action.startswith("mod_ban:"):
+        oid = action.split(":", 1)[1]
+        until = time.time() + 7 * 86400
+        await crm_storage.update_crm_owner(oid, banned_until=until)
+        await call.answer("🚫 Забанен на 7 дней")
+        o = crm_storage.get_crm_owner(oid) or {}
+        try:
+            if o.get("tg_user_id"):
+                await call.message.bot.send_message(
+                    o["tg_user_id"],
+                    "🚫 Вы временно заблокированы в CRM на <b>7 дней</b>.\n"
+                    "По вопросам — пишите SIMBA.",
+                )
+        except Exception:
+            pass
+        return
+
+    if action.startswith("mod_unban:"):
+        oid = action.split(":", 1)[1]
+        await crm_storage.update_crm_owner(oid, banned_until=0)
+        await call.answer("↩️ Бан снят")
+        o = crm_storage.get_crm_owner(oid) or {}
+        try:
+            if o.get("tg_user_id"):
+                await call.message.bot.send_message(
+                    o["tg_user_id"],
+                    "✅ Блокировка снята — снова можешь работать с CRM.",
+                )
+        except Exception:
+            pass
+        return
+
+    if action == "reg":
+        owners = crm_storage.list_crm_owners()
+        drops = crm_storage.list_crm_drops()
+        lks = crm_storage.list_crm_drop_lks()
+        drafts = sum(1 for d in drops.values() if d.get("status") == "draft")
+        managed = crm_storage.state.get("managed_chats") or {}
+        text = (
+            "📊 <b>Регулятор CRM</b>\n\n"
+            f"• Партнёров: <b>{len(owners)}</b>\n"
+            f"• Клиентов: <b>{len(drops)}</b> (драфтов: {drafts})\n"
+            f"• ЛК: <b>{len(lks)}</b>\n"
+            f"• Managed-чатов: <b>{len(managed)}</b>\n"
+        )
+        rows = [
+            [InlineKeyboardButton(text="🧹 Очистить драфты", callback_data="ac:reg_clean_drafts")],
+            [InlineKeyboardButton(text="💾 Бэкап state.json", callback_data="ac:reg_backup")],
+            [InlineKeyboardButton(text="🔄 Пересчитать статистику", callback_data="ac:reg_recalc")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="ac:main")],
+        ]
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        return
+
+    if action == "reg_clean_drafts":
+        drops = crm_storage.list_crm_drops()
+        now = time.time()
+        old = [did for did, d in drops.items()
+               if d.get("status") == "draft"
+               and (now - (d.get("created_at") or 0)) > 7 * 86400]
+        for did in old:
+            await crm_storage.delete_crm_drop(did)
+        await call.answer(f"🧹 Удалено драфтов: {len(old)}")
+        return
+
+    if action == "reg_backup":
+        # Просто триггерим save (state.json уже на диске)
+        try:
+            await crm_storage._save_unlocked()
+            await call.answer("💾 state.json сохранён")
+        except Exception as e:
+            await call.answer(f"Err: {e}", show_alert=True)
+        return
+
+    if action == "reg_recalc":
+        owners = crm_storage.list_crm_owners()
+        drops = crm_storage.list_crm_drops()
+        # Пересчёт total_drops у каждого owner
+        for oid, o in owners.items():
+            cnt = sum(1 for d in drops.values() if d.get("owner_id") == oid)
+            if (o.get("total_drops") or 0) != cnt:
+                await crm_storage.update_crm_owner(oid, total_drops=cnt)
+        await call.answer("🔄 Стата пересчитана")
+        return
+
+    if action == "pricing":
+        pricing = crm_storage.state.get("pricing") or {}
+        if not pricing:
+            text = "💰 <b>Прайс ЛК</b>\n\n<i>Пустой. Установи через брейн-чат: «прайс БАНК ЦЕНА».</i>"
+        else:
+            lines = [f"  • <b>{k}</b>: ${v}" for k, v in sorted(pricing.items())]
+            text = "💰 <b>Прайс ЛК</b>\n\n" + "\n".join(lines)
+        rows = [[InlineKeyboardButton(text="◀️ Назад", callback_data="ac:main")]]
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        return
+
+
+@router.message(AdminCRMFSM.bc_filter_value, F.text & ~F.text.startswith("/"))
+async def fsm_bc_filter_value(message: Message, state: FSMContext):
+    if not is_owner(message.from_user.id):
+        await state.clear()
+        return
+    await state.update_data(bc_filter_value=(message.text or "").strip())
+    await message.reply(
+        f"📢 Фильтр: <code>{message.text.strip()}</code>\n\n"
+        "Пришли <b>текст рассылки</b> одним сообщением:"
+    )
+    await state.set_state(AdminCRMFSM.bc_text)
+
+
+@router.message(AdminCRMFSM.bc_text, F.text & ~F.text.startswith("/"))
+async def fsm_bc_text(message: Message, state: FSMContext):
+    if not is_owner(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text:
+        return
+    await state.update_data(bc_text=text)
+    data = await state.get_data()
+    # Соберём список целевых чатов
+    chats = _collect_broadcast_targets(
+        data.get("bc_filter_kind"),
+        data.get("bc_filter_value"),
+    )
+    if not chats:
+        await message.reply("❌ По фильтру никого не нашлось.")
+        await state.clear()
+        return
+    await message.reply(
+        f"📢 <b>Подтверждение рассылки</b>\n\n"
+        f"Фильтр: <b>{data.get('bc_filter_kind')}</b> = <code>{data.get('bc_filter_value')}</code>\n"
+        f"Получателей: <b>{len(chats)}</b>\n\n"
+        f"<b>Превью:</b>\n{text[:300]}{'...' if len(text)>300 else ''}\n\n"
+        f"Отправить?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Отправить", callback_data="ac:bc_send")],
+            [InlineKeyboardButton(text="❌ Отменить",  callback_data="ac:main")],
+        ]),
+    )
+    await state.update_data(bc_targets=chats)
+    await state.set_state(AdminCRMFSM.bc_confirm)
+
+
+@router.callback_query(F.data == "ac:bc_send")
+async def cb_bc_send(call: CallbackQuery, state: FSMContext):
+    if not is_owner(call.from_user.id):
+        await call.answer()
+        return
+    data = await state.get_data()
+    chats = data.get("bc_targets") or []
+    text = data.get("bc_text") or ""
+    if not chats or not text:
+        await call.answer("Нет данных")
+        await state.clear()
+        return
+    await call.answer("🚀 Шлю...")
+    sent = 0
+    failed = 0
+    for chat_id in chats:
+        try:
+            await call.message.bot.send_message(chat_id, text)
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logger.debug("bc fail %s: %s", chat_id, e)
+        await asyncio.sleep(0.05)  # тротлинг
+    await state.clear()
+    try:
+        await call.message.edit_text(
+            f"📊 <b>Рассылка завершена</b>\n\n"
+            f"✅ Отправлено: <b>{sent}</b>\n"
+            f"❌ Не удалось: <b>{failed}</b>",
+            reply_markup=_admincrm_menu_kb(),
+        )
+    except Exception:
+        pass
+
+
+def _collect_broadcast_targets(kind: str, value: str) -> list:
+    """Возвращает список chat_id для рассылки по фильтру."""
+    drops = crm_storage.list_crm_drops()
+    lks = crm_storage.list_crm_drop_lks()
+    owners = crm_storage.list_crm_owners()
+    managed = crm_storage.state.get("managed_chats") or {}
+
+    # Все «активные» work_chat'ы клиентов (drops.work_chat_id)
+    drop_chats = set()
+    for d in drops.values():
+        wc = d.get("work_chat_id")
+        if wc:
+            drop_chats.add(int(wc))
+
+    if kind == "all":
+        return list(drop_chats)
+
+    if kind == "bank":
+        bank_filter = (value or "").upper().strip()
+        # Найти drop_id'ы где есть ЛК с этим банком
+        matching_drops = set()
+        for l in lks.values():
+            if bank_filter in (l.get("bank") or "").upper():
+                matching_drops.add(l.get("drop_id"))
+        out = []
+        for did in matching_drops:
+            d = drops.get(did) or {}
+            wc = d.get("work_chat_id")
+            if wc:
+                out.append(int(wc))
+        return out
+
+    if kind == "status":
+        target = (value or "").lower().strip()
+        out = []
+        for d in drops.values():
+            if (d.get("status") or "").lower() == target and d.get("work_chat_id"):
+                out.append(int(d["work_chat_id"]))
+        return out
+
+    if kind == "method":
+        target = (value or "").upper().strip()
+        # Метод оплаты — в lk_cards (общая таблица), фильтруем по supplier=username
+        cards = crm_storage.state.get("lk_cards") or {}
+        matching_suppliers = set()
+        for c in cards.values():
+            if (c.get("payment_method") or "").upper() == target:
+                matching_suppliers.add((c.get("supplier") or "").lstrip("@").lower())
+        out = []
+        for oid, o in owners.items():
+            uname = (o.get("username") or "").lower()
+            if uname in matching_suppliers:
+                # Шлём в work_chat дропов этого партнёра
+                for d in drops.values():
+                    if d.get("owner_id") == oid and d.get("work_chat_id"):
+                        out.append(int(d["work_chat_id"]))
+        return out
+
+    return []
 
 
 # ════════════════════════════════════════════════════════════════
