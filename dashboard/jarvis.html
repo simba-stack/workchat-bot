@@ -4799,21 +4799,6 @@ function jarvis() {
           }
           stream.addTrack(ev.track);
 
-          // === Helper: показать экран этого peer'а ===
-          const showRemoteScreen = () => {
-            let s = this.dcRemoteScreens[remoteSessionId];
-            if (!s) {
-              s = new MediaStream();
-              this.dcRemoteScreens = { ...this.dcRemoteScreens, [remoteSessionId]: s };
-            }
-            // Добавим track если ещё не добавлен
-            if (!s.getTracks().includes(ev.track)) {
-              try { s.addTrack(ev.track); } catch {}
-            }
-            this.dcActiveScreenSession = remoteSessionId;
-            this.$nextTick(() => this._bindRemoteScreenVideo(remoteSessionId));
-          };
-
           // === Helper: скрыть экран этого peer'а ===
           const hideRemoteScreen = () => {
             const updated = { ...this.dcRemoteScreens };
@@ -4832,36 +4817,12 @@ function jarvis() {
             }
           };
 
-          // ВАЖНО: track может быть в состоянии muted=true ИЗНАЧАЛЬНО
-          // (фреймы ещё не пришли). Игнорируем mute events до первого
-          // unmute — иначе скрываем экран ещё до того как он показался.
-          let everUnmuted = !ev.track.muted;
-          // Если track сразу не muted — он живой
-          if (everUnmuted) {
-            console.log('[screen] track active on arrival');
-          } else {
-            console.log('[screen] track initially muted, waiting for frames...');
-          }
-
-          // 'ended' — sender вышел из канала или закрыл pc
+          // Только onended — срабатывает когда sender делает track.stop()
+          // или removeTrack + renegotiate (transceiver удалён).
+          // Не используем onmute — там race с initial muted state.
           ev.track.onended = () => {
             console.log('[screen] remote track ended for', remoteSessionId);
             hideRemoteScreen();
-          };
-          // 'mute' — игнорируем до того как track хоть раз был unmuted
-          ev.track.onmute = () => {
-            if (!everUnmuted) {
-              console.log('[screen] initial mute — ignoring (waiting for frames)');
-              return;
-            }
-            console.log('[screen] remote track muted for', remoteSessionId, '— sender stopped');
-            hideRemoteScreen();
-          };
-          // 'unmute' — фреймы пошли (первый раз ИЛИ повторный share)
-          ev.track.onunmute = () => {
-            console.log('[screen] remote track unmuted for', remoteSessionId);
-            everUnmuted = true;
-            showRemoteScreen();
           };
           // Авто-переключаемся на просмотр этого экрана
           this.dcActiveScreenSession = remoteSessionId;
@@ -5429,30 +5390,19 @@ function jarvis() {
 
     async _addScreenSenderTo(sid, peer, videoTrack) {
       if (!peer.pc || peer.pc.signalingState === 'closed') return;
-      // Пытаемся переиспользовать существующий sender через replaceTrack.
-      // Если не получится (например, sender невалиден после reconnect) —
-      // fallback на addTrack.
-      let used = false;
+      // Если у нас остался старый sender (например после reconnect) — снимем его
+      // (не используем replaceTrack, был глюк в Chrome). Создаём новый каждый раз.
       if (peer.screenSender) {
-        try {
-          await peer.screenSender.replaceTrack(videoTrack);
-          console.log('[screen] reused sender for', sid);
-          used = true;
-        } catch (e) {
-          console.warn('[screen] replaceTrack failed, falling back to addTrack:', e);
-          peer.screenSender = null;
-        }
+        try { peer.pc.removeTrack(peer.screenSender); } catch {}
+        peer.screenSender = null;
       }
-      if (!used) {
-        try {
-          peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
-          console.log('[screen] new sender for', sid);
-        } catch (e) {
-          console.warn('[screen] addTrack failed for', sid, e);
-          return;
-        }
+      try {
+        peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
+        console.log('[screen] addTrack ok for', sid);
+      } catch (e) {
+        console.warn('[screen] addTrack failed for', sid, e);
+        return;
       }
-      // Очередь negotiation чтобы не было glare
       await this._safeRenegotiate(sid, peer);
     },
 
@@ -5592,18 +5542,11 @@ function jarvis() {
     async _removeSenderAndRenegotiate(sid, peer, sender) {
       try {
         if (!peer || !peer.pc || peer.pc.signalingState === 'closed') return;
-        // ВАЖНО: replaceTrack(null) вместо removeTrack — transceiver
-        // остаётся в pc, можно переиспользовать при следующем шаринге.
-        // removeTrack делал transceiver инактивным навсегда, и addTrack
-        // создавал новый → дубликаты transceiver'ов = всё ломалось.
-        try {
-          if (sender.replaceTrack) {
-            await sender.replaceTrack(null);
-          }
-        } catch (e) {
-          console.debug('[screen] replaceTrack(null) failed:', e);
+        // removeTrack — стандартный способ убрать sender из pc
+        try { peer.pc.removeTrack(sender); } catch (e) {
+          console.debug('[screen] removeTrack failed:', e);
         }
-        // Renegotiate через очередь — transceiver direction станет recvonly/inactive
+        peer.screenSender = null;  // обнуляем, в следующий раз addTrack создаст новый
         await this._safeRenegotiate(sid, peer);
       } catch (e) {
         console.warn('[screen] cleanup for', sid, 'failed:', e);
