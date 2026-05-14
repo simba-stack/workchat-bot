@@ -218,6 +218,18 @@ def _default_state() -> dict:
         # Временное состояние авторизации (phone -> session-data) пока юзер
         # вводит SMS-код. Очищается после успешной авторизации.
         "outreach_pending_auth": {},
+        # ==== InviteWork-бот настройки (welcome + premium emoji + GIF) ====
+        # file_id GIF/анимации для welcome (из Telegram, получается по reply
+        # на GIF командой /setwelcomegif админом).
+        "invite_welcome_gif_id": "",
+        # Premium-emoji custom_emoji document_id'ы для замены текстовых эмодзи
+        # в welcome. Структура: {emoji_char: document_id_str}.
+        # Например {'🔥': '5462863737368090301', '🤝': '5462863737368090302'}.
+        # Без премиум-аккаунта боты могут их пересылать если document_id
+        # известен (полученный от premium-юзера).
+        "invite_premium_emoji": {},
+        # Текст разделов welcome (для редактирования без перезаписи кода).
+        "invite_jobs_text": "",
     }
 
 
@@ -475,6 +487,48 @@ class Storage:
 
     def get_triggers(self):
         return list(self.state["trigger_phrases"])
+
+    # ---- InviteWork-бот: welcome GIF + premium emoji ----
+    def get_invite_welcome_gif(self) -> str:
+        return (self.state.get("invite_welcome_gif_id") or "").strip()
+
+    async def set_invite_welcome_gif(self, file_id: str):
+        async with _lock:
+            self.state["invite_welcome_gif_id"] = (file_id or "").strip()
+            await self._save_unlocked()
+
+    def get_invite_premium_emoji(self) -> dict:
+        return dict(self.state.get("invite_premium_emoji") or {})
+
+    async def set_invite_premium_emoji(self, mapping: dict):
+        async with _lock:
+            self.state["invite_premium_emoji"] = {
+                str(k): str(v) for k, v in (mapping or {}).items() if k and v
+            }
+            await self._save_unlocked()
+
+    async def set_invite_premium_emoji_one(self, emoji: str, document_id: str):
+        async with _lock:
+            m = dict(self.state.get("invite_premium_emoji") or {})
+            if document_id and document_id != "-":
+                m[emoji] = document_id
+            else:
+                m.pop(emoji, None)
+            self.state["invite_premium_emoji"] = m
+            await self._save_unlocked()
+
+    def get_invite_jobs_text(self) -> str:
+        return (self.state.get("invite_jobs_text") or "").strip() or (
+            "💼 <b>Открытые вакансии:</b>\n\n"
+            "🟢 <b>Менеджер ИП-направления</b> — работа с поставщиками, опыт от 6 мес.\n"
+            "🟢 <b>Оператор перевязки</b> — техническая часть, обучаем.\n\n"
+            "📩 Резюме и вопросы: пиши <b>SIMBA</b> в личку."
+        )
+
+    async def set_invite_jobs_text(self, text: str):
+        async with _lock:
+            self.state["invite_jobs_text"] = text or ""
+            await self._save_unlocked()
 
     def _username_index_set_unlocked(self, username: str, chat_id) -> bool:
         """Кладёт chat_id в обратный индекс client_username_index по lower-key.

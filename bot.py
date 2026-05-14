@@ -19,6 +19,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     User as TgUser,
+    MessageEntity,
 )
 
 import config
@@ -67,6 +68,27 @@ WELCOME_AFTER_SURVEY = (
     "нажмите кнопку ниже."
 )
 
+# Главный welcome-баннер @PrideInviteWork_bot.
+# Шаблон: {nick} подставится через format() из first_name пользователя.
+WELCOME_BANNER = (
+    "🔥 <b>{nick}</b>, добро пожаловать в <b>ЭКО-СИСТЕМУ PRIDE</b>!\n\n"
+    "🤝 Безупречная репутация и <b>120.000 $ +</b> сделок в Continental.\n\n"
+    "👉 <b>Наши ресурсы:</b>\n\n"
+    "✋ <b>Покупка ИП</b> @pride_projectv2 <i>(ЧАТ, КАНАЛ)</i>\n"
+    "   • Уникальная автоматическая система с личной ЦРМ и AI-Ассистентом, "
+    "который не оставит Вас без ответа <b>24/7</b> "
+    "<i>(на рынке нет более удобной системы для людей, которые продают ИП).</i>\n"
+    "   • Если хотите начать работу по продаже ИП — просто нажмите кнопку "
+    "<b>«Продать ИП»</b>.\n\n"
+    "🙂 <b>Набор сотрудников</b> — актуальный список вакансий в разделе "
+    "<b>«Вакансии»</b>."
+)
+
+# Эмодзи которые могут быть premium (заменяются на custom_emoji если в storage
+# заданы document_id'ы). Порядок важен — entities должны быть в порядке
+# появления в тексте.
+WELCOME_PREMIUM_EMOJI_SLOTS = ["🔥", "🤝", "👉", "✋", "🙂"]
+
 CAPTCHA_MAX_ATTEMPTS = 3
 
 # Интервал периодической очистки storage (раз в 6 часов)
@@ -85,10 +107,111 @@ def _sources_kb() -> InlineKeyboardMarkup:
 
 
 def _get_chat_kb() -> InlineKeyboardMarkup:
-    """Кнопка «Получить рабочую беседу» — ведёт на капчу."""
+    """Кнопка «Получить рабочую беседу» — ведёт на капчу.
+    Legacy — оставлено для совместимости со старым flow после source survey."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="📩 Получить рабочую беседу", callback_data="gw:get")
     ]])
+
+
+def _welcome_kb() -> InlineKeyboardMarkup:
+    """Главная клавиатура welcome-баннера PrideInviteWork_bot."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Продать ИП", callback_data="iw:sell")],
+        [InlineKeyboardButton(text="💼 Вакансии",   callback_data="iw:jobs")],
+        [
+            InlineKeyboardButton(text="💬 ЧАТ PRIDE",  url="https://t.me/pride_projectv2"),
+            InlineKeyboardButton(text="📢 КАНАЛ PRIDE", url="https://t.me/pride_projectv2"),
+        ],
+    ])
+
+
+def _back_to_welcome_kb() -> InlineKeyboardMarkup:
+    """Кнопка ← Назад в главное меню."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="iw:back"),
+    ]])
+
+
+def _build_welcome_entities(text: str) -> list[MessageEntity]:
+    """Строит MessageEntity[type='custom_emoji'] для каждого эмодзи из
+    WELCOME_PREMIUM_EMOJI_SLOTS если в storage задан его document_id.
+
+    Возвращает массив сущностей с правильными offset/length (в UTF-16 code
+    units — как требует Telegram). Если premium-эмодзи не настроены, вернёт
+    пустой список (текст останется с обычными эмодзи)."""
+    emoji_map = storage.get_invite_premium_emoji() or {}
+    if not emoji_map:
+        return []
+    entities = []
+    # UTF-16 offsets — Telegram считает в code units (BMP=1, не-BMP=2).
+    # Эмодзи 🔥🤝 и пр. — в supplementary plane, занимают 2 code units.
+    # Простой счётчик через encode('utf-16-le').
+    for emoji_char in WELCOME_PREMIUM_EMOJI_SLOTS:
+        doc_id = emoji_map.get(emoji_char)
+        if not doc_id:
+            continue
+        # Найти первое появление эмодзи в тексте
+        idx_chars = text.find(emoji_char)
+        if idx_chars < 0:
+            continue
+        # Сконвертировать char-offset в UTF-16 code units
+        prefix = text[:idx_chars]
+        offset_u16 = len(prefix.encode("utf-16-le")) // 2
+        length_u16 = len(emoji_char.encode("utf-16-le")) // 2
+        try:
+            entities.append(MessageEntity(
+                type="custom_emoji",
+                offset=offset_u16,
+                length=length_u16,
+                custom_emoji_id=str(doc_id),
+            ))
+        except Exception as e:
+            logger.debug("MessageEntity build failed for %s: %s", emoji_char, e)
+    return entities
+
+
+async def _send_welcome_banner(target_chat_id: int, user: TgUser) -> bool:
+    """Отправляет главный welcome-баннер: GIF (если настроен) + текст с
+    premium-emoji-entities + клавиатура. Возвращает True если успешно."""
+    nick = (user.first_name or user.username or "друг").strip()
+    text = WELCOME_BANNER.format(nick=html.escape(nick))
+    entities = _build_welcome_entities(text)
+    kb = _welcome_kb()
+    gif_id = storage.get_invite_welcome_gif()
+
+    try:
+        if gif_id:
+            # send_animation поддерживает caption + entities + reply_markup
+            await bot.send_animation(
+                chat_id=target_chat_id,
+                animation=gif_id,
+                caption=text,
+                caption_entities=entities or None,
+                reply_markup=kb,
+            )
+        else:
+            await bot.send_message(
+                chat_id=target_chat_id,
+                text=text,
+                entities=entities or None,
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+        return True
+    except Exception as e:
+        logger.warning("welcome banner send failed: %s", e)
+        # Fallback — без GIF/entities
+        try:
+            await bot.send_message(
+                chat_id=target_chat_id,
+                text=text,
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+            return True
+        except Exception:
+            return False
 
 
 class CaptchaFSM(StatesGroup):
@@ -193,12 +316,72 @@ async def on_start(message: Message, state: FSMContext):
         )
     except Exception:
         pass
-    # Если пользователь уже был атрибутирован — пропускаем опрос,
-    # сразу даём кнопку «Получить рабочую беседу».
-    if storage.get_user_source(message.from_user.id):
-        await _send_post_survey(message, state)
+    # Новый welcome — главное меню сразу, без сухого «где о нас узнали».
+    # Source survey теперь сидит ВНУТРИ кнопки «Продать ИП» (iw:sell).
+    await _send_welcome_banner(message.chat.id, message.from_user)
+
+
+# ───── Главное меню InviteWork: callbacks ────────────────────────
+
+@main_router.callback_query(F.data == "iw:sell")
+async def on_invite_sell(call: CallbackQuery, state: FSMContext):
+    """«Продать ИП» — если источник ещё не зафиксирован, спрашиваем; иначе
+    сразу даём кнопку получения рабочей беседы."""
+    await call.answer()
+    if storage.get_user_source(call.from_user.id):
+        # Сразу показываем кнопку получения беседы
+        try:
+            await call.message.edit_text(
+                WELCOME_AFTER_SURVEY,
+                reply_markup=_get_chat_kb(),
+            )
+        except Exception:
+            await call.message.answer(
+                WELCOME_AFTER_SURVEY,
+                reply_markup=_get_chat_kb(),
+            )
         return
-    await message.answer(START_GREETING, reply_markup=_sources_kb())
+    # Иначе — опрос «где узнали»
+    try:
+        await call.message.edit_text(START_GREETING, reply_markup=_sources_kb())
+    except Exception:
+        await call.message.answer(START_GREETING, reply_markup=_sources_kb())
+
+
+@main_router.callback_query(F.data == "iw:jobs")
+async def on_invite_jobs(call: CallbackQuery, state: FSMContext):
+    """«Вакансии» — показываем редактируемый из админки текст."""
+    await call.answer()
+    text = storage.get_invite_jobs_text()
+    try:
+        await call.message.edit_text(
+            text, reply_markup=_back_to_welcome_kb(),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        await call.message.answer(
+            text, reply_markup=_back_to_welcome_kb(),
+            disable_web_page_preview=True,
+        )
+
+
+@main_router.callback_query(F.data == "iw:back")
+async def on_invite_back(call: CallbackQuery, state: FSMContext):
+    """Назад в главное меню welcome."""
+    await call.answer()
+    # При edit_text нельзя добавить GIF — поэтому если приходим с подэкрана,
+    # просто меняем текст обратно на welcome (без GIF) с теми же кнопками.
+    nick = (call.from_user.first_name or call.from_user.username or "друг").strip()
+    text = WELCOME_BANNER.format(nick=html.escape(nick))
+    entities = _build_welcome_entities(text)
+    try:
+        await call.message.edit_text(
+            text, entities=entities or None,
+            reply_markup=_welcome_kb(),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        await _send_welcome_banner(call.message.chat.id, call.from_user)
 
 
 @main_router.message(Command("help"))

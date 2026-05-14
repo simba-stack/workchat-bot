@@ -28,6 +28,9 @@ class AdminFSM(StatesGroup):
     set_lk_chat = State()
     set_role_name = State()       # FSM роли: ввод названия роли (username
                                   # передаётся в state.data из callback'а)
+    set_invite_gif = State()      # ожидаем reply/forward с GIF (file_id)
+    set_invite_emoji = State()    # формат "EMOJI document_id" или "EMOJI -"
+    set_invite_jobs = State()     # текст раздела «Вакансии»
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -39,6 +42,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
         [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
+        [InlineKeyboardButton(text="📨 Invite-бот (welcome)", callback_data="adm:invite")],
         [InlineKeyboardButton(text="🔐 Админы", callback_data="adm:admins")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="adm:close")],
     ])
@@ -190,6 +194,53 @@ async def on_cb(call: CallbackQuery, state: FSMContext):
             reply_markup=back_kb(),
         )
         await state.set_state(AdminFSM.set_idle_minutes)
+    elif action == "invite":
+        await render_invite(call)
+    elif action == "invite_setgif":
+        await call.message.edit_text(
+            "🎞 <b>GIF для welcome InviteWork-бота</b>\n\n"
+            "Пришлите GIF/анимацию <b>одним сообщением</b> — я возьму её file_id "
+            "и сохраню. Можно переслать GIF из любого чата.\n\n"
+            "Чтобы убрать GIF — пришлите <code>-</code> (минус).\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_invite_gif)
+    elif action == "invite_setemoji":
+        cur = storage.get_invite_premium_emoji() or {}
+        cur_str = "\n".join(f"  {k} → <code>{v}</code>" for k, v in cur.items()) or "<i>(пусто)</i>"
+        await call.message.edit_text(
+            "🎨 <b>Premium-эмодзи для welcome</b>\n\n"
+            "Пришлите <b>одним сообщением</b> в формате:\n"
+            "<code>EMOJI DOCUMENT_ID</code>\n\n"
+            "Например:\n"
+            "<code>🔥 5462863737368090301</code>\n\n"
+            "Чтобы удалить — <code>EMOJI -</code> (минус вместо ID).\n\n"
+            "<b>Как получить DOCUMENT_ID:</b>\n"
+            "1. Premium-юзер шлёт боту нужный premium-эмодзи.\n"
+            "2. В логах JSON ищем <code>custom_emoji_id</code>.\n"
+            "3. Или используем @CustomEmojiInfoBot.\n\n"
+            f"<b>Текущие маппинги:</b>\n{cur_str}\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_invite_emoji)
+    elif action == "invite_setjobs":
+        cur = storage.get_invite_jobs_text()
+        safe = cur.replace("<", "&lt;").replace(">", "&gt;")
+        await call.message.edit_text(
+            "💼 <b>Текст раздела «Вакансии»</b>\n\n"
+            "Текущий текст:\n\n<blockquote>" + safe + "</blockquote>\n\n"
+            "Пришлите новый текст (HTML — поддерживается).\n\n"
+            "Чтобы вернуть default — пришлите <code>-</code>.\n\n"
+            "Или /admin для отмены.",
+            reply_markup=back_kb(),
+        )
+        await state.set_state(AdminFSM.set_invite_jobs)
+    elif action == "invite_clearemoji":
+        await storage.set_invite_premium_emoji({})
+        await call.answer("Premium-эмодзи очищены.")
+        await render_invite(call)
     elif action == "admins":
         await render_admins(call)
     elif action == "worker_add":
@@ -328,6 +379,34 @@ async def render_welcome(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="adm:main")],
     ])
     await call.message.edit_text(text, reply_markup=kb)
+
+
+async def render_invite(call: CallbackQuery):
+    """Меню настроек InviteWork-бота: GIF + premium emoji + текст вакансий."""
+    gif_id = storage.get_invite_welcome_gif() or ""
+    emoji_map = storage.get_invite_premium_emoji() or {}
+    jobs_text = storage.get_invite_jobs_text()
+    gif_status = f"✅ задан (<code>{gif_id[:20]}...</code>)" if gif_id else "❌ не задан"
+    emoji_lines = ""
+    if emoji_map:
+        emoji_lines = "\n".join(f"  {k} → <code>{v}</code>" for k, v in emoji_map.items())
+    else:
+        emoji_lines = "<i>(дефолтные эмодзи)</i>"
+    jobs_safe = (jobs_text[:200].replace("<", "&lt;").replace(">", "&gt;"))
+    body = (
+        "📨 <b>InviteWork-бот — welcome</b>\n\n"
+        f"🎞 <b>GIF:</b> {gif_status}\n\n"
+        f"🎨 <b>Premium-эмодзи:</b>\n{emoji_lines}\n\n"
+        f"💼 <b>Вакансии (preview):</b>\n<blockquote>{jobs_safe}...</blockquote>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎞 Задать GIF",      callback_data="adm:invite_setgif")],
+        [InlineKeyboardButton(text="🎨 Premium-эмодзи", callback_data="adm:invite_setemoji")],
+        [InlineKeyboardButton(text="🧹 Очистить эмодзи", callback_data="adm:invite_clearemoji")],
+        [InlineKeyboardButton(text="💼 Текст вакансий", callback_data="adm:invite_setjobs")],
+        [InlineKeyboardButton(text="🔙 Назад",          callback_data="adm:main")],
+    ])
+    await call.message.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
 
 
 async def render_cooldown(call: CallbackQuery):
@@ -668,7 +747,6 @@ async def fsm_set_ai_model(message: Message, state: FSMContext):
         await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
         return
     raw = (message.text or "").strip()
-    # Простая валидация: только claude-* модели или пустая строка для дефолта
     if raw and not raw.startswith("claude-"):
         await message.answer(
             "Имя модели должно начинаться с <code>claude-</code>. "
@@ -679,7 +757,7 @@ async def fsm_set_ai_model(message: Message, state: FSMContext):
     await state.clear()
     effective = raw or config.DEFAULT_AI_MODEL
     await message.answer(
-        f"✅ Модель: <code>{effective}</code>",
+        f"✅ Модель AI: <code>{effective}</code>",
         reply_markup=main_menu_kb(),
     )
 
@@ -696,68 +774,14 @@ async def fsm_set_idle_minutes(message: Message, state: FSMContext):
     try:
         minutes = int((message.text or "").strip())
         if minutes < 0 or minutes > 1440:
-            raise ValueError()
+            raise ValueError
     except ValueError:
-        await message.answer(
-            "Нужно целое число от 0 до 1440. Пришлите ещё раз или /admin для отмены."
-        )
+        await message.answer("Число от 0 до 1440. Пришлите ещё раз или /admin.")
         return
     await storage.set_client_idle_minutes(minutes)
     await state.clear()
-    descr = (
-        "AI всегда отвечает (без проверки активности сотрудников)"
-        if minutes == 0
-        else f"AI молчит, если worker писал в последние <b>{minutes}</b> мин"
-    )
     await message.answer(
-        f"✅ Тишина сотрудников: <b>{minutes}</b> мин\n{descr}",
-        reply_markup=main_menu_kb(),
-    )
-
-
-@router.message(AdminFSM.set_lk_chat)
-async def fsm_set_lk_chat(message: Message, state: FSMContext):
-    if not storage.is_admin(message.from_user.id):
-        await state.clear(); return
-    if message.text == "/admin":
-        await state.clear()
-        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
-        return
-    try:
-        chat_id = int((message.text or "").strip())
-    except ValueError:
-        await message.answer("Нужно целое число (chat_id). Пришлите ещё раз или /admin.")
-        return
-    await storage.set_lk_group_id(chat_id)
-    await state.clear()
-    label = "очищена" if chat_id == 0 else f"<code>{chat_id}</code>"
-    await message.answer(
-        f"✅ Группа 1 «Личные кабинеты»: {label}\n\n"
-        f"<i>Юзербот будет постить туда карточки ЛК и читать команды "
-        f"БРАК/БЛОК.</i>",
-        reply_markup=main_menu_kb(),
-    )
-
-
-@router.message(AdminFSM.set_accounting_chat)
-async def fsm_set_accounting_chat(message: Message, state: FSMContext):
-    if not storage.is_admin(message.from_user.id):
-        await state.clear(); return
-    if message.text == "/admin":
-        await state.clear()
-        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
-        return
-    try:
-        chat_id = int((message.text or "").strip())
-    except ValueError:
-        await message.answer("Нужно целое число (chat_id). Пришлите ещё раз или /admin.")
-        return
-    await storage.set_accounting_group_id(chat_id)
-    await state.clear()
-    label = "очищен" if chat_id == 0 else f"<code>{chat_id}</code>"
-    await message.answer(
-        f"✅ Чат «Бухгалтерия»: {label}\n\n"
-        f"<i>Команды в чате — пришлите «помощь» / «?» / «/help».</i>",
+        f"✅ Тишина сотрудников: <b>{minutes}</b> мин",
         reply_markup=main_menu_kb(),
     )
 
@@ -774,9 +798,7 @@ async def fsm_set_coord_chat(message: Message, state: FSMContext):
     try:
         chat_id = int((message.text or "").strip())
     except ValueError:
-        await message.answer(
-            "Нужно целое число (chat_id). Пришлите ещё раз или /admin для отмены."
-        )
+        await message.answer("Нужно число. Пришлите ещё раз или /admin.")
         return
     await storage.set_coordination_chat_id(chat_id)
     await state.clear()
@@ -787,8 +809,173 @@ async def fsm_set_coord_chat(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            f"✅ Координаторская беседа: <code>{chat_id}</code>\n\n"
-            f"<i>Убедитесь, что юзербот участник этой беседы и что в ней "
-            f"присутствуют @TimonSkupCL, @pride_sys01, @pride_manager1.</i>",
+            f"✅ Координаторская беседа: <code>{chat_id}</code>",
             reply_markup=main_menu_kb(),
         )
+
+
+@router.message(AdminFSM.set_accounting_chat)
+async def fsm_set_accounting_chat(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        chat_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("Нужно число. Пришлите ещё раз или /admin.")
+        return
+    if hasattr(storage, "set_accounting_group_id"):
+        await storage.set_accounting_group_id(chat_id)
+    await state.clear()
+    await message.answer(
+        f"✅ Чат «Бухгалтерия»: <code>{chat_id}</code>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_lk_chat)
+async def fsm_set_lk_chat(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    try:
+        chat_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("Нужно число. Пришлите ещё раз или /admin.")
+        return
+    if hasattr(storage, "set_lk_group_id"):
+        await storage.set_lk_group_id(chat_id)
+    await state.clear()
+    await message.answer(
+        f"✅ Группа 1 «Личные кабинеты»: <code>{chat_id}</code>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_role_name)
+async def fsm_set_role_name(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if message.text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    data = await state.get_data()
+    uname = data.get("role_username") or ""
+    role = (message.text or "").strip()[:16]
+    if not role:
+        await message.answer("Пустое название. Пришлите ещё раз или /admin.")
+        return
+    cur = storage.get_worker_role(uname) or {}
+    await storage.set_worker_role(uname, role, bool(cur.get("is_admin")))
+    await state.clear()
+    await message.answer(
+        f"✅ Роль @{uname}: <b>{role}</b>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+# ─── InviteWork-бот: FSM-обработчики ─────────────────────────────
+
+@router.message(AdminFSM.set_invite_gif)
+async def fsm_set_invite_gif(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if (message.text or "").strip() == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    if (message.text or "").strip() == "-":
+        await storage.set_invite_welcome_gif("")
+        await state.clear()
+        await message.answer("✅ GIF welcome очищен.", reply_markup=main_menu_kb())
+        return
+    file_id = ""
+    if message.animation:
+        file_id = message.animation.file_id
+    elif message.document and (message.document.mime_type or "").startswith("video/"):
+        file_id = message.document.file_id
+    elif message.video:
+        file_id = message.video.file_id
+    if not file_id:
+        await message.answer(
+            "Не похоже на GIF/анимацию. Пришлите GIF одним сообщением или /admin для отмены."
+        )
+        return
+    await storage.set_invite_welcome_gif(file_id)
+    await state.clear()
+    await message.answer(
+        f"✅ GIF сохранён.\n<code>{file_id}</code>",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(AdminFSM.set_invite_emoji)
+async def fsm_set_invite_emoji(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    parts = text.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Формат: <code>EMOJI DOCUMENT_ID</code>\nПример: <code>🔥 5462863737368090301</code>\n\n"
+            "Или /admin для отмены."
+        )
+        return
+    emoji, doc = parts[0], parts[1].strip()
+    await storage.set_invite_premium_emoji_one(emoji, doc)
+    await state.clear()
+    if doc == "-":
+        await message.answer(
+            f"✅ Эмодзи {emoji} удалён из premium-маппинга.",
+            reply_markup=main_menu_kb(),
+        )
+    else:
+        await message.answer(
+            f"✅ Premium-эмодзи: {emoji} → <code>{doc}</code>",
+            reply_markup=main_menu_kb(),
+        )
+
+
+@router.message(AdminFSM.set_invite_jobs)
+async def fsm_set_invite_jobs(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or message.html_text or "").strip()
+    if text == "/admin":
+        await state.clear()
+        await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+        return
+    if text == "-":
+        await storage.set_invite_jobs_text("")
+        await state.clear()
+        await message.answer(
+            "✅ Текст вакансий сброшен на дефолт.",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    if not text:
+        await message.answer("Пустой текст. Пришлите ещё раз или /admin.")
+        return
+    await storage.set_invite_jobs_text(text)
+    await state.clear()
+    await message.answer(
+        f"✅ Текст вакансий обновлён ({len(text)} симв.).",
+        reply_markup=main_menu_kb(),
+    )
