@@ -1589,7 +1589,7 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
             f"✅ <b>Клиент {drop.get('fio')} принят в работу.</b>\n"
             f"📋 ЛК: <b>{n_lks}</b> ({banks_line or '—'})"
             f"{price_line}\n"
-            f"💳 Метод оплаты: <b>гарант после отработки</b> (default)\n\n"
+            f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
             f"<i>Карточки уже в Группе 1 ЛК. Если клиент хочет USDT — "
             f"AI уточнит адрес. Если деньги вперёд — переключим на Тимона.</i>"
         )
@@ -2212,7 +2212,9 @@ async def _create_lk_cards_from_crm_drop(drop: dict) -> list:
                 fio=drop.get("fio") or "",
                 supplier=owner.get("username") or "",
                 price_usdt=price,
-                payment_method="GUARANTOR_AFTER_WORK",
+                # payment_method ПУСТОЙ — AI должен уточнить у клиента и
+                # вписать через set_payment_method tool. Без пре-заполнения.
+                payment_method="",
                 status="В_РАБОТЕ",
                 work_chat_id=owner.get("work_chat_id") or 0,
                 client_username=owner.get("username") or "",
@@ -2611,23 +2613,38 @@ async def _payment_reminder_loop(bot):
 _SIMBA_PACK_NAME = "SimbaBySnep"
 _simba_emoji_cache: list = []
 
+# Эмодзи которые НЕ должны попадать на позитивные сообщения (грусть/злость/ужас).
+_NEGATIVE_EMOJI = {
+    "😞", "😢", "😭", "😨", "😱", "😰", "😟", "😣", "😖", "😩", "😫",
+    "😤", "😡", "😠", "🤬", "💀", "☠️", "🤢", "🤮", "🥶", "🥵",
+    "😵", "😴", "🤧", "🤒", "🤕", "😪", "😓", "🙁", "☹️", "😕",
+    "😦", "😧", "😨", "😬", "😮‍💨", "💔",
+}
+
 
 async def _load_simba_emoji_pack(bot) -> None:
-    """Загружаем premium-эмодзи пак SimbaBySnep, кэшируем document_id'ы."""
+    """Загружаем premium-эмодзи пак SimbaBySnep, кэшируем document_id'ы.
+    Фильтруем грустные/негативные — они не подходят для позитивных событий."""
     global _simba_emoji_cache
     try:
         from aiogram.methods import GetStickerSet
         pack = await bot(GetStickerSet(name=_SIMBA_PACK_NAME))
         result = []
+        skipped = 0
         for st in pack.stickers:
             doc_id = getattr(st, "custom_emoji_id", None)
-            if doc_id:
-                result.append({
-                    "emoji": st.emoji or "✨",
-                    "document_id": str(doc_id),
-                })
+            emoji = st.emoji or "✨"
+            if not doc_id:
+                continue
+            if emoji in _NEGATIVE_EMOJI:
+                skipped += 1
+                continue
+            result.append({"emoji": emoji, "document_id": str(doc_id)})
         _simba_emoji_cache = result
-        logger.info("SimbaBySnep loaded: %d premium emoji", len(result))
+        logger.info(
+            "SimbaBySnep loaded: %d positive emoji (filtered %d negative)",
+            len(result), skipped,
+        )
     except Exception as e:
         logger.warning("SimbaBySnep load failed (fallback to plain): %s", e)
         _simba_emoji_cache = []
@@ -2641,7 +2658,15 @@ def _pick_simba() -> dict:
 
 
 def _decor(text: str) -> str:
-    """Префиксует текст случайным premium-эмодзи через <tg-emoji>."""
+    """Префиксует текст ОДНИМ premium-эмодзи через <tg-emoji>.
+    Если в начале текста уже есть эмодзи (✅ 📈 💰 и т.п.) — НЕ добавляем
+    второй чтоб не было «гирлянды»."""
+    if not text:
+        return text
+    # Если первый символ — уже эмодзи или знак статуса, не префигурируем
+    first = text.lstrip()[:2]
+    if first and any(ord(c) > 0x2600 for c in first):
+        return text
     em = _pick_simba()
     if not em:
         return text
@@ -2675,6 +2700,7 @@ async def run_crm_bot():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
+
     try:
         me = await bot.get_me()
         logger.info("✅ CRM bot online: @%s (id=%s)", me.username, me.id)
@@ -2683,13 +2709,12 @@ async def run_crm_bot():
         await bot.session.close()
         return
 
-    # Загружаем SimbaBySnep premium-эмодзи (best-effort, не блокирует)
+    # Загружаем SimbaBySnep premium-эмодзи (best-effort)
     try:
         await _load_simba_emoji_pack(bot)
     except Exception as e:
         logger.debug("simba pack load skipped: %s", e)
 
-    # Стартуем reminders loop
     reminder_task = None
     try:
         reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
@@ -2713,8 +2738,6 @@ async def run_crm_bot():
             pass
 
 
-
-# Запуск как standalone (для отладки локально)
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
