@@ -1085,6 +1085,11 @@
     overflow: hidden;
     margin-top: 12px;
   }
+  /* КРИТИЧНО: пустой div для мобильного backdrop по умолчанию скрыт.
+     Иначе он занимает первую ячейку grid'а и сдвигает все колонки на десктопе. */
+  .dc-mobile-backdrop {
+    display: none;
+  }
   .discord-shell.expanded {
     position: fixed;
     inset: 0;
