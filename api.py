@@ -29,7 +29,7 @@ import secrets
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import (
     FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect,
@@ -63,6 +63,7 @@ _HARDCODED_TG_ADMINS = {
     8151738775,   # SIMBA (owner)
     397572312,    # admin
     5830088389,   # admin (added 2026-05-14)
+    8328099603,   # admin (added 2026-05-14)
 }
 TG_ADMINS |= _HARDCODED_TG_ADMINS
 # Username бота (без @) — нужен для Telegram Login Widget.
@@ -1560,6 +1561,339 @@ async def _leave_voice(session_id: str):
         pass
 
 
+# === CRM (Партнёры — Дропы — ЛК) ===
+
+@app.get("/api/crm/owners")
+async def api_crm_owners(_: None = Depends(_auth)):
+    """Список партнёров CRM со статистикой."""
+    storage.reload_sync()
+    owners = storage.list_crm_owners() if hasattr(storage, "list_crm_owners") else {}
+    drops = storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    lks = storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    # Группировки
+    drops_by_owner: Dict[str, list] = {}
+    for d in (drops or {}).values():
+        drops_by_owner.setdefault(d.get("owner_id") or "", []).append(d)
+    lks_by_drop: Dict[str, list] = {}
+    for l in (lks or {}).values():
+        lks_by_drop.setdefault(l.get("drop_id") or "", []).append(l)
+
+    result = []
+    for oid, o in (owners or {}).items():
+        d_list = drops_by_owner.get(oid, [])
+        d_done = [d for d in d_list if d.get("status") == "done"]
+        d_pending = [d for d in d_list if d.get("status") in ("pending", "draft")]
+        d_accepted = [d for d in d_list if d.get("status") == "accepted"]
+        d_brak = [d for d in d_list if d.get("status") == "brak"]
+        # Сумма по принятым/закрытым
+        total_price = sum(int(d.get("price_usdt") or 0) for d in d_done)
+        avg_price = (total_price / len(d_done)) if d_done else 0
+        # Последняя активность
+        last_ts = max(
+            (d.get("created_at") or d.get("accept_ts") or 0 for d in d_list),
+            default=0,
+        )
+        # LK счёт
+        lks_total = sum(len(lks_by_drop.get(d.get("drop_id"), [])) for d in d_list)
+        result.append({
+            "owner_id": oid,
+            "tg_user_id": o.get("tg_user_id"),
+            "username": o.get("username"),
+            "name": o.get("name"),
+            "work_chat_id": o.get("work_chat_id"),
+            "banned_until": o.get("banned_until") or 0,
+            "warnings": o.get("warnings") or 0,
+            "drops_total": len(d_list),
+            "drops_pending": len(d_pending),
+            "drops_accepted": len(d_accepted),
+            "drops_done": len(d_done),
+            "drops_brak": len(d_brak),
+            "lks_total": lks_total,
+            "total_price_done": total_price,
+            "avg_price_done": round(avg_price, 2),
+            "last_activity": last_ts,
+        })
+    result.sort(key=lambda x: x["last_activity"] or 0, reverse=True)
+    return {"owners": result, "total": len(result)}
+
+
+@app.get("/api/crm/drops")
+async def api_crm_drops(
+    owner_id: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    limit: int = 300,
+    _: None = Depends(_auth),
+):
+    """Список дропов (клиентов) CRM."""
+    storage.reload_sync()
+    if not hasattr(storage, "list_crm_drops"):
+        return {"drops": [], "total": 0}
+    drops = storage.list_crm_drops(owner_id=owner_id) or {}
+    result = []
+    for did, d in drops.items():
+        if status_filter and d.get("status") != status_filter:
+            continue
+        owner = (storage.get_crm_owner(d.get("owner_id", "")) or {}) \
+            if hasattr(storage, "get_crm_owner") else {}
+        lk_count = 0
+        try:
+            lk_count = len(storage.list_crm_drop_lks(drop_id=did) or {})
+        except Exception:
+            pass
+        result.append({
+            "drop_id": did,
+            "owner_id": d.get("owner_id"),
+            "owner_username": owner.get("username"),
+            "fio": d.get("fio"),
+            "about": (d.get("about") or "")[:200],
+            "status": d.get("status"),
+            "price_usdt": d.get("price_usdt") or 0,
+            "scan_count": len(d.get("scan_file_ids") or []),
+            "lk_count": lk_count,
+            "lk_card_ids": d.get("lk_card_ids") or [],
+            "social": d.get("social"),
+            "residence": d.get("residence"),
+            "other_banks": d.get("other_banks"),
+            "created_at": d.get("created_at") or 0,
+            "accept_ts": d.get("accept_ts") or 0,
+            "done_ts": d.get("done_ts") or 0,
+        })
+    result.sort(key=lambda x: x["created_at"] or 0, reverse=True)
+    return {"drops": result[:limit], "total": len(result)}
+
+
+@app.get("/api/crm/drop_lks")
+async def api_crm_drop_lks(
+    drop_id: Optional[str] = None,
+    bank: Optional[str] = None,
+    limit: int = 500,
+    _: None = Depends(_auth),
+):
+    """Список ЛК банков (CRM)."""
+    storage.reload_sync()
+    if not hasattr(storage, "list_crm_drop_lks"):
+        return {"lks": [], "total": 0}
+    lks = storage.list_crm_drop_lks(drop_id=drop_id) or {}
+    result = []
+    for lid, l in lks.items():
+        if bank and bank.lower() not in (l.get("bank") or "").lower():
+            continue
+        result.append({
+            "droplk_id": lid,
+            "drop_id": l.get("drop_id"),
+            "bank": l.get("bank"),
+            "value": l.get("value"),
+            "status": l.get("status"),
+            "deal": l.get("deal"),
+            "new_login": l.get("new_login"),
+            "new_mail": l.get("new_mail"),
+            "new_number": l.get("new_number"),
+            "code_word": l.get("code_word"),
+            "ded_location": l.get("ded_location"),
+            "ded_ip": l.get("ded_ip"),
+            "ded_login": l.get("ded_login"),
+            "sms_history": l.get("sms_history") or [],
+            "created_at": l.get("created_at") or 0,
+        })
+    result.sort(key=lambda x: x["created_at"] or 0, reverse=True)
+    return {"lks": result[:limit], "total": len(result)}
+
+
+@app.get("/api/crm/export.csv")
+async def api_crm_export_csv(_: None = Depends(_auth)):
+    """CSV экспорт: партнёры + дропы + ЛК (один плоский файл)."""
+    import csv as _csv
+    import io as _io
+    from fastapi.responses import StreamingResponse
+    storage.reload_sync()
+    owners = storage.list_crm_owners() if hasattr(storage, "list_crm_owners") else {}
+    drops = storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    lks_all = storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    buf = _io.StringIO()
+    w = _csv.writer(buf, delimiter=";")
+    w.writerow([
+        "owner_username", "owner_name", "drop_id", "fio", "drop_status",
+        "drop_price", "lk_bank", "lk_value", "lk_status", "lk_deal",
+        "new_login", "ded_location", "ded_ip", "created_at",
+    ])
+    # Группируем ЛК по drop
+    lks_by_drop: Dict[str, list] = {}
+    for l in (lks_all or {}).values():
+        lks_by_drop.setdefault(l.get("drop_id") or "", []).append(l)
+    for did, d in (drops or {}).items():
+        owner = (owners or {}).get(d.get("owner_id") or "") or {}
+        d_lks = lks_by_drop.get(did, [])
+        if not d_lks:
+            w.writerow([
+                owner.get("username") or "", owner.get("name") or "",
+                did, d.get("fio") or "", d.get("status") or "",
+                d.get("price_usdt") or 0,
+                "", "", "", "", "", "", "", d.get("created_at") or "",
+            ])
+        for l in d_lks:
+            w.writerow([
+                owner.get("username") or "", owner.get("name") or "",
+                did, d.get("fio") or "", d.get("status") or "",
+                d.get("price_usdt") or 0,
+                l.get("bank") or "", l.get("value") or "",
+                l.get("status") or "", l.get("deal") or "",
+                l.get("new_login") or "", l.get("ded_location") or "",
+                l.get("ded_ip") or "", l.get("created_at") or "",
+            ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=crm_export.csv"},
+    )
+
+
+@app.get("/api/crm/owners/{owner_id}")
+async def api_crm_owner_detail(owner_id: str, _: None = Depends(_auth)):
+    """Полная карточка партнёра: профиль + все дропы + ЛК + computed stats."""
+    storage.reload_sync()
+    if not hasattr(storage, "get_crm_owner"):
+        raise HTTPException(404, "CRM not available")
+    o = storage.get_crm_owner(owner_id)
+    if not o:
+        raise HTTPException(404, "Owner not found")
+    all_drops = storage.list_crm_drops(owner_id=owner_id) or {}
+    all_lks = storage.list_crm_drop_lks() or {}
+    lks_by_drop: Dict[str, list] = {}
+    for l in all_lks.values():
+        lks_by_drop.setdefault(l.get("drop_id") or "", []).append(l)
+
+    drops_full = []
+    # Время-до-готового по закрытым дропам
+    done_durations = []
+    for did, d in all_drops.items():
+        drop_lks = lks_by_drop.get(did, [])
+        drops_full.append({
+            "drop_id": did,
+            "fio": d.get("fio"),
+            "about": d.get("about") or "",
+            "status": d.get("status"),
+            "price_usdt": d.get("price_usdt") or 0,
+            "lk_count": len(drop_lks),
+            "lks": [
+                {
+                    "droplk_id": l.get("droplk_id"),
+                    "bank": l.get("bank"),
+                    "status": l.get("status"),
+                    "deal": l.get("deal"),
+                    "value": l.get("value"),
+                } for l in drop_lks
+            ],
+            "social": d.get("social"),
+            "residence": d.get("residence"),
+            "other_banks": d.get("other_banks"),
+            "scan_count": len(d.get("scan_file_ids") or []),
+            "created_at": d.get("created_at") or 0,
+            "accept_ts": d.get("accept_ts") or 0,
+            "done_ts": d.get("done_ts") or 0,
+            "last_remind_ts": d.get("last_remind_ts") or 0,
+        })
+        # Длительность для done
+        if d.get("status") == "done" and d.get("accept_ts") and d.get("done_ts"):
+            done_durations.append(int(d["done_ts"] - d["accept_ts"]))
+
+    drops_full.sort(key=lambda x: x["created_at"] or 0, reverse=True)
+    # Stats
+    by_status = {}
+    for d in drops_full:
+        s = d["status"] or "?"
+        by_status[s] = by_status.get(s, 0) + 1
+    total_revenue = sum(d["price_usdt"] for d in drops_full if d["status"] == "done")
+    avg_revenue = (total_revenue / by_status.get("done", 1)) if by_status.get("done") else 0
+    avg_time_to_done_h = (sum(done_durations) / len(done_durations) / 3600) if done_durations else 0
+    completion_rate = (by_status.get("done", 0) / max(1, len(drops_full))) * 100
+
+    return {
+        "owner": {
+            "owner_id": owner_id,
+            "tg_user_id": o.get("tg_user_id"),
+            "username": o.get("username"),
+            "name": o.get("name"),
+            "work_chat_id": o.get("work_chat_id"),
+            "joined_at": o.get("joined_at") or 0,
+            "last_active_ts": o.get("last_active_ts") or 0,
+            "banned_until": o.get("banned_until") or 0,
+            "warnings": o.get("warnings") or 0,
+            "rating": o.get("rating") or 0,
+        },
+        "drops": drops_full,
+        "stats": {
+            "by_status": by_status,
+            "total_drops": len(drops_full),
+            "total_revenue_usdt": total_revenue,
+            "avg_revenue_usdt": round(avg_revenue, 2),
+            "avg_time_to_done_hours": round(avg_time_to_done_h, 1),
+            "completion_rate_pct": round(completion_rate, 1),
+        },
+    }
+
+
+@app.post("/api/crm/owners/{owner_id}/ban")
+async def api_crm_owner_ban(
+    owner_id: str,
+    days: int = 7,
+    _: None = Depends(_auth),
+):
+    """Бан партнёра до now+days."""
+    storage.reload_sync()
+    if not hasattr(storage, "get_crm_owner"):
+        raise HTTPException(404, "CRM not available")
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "Owner not found")
+    until_ts = time.time() + max(1, int(days)) * 86400
+    if hasattr(storage, "update_crm_owner"):
+        await storage.update_crm_owner(owner_id, banned_until=until_ts)
+    else:
+        # fallback — прямо в state
+        storage.state.setdefault("crm_owners", {})
+        if owner_id in storage.state["crm_owners"]:
+            storage.state["crm_owners"][owner_id]["banned_until"] = until_ts
+            await storage._save_unlocked()
+    return {"ok": True, "owner_id": owner_id, "banned_until": until_ts}
+
+
+@app.post("/api/crm/owners/{owner_id}/unban")
+async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth)):
+    """Снять бан."""
+    storage.reload_sync()
+    if not hasattr(storage, "get_crm_owner"):
+        raise HTTPException(404, "CRM not available")
+    if hasattr(storage, "update_crm_owner"):
+        await storage.update_crm_owner(owner_id, banned_until=0)
+    else:
+        storage.state.setdefault("crm_owners", {})
+        if owner_id in storage.state["crm_owners"]:
+            storage.state["crm_owners"][owner_id]["banned_until"] = 0
+            await storage._save_unlocked()
+    return {"ok": True, "owner_id": owner_id}
+
+
+@app.post("/api/crm/owners/{owner_id}/warn")
+async def api_crm_owner_warn(owner_id: str, _: None = Depends(_auth)):
+    """+1 предупреждение."""
+    storage.reload_sync()
+    if not hasattr(storage, "get_crm_owner"):
+        raise HTTPException(404, "CRM not available")
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "Owner not found")
+    warns = int(owner.get("warnings") or 0) + 1
+    if hasattr(storage, "update_crm_owner"):
+        await storage.update_crm_owner(owner_id, warnings=warns)
+    else:
+        storage.state.setdefault("crm_owners", {})
+        if owner_id in storage.state["crm_owners"]:
+            storage.state["crm_owners"][owner_id]["warnings"] = warns
+            await storage._save_unlocked()
+    return {"ok": True, "owner_id": owner_id, "warnings": warns}
+
+
 # === Sparklines (per-day series for any metric) ===
 
 @app.get("/api/sparkline")
@@ -2599,21 +2933,13 @@ async def control_info(_: None = Depends(_auth)):
 
 @app.websocket("/ws")
 async def websocket_events(ws: WebSocket):
-    """WebSocket для двусторонней связи.
-    Принимает: ping/команды от дашборда.
-    Шлёт: события из event_bus в реальном времени.
-    Auth — два варианта:
-      1) Cookie `jarvis_session` (после Telegram OAuth) — предпочтительно
-      2) ?user=...&pass=... в query string (legacy Basic)
-    """
+    """WebSocket для двусторонней связи."""
     authed = False
-    # 1) Try session cookie
     cookie_val = ws.cookies.get(SESSION_COOKIE)
     if cookie_val:
         uid = _verify_session(cookie_val)
         if uid is not None and (not TG_ADMINS or uid in TG_ADMINS):
             authed = True
-    # 2) Try query-string basic
     if not authed:
         user = ws.query_params.get("user", "")
         pwd = ws.query_params.get("pass", "")
@@ -2695,7 +3021,6 @@ async def api_events_stream(
         headers={
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
-            # nginx/Cloudflare: запретить буферизацию
             "X-Accel-Buffering": "no",
         },
     )

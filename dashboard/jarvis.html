@@ -6,6 +6,7 @@
 <title>PRIDE · J.A.R.V.I.S.</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   /* ===========================
      THEMES
@@ -2262,6 +2263,7 @@
   <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Chat Dept</button>
   <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 LK Dept</button>
   <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Finance Dept</button>
+  <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
   <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Discord</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
@@ -3010,6 +3012,195 @@
   </div>
 </section>
 
+<!-- ===== CRM TAB (Партнёры) ===== -->
+<section x-show="currentView === 'crm'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+    <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">🤝 ПАРТНЁРЫ CRM</h2>
+    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+      <button class="btn" @click="refreshCrm()" :disabled="crmLoading">↻</button>
+      <button class="btn" @click="crmExportCsv()">📥 CSV</button>
+      <select x-model="crmFilter" class="btn" style="padding: 6px 10px;">
+        <option value="all">все</option>
+        <option value="draft">draft</option>
+        <option value="pending">pending</option>
+        <option value="accepted">accepted</option>
+        <option value="done">done</option>
+        <option value="brak">brak</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 12px; margin-bottom: 16px;">
+    <div class="jarvis-panel" style="padding: 12px; height: 220px;">
+      <div class="panel-title">По статусам</div>
+      <div style="height: 170px; position: relative;"><canvas id="crm-chart-status"></canvas></div>
+    </div>
+    <div class="jarvis-panel" style="padding: 12px; height: 220px;">
+      <div class="panel-title">Топ партнёров</div>
+      <div style="height: 170px; position: relative;"><canvas id="crm-chart-top"></canvas></div>
+    </div>
+    <div class="jarvis-panel" style="padding: 12px; height: 220px;">
+      <div class="panel-title">14 дней</div>
+      <div style="height: 170px; position: relative;"><canvas id="crm-chart-trend"></canvas></div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 16px;">
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div class="panel-title">Партнёры (<span x-text="crmOwners.length"></span>)</div>
+      <div style="max-height: 70vh; overflow-y: auto;">
+        <div @click="crmSelectedOwner = null; crmSelectedDrop = null" style="padding: 8px; cursor: pointer; border-radius: 6px; margin-bottom: 4px;" :style="!crmSelectedOwner ? 'background: rgba(0,229,255,0.12);' : ''">
+          <b>Все партнёры</b>
+          <div style="font-size: 11px; color: var(--text-dim);"><span x-text="crmDrops.length"></span> клиентов</div>
+        </div>
+        <template x-for="o in crmOwners" :key="o.owner_id">
+          <div @click="crmSelectedOwner = o.owner_id; crmSelectedDrop = null" style="padding: 10px; cursor: pointer; border-radius: 6px; margin-bottom: 4px; border: 1px solid rgba(255,255,255,0.04);" :style="crmSelectedOwner === o.owner_id ? 'background: rgba(0,229,255,0.15); border-color: var(--hud-primary);' : ''">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <b>
+                @<span x-text="o.username || '—'"></span>
+                <span x-show="o.banned_until > Date.now()/1000" style="color: #e76f51; margin-left: 4px;">🚫</span>
+                <span x-show="(o.warnings || 0) > 0" style="color: #e9c46a; margin-left: 4px;">⚠️<span x-text="o.warnings"></span></span>
+              </b>
+              <span style="font-size: 10px; color: var(--text-dim);" x-text="o.name || ''"></span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap;">
+              <span>📋 <b x-text="o.drops_total"></b></span>
+              <span x-show="o.drops_pending > 0">⏳ <b x-text="o.drops_pending"></b></span>
+              <span x-show="o.drops_accepted > 0" style="color: #2a9d8f;">▶️ <b x-text="o.drops_accepted"></b></span>
+              <span x-show="o.drops_done > 0" style="color: #06b6d4;">🏁 <b x-text="o.drops_done"></b></span>
+              <span x-show="o.drops_brak > 0" style="color: #e76f51;">❌ <b x-text="o.drops_brak"></b></span>
+              <span x-show="o.total_price_done > 0">💰 $<b x-text="o.total_price_done"></b></span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">last: <span x-text="crmFormatTs(o.last_activity)"></span></div>
+            <div style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" @click.stop="openOwnerModal(o.owner_id)">🔍</button>
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" @click.stop="crmWarnOwner(o.owner_id)">⚠️</button>
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="o.banned_until <= Date.now()/1000" @click.stop="crmBanOwner(o.owner_id)">🚫</button>
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="o.banned_until > Date.now()/1000" @click.stop="crmUnbanOwner(o.owner_id)">↩️</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div class="panel-title">Клиенты <span class="badge-mini" x-text="crmFilteredDrops().length + ' / ' + crmDrops.length"></span></div>
+      <div style="max-height: 70vh; overflow-y: auto;">
+        <template x-for="d in crmFilteredDrops()" :key="d.drop_id">
+          <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+              <div style="flex: 1;">
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                  <span :style="'color: ' + crmStatusBadge(d.status).color" x-text="crmStatusBadge(d.status).icon + ' ' + crmStatusBadge(d.status).label" style="font-size: 10px; letter-spacing: 1px; text-transform: uppercase;"></span>
+                  <b x-text="d.fio || '—'"></b>
+                  <span style="color: var(--text-dim); font-size: 10px;" x-text="'#' + d.drop_id"></span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap;">
+                  <span>@<span x-text="d.owner_username || '—'"></span></span>
+                  <span x-show="d.price_usdt > 0">💵 $<span x-text="d.price_usdt"></span></span>
+                  <span>📋 <span x-text="d.lk_count"></span></span>
+                  <span>🕒 <span x-text="crmFormatTs(d.created_at)"></span></span>
+                </div>
+              </div>
+              <button class="btn" style="padding: 4px 10px; font-size: 11px;" @click="crmSelectedDrop = (crmSelectedDrop === d.drop_id) ? null : d.drop_id">
+                <span x-text="crmSelectedDrop === d.drop_id ? '▲' : '▼ ЛК'"></span>
+              </button>
+            </div>
+            <div x-show="crmSelectedDrop === d.drop_id" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1);">
+              <template x-for="lk in crmLksForDrop(d.drop_id)" :key="lk.droplk_id">
+                <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 4px; margin-bottom: 4px; font-size: 11px;">
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <b style="color: var(--hud-primary);" x-text="lk.bank || '—'"></b>
+                    <span :style="'color: ' + crmStatusBadge(lk.status).color" x-text="crmStatusBadge(lk.status).icon + ' ' + (lk.status || '?')"></span>
+                    <span x-show="lk.deal" style="color: var(--text-dim);" x-text="'#' + lk.deal"></span>
+                  </div>
+                  <div style="margin-top: 4px; color: var(--text-dim);" x-text="lk.value || '—'"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- OWNER DETAIL MODAL -->
+  <div x-show="crmOwnerModal.open" @keydown.escape.window="closeOwnerModal()" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;" @click.self="closeOwnerModal()">
+    <div style="background: var(--bg-panel, #14181f); border: 1px solid var(--hud-primary); border-radius: 8px; max-width: 900px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 20px;">
+      <div x-show="crmOwnerModal.loading" style="text-align: center; padding: 40px; color: var(--text-dim);">loading...</div>
+      <template x-if="crmOwnerModal.data && !crmOwnerModal.loading">
+        <div>
+          <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; margin-bottom: 12px;">
+            <div>
+              <h3 style="margin: 0; color: var(--hud-primary); font-size: 18px;">@<span x-text="crmOwnerModal.data.owner.username || crmOwnerModal.data.owner.owner_id"></span></h3>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+                <span x-text="crmOwnerModal.data.owner.name || ''"></span>
+                <span> · TG <span x-text="crmOwnerModal.data.owner.tg_user_id || '—'"></span></span>
+                <span> · <span x-text="crmFormatTs(crmOwnerModal.data.owner.joined_at)"></span></span>
+              </div>
+            </div>
+            <button class="btn" @click="closeOwnerModal()">✖</button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px;">
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">Всего</div>
+              <div style="font-size: 22px; font-weight: bold; color: var(--hud-primary);" x-text="crmOwnerModal.data.stats.total_drops"></div>
+            </div>
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">Done</div>
+              <div style="font-size: 22px; font-weight: bold; color: #06b6d4;" x-text="crmOwnerModal.data.stats.by_status.done || 0"></div>
+            </div>
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">%</div>
+              <div style="font-size: 22px; font-weight: bold;" x-text="(crmOwnerModal.data.stats.completion_rate_pct || 0) + '%'"></div>
+            </div>
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">Revenue</div>
+              <div style="font-size: 22px; font-weight: bold; color: #2a9d8f;" x-text="'$' + crmOwnerModal.data.stats.total_revenue_usdt"></div>
+            </div>
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">Avg $</div>
+              <div style="font-size: 22px; font-weight: bold;" x-text="'$' + crmOwnerModal.data.stats.avg_revenue_usdt"></div>
+            </div>
+            <div class="jarvis-panel" style="padding: 10px; text-align: center;">
+              <div style="font-size: 10px; color: var(--text-dim);">Avg h</div>
+              <div style="font-size: 22px; font-weight: bold;" x-text="crmOwnerModal.data.stats.avg_time_to_done_hours + 'ч'"></div>
+            </div>
+          </div>
+
+          <h4 style="margin: 8px 0; color: var(--text-dim); font-size: 12px; letter-spacing: 1px;">КЛИЕНТЫ</h4>
+          <div style="max-height: 50vh; overflow-y: auto;">
+            <template x-for="d in crmOwnerModal.data.drops" :key="d.drop_id">
+              <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                  <span :style="'color: ' + crmStatusBadge(d.status).color" x-text="crmStatusBadge(d.status).icon + ' ' + crmStatusBadge(d.status).label" style="font-size: 10px;"></span>
+                  <b x-text="d.fio || '—'"></b>
+                  <span style="color: var(--text-dim); font-size: 10px;" x-text="'#' + d.drop_id"></span>
+                  <span x-show="d.price_usdt > 0" style="color: #2a9d8f;">💵 $<span x-text="d.price_usdt"></span></span>
+                </div>
+                <div style="margin-top: 4px; font-size: 10px; color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap;">
+                  <span x-text="'создан: ' + crmFormatTs(d.created_at)"></span>
+                  <span x-show="d.accept_ts > 0" x-text="'принят: ' + crmFormatTs(d.accept_ts)"></span>
+                  <span x-show="d.done_ts > 0" x-text="'done: ' + crmFormatTs(d.done_ts)"></span>
+                </div>
+                <div x-show="d.lks && d.lks.length > 0" style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
+                  <template x-for="lk in d.lks" :key="lk.droplk_id">
+                    <span style="font-size: 10px; padding: 2px 6px; background: rgba(255,255,255,0.05); border-radius: 3px;">
+                      <span x-text="lk.bank"></span>
+                      <span :style="'color: ' + crmStatusBadge(lk.status).color" x-text="' ' + crmStatusBadge(lk.status).icon"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</section>
+
 <!-- ===== DISCORD TAB ===== -->
 <section x-show="currentView === 'discord'" class="discord-shell" :class="discordExpanded ? 'expanded' : ''">
   <!-- Mobile backdrop для закрытия рейла -->
@@ -3575,6 +3766,16 @@ function jarvis() {
     // Brain notes (LEO)
     notesPreview: [],
     notesCategory: '',
+    // CRM (Партнёры)
+    crmOwners: [],
+    crmDrops: [],
+    crmDropLks: [],
+    crmSelectedOwner: null,
+    crmSelectedDrop: null,
+    crmFilter: 'all',
+    crmLoading: false,
+    crmOwnerModal: { open: false, loading: false, data: null },
+    crmCharts: {},
     // Outreach
     outreachBots: [],
     outreachCampaigns: [],
@@ -4206,6 +4407,11 @@ function jarvis() {
           }, 600);
         }
       }
+      if (t.startsWith('crm.')) {
+        if (this.currentView === 'crm') {
+          setTimeout(() => this.refreshCrm(), 400);
+        }
+      }
       if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
         setTimeout(() => this.refresh(), 500);
       }
@@ -4303,6 +4509,7 @@ function jarvis() {
     goToView(view) {
       this.currentView = view;
       location.hash = '#' + view;
+      if (view === 'crm') { this.refreshCrm(); }
     },
     banksFromCards() {
       const out = {};
@@ -5737,6 +5944,138 @@ function jarvis() {
         alert('Архивировано: ' + (data.archived || 0));
         this.refreshNotes();
       } catch (e) { alert(String(e)); }
+    },
+
+    // === CRM (Партнёры) ===
+    async refreshCrm() {
+      this.crmLoading = true;
+      try {
+        const [r1, r2, r3] = await Promise.all([
+          fetch('/api/crm/owners',    {credentials: 'include'}),
+          fetch('/api/crm/drops',     {credentials: 'include'}),
+          fetch('/api/crm/drop_lks',  {credentials: 'include'}),
+        ]);
+        if (r1.ok) this.crmOwners   = (await r1.json()).owners || [];
+        if (r2.ok) this.crmDrops    = (await r2.json()).drops  || [];
+        if (r3.ok) this.crmDropLks  = (await r3.json()).lks    || [];
+        this.$nextTick(() => setTimeout(() => this.renderCrmCharts(), 50));
+      } catch (e) { console.error('crm refresh fail', e); }
+      finally { this.crmLoading = false; }
+    },
+    crmFilteredDrops() {
+      let drops = this.crmDrops;
+      if (this.crmSelectedOwner) drops = drops.filter(d => d.owner_id === this.crmSelectedOwner);
+      if (this.crmFilter !== 'all') drops = drops.filter(d => d.status === this.crmFilter);
+      return drops;
+    },
+    crmLksForDrop(drop_id) { return this.crmDropLks.filter(l => l.drop_id === drop_id); },
+    crmStatusBadge(status) {
+      const map = {
+        draft:    {icon: '✏️', label: 'draft',    color: '#888'},
+        pending:  {icon: '⏳', label: 'pending',  color: '#e9c46a'},
+        accepted: {icon: '✅', label: 'work', color: '#2a9d8f'},
+        done:     {icon: '🏁', label: 'done',   color: '#06b6d4'},
+        brak:     {icon: '❌', label: 'brak',     color: '#e76f51'},
+        in_review:{icon: '👀', label: 'review',   color: '#a78bfa'},
+      };
+      return map[status] || {icon: '•', label: status || '?', color: '#777'};
+    },
+    crmExportCsv() { window.open('/api/crm/export.csv', '_blank'); },
+    async crmBanOwner(oid) {
+      const days = prompt('Ban for how many days?', '7');
+      if (!days || isNaN(parseInt(days, 10))) return;
+      try {
+        const r = await fetch('/api/crm/owners/' + oid + '/ban?days=' + parseInt(days, 10), { method: 'POST', credentials: 'include' });
+        if (r.ok) { alert('banned'); await this.refreshCrm(); } else alert('err ' + r.status);
+      } catch (e) { alert(String(e)); }
+    },
+    async crmUnbanOwner(oid) {
+      if (!confirm('Unban?')) return;
+      try {
+        const r = await fetch('/api/crm/owners/' + oid + '/unban', { method: 'POST', credentials: 'include' });
+        if (r.ok) await this.refreshCrm();
+      } catch (e) { alert(String(e)); }
+    },
+    async crmWarnOwner(oid) {
+      if (!confirm('+1 warn?')) return;
+      try {
+        const r = await fetch('/api/crm/owners/' + oid + '/warn', { method: 'POST', credentials: 'include' });
+        if (r.ok) await this.refreshCrm();
+      } catch (e) { alert(String(e)); }
+    },
+    crmFormatTs(ts) {
+      if (!ts) return '—';
+      try { return new Date(ts * 1000).toLocaleString('ru-RU', {dateStyle: 'short', timeStyle: 'short'}); }
+      catch { return '—'; }
+    },
+    async openOwnerModal(owner_id) {
+      this.crmOwnerModal = { open: true, loading: true, data: null };
+      try {
+        const r = await fetch('/api/crm/owners/' + owner_id, { credentials: 'include' });
+        if (r.ok) this.crmOwnerModal.data = await r.json();
+        else { alert('err ' + r.status); this.crmOwnerModal.open = false; }
+      } catch (e) { alert(String(e)); this.crmOwnerModal.open = false; }
+      finally { this.crmOwnerModal.loading = false; }
+    },
+    closeOwnerModal() { this.crmOwnerModal = { open: false, loading: false, data: null }; },
+    renderCrmCharts() {
+      if (typeof Chart === 'undefined') return;
+      for (const id in this.crmCharts) {
+        try { this.crmCharts[id].destroy(); } catch {}
+      }
+      this.crmCharts = {};
+      const elStatus = document.getElementById('crm-chart-status');
+      if (elStatus) {
+        const counts = { draft:0, pending:0, accepted:0, done:0, brak:0 };
+        for (const d of this.crmDrops) { const s = d.status || 'draft'; if (counts[s] !== undefined) counts[s]++; }
+        const labels = Object.keys(counts);
+        const data   = labels.map(k => counts[k]);
+        const colors = ['#888','#e9c46a','#2a9d8f','#06b6d4','#e76f51'];
+        this.crmCharts.status = new Chart(elStatus, {
+          type: 'doughnut',
+          data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { color: '#aaa', font: { size: 10 } } } } },
+        });
+      }
+      const elTop = document.getElementById('crm-chart-top');
+      if (elTop) {
+        const top = [...this.crmOwners].filter(o => (o.total_price_done || 0) > 0)
+          .sort((a,b) => (b.total_price_done||0) - (a.total_price_done||0)).slice(0, 8);
+        this.crmCharts.top = new Chart(elTop, {
+          type: 'bar',
+          data: { labels: top.map(o => '@' + (o.username || o.owner_id).slice(0, 12)),
+            datasets: [{ label: 'Revenue $', data: top.map(o => o.total_price_done || 0), backgroundColor: '#00e5ff' }] },
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { ticks: { color: '#aaa', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                      y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } } } },
+        });
+      }
+      const elTrend = document.getElementById('crm-chart-trend');
+      if (elTrend) {
+        const buckets = {};
+        const today = new Date();
+        for (let i = 13; i >= 0; i--) {
+          const d = new Date(today.getTime() - i*86400000);
+          buckets[d.toISOString().slice(0, 10)] = 0;
+        }
+        for (const dr of this.crmDrops) {
+          if (!dr.created_at) continue;
+          const day = new Date(dr.created_at * 1000).toISOString().slice(0, 10);
+          if (buckets[day] !== undefined) buckets[day]++;
+        }
+        this.crmCharts.trend = new Chart(elTrend, {
+          type: 'line',
+          data: { labels: Object.keys(buckets).map(s => s.slice(5)),
+            datasets: [{ label: 'Drops/day', data: Object.values(buckets),
+              borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,0.12)', fill: true, tension: 0.35, pointRadius: 3 }] },
+          options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { ticks: { color: '#aaa', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                      y: { ticks: { color: '#aaa', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true } } },
+        });
+      }
     },
 
     // === Outreach ===

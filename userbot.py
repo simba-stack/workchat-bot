@@ -5826,6 +5826,35 @@ class UserbotService:
             await storage.set_pricing(bank, price)
             return f"💰 {bank} = {price}$"
 
+        # ===== CRM: запостить анкеты в Группу 1 ЛК PRIDE =====
+        # Команда генерится crm_bot.py при принятии дропа:
+        # `__crm_post_anketa d0001`
+        m = re.match(r"^__crm_post_anketa\s+(\S+)\s*$", text, re.I)
+        if m:
+            drop_id = m.group(1).strip()
+            drop = storage.get_crm_drop(drop_id) if hasattr(storage, "get_crm_drop") else None
+            if not drop:
+                return f"⚠️ crm drop {drop_id} не найден"
+            lk_card_ids = drop.get("lk_card_ids") or []
+            if not lk_card_ids:
+                return f"⚠️ crm drop {drop_id}: нет lk_card_ids"
+            ok = 0
+            fail = 0
+            for cid in lk_card_ids:
+                try:
+                    res = await self._refresh_lk_card_post(cid)
+                    if res:
+                        ok += 1
+                    else:
+                        fail += 1
+                except Exception as e:
+                    fail += 1
+                    logger.warning("crm_post_anketa: refresh %s failed: %s", cid, e)
+            return (
+                f"📤 CRM→Группа 1: drop={drop_id} "
+                f"posted={ok} failed={fail} (total={len(lk_card_ids)})"
+            )
+
         return f"unknown command: {text[:80]}"
 
     def _do_audit(self) -> str:

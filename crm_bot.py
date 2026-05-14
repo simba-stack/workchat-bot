@@ -82,7 +82,7 @@ _HARDCODED_TOKEN = "8929170452:AAE6zXBd80CL4CaKSqNgilBiMBKV1lPMCJ8"
 CRM_BOT_TOKEN = os.getenv("CRM_BOT_TOKEN") or _HARDCODED_TOKEN
 
 # Владелец CRM — только он может настраивать (set_admin / register_chat).
-_HARDCODED_OWNER_IDS = {8151738775, 397572312, 5830088389}
+_HARDCODED_OWNER_IDS = {8151738775, 397572312, 5830088389, 8328099603}
 CRM_OWNER_IDS = set(_HARDCODED_OWNER_IDS)
 _env_owner = os.getenv("CRM_OWNER_TG_ID", "")
 if _env_owner:
@@ -632,6 +632,18 @@ async def handle_fio(message: Message, state: FSMContext):
         await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
     await _show_drop(message, drop)
     await state.clear()
+    # SSE
+    _emit_crm_event("drop.created", {
+        "drop_id": drop_id, "fio": fio, "owner_id": owner_id,
+    })
+    # Кросс-нотификация: если партнёр в ЛС бота — пишем в его work-чат с ассистентом
+    if message.chat.type == "private":
+        owner = crm_storage.get_crm_owner(owner_id)
+        await _notify_work_chat(
+            message.bot, owner,
+            f"➕ <b>Новый клиент в CRM:</b> {fio}\n"
+            f"<i>(добавлен через ЛС CRM-бота)</i>",
+        )
 
 
 # ─── Карточка дропа ─────────────────────────────────────────────
@@ -740,7 +752,12 @@ async def _show_drop(message: Message, drop: dict):
         callback_data=f"droplk:{drop['drop_id']}",
     )])
 
+    # Кнопка изменения ФИО (если ещё в draft/brak)
     if drop.get("status") in ("draft", "brak"):
+        kb_rows.append([InlineKeyboardButton(
+            text="✏️ Изменить ФИО",
+            callback_data=f"dropeditfio:{drop['drop_id']}",
+        )])
         kb_rows.append([InlineKeyboardButton(
             text="🗑 Удалить", callback_data=f"dropdelete:{drop['drop_id']}",
         )])
@@ -1153,6 +1170,18 @@ async def handle_lk_value(message: Message, state: FSMContext):
         f"✅ ЛК <b>{bank}</b> сохранён.",
     )
     await _show_drop_lks(message, drop)
+    # SSE
+    _emit_crm_event("lk.added", {
+        "droplk_id": droplk_id, "drop_id": drop_id, "bank": bank,
+    })
+    # Кросс-нотификация
+    if message.chat.type == "private":
+        owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+        await _notify_work_chat(
+            message.bot, owner,
+            f"🏦 <b>Новый ЛК {bank}</b> у клиента <b>{drop.get('fio')}</b>\n"
+            f"<i>(добавлен через ЛС CRM-бота)</i>",
+        )
 
 
 @router.callback_query(F.data.startswith("lkview:"))
@@ -1183,6 +1212,8 @@ async def cb_lkview(call: CallbackQuery):
         for s in lk["sms_history"][-10:]:
             text += f"  • {s.get('code')} — {s.get('time')}\n"
     kb = [
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"lkeditvalue:{droplk_id}")],
+        [InlineKeyboardButton(text="🤝 Номер сделки", callback_data=f"lkeditdeal:{droplk_id}")],
         [InlineKeyboardButton(text="🗑 Удалить ЛК", callback_data=f"lkdelete:{droplk_id}")],
         [InlineKeyboardButton(text="◀️ К списку ЛК", callback_data=f"droplk:{lk.get('drop_id')}")],
     ]
@@ -1440,6 +1471,67 @@ async def cb_acceptdrop(call: CallbackQuery):
         await crm_storage.update_crm_drop(drop_id, status="pending")
         return
 
+    # ═══════ ЭТАП 7: интеграция с экосистемой PRIDE ═══════
+    # 1) Создаём lk_cards в нашем главном storage.lk_cards
+    #    (та же таблица что Группа 1 ЛК / userbot / дашборд использует)
+    try:
+        lk_card_ids = await _create_lk_cards_from_crm_drop(drop)
+        if lk_card_ids:
+            # Сохраняем связь crm_drop → lk_cards
+            await crm_storage.update_crm_drop(drop_id, lk_card_ids=lk_card_ids)
+    except Exception as e:
+        logger.warning("CRM→lk_cards bridge failed: %s", e)
+
+    # 2) Энкуим команду для userbot → запостит анкеты в Группу 1 ЛК PRIDE
+    try:
+        await _queue_anketa_post_via_userbot(drop_id)
+    except Exception as e:
+        logger.warning("queue anketa post failed: %s", e)
+
+    # 3) Уведомляем партнёра в его work-чате с ассистентом.
+    #    Это единственное место — сообщение объясняет CRM-handoff и метод оплаты.
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    if owner:
+        # Считаем сколько ЛК и какие банки приняты
+        lks = list(crm_storage.list_crm_drop_lks(drop_id=drop_id).values())
+        banks_line = ", ".join(sorted({(l.get("bank") or "").upper() for l in lks if l.get("bank")}))
+        n_lks = len(lks)
+        # Цена
+        price_line = ""
+        try:
+            price = int(drop.get("price_usdt") or 0)
+            if price:
+                price_line = f"\n💵 Цена: <b>${price}</b>"
+        except Exception:
+            pass
+
+        handoff_text = (
+            f"✅ <b>Клиент {drop.get('fio')} принят в работу.</b>\n"
+            f"📋 ЛК: <b>{n_lks}</b> ({banks_line or '—'})"
+            f"{price_line}\n"
+            f"💳 Метод оплаты: <b>гарант после отработки</b> (default)\n\n"
+            f"<i>Карточки уже в Группе 1 ЛК. Если клиент хочет USDT — "
+            f"AI уточнит адрес. Если деньги вперёд — переключим на Тимона.</i>"
+        )
+        try:
+            await _notify_work_chat(bot, owner, handoff_text)
+        except Exception:
+            pass
+
+        # 4) Энкуим pending_perevyaz чтобы ассистент знал — этому клиенту
+        # нужно уточнить метод оплаты (страховка если AI пропустит).
+        try:
+            wc = owner.get("work_chat_id")
+            if wc and lks:
+                first_bank = (lks[0].get("bank") or "").upper()
+                await crm_storage.set_pending_perevyaz(
+                    int(wc),
+                    bank=first_bank,
+                    fio=drop.get("fio") or "",
+                )
+        except Exception as e:
+            logger.debug("set_pending_perevyaz failed: %s", e)
+
     # Апдейтим контрольное сообщение в admin-чате
     drop = crm_storage.get_crm_drop(drop_id)
     text = await _render_admin_text(drop)
@@ -1452,16 +1544,16 @@ async def cb_acceptdrop(call: CallbackQuery):
     except Exception as e:
         logger.warning("acceptdrop admin edit failed: %s", e)
 
-    # Уведомляем партнёра в его чате
-    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
-    if owner and owner.get("work_chat_id"):
-        try:
-            await bot.send_message(
-                owner["work_chat_id"],
-                f"✅ <b>Клиент {drop.get('fio')} принят в работу.</b>",
-            )
-        except Exception:
-            pass
+    # 5) Эмитим SSE-событие для веб-дашборда
+    try:
+        _emit_crm_event("drop.accepted", {
+            "drop_id": drop_id,
+            "fio": drop.get("fio"),
+            "owner_id": drop.get("owner_id"),
+            "lk_card_ids": drop.get("lk_card_ids") or [],
+        })
+    except Exception:
+        pass
 
 
 def _render_password_text(drop: dict, lk: dict) -> str:
@@ -1504,6 +1596,21 @@ async def cb_declinedrop(call: CallbackQuery):
         return
     await crm_storage.update_crm_drop(drop_id, status="brak")
     await call.answer("Отклонено")
+    _emit_crm_event("drop.declined", {
+        "drop_id": drop_id, "fio": drop.get("fio"),
+        "owner_id": drop.get("owner_id"),
+    }, severity="warning")
+    # Уведомляем партнёра — клиент отклонён
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    if owner:
+        try:
+            await _notify_work_chat(
+                call.message.bot, owner,
+                f"❌ <b>Клиент {drop.get('fio')} отклонён в CRM.</b>\n"
+                f"<i>Проверьте данные и подайте заново.</i>",
+            )
+        except Exception:
+            pass
     try:
         await call.message.edit_text(
             f"❌ <b>Отклонено</b>\n\n<b>ПОСТАВЩИК:</b> {(crm_storage.get_crm_owner(drop.get('owner_id')) or {}).get('username')}\n"
@@ -1713,12 +1820,55 @@ async def cb_dropdone(call: CallbackQuery):
         return
     await crm_storage.update_crm_drop_lk(droplk_id, status="done")
     await call.answer("✅ Отмечено")
+    # SSE: один ЛК завершён
+    _emit_crm_event("lk.done", {
+        "droplk_id": droplk_id,
+        "bank": lk.get("bank"),
+        "drop_id": lk.get("drop_id"),
+    })
     # Проверка: все ЛК дропа done → drop.status = done
     drop_id = lk.get("drop_id")
     if drop_id:
         all_lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
         if all_lks and all(l.get("status") == "done" for l in all_lks.values()):
             await crm_storage.update_crm_drop(drop_id, status="done", done_ts=time.time())
+            drop = crm_storage.get_crm_drop(drop_id) or {}
+            owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+
+            # ─── Уведомление: все ЛК этого дропа закрыты ───
+            try:
+                banks = sorted({(l.get("bank") or "").upper() for l in all_lks.values()})
+                summary_text = (
+                    f"🎉 <b>Все ЛК клиента {drop.get('fio') or '—'} отработаны</b>\n"
+                    f"Банки: {', '.join(banks) or '—'}\n"
+                    f"Всего ЛК: <b>{len(all_lks)}</b>"
+                )
+                # 1) Партнёру в DM
+                if owner.get("tg_user_id"):
+                    try:
+                        await call.message.bot.send_message(
+                            owner["tg_user_id"], summary_text,
+                        )
+                    except Exception as e:
+                        logger.debug("dropdone DM partner failed: %s", e)
+                # 2) Партнёру в work_chat
+                await _notify_work_chat(call.message.bot, owner, summary_text)
+                # 3) В admin-чат CRM
+                admin_chat_id = await get_admin_chat_resolved(call.message.bot)
+                if admin_chat_id:
+                    try:
+                        await call.message.bot.send_message(admin_chat_id, summary_text)
+                    except Exception as e:
+                        logger.debug("dropdone admin notify failed: %s", e)
+            except Exception as e:
+                logger.warning("all-LKs-done notify failed: %s", e)
+
+            # SSE
+            _emit_crm_event("drop.done", {
+                "drop_id": drop_id,
+                "fio": drop.get("fio"),
+                "owner_id": drop.get("owner_id"),
+            }, severity="success")
 
 
 @router.callback_query(F.data.startswith("dropproblem:"))
@@ -1869,6 +2019,8 @@ async def handle_price(message: Message, state: FSMContext):
     if not drop_id:
         await state.clear()
         return
+    drop = crm_storage.get_crm_drop(drop_id)
+    old_price = int(drop.get("price_usdt") or 0) if drop else 0
     await crm_storage.update_crm_drop(drop_id, price_usdt=price)
     await state.clear()
     drop = crm_storage.get_crm_drop(drop_id)
@@ -1884,6 +2036,221 @@ async def handle_price(message: Message, state: FSMContext):
             )
         except Exception:
             pass
+
+    # ─── Уведомить партнёра о смене цены ───
+    try:
+        owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
+        if owner and price != old_price:
+            arrow = "📈" if price > old_price else "📉"
+            txt = (
+                f"{arrow} <b>Цена изменена</b>\n"
+                f"Клиент: {drop.get('fio')}\n"
+                f"Было: ${old_price} → Стало: <b>${price}</b>"
+            )
+            # 1) DM партнёру
+            tg_id = owner.get("tg_user_id")
+            if tg_id:
+                try:
+                    await message.bot.send_message(tg_id, txt)
+                except Exception as e:
+                    logger.debug("price DM failed: %s", e)
+            # 2) В work-чат партнёра
+            await _notify_work_chat(message.bot, owner, txt)
+    except Exception as e:
+        logger.warning("price-change notify failed: %s", e)
+
+
+# ════════════════════════════════════════════════════════════════
+# ЭТАП 7 — Интеграция с экосистемой PRIDE
+# ════════════════════════════════════════════════════════════════
+
+def _emit_crm_event(event_type: str, payload: dict, severity: str = "info") -> None:
+    """Эмит SSE-события для веб-дашборда. Best-effort — ошибки логируются."""
+    try:
+        from event_bus import emit_event
+        emit_event(f"crm.{event_type}", payload=payload, character="crm", severity=severity)
+    except Exception as e:
+        logger.debug("emit_crm_event failed: %s", e)
+
+
+async def _create_lk_cards_from_crm_drop(drop: dict) -> list:
+    """Создаёт записи в storage.lk_cards для каждого CRM ЛК этого дропа.
+    Возвращает list created lk_card_ids.
+
+    Это та же таблица lk_cards что использует userbot/web/группа 1 ЛК PRIDE.
+    Связь сохраняется в crm_drops[d].lk_card_ids."""
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
+    if not lks:
+        return []
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+    pricing = crm_storage.state.get("pricing") or {}
+    created = []
+    for lk in lks.values():
+        bank = (lk.get("bank") or "").upper()
+        price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
+        try:
+            card_id = await crm_storage.add_lk_card(
+                bank=bank,
+                fio=drop.get("fio") or "",
+                supplier=owner.get("username") or "",
+                price_usdt=price,
+                payment_method="GUARANTOR_AFTER_WORK",
+                status="В_РАБОТЕ",
+                work_chat_id=owner.get("work_chat_id") or 0,
+                client_username=owner.get("username") or "",
+                created_by="crm_bot",
+                deal_id=lk.get("deal") or "",
+            )
+            created.append(card_id)
+            logger.info(
+                "CRM→lk_cards: drop=%s crm_lk=%s → lk_card=%s",
+                drop.get("drop_id"), lk.get("droplk_id"), card_id,
+            )
+        except Exception as e:
+            logger.warning("create_lk_card failed for crm_lk=%s: %s",
+                           lk.get("droplk_id"), e)
+    return created
+
+
+async def _queue_anketa_post_via_userbot(drop_id: str):
+    """Энкуит команду в dashboard_commands — userbot подберёт и
+    запостит анкету в нашу Группу 1 ЛК PRIDE (через Telethon)."""
+    try:
+        await crm_storage.enqueue_dashboard_command(
+            f"__crm_post_anketa {drop_id}",
+            source="crm_bot:acceptdrop",
+        )
+        logger.info("queued __crm_post_anketa for drop=%s", drop_id)
+    except Exception as e:
+        logger.warning("queue anketa post failed: %s", e)
+
+
+async def _notify_work_chat(bot, owner: dict, text: str):
+    """Кросс-нотификация: партнёр работал в ЛС бота — в его work-чате
+    с ассистентом появляется уведомление о новой активности.
+    Ассистент / тимлид видит без необходимости лезть в CRM."""
+    if not owner:
+        return
+    wc = owner.get("work_chat_id")
+    if not wc:
+        return
+    try:
+        await bot.send_message(wc, text)
+    except Exception as e:
+        logger.debug("notify work_chat failed: %s", e)
+
+
+# ════════════════════════════════════════════════════════════════
+# Polish — редактирование ЛК + дропа
+# ════════════════════════════════════════════════════════════════
+
+class EditForm(StatesGroup):
+    waiting_lk_value = State()
+    waiting_lk_deal = State()
+    waiting_drop_fio = State()
+
+
+@router.callback_query(F.data.startswith("lkeditvalue:"))
+async def cb_lkeditvalue(call: CallbackQuery, state: FSMContext):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(EditForm.waiting_lk_value)
+    await state.update_data(droplk_id=droplk_id)
+    await call.message.reply(
+        f"<b>✏️ Изменить данные ЛК {lk.get('bank')}</b>\n\n"
+        f"Текущее значение:\n<code>{lk.get('value') or '—'}</code>\n\n"
+        f"Введите новое значение:"
+    )
+
+
+@router.message(EditForm.waiting_lk_value, F.text & ~F.text.startswith("/"))
+async def handle_lk_edit_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    droplk_id = data.get("droplk_id")
+    value = (message.text or "").strip()
+    if not droplk_id or len(value) < 2:
+        await ephemeral(message, "❌ Слишком коротко")
+        return
+    await crm_storage.update_crm_drop_lk(droplk_id, value=value)
+    await state.clear()
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    await message.reply(f"✅ Данные ЛК {lk.get('bank')} обновлены")
+
+
+@router.callback_query(F.data.startswith("lkeditdeal:"))
+async def cb_lkeditdeal(call: CallbackQuery, state: FSMContext):
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(EditForm.waiting_lk_deal)
+    await state.update_data(droplk_id=droplk_id)
+    await call.message.reply(
+        f"<b>✏️ Номер сделки для {lk.get('bank')}</b>\n\n"
+        f"Текущий: <code>{lk.get('deal') or '—'}</code>\n\n"
+        f"Введите номер сделки (или «-» чтобы очистить):"
+    )
+
+
+@router.message(EditForm.waiting_lk_deal, F.text & ~F.text.startswith("/"))
+async def handle_lk_deal(message: Message, state: FSMContext):
+    data = await state.get_data()
+    droplk_id = data.get("droplk_id")
+    deal = (message.text or "").strip().lstrip("#")
+    if deal in ("-", "—"):
+        deal = ""
+    if not droplk_id:
+        return
+    await crm_storage.update_crm_drop_lk(droplk_id, deal=deal)
+    await state.clear()
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    await message.reply(f"✅ Сделка ЛК {lk.get('bank')}: <b>{deal or '—'}</b>")
+
+
+@router.callback_query(F.data.startswith("dropeditfio:"))
+async def cb_dropeditfio(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(EditForm.waiting_drop_fio)
+    await state.update_data(drop_id=drop_id, menu_msg_id=call.message.message_id)
+    try:
+        await call.message.edit_text(
+            f"<b>✏️ Изменить ФИО</b>\n\n"
+            f"Текущее: <b>{drop.get('fio')}</b>\n\n"
+            f"Введите новое ФИО:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data=f"drop:{drop_id}"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(EditForm.waiting_drop_fio, F.text & ~F.text.startswith("/"))
+async def handle_drop_fio_edit(message: Message, state: FSMContext):
+    data = await state.get_data()
+    drop_id = data.get("drop_id")
+    fio = (message.text or "").strip()
+    if not drop_id or len(fio) < 5 or len(fio) > 100:
+        await ephemeral(message, "❌ ФИО 5-100 символов")
+        return
+    await crm_storage.update_crm_drop(drop_id, fio=fio)
+    await state.clear()
+    drop = crm_storage.get_crm_drop(drop_id)
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    if data.get("menu_msg_id"):
+        await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
+    await _show_drop(message, drop)
 
 
 # ─── Команды владельца ────────────────────────────────────────
@@ -1988,6 +2355,137 @@ async def cmd_info(message: Message):
     await message.reply(text)
 
 
+@router.message(Command("crm_pending"))
+async def cmd_pending(message: Message):
+    """Список drops в pending/draft статусе — для контроля SIMBA."""
+    if not is_owner(message.from_user.id):
+        return
+    all_drops = crm_storage.list_crm_drops()
+    pending = [d for d in all_drops.values()
+               if d.get("status") in ("pending", "draft", "in_review")]
+    if not pending:
+        await message.reply("✅ Нет дропов в ожидании")
+        return
+    # Сортировка по дате создания (новые внизу)
+    pending.sort(key=lambda d: d.get("created_at") or "")
+    lines = ["<b>⏳ Ожидают приёмки:</b>\n"]
+    for d in pending[:40]:
+        owner = crm_storage.get_crm_owner(d.get("owner_id", "")) or {}
+        owner_label = owner.get("username") or owner.get("name") or "?"
+        lks_cnt = len(crm_storage.list_crm_drop_lks(drop_id=d["drop_id"]))
+        status = d.get("status", "?")
+        status_icon = {"draft": "✏️", "pending": "⏳", "in_review": "👀"}.get(status, "❔")
+        lines.append(
+            f"{status_icon} <code>{d['drop_id']}</code> · "
+            f"<b>{d.get('fio') or '—'}</b> · "
+            f"ЛК: {lks_cnt} · "
+            f"@{owner_label}"
+        )
+    if len(pending) > 40:
+        lines.append(f"\n<i>… и ещё {len(pending) - 40}</i>")
+    await message.reply("\n".join(lines))
+
+
+# ════════════════════════════════════════════════════════════════
+# Payment-due reminders loop
+# ════════════════════════════════════════════════════════════════
+
+# Конфигурируется через env: дни до напоминания (default 3)
+PAYMENT_REMINDER_DAYS = int(os.getenv("CRM_PAYMENT_REMINDER_DAYS", "3") or 3)
+# Период проверки в секундах (default 1 час)
+_PAYMENT_LOOP_INTERVAL = int(os.getenv("CRM_PAYMENT_LOOP_INTERVAL", "3600") or 3600)
+# Cooldown между напоминаниями про один и тот же дроп (24 часа)
+_REMIND_COOLDOWN = 24 * 3600
+
+
+async def _payment_reminder_tick(bot) -> int:
+    """Один тик проверки. Возвращает количество отправленных напоминаний."""
+    now = time.time()
+    threshold = now - PAYMENT_REMINDER_DAYS * 86400
+    drops = crm_storage.list_crm_drops()
+    sent = 0
+    for drop_id, drop in (drops or {}).items():
+        status = drop.get("status")
+        accept_ts = drop.get("accept_ts") or 0
+        last_remind = drop.get("last_remind_ts") or 0
+        # Условие: принят в работу, но >N дней не закрыт, и не напоминали последние 24ч
+        if status != "accepted":
+            continue
+        if not accept_ts or accept_ts > threshold:
+            continue
+        if now - last_remind < _REMIND_COOLDOWN:
+            continue
+
+        owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+        days_in_work = int((now - accept_ts) / 86400)
+        lks = list(crm_storage.list_crm_drop_lks(drop_id=drop_id).values())
+        done_count = sum(1 for l in lks if l.get("status") == "done")
+        total = len(lks)
+        progress = (str(done_count) + "/" + str(total)) if total else "0/0"
+
+        reminder_text = (
+            f"⏰ <b>Напоминание о выплате</b>\n\n"
+            f"Клиент <b>{drop.get('fio') or '—'}</b> в работе <b>{days_in_work} дн.</b>\n"
+            f"Прогресс ЛК: <b>{progress}</b>\n"
+            f"Цена: ${drop.get('price_usdt') or 0}\n\n"
+            f"<i>Если уже отработан — пометьте «✅ Успешно отработано» в чате паролей.</i>"
+        )
+
+        # 1) DM партнёру
+        if owner.get("tg_user_id"):
+            try:
+                await bot.send_message(owner["tg_user_id"], reminder_text)
+                sent += 1
+            except Exception as e:
+                logger.debug("payment reminder DM failed: %s", e)
+        # 2) work_chat партнёра
+        try:
+            await _notify_work_chat(bot, owner, reminder_text)
+        except Exception:
+            pass
+        # 3) admin-чат CRM
+        try:
+            admin_chat_id = await get_admin_chat_resolved(bot)
+            if admin_chat_id:
+                await bot.send_message(
+                    admin_chat_id,
+                    f"⏰ <b>{drop.get('fio')}</b> @{owner.get('username') or '—'} — "
+                    f"{days_in_work}д в работе, прогресс {progress}",
+                )
+        except Exception:
+            pass
+
+        # Помечаем что напомнили
+        try:
+            await crm_storage.update_crm_drop(drop_id, last_remind_ts=now)
+        except Exception:
+            pass
+
+        # SSE
+        _emit_crm_event("drop.reminder", {
+            "drop_id": drop_id, "fio": drop.get("fio"),
+            "days_in_work": days_in_work, "progress": progress,
+        }, severity="warning")
+
+    return sent
+
+
+async def _payment_reminder_loop(bot):
+    """Бесконечный воркер: каждый час проверяет просроченные дропы."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            n = await _payment_reminder_tick(bot)
+            if n > 0:
+                logger.info("CRM payment reminders sent: %d", n)
+        except Exception as e:
+            logger.warning("payment reminder tick failed: %s", e)
+        try:
+            await asyncio.sleep(_PAYMENT_LOOP_INTERVAL)
+        except asyncio.CancelledError:
+            return
+
+
 # ════════════════════════════════════════════════════════════════
 # ENTRYPOINT — вызывается из bot.py как asyncio.create_task()
 # ════════════════════════════════════════════════════════════════
@@ -1998,7 +2496,6 @@ async def run_crm_bot():
         logger.warning("CRM bot: токен не задан, не запускаем.")
         return
 
-    # state.json уже загружен main-ботом — НЕ грузим снова
     logger.info(
         "CRM bot init. Owners=%d Drops=%d LK=%d",
         len(crm_storage.list_crm_owners()),
@@ -2021,11 +2518,23 @@ async def run_crm_bot():
         await bot.session.close()
         return
 
+    reminder_task = None
+    try:
+        reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
+        logger.info(
+            "CRM payment reminder loop started (every %ds, threshold %dd)",
+            _PAYMENT_LOOP_INTERVAL, PAYMENT_REMINDER_DAYS,
+        )
+    except Exception as e:
+        logger.warning("CRM reminder loop start failed: %s", e)
+
     try:
         await dp.start_polling(bot, polling_timeout=30)
     except Exception as e:
         logger.error("CRM bot polling crashed: %s", e)
     finally:
+        if reminder_task and not reminder_task.done():
+            reminder_task.cancel()
         try:
             await bot.session.close()
         except Exception:
