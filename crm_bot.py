@@ -420,27 +420,95 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
     drops_total = int(owner.get("total_drops") or 0)
     revenue = float(owner.get("total_revenue_usd") or 0)
     rating = float(owner.get("rating") or 5.0)
+    warnings = int(owner.get("warnings") or 0)
+    banned_until = float(owner.get("banned_until") or 0)
     drops = crm_storage.list_crm_drops(owner_id=owner["owner_id"])
     drops_active = sum(1 for d in drops.values() if d.get("status") in ("pending", "accepted"))
     drops_done = sum(1 for d in drops.values() if d.get("status") == "done")
+    drops_pending = sum(1 for d in drops.values() if d.get("status") in ("draft", "pending"))
+    drops_brak = sum(1 for d in drops.values() if d.get("status") == "brak")
+
+    # Расчёт средней цены и среднего времени до done
+    done_drops = [d for d in drops.values() if d.get("status") == "done"]
+    avg_price = (sum(int(d.get("price_usdt") or 0) for d in done_drops) / len(done_drops)) if done_drops else 0
+    completion_rate = (drops_done / max(1, drops_total)) * 100 if drops_total else 0
+
+    # Бейджи статуса
+    status_line = ""
+    if banned_until > time.time():
+        until_str = time.strftime("%d.%m %H:%M", time.localtime(banned_until))
+        status_line = f"🚫 <b>ЗАБЛОКИРОВАН</b> до {until_str}\n\n"
+    elif warnings > 0:
+        status_line = f"⚠️ Предупреждений: <b>{warnings}</b>\n\n"
 
     text = (
         f"👤 <b>Профиль партнёра</b>\n\n"
+        f"{status_line}"
         f"<b>Имя:</b> {owner.get('name') or '—'}\n"
         f"<b>Username:</b> @{owner.get('username') or '—'}\n"
         f"<b>ID:</b> <code>{owner['owner_id']}</code>\n"
         f"<b>С нами с:</b> {joined}\n\n"
         f"<b>📊 Статистика:</b>\n"
         f"• Всего клиентов: <b>{drops_total}</b>\n"
-        f"• Активных: <b>{drops_active}</b>\n"
+        f"• В ожидании: <b>{drops_pending}</b>\n"
+        f"• В работе: <b>{drops_active}</b>\n"
         f"• Отработано: <b>{drops_done}</b>\n"
-        f"• Заработано: <b>${revenue:.0f}</b>\n"
+        f"• Брак: <b>{drops_brak}</b>\n"
+        f"• % успеха: <b>{completion_rate:.0f}%</b>\n"
+        f"• Средняя цена: <b>${avg_price:.0f}</b>\n"
         f"• Рейтинг: <b>{rating:.1f}/5.0</b> ⭐\n"
     )
-    kb = [[InlineKeyboardButton(text="📇 Мои клиенты", callback_data="drops")]]
+    kb = [
+        [InlineKeyboardButton(text="📇 Мои клиенты", callback_data="drops")],
+        [InlineKeyboardButton(text="➕ Новый клиент", callback_data="newdrop")],
+        [InlineKeyboardButton(text="❓ Помощь / FAQ", callback_data="help")],
+    ]
     if in_group:
         kb.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
     await _send(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+
+@router.callback_query(F.data == "help")
+async def cb_help_inline(call: CallbackQuery):
+    """Inline-кнопка «Помощь» из профиля."""
+    await call.answer()
+    text = (
+        "❓ <b>FAQ для партнёров</b>\n\n"
+        "<b>1) Как добавить нового клиента?</b>\n"
+        "/clients → «➕ Добавить клиента» → введи ФИО → выбери банк → данные.\n\n"
+        "<b>2) Когда оплата?</b>\n"
+        "По умолчанию — гарант ПОСЛЕ отработки. Хотите USDT TRC20 или деньги вперёд — "
+        "напишите ассистенту в work-чате.\n\n"
+        "<b>3) Что значит «ожидает приёмки»?</b>\n"
+        "Вы заполнили анкету и нажали «Отдать в работу» — ждём пока SIMBA подтвердит.\n\n"
+        "<b>4) Где статус ЛК?</b>\n"
+        "В /clients → ЛК показывают статус: ✏️draft → ⏳pending → ✅accepted → 🏁done.\n\n"
+        "<b>5) Что-то не работает?</b>\n"
+        "Пиши в личку SIMBA или жми «📞 Связаться с админом» ниже."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📞 Связаться с админом", url="https://t.me/SIMBA")],
+        [InlineKeyboardButton(text="◀️ Назад в профиль", callback_data="back_profile")],
+    ])
+    try:
+        await call.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        await call.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "back_profile")
+async def cb_back_profile(call: CallbackQuery):
+    """Назад к профилю."""
+    await call.answer()
+    owner = crm_storage.find_crm_owner_by_tg(call.from_user.id)
+    if not owner:
+        await call.message.answer("Профиль не найден.")
+        return
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _show_profile(call.message, owner, in_group=False)
 
 
 # ─── /help ──────────────────────────────────────────────────────
@@ -1397,16 +1465,32 @@ async def cb_dropsend(call: CallbackQuery):
 @router.callback_query(F.data.startswith("acceptdrop:"))
 async def cb_acceptdrop(call: CallbackQuery):
     drop_id = call.data.split(":", 1)[1]
-    drop = crm_storage.get_crm_drop(drop_id)
-    if not drop:
-        await call.answer("Клиент не найден", show_alert=True)
+    # Защита от двойного клика — атомарная блокировка через in-memory set
+    if drop_id in _accepting_now:
+        await call.answer("⏳ Уже обрабатываю...", show_alert=False)
         return
-    if drop.get("status") == "accepted":
-        await call.answer("Уже принят", show_alert=True)
-        return
-    if drop.get("status") not in ("pending", "draft"):
-        await call.answer("Нельзя принять в этом статусе", show_alert=True)
-        return
+    _accepting_now.add(drop_id)
+    try:
+        drop = crm_storage.get_crm_drop(drop_id)
+        if not drop:
+            await call.answer("Клиент не найден", show_alert=True)
+            return
+        if drop.get("status") == "accepted":
+            await call.answer("Уже принят", show_alert=True)
+            return
+        if drop.get("status") not in ("pending", "draft"):
+            await call.answer("Нельзя принять в этом статусе", show_alert=True)
+            return
+        await _cb_acceptdrop_inner(call, drop_id, drop)
+    finally:
+        _accepting_now.discard(drop_id)
+
+
+# Локальный set для защиты от двойного нажатия Accept/Decline
+_accepting_now: set = set()
+
+
+async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
     bot = call.message.bot
 
     # СНАЧАЛА проверим что бот имеет доступ к password-чату
@@ -1590,12 +1674,23 @@ def _password_filled_keyboard(droplk_id: str, link_access: str = "") -> InlineKe
 @router.callback_query(F.data.startswith("declinedrop:"))
 async def cb_declinedrop(call: CallbackQuery):
     drop_id = call.data.split(":", 1)[1]
-    drop = crm_storage.get_crm_drop(drop_id)
-    if not drop:
-        await call.answer("Клиент не найден", show_alert=True)
+    # Защита от двойного клика
+    if drop_id in _accepting_now:
+        await call.answer("⏳ Уже обрабатываю...", show_alert=False)
         return
-    await crm_storage.update_crm_drop(drop_id, status="brak")
-    await call.answer("Отклонено")
+    _accepting_now.add(drop_id)
+    try:
+        drop = crm_storage.get_crm_drop(drop_id)
+        if not drop:
+            await call.answer("Клиент не найден", show_alert=True)
+            return
+        if drop.get("status") == "brak":
+            await call.answer("Уже отклонён", show_alert=True)
+            return
+        await crm_storage.update_crm_drop(drop_id, status="brak")
+        await call.answer("Отклонено")
+    finally:
+        _accepting_now.discard(drop_id)
     _emit_crm_event("drop.declined", {
         "drop_id": drop_id, "fio": drop.get("fio"),
         "owner_id": drop.get("owner_id"),
@@ -2134,10 +2229,16 @@ async def _notify_work_chat(bot, owner: dict, text: str):
     wc = owner.get("work_chat_id")
     if not wc:
         return
+    decorated = _decor(text)
     try:
-        await bot.send_message(wc, text)
+        await bot.send_message(wc, decorated)
     except Exception as e:
-        logger.debug("notify work_chat failed: %s", e)
+        # Fallback без premium-emoji
+        logger.debug("notify work_chat with premium emoji failed: %s", e)
+        try:
+            await bot.send_message(wc, text)
+        except Exception as e2:
+            logger.debug("notify work_chat plain failed: %s", e2)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2487,6 +2588,53 @@ async def _payment_reminder_loop(bot):
 
 
 # ════════════════════════════════════════════════════════════════
+# SimbaBySnep premium emoji pack — украшение CRM-сообщений
+# ════════════════════════════════════════════════════════════════
+
+_SIMBA_PACK_NAME = "SimbaBySnep"
+_simba_emoji_cache: list = []
+
+
+async def _load_simba_emoji_pack(bot) -> None:
+    """Загружаем premium-эмодзи пак SimbaBySnep, кэшируем document_id'ы."""
+    global _simba_emoji_cache
+    try:
+        from aiogram.methods import GetStickerSet
+        pack = await bot(GetStickerSet(name=_SIMBA_PACK_NAME))
+        result = []
+        for st in pack.stickers:
+            doc_id = getattr(st, "custom_emoji_id", None)
+            if doc_id:
+                result.append({
+                    "emoji": st.emoji or "✨",
+                    "document_id": str(doc_id),
+                })
+        _simba_emoji_cache = result
+        logger.info("SimbaBySnep loaded: %d premium emoji", len(result))
+    except Exception as e:
+        logger.warning("SimbaBySnep load failed (fallback to plain): %s", e)
+        _simba_emoji_cache = []
+
+
+def _pick_simba() -> dict:
+    if not _simba_emoji_cache:
+        return {}
+    import random
+    return random.choice(_simba_emoji_cache)
+
+
+def _decor(text: str) -> str:
+    """Префиксует текст случайным premium-эмодзи через <tg-emoji>."""
+    em = _pick_simba()
+    if not em:
+        return text
+    char = em["emoji"]
+    doc_id = em["document_id"]
+    tag = f'<tg-emoji emoji-id="{doc_id}">{char}</tg-emoji>'
+    return tag + " " + text
+
+
+# ════════════════════════════════════════════════════════════════
 # ENTRYPOINT — вызывается из bot.py как asyncio.create_task()
 # ════════════════════════════════════════════════════════════════
 
@@ -2518,6 +2666,13 @@ async def run_crm_bot():
         await bot.session.close()
         return
 
+    # Загружаем SimbaBySnep premium-эмодзи (best-effort, не блокирует)
+    try:
+        await _load_simba_emoji_pack(bot)
+    except Exception as e:
+        logger.debug("simba pack load skipped: %s", e)
+
+    # Стартуем reminders loop
     reminder_task = None
     try:
         reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
@@ -2541,8 +2696,7 @@ async def run_crm_bot():
             pass
 
 
-# Запуск как standalone (для отладки локально):
-#   python crm_bot.py
+# Запуск как standalone (для отладки локально)
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,

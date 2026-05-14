@@ -2294,8 +2294,41 @@ class Storage:
             d = (self.state.get("crm_drops") or {}).get(str(drop_id))
             if not d:
                 return False
+            # Audit log: записываем что изменилось (без больших полей и без
+            # служебных msg_id'ов чтобы не шуметь)
+            history = d.setdefault("history", [])
+            audit_fields = {
+                k: v for k, v in fields.items()
+                if k not in ("admin_msg_id", "owner_msg_id", "last_remind_ts")
+                and not isinstance(v, (list, dict))
+            }
+            if audit_fields:
+                history.append({
+                    "ts": time.time(),
+                    "fields": audit_fields,
+                })
+                # Ограничиваем размер истории
+                if len(history) > 50:
+                    d["history"] = history[-50:]
             for k, v in fields.items():
                 d[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def add_crm_drop_history(self, drop_id: str, action: str, details: dict = None):
+        """Внешний хук для записи произвольных action'ов в history дропа."""
+        async with _lock:
+            d = (self.state.get("crm_drops") or {}).get(str(drop_id))
+            if not d:
+                return False
+            history = d.setdefault("history", [])
+            history.append({
+                "ts": time.time(),
+                "action": action,
+                "details": details or {},
+            })
+            if len(history) > 50:
+                d["history"] = history[-50:]
             await self._save_unlocked()
             return True
 

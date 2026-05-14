@@ -14,7 +14,7 @@
 
 ## Tools у AI (актуальный список)
 
-- `add_partner_to_crm(client_username)` — +партнер в @PrideCONTROLE_bot
+- `add_partner_to_crm(client_username)` — +партнер в @PrideCRMv4_bot
 - `escalate_to_team(specialist, reason, client_question)` — вызов Тимона/менеджера в координат-чат
 - `record_deal(deal_id, client_username, fio, bank, amount, fee, method)` — создать сделку (карточка ЛК обновится сама)
 - `update_deal_status(deal_id, new_status)` — сменить статус (карточка ЛК обновится сама)
