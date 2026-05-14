@@ -3563,18 +3563,75 @@ async def cmd_ideas_set(message: Message):
     if not is_owner(message.from_user.id):
         return
     if message.chat.type == "private":
-        await message.reply("Команду вызывай <b>в группе</b> для идей.")
+        await message.reply(
+            "Команду вызывай <b>в группе</b> для идей,\n"
+            "или укажи ID вручную: <code>/ideas_setid -1003995887450</code>"
+        )
         return
     await crm_storage.set_ideas_chat_id(message.chat.id)
     await message.reply(
         f"✅ Эта группа теперь <b>Ideas Inbox</b> (id <code>{message.chat.id}</code>).\n\n"
         f"Все сообщения отсюда будут сохраняться как идеи/баги.\n"
-        f"Команды:\n"
-        f"• <code>/ideas</code> — список нерешённых (в ЛС бота)\n"
+        f"Команды (пиши в ЛС @PrideCONTROLE_bot):\n"
+        f"• <code>/ideas</code> — список нерешённых\n"
         f"• <code>/ideas_all</code> — все включая закрытые\n"
-        f"• <code>/ideas_done N</code> — пометить идею #N как закрытую\n"
+        f"• <code>/ideas_done N</code> — пометить #N как закрытую\n"
         f"• <code>/ideas_clean</code> — удалить все закрытые"
     )
+
+
+@router.message(Command("ideas_setid"))
+async def cmd_ideas_setid(message: Message):
+    """Установить ID ideas-чата вручную: /ideas_setid -1003995887450 или 3995887450."""
+    if not is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply(
+            "Использование: <code>/ideas_setid -1003995887450</code>\n"
+            "(можно с -100, можно без — будет нормализовано)"
+        )
+        return
+    raw = parts[1].strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        await message.reply("❌ Нужен числовой ID")
+        return
+    # Если пришло без минуса (3995887450) — добавляем -100
+    if n > 0 and n < 10**12:
+        # Это короткая форма (без префикса) — превращаем в -100xxx
+        normalized = -1000000000000 - n
+    else:
+        normalized = n
+    await crm_storage.set_ideas_chat_id(normalized)
+    await message.reply(
+        f"✅ Ideas Inbox установлен: <code>{normalized}</code>\n\n"
+        f"⚠️ Убедись что юзербот (под аккаунтом SIMBA) добавлен в эту группу — "
+        f"иначе сообщения не будут сохраняться."
+    )
+
+
+@router.message(Command("ideas_status"))
+async def cmd_ideas_status(message: Message):
+    """Проверить настройку ideas-чата."""
+    if not is_owner(message.from_user.id):
+        return
+    cid = crm_storage.get_ideas_chat_id()
+    count_total = len(crm_storage.list_ideas(only_unresolved=False))
+    count_open = len(crm_storage.list_ideas(only_unresolved=True))
+    if not cid:
+        await message.reply("❌ Ideas-чат не настроен. Используй /ideas_set в группе или /ideas_setid &lt;id&gt;.")
+        return
+    await message.reply(
+        f"📋 <b>Ideas Inbox</b>\n\n"
+        f"Chat ID: <code>{cid}</code>\n"
+        f"Всего идей: <b>{count_total}</b>\n"
+        f"Открытых: <b>{count_open}</b>\n\n"
+        f"<i>Если идеи не сохраняются — проверь что юзербот в группе.</i>"
+    )
+
+
 
 
 @router.message(Command("ideas"))
@@ -3588,13 +3645,11 @@ async def cmd_ideas(message: Message):
     items.sort(key=lambda i: -(i.get("ts") or 0))
     lines = [f"💡 <b>Нерешённых идей: {len(items)}</b>\n"]
     for i in items[:30]:
-        kind_icon = "🐛" if i.get("kind") == "bug" else "💡"
+        is_bug = i.get("kind") == "bug"
+        kind_icon = "🐛" if is_bug else "💡"
         author = i.get("author") or "?"
         text = (i.get("text") or "")[:200]
-        lines.append(
-            f"\n<b>#{i['id']}</b> {kind_icon} <i>{author}</i>\n"
-            f"  {text}"
-        )
+        lines.append(f"\n<b>#{i['id']}</b> {kind_icon} <i>{author}</i>\n  {text}")
     if len(items) > 30:
         lines.append(f"\n<i>… и ещё {len(items) - 30}</i>")
     await message.reply("\n".join(lines))

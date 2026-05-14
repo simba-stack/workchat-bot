@@ -382,37 +382,63 @@ class UserbotService:
         async def _on_new_message(event):
             try:
                 # Ideas-чат — отдельная обработка (сохраняем сообщения как идеи)
+                # ВАЖНО: chat_id у Telethon vs aiogram может отличаться по формату
+                # (-100xxx vs xxx), поэтому нормализуем оба через storage._norm_chat_id.
+                from storage import _norm_chat_id as _norm
                 ideas_chat = storage.get_ideas_chat_id()
-                if ideas_chat and int(event.chat_id) == int(ideas_chat):
-                    await self._handle_ideas_message(event)
-                    return
+                if ideas_chat:
+                    if _norm(event.chat_id) == _norm(ideas_chat):
+                        await self._handle_ideas_message(event)
+                        return
                 await self._handle_ai_message(event)
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
 
     async def _handle_ideas_message(self, event):
         """Сохраняет сообщения из ideas-чата в storage.ideas_inbox.
-        Автоматически распознаёт «баг» / «идея» по словам."""
+        Автоматически распознаёт «баг» / «идея» по словам.
+        Работает для ВСЕХ участников группы — без ограничения по правам."""
         try:
             text = (event.message.text or event.message.message or "").strip()
             if not text or text.startswith("/"):
+                # Команды (/ideas, /ideas_set и т.д.) — пропускаем, их ловит CRM-бот
                 return
-            sender = await event.get_sender()
-            uname = getattr(sender, "username", None) or getattr(sender, "first_name", "") or "?"
+            try:
+                sender = await event.get_sender()
+                uname = getattr(sender, "username", None) or ""
+                fname = getattr(sender, "first_name", "") or ""
+                author = (f"@{uname}" if uname else fname) or "?"
+            except Exception:
+                author = "?"
             low = text.lower()
-            kind = "bug" if any(w in low for w in ("баг", "bug", "ошибк", "не работает", "сломал")) else "idea"
+            kind = "bug" if any(w in low for w in (
+                "баг", "bug", "ошибк", "не работает", "сломал", "криво",
+                "не пашет", "глюк", "fix", "исправ",
+            )) else "idea"
             idea_id = await storage.add_idea(
-                text=text, author=f"@{uname}" if uname else "?",
+                text=text,
+                author=author,
                 chat_id=int(event.chat_id),
                 msg_id=int(event.message.id),
                 kind=kind,
             )
-            # Реагируем emoji'ем чтобы автор видел что сохранено
+            logger.info(
+                "idea saved id=%s kind=%s by=%s chat=%s len=%d",
+                idea_id, kind, author, event.chat_id, len(text),
+            )
+            # Telegram-реакция (требует premium для бота — может не сработать)
             try:
-                await event.message.react("📝" if kind == "idea" else "🐛")
+                emoji = "📝" if kind == "idea" else "🐛"
+                await event.message.react(emoji)
             except Exception:
-                pass
-            logger.info("idea saved id=%s kind=%s by=%s", idea_id, kind, uname)
+                # Fallback: reply короткий тред-ack
+                try:
+                    await event.message.reply(
+                        f"{'🐛' if kind == 'bug' else '💡'} <b>Сохранено #{idea_id}</b>",
+                        parse_mode="html",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("ideas handler failed: %s", e)
 
@@ -6130,38 +6156,3 @@ class UserbotService:
 
             # Выдать админ-права с rank=role если задано в worker_roles
             role_info = storage.get_worker_role(uname_or_id)
-            if role_info.get("is_admin"):
-                rank = (role_info.get("role") or "Admin")[:16]
-                try:
-                    rights = ChatAdminRights(
-                        change_info=True,
-                        post_messages=False,
-                        edit_messages=True,
-                        delete_messages=True,
-                        ban_users=True,
-                        invite_users=True,
-                        pin_messages=True,
-                        add_admins=False,
-                        anonymous=False,
-                        manage_call=False,
-                    )
-                    await self.client(EditAdminRequest(
-                        channel=channel,
-                        user_id=uname_or_id,
-                        admin_rights=rights,
-                        rank=rank,
-                    ))
-                except Exception as e:
-                    logger.warning("admin grant for @%s failed: %s", uname_or_id, e)
-
-        invite = await self.client(ExportChatInviteRequest(channel))
-
-        if client_id:
-            asyncio.create_task(self._watch_for_client_join(channel, client_id))
-
-        return {
-            "chat_id": channel.id,
-            "title": title,
-            "invite_link": invite.link,
-            "statuses": statuses,
-        }
