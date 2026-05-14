@@ -4832,20 +4832,35 @@ function jarvis() {
             }
           };
 
+          // ВАЖНО: track может быть в состоянии muted=true ИЗНАЧАЛЬНО
+          // (фреймы ещё не пришли). Игнорируем mute events до первого
+          // unmute — иначе скрываем экран ещё до того как он показался.
+          let everUnmuted = !ev.track.muted;
+          // Если track сразу не muted — он живой
+          if (everUnmuted) {
+            console.log('[screen] track active on arrival');
+          } else {
+            console.log('[screen] track initially muted, waiting for frames...');
+          }
+
           // 'ended' — sender вышел из канала или закрыл pc
           ev.track.onended = () => {
             console.log('[screen] remote track ended for', remoteSessionId);
             hideRemoteScreen();
           };
-          // 'mute' — sender сделал replaceTrack(null) (нажал Стоп)
+          // 'mute' — игнорируем до того как track хоть раз был unmuted
           ev.track.onmute = () => {
-            console.log('[screen] remote track muted for', remoteSessionId);
+            if (!everUnmuted) {
+              console.log('[screen] initial mute — ignoring (waiting for frames)');
+              return;
+            }
+            console.log('[screen] remote track muted for', remoteSessionId, '— sender stopped');
             hideRemoteScreen();
           };
-          // 'unmute' — sender повторно начал шарить через тот же transceiver
-          // (replaceTrack(newTrack)). Без этого второй заход не отображался!
+          // 'unmute' — фреймы пошли (первый раз ИЛИ повторный share)
           ev.track.onunmute = () => {
-            console.log('[screen] remote track unmuted — restore for', remoteSessionId);
+            console.log('[screen] remote track unmuted for', remoteSessionId);
+            everUnmuted = true;
             showRemoteScreen();
           };
           // Авто-переключаемся на просмотр этого экрана
@@ -5413,21 +5428,29 @@ function jarvis() {
     },
 
     async _addScreenSenderTo(sid, peer, videoTrack) {
-      try {
-        if (!peer.pc || peer.pc.signalingState === 'closed') return;
-        // Правильный WebRTC pattern: переиспользуем существующий transceiver
-        // вместо addTrack заново. Это избегает дубликатов transceiver'ов
-        // и решает проблему «второй раз не запускается»
-        if (peer.screenSender && peer.screenSender.replaceTrack) {
+      if (!peer.pc || peer.pc.signalingState === 'closed') return;
+      // Пытаемся переиспользовать существующий sender через replaceTrack.
+      // Если не получится (например, sender невалиден после reconnect) —
+      // fallback на addTrack.
+      let used = false;
+      if (peer.screenSender) {
+        try {
           await peer.screenSender.replaceTrack(videoTrack);
           console.log('[screen] reused sender for', sid);
-        } else {
+          used = true;
+        } catch (e) {
+          console.warn('[screen] replaceTrack failed, falling back to addTrack:', e);
+          peer.screenSender = null;
+        }
+      }
+      if (!used) {
+        try {
           peer.screenSender = peer.pc.addTrack(videoTrack, this.dcScreenStream);
           console.log('[screen] new sender for', sid);
+        } catch (e) {
+          console.warn('[screen] addTrack failed for', sid, e);
+          return;
         }
-      } catch (e) {
-        console.warn('[screen] addTrack failed for', sid, e);
-        return;
       }
       // Очередь negotiation чтобы не было glare
       await this._safeRenegotiate(sid, peer);
