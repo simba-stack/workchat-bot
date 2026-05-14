@@ -1632,6 +1632,1251 @@
 
   /* SVG sparkline gradient */
   .sparkline-defs { display: none; }
+
+  /* ===================================================================
+     📱 MOBILE RESPONSIVE (≤ 768px)
+     =================================================================== */
+  @media (max-width: 768px) {
+    /* Глобально: меньше отступов, меньше шрифты */
+    body {
+      font-size: 13px;
+    }
+
+    /* Верхний стат-бар: горизонтальный скролл */
+    .stat-bar {
+      flex-wrap: nowrap !important;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 4px 8px;
+      gap: 6px;
+    }
+    .stat-bar > * {
+      flex-shrink: 0;
+    }
+    .stat-pill {
+      font-size: 9px !important;
+      padding: 4px 8px !important;
+      white-space: nowrap;
+    }
+    .clock { font-size: 11px !important; }
+
+    /* View tabs: горизонтальный скролл */
+    .view-tabs {
+      flex-wrap: nowrap !important;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 2px 8px;
+      gap: 4px;
+    }
+    .view-tab {
+      flex-shrink: 0;
+      font-size: 10px !important;
+      padding: 5px 8px !important;
+      white-space: nowrap;
+    }
+    .view-tab span:not(:first-child) { display: none; }  /* Скрываем длинный текст, оставляем эмодзи */
+
+    /* Основной грид: одна колонка */
+    .jarvis-grid {
+      grid-template-columns: 1fr !important;
+      gap: 8px !important;
+      padding: 8px !important;
+    }
+
+    /* Панели — компактнее */
+    .jarvis-panel {
+      border-radius: 4px;
+    }
+    .panel-title {
+      font-size: 10px !important;
+      padding: 8px 10px !important;
+      letter-spacing: 1px;
+    }
+    .badge-mini {
+      font-size: 8px;
+      padding: 1px 4px;
+    }
+
+    /* Операционный пол — меньше высота */
+    .ops-floor {
+      height: 200px !important;
+      min-height: 200px !important;
+    }
+    .character {
+      width: 28px !important;
+      height: 28px !important;
+      font-size: 14px !important;
+    }
+
+    /* JARVIS sphere — меньше */
+    .jarvis-sphere {
+      max-width: 180px !important;
+    }
+
+    /* Метрики — крупнее value, мельче label */
+    .metric {
+      padding: 8px 10px !important;
+    }
+    .metric .value {
+      font-size: 22px !important;
+    }
+    .metric .label {
+      font-size: 9px !important;
+    }
+
+    /* LK chips: вертикальный layout, тапаемые */
+    .lk-chip {
+      flex-wrap: wrap;
+      padding: 8px 10px !important;
+      gap: 6px;
+    }
+    .lk-chip .cid {
+      font-size: 10px !important;
+      min-width: 36px !important;
+    }
+    .lk-chip .info {
+      flex: 1;
+      min-width: 0;
+    }
+    .lk-chip .info .top {
+      font-size: 11px !important;
+    }
+    .lk-chip .info .bot {
+      font-size: 9px !important;
+    }
+    .lk-chip .badge {
+      font-size: 9px !important;
+    }
+    .lk-actions button {
+      min-width: 32px;
+      min-height: 32px;
+      font-size: 14px;
+    }
+
+    /* Модалки — на весь экран */
+    .modal {
+      min-width: 0 !important;
+      width: 95vw !important;
+      max-width: 95vw !important;
+      max-height: 90vh !important;
+      padding: 16px !important;
+      overflow-y: auto;
+    }
+    .modal.detail {
+      min-width: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      max-height: 100vh !important;
+      border-radius: 0;
+    }
+    .detail-grid {
+      grid-template-columns: 1fr !important;
+      gap: 4px 0 !important;
+    }
+    .detail-grid label {
+      margin-top: 6px;
+    }
+
+    /* ===== DISCORD MOBILE ===== */
+    .discord-shell {
+      grid-template-columns: 1fr !important;
+      height: calc(100vh - 160px) !important;
+      min-height: 400px;
+      position: relative;
+    }
+    .discord-shell.expanded {
+      grid-template-columns: 1fr !important;
+    }
+
+    /* Левый рейл — выезжающий sidebar */
+    .dc-rail {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 75vw;
+      max-width: 280px;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease-out;
+      z-index: 50;
+      box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+    }
+    .dc-rail.mobile-open {
+      transform: translateX(0);
+    }
+    .dc-mobile-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 49;
+      display: none;
+    }
+    .dc-rail.mobile-open + .dc-mobile-backdrop,
+    .dc-mobile-backdrop.show {
+      display: block;
+    }
+
+    /* Кнопка-гамбургер для открытия рейла */
+    .dc-mobile-toggle {
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid rgba(var(--primary-rgb), 0.3);
+      color: var(--hud-primary);
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-right: 6px;
+    }
+
+    /* Правый рейл "онлайн" — скрыть на мобиле */
+    .dc-online {
+      display: none !important;
+    }
+
+    /* Main: занимает всё */
+    .dc-main {
+      grid-column: 1 / -1;
+    }
+
+    /* Header канала */
+    .dc-main-head {
+      padding: 8px 10px !important;
+      gap: 6px !important;
+      flex-wrap: wrap;
+    }
+    .dc-main-head .btn {
+      padding: 6px 10px !important;
+      font-size: 10px !important;
+      min-height: 34px;
+    }
+
+    /* Сообщения */
+    .dc-messages {
+      padding: 8px 10px !important;
+    }
+    .dc-msg {
+      grid-template-columns: 28px 1fr !important;
+      gap: 8px;
+    }
+    .dc-avatar, .dc-avatar-img {
+      width: 24px !important;
+      height: 24px !important;
+      font-size: 11px;
+    }
+    .dc-avatar-img.big {
+      width: 28px !important;
+      height: 28px !important;
+    }
+    .dc-msg-text {
+      font-size: 13px;
+    }
+
+    /* Action-кнопки на сообщениях — всегда видны на мобиле (нет hover) */
+    .dc-msg-actions {
+      opacity: 1 !important;
+    }
+    .dc-act-btn {
+      padding: 4px 8px;
+      font-size: 14px;
+      min-height: 30px;
+    }
+
+    /* Input message — больше тачабельный */
+    .dc-input-wrap {
+      padding: 6px 8px !important;
+      gap: 6px;
+    }
+    .dc-input {
+      padding: 10px 12px !important;
+      font-size: 14px !important;
+      min-height: 40px;
+    }
+    .dc-input-wrap .btn {
+      min-width: 44px;
+      min-height: 40px;
+      font-size: 16px;
+      padding: 6px 10px;
+    }
+
+    /* Voice stage — компактно */
+    .dc-voice-stage {
+      padding: 12px 8px !important;
+      gap: 12px !important;
+      min-height: 140px;
+    }
+    .dc-stage-user {
+      min-width: 90px !important;
+      padding: 8px 12px !important;
+    }
+    .dc-stage-avatar, .dc-avatar.large {
+      width: 50px !important;
+      height: 50px !important;
+      font-size: 20px !important;
+    }
+    .dc-voice-info {
+      padding: 30px 16px !important;
+    }
+    .dc-voice-info .btn {
+      min-height: 48px;
+      font-size: 13px;
+      padding: 10px 20px;
+    }
+
+    /* Me-bar — крупнее тачабельные */
+    .dc-me-btn {
+      min-width: 36px;
+      min-height: 36px;
+      font-size: 16px;
+    }
+
+    /* Channel в рейле — крупнее */
+    .dc-channel {
+      padding: 8px 12px !important;
+      font-size: 13px !important;
+      min-height: 36px;
+    }
+
+    /* Tables / overflowing content — горизонтальный скролл */
+    table { font-size: 11px; }
+  }
+
+  /* По умолчанию — гамбургер скрыт (только моб) */
+  .dc-mobile-toggle { display: none; }
+
+  /* iOS notch safety */
+  @supports (padding: max(0px)) {
+    @media (max-width: 768px) {
+      .stat-bar {
+        padding-top: max(4px, env(safe-area-inset-top));
+      }
+      body {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+    }
+  }
+
+  /* Pinch-zoom отключен (мешает в дашборде) — но input zoom оставлен */
+  @media (max-width: 768px) {
+    input, select, textarea {
+      font-size: 16px !important;  /* iOS не зумит если font >= 16px */
+    }
+    .dc-input, .cmd-input {
+      font-size: 16px !important;
+    }
+  }
+
+  /* ===================================================================
+     📱 MOBILE SHELL — отдельный layout с bottom-nav, card UI
+     =================================================================== */
+  [x-cloak] { display: none !important; }
+
+  .mobile-shell {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    /* Прячем десктоп-shell */
+    .desktop-shell { display: none !important; }
+
+    .mobile-shell {
+      display: flex !important;
+      flex-direction: column;
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(8, 12, 28, 1) 0%, rgba(5, 8, 18, 1) 100%);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    /* ===== TOP HEADER ===== */
+    .m-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+      background: rgba(5, 8, 18, 0.95);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(var(--primary-rgb), 0.12);
+      z-index: 10;
+      flex-shrink: 0;
+    }
+    .m-header-title {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .m-app-name {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: var(--hud-primary);
+      text-shadow: 0 0 8px rgba(var(--primary-rgb), 0.6);
+    }
+    .m-header-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      text-transform: lowercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .m-icon-btn {
+      background: transparent;
+      border: 1px solid rgba(var(--primary-rgb), 0.2);
+      color: var(--hud-primary);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .m-icon-btn:active {
+      background: rgba(var(--primary-rgb), 0.15);
+      transform: scale(0.96);
+    }
+    .m-conn-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--hud-rose);
+      box-shadow: 0 0 6px var(--hud-rose);
+    }
+    .m-conn-dot.online {
+      background: var(--hud-emerald);
+      box-shadow: 0 0 6px var(--hud-emerald);
+    }
+
+    /* ===== MAIN CONTENT ===== */
+    .m-content {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding: 0 0 calc(72px + env(safe-area-inset-bottom)) 0;  /* место под bottom-nav */
+    }
+    .m-tab {
+      padding: 12px;
+      min-height: 100%;
+    }
+
+    /* ===== HERO CARD ===== */
+    .m-hero {
+      background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.12), rgba(var(--primary-rgb), 0.04));
+      border: 1px solid rgba(var(--primary-rgb), 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+    .m-hero.pos { border-color: rgba(74, 222, 128, 0.35); background: linear-gradient(135deg, rgba(74, 222, 128, 0.12), rgba(74, 222, 128, 0.03)); }
+    .m-hero.neg { border-color: rgba(251, 113, 133, 0.35); background: linear-gradient(135deg, rgba(251, 113, 133, 0.12), rgba(251, 113, 133, 0.03)); }
+    .m-hero-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .m-hero-value {
+      font-size: 42px;
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1;
+      color: var(--text);
+    }
+    .m-hero.pos .m-hero-value { color: var(--hud-emerald); }
+    .m-hero.neg .m-hero-value { color: var(--hud-rose); }
+    .m-hero-sub {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    /* ===== STAT GRID ===== */
+    .m-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .m-stat-card {
+      background: rgba(var(--primary-rgb), 0.05);
+      border: 1px solid rgba(var(--primary-rgb), 0.12);
+      border-radius: 12px;
+      padding: 12px 8px;
+      text-align: center;
+      transition: transform 0.1s;
+    }
+    .m-stat-card:active { transform: scale(0.96); }
+    .m-stat-card.warn {
+      background: rgba(251, 113, 133, 0.08);
+      border-color: rgba(251, 113, 133, 0.3);
+    }
+    .m-stat-icon {
+      font-size: 18px;
+      color: var(--hud-primary);
+      margin-bottom: 4px;
+    }
+    .m-stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .m-stat-label {
+      font-size: 10px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 3px;
+    }
+
+    /* ===== SECTION TITLES ===== */
+    .m-section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 0 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+    }
+    .m-section-count {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .m-cat-label {
+      padding: 10px 0 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+    }
+    .m-empty {
+      text-align: center;
+      padding: 24px;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    /* ===== EVENT LIST ===== */
+    .m-event-list {
+      background: rgba(var(--primary-rgb), 0.03);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .m-event-row {
+      display: grid;
+      grid-template-columns: 50px 60px 1fr;
+      gap: 6px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(var(--primary-rgb), 0.06);
+      font-size: 11px;
+      align-items: center;
+    }
+    .m-event-row:last-child { border-bottom: 0; }
+    .m-event-time { color: var(--text-dim); font-size: 10px; }
+    .m-event-tag {
+      color: var(--hud-primary);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .m-event-msg {
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-event-row.sev-warning { background: rgba(251, 191, 36, 0.04); }
+    .m-event-row.sev-error { background: rgba(251, 113, 133, 0.04); }
+    .m-event-row.sev-alert { background: rgba(251, 113, 133, 0.08); }
+
+    /* ===== DISCORD MOBILE ===== */
+    .m-discord-me-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.1), rgba(var(--primary-rgb), 0.02));
+      border-radius: 16px;
+      margin-bottom: 14px;
+      border: 1px solid rgba(var(--primary-rgb), 0.15);
+    }
+    .m-discord-me-avatar, .m-discord-me-avatar-fallback {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid rgba(var(--primary-rgb), 0.4);
+    }
+    .m-discord-me-avatar-fallback {
+      background: rgba(var(--primary-rgb), 0.15);
+      color: var(--hud-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .m-discord-me-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-discord-me-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+    .m-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--hud-rose);
+    }
+    .m-status-dot.online {
+      background: var(--hud-emerald);
+      box-shadow: 0 0 6px var(--hud-emerald);
+    }
+    .m-status-dot.idle {
+      background: var(--hud-amber);
+    }
+    .m-status-dot.offline {
+      background: var(--text-dim);
+    }
+
+    .m-channel-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: rgba(var(--primary-rgb), 0.04);
+      border: 1px solid rgba(var(--primary-rgb), 0.08);
+      border-radius: 12px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .m-channel-row:active {
+      background: rgba(var(--primary-rgb), 0.12);
+      transform: scale(0.98);
+    }
+    .m-channel-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(var(--primary-rgb), 0.15);
+      color: var(--hud-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .m-channel-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .m-channel-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-channel-topic {
+      font-size: 11px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-channel-meta {
+      flex-shrink: 0;
+    }
+    .m-channel-badge {
+      background: var(--hud-emerald);
+      color: #0a1421;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 10px;
+    }
+
+    /* ===== CHAT ===== */
+    .m-chat {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 60px - 72px - env(safe-area-inset-bottom) - env(safe-area-inset-top));
+      margin: -12px;
+    }
+    .m-chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .m-msg {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 10px;
+    }
+    .m-msg-avatar, .m-msg-avatar-fallback {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .m-msg-avatar-fallback {
+      background: rgba(var(--primary-rgb), 0.15);
+      color: var(--hud-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .m-msg-body { min-width: 0; }
+    .m-msg-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 2px;
+    }
+    .m-msg-author {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--hud-primary);
+    }
+    .m-msg-time {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .m-msg-text {
+      font-size: 14px;
+      line-height: 1.4;
+      color: var(--text);
+      word-wrap: break-word;
+    }
+    .m-msg-text .dc-mention {
+      background: rgba(var(--primary-rgb), 0.2);
+      color: var(--hud-primary);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .m-msg-text .dc-link {
+      color: var(--hud-cyan);
+      text-decoration: underline;
+    }
+    .m-reactions {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .m-reaction {
+      background: rgba(var(--primary-rgb), 0.08);
+      border: 1px solid rgba(var(--primary-rgb), 0.15);
+      border-radius: 12px;
+      padding: 3px 9px;
+      font-size: 12px;
+      display: inline-flex;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .m-reaction.mine {
+      background: rgba(var(--primary-rgb), 0.25);
+      border-color: var(--hud-primary);
+    }
+
+    .m-chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      background: rgba(5, 8, 18, 0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(var(--primary-rgb), 0.12);
+      flex-shrink: 0;
+    }
+    .m-chat-input {
+      flex: 1;
+      background: rgba(var(--primary-rgb), 0.06);
+      border: 1px solid rgba(var(--primary-rgb), 0.15);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 22px;
+      font-size: 14px !important;
+      outline: none;
+    }
+    .m-chat-input:focus {
+      border-color: var(--hud-primary);
+      background: rgba(var(--primary-rgb), 0.1);
+    }
+    .m-send-btn {
+      width: 44px;
+      height: 44px;
+      background: var(--hud-primary);
+      color: #0a1421;
+      border: none;
+      border-radius: 50%;
+      font-size: 20px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.4);
+    }
+    .m-send-btn:active { transform: scale(0.94); }
+    .m-send-btn:disabled {
+      opacity: 0.4;
+      box-shadow: none;
+    }
+
+    /* ===== VOICE ROOM ===== */
+    .m-voice-room {
+      padding: 12px;
+    }
+    .m-voice-header {
+      text-align: center;
+      padding: 20px 0;
+    }
+    .m-voice-channel-name {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .m-voice-channel-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+    .m-voice-participants {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      padding: 14px 0;
+    }
+    .m-voice-user {
+      background: rgba(var(--primary-rgb), 0.05);
+      border: 1px solid rgba(var(--primary-rgb), 0.15);
+      border-radius: 16px;
+      padding: 18px 12px;
+      text-align: center;
+      position: relative;
+    }
+    .m-voice-user.is-me {
+      border-color: var(--hud-amber);
+      box-shadow: 0 0 16px rgba(251, 191, 36, 0.2);
+    }
+    .m-voice-user.muted {
+      opacity: 0.7;
+      border-color: rgba(251, 146, 60, 0.4);
+    }
+    .m-voice-avatar, .m-voice-avatar-fallback {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      margin: 0 auto 10px;
+      object-fit: cover;
+      border: 3px solid var(--hud-primary);
+      box-shadow: 0 0 12px rgba(var(--primary-rgb), 0.4);
+    }
+    .m-voice-avatar-fallback {
+      background: rgba(var(--primary-rgb), 0.2);
+      color: var(--hud-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .m-voice-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .m-voice-flags {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 4px;
+      font-size: 14px;
+    }
+    .m-voice-you {
+      font-size: 9px;
+      background: var(--hud-amber);
+      color: #0a1421;
+      padding: 2px 7px;
+      border-radius: 8px;
+      font-weight: 700;
+    }
+    .m-voice-actions {
+      padding: 20px 0;
+    }
+    .m-voice-join-btn {
+      display: block;
+      width: 100%;
+      background: linear-gradient(135deg, var(--hud-emerald), #10b981);
+      color: #0a1421;
+      border: none;
+      padding: 18px;
+      border-radius: 16px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(74, 222, 128, 0.3);
+    }
+    .m-voice-join-btn:active { transform: scale(0.97); }
+    .m-voice-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .m-voice-ctrl {
+      background: rgba(var(--primary-rgb), 0.08);
+      border: 1px solid rgba(var(--primary-rgb), 0.2);
+      color: var(--text);
+      padding: 14px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .m-voice-ctrl span:first-child { font-size: 22px; }
+    .m-voice-ctrl.active {
+      background: rgba(251, 113, 133, 0.15);
+      border-color: var(--hud-rose);
+      color: var(--hud-rose);
+    }
+    .m-voice-leave-btn {
+      grid-column: 1 / -1;
+      background: rgba(251, 113, 133, 0.12);
+      border: 1px solid var(--hud-rose);
+      color: var(--hud-rose);
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+
+    /* ===== LK CARDS ===== */
+    .m-search {
+      margin-bottom: 10px;
+    }
+    .m-search-input {
+      width: 100%;
+      background: rgba(var(--primary-rgb), 0.06);
+      border: 1px solid rgba(var(--primary-rgb), 0.15);
+      color: var(--text);
+      padding: 11px 14px;
+      border-radius: 12px;
+      font-size: 14px !important;
+      outline: none;
+    }
+    .m-search-input:focus { border-color: var(--hud-primary); }
+
+    .m-card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .m-lk-card {
+      background: rgba(var(--primary-rgb), 0.04);
+      border: 1px solid rgba(var(--primary-rgb), 0.1);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .m-lk-card:active { transform: scale(0.98); background: rgba(var(--primary-rgb), 0.1); }
+    .m-lk-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .m-lk-id {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--hud-primary);
+      letter-spacing: 1px;
+    }
+    .m-badge {
+      font-size: 9px;
+      padding: 3px 8px;
+      border: 1px solid;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .m-badge.s-в_работе  { color: var(--hud-primary); border-color: var(--hud-primary); }
+    .m-badge.s-отработан { color: var(--hud-amber);   border-color: var(--hud-amber); }
+    .m-badge.s-завершён,
+    .m-badge.s-завершен,
+    .m-badge.s-пополнить_и_отпустить { color: var(--hud-emerald); border-color: var(--hud-emerald); }
+    .m-badge.s-блок,
+    .m-badge.s-блок_без_отработки,
+    .m-badge.s-брак { color: var(--hud-rose); border-color: var(--hud-rose); }
+    .m-lk-bank-fio {
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .m-lk-meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      gap: 10px;
+    }
+
+    /* ===== FIN ===== */
+    .m-fin-hero {
+      background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.12), rgba(var(--primary-rgb), 0.04));
+      border: 1px solid rgba(var(--primary-rgb), 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 14px;
+    }
+    .m-fin-hero.pos { border-color: rgba(74, 222, 128, 0.35); }
+    .m-fin-hero.neg { border-color: rgba(251, 113, 133, 0.35); }
+    .m-fin-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .m-fin-label {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .m-fin-value-big {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--text);
+      margin-top: 4px;
+    }
+    .m-fin-hero.pos .m-fin-value-big { color: var(--hud-emerald); }
+    .m-fin-hero.neg .m-fin-value-big { color: var(--hud-rose); }
+
+    .m-app-card {
+      background: rgba(var(--primary-rgb), 0.04);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .m-app-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .m-app-id {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--hud-primary);
+    }
+    .m-app-date { font-size: 11px; color: var(--text-dim); }
+    .m-app-margin {
+      font-size: 13px;
+      font-weight: 700;
+      margin-left: auto;
+    }
+    .m-app-margin.pos { color: var(--hud-emerald); }
+    .m-app-margin.neg { color: var(--hud-rose); }
+    .m-app-info {
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* ===== MORE TAB ===== */
+    .m-more-profile {
+      text-align: center;
+      padding: 24px 16px 16px;
+    }
+    .m-more-avatar, .m-more-avatar-fallback {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      margin: 0 auto 12px;
+      object-fit: cover;
+      border: 3px solid var(--hud-primary);
+      box-shadow: 0 0 20px rgba(var(--primary-rgb), 0.4);
+    }
+    .m-more-avatar-fallback {
+      background: rgba(var(--primary-rgb), 0.15);
+      color: var(--hud-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 700;
+    }
+    .m-more-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .m-more-uid {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .m-manager-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      background: rgba(var(--primary-rgb), 0.04);
+      border-radius: 12px;
+      margin-bottom: 6px;
+    }
+    .m-mgr-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .m-mgr-meta {
+      font-size: 10px;
+      color: var(--text-dim);
+      display: flex;
+      gap: 10px;
+      margin-top: 2px;
+    }
+    .m-mgr-idle {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+
+    .m-action-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .m-action-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      padding: 14px;
+      background: rgba(var(--primary-rgb), 0.04);
+      border: none;
+      border-radius: 12px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 14px;
+      text-decoration: none;
+    }
+    .m-action-row:active { background: rgba(var(--primary-rgb), 0.12); }
+    .m-action-icon { font-size: 20px; }
+    .m-action-text { flex: 1; text-align: left; }
+    .m-action-chev { color: var(--text-dim); font-size: 18px; }
+
+    .m-version {
+      text-align: center;
+      padding: 24px 12px 12px;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+
+    /* ===== BOTTOM NAV ===== */
+    .m-bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      background: rgba(5, 8, 18, 0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(var(--primary-rgb), 0.15);
+      padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
+      z-index: 100;
+    }
+    .m-nav-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      padding: 6px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      cursor: pointer;
+      transition: color 0.12s;
+      position: relative;
+    }
+    .m-nav-btn.active {
+      color: var(--hud-primary);
+    }
+    .m-nav-btn.active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 25%;
+      right: 25%;
+      height: 2px;
+      background: var(--hud-primary);
+      border-radius: 2px;
+      box-shadow: 0 0 8px var(--hud-primary);
+    }
+    .m-nav-icon {
+      font-size: 22px;
+      line-height: 1;
+    }
+    .m-nav-label {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .m-nav-btn:active { transform: scale(0.92); }
+  }
+
+  @media (min-width: 769px) {
+    .mobile-shell { display: none !important; }
+  }
 </style>
 </head>
 <body x-data="jarvis()" x-init="init()" :data-theme="theme">
@@ -1653,6 +2898,11 @@
     <div x-text="bootStatus"></div>
   </div>
 </div>
+
+<!-- ============================================================ -->
+<!-- DESKTOP shell — скрыт на мобиле                              -->
+<!-- ============================================================ -->
+<div class="desktop-shell" x-show="!isMobile">
 
 <!-- HEADER -->
 <header class="jarvis-header">
@@ -2435,8 +3685,10 @@
 
 <!-- ===== DISCORD TAB ===== -->
 <section x-show="currentView === 'discord'" class="discord-shell" :class="discordExpanded ? 'expanded' : ''">
+  <!-- Mobile backdrop для закрытия рейла -->
+  <div class="dc-mobile-backdrop" :class="discordRailOpen ? 'show' : ''" @click="discordRailOpen = false"></div>
   <!-- LEFT: channel rail -->
-  <aside class="dc-rail">
+  <aside class="dc-rail" :class="discordRailOpen ? 'mobile-open' : ''">
     <div class="dc-rail-head">
       <span style="color: var(--hud-primary); font-weight: 700; letter-spacing: 2px;">PRIDE</span>
       <span class="dc-ws-status" :class="dcWsConnected ? 'online' : 'offline'" :title="dcWsConnected ? 'WS online' : 'WS offline'"></span>
@@ -2501,6 +3753,8 @@
   <!-- MAIN: messages -->
   <main class="dc-main" x-show="discordActiveChannel">
     <div class="dc-main-head">
+      <!-- Гамбургер только на мобиле -->
+      <button class="dc-mobile-toggle" @click="discordRailOpen = !discordRailOpen" title="Каналы">☰</button>
       <span class="dc-ch-icon" style="font-size: 16px;" x-text="discordActiveChannel?.type === 'voice' ? '🔊' : '#'"></span>
       <span style="font-weight: 700;" x-text="discordActiveChannel?.name || ''"></span>
       <span style="font-size: 10px; color: var(--text-dim); margin-left: 8px;" x-text="discordActiveChannel?.topic || ''"></span>
@@ -2667,6 +3921,416 @@
     </div>
   </div>
 </template>
+
+</div>
+<!-- ============================================================ -->
+<!-- /DESKTOP shell                                                -->
+<!-- ============================================================ -->
+
+
+<!-- ============================================================ -->
+<!-- MOBILE shell — отдельный layout для телефонов                -->
+<!-- ============================================================ -->
+<div class="mobile-shell" x-show="isMobile" x-cloak>
+
+  <!-- TOP header -->
+  <header class="m-header">
+    <button class="m-icon-btn" @click="mobileBack()" x-show="mobileBackVisible" title="Назад">←</button>
+    <div class="m-header-title">
+      <span class="m-app-name">PRIDE</span>
+      <span class="m-header-sub" x-text="mobileHeaderTitle"></span>
+    </div>
+    <div class="m-header-actions">
+      <span class="m-conn-dot" :class="connState"></span>
+      <button class="m-icon-btn" @click="toggleSound()" :title="soundOn ? 'звук вкл' : 'звук выкл'"
+              x-text="soundOn ? '🔊' : '🔇'"></button>
+    </div>
+  </header>
+
+  <!-- MAIN content area -->
+  <main class="m-content">
+
+    <!-- TAB: HOME (Office) -->
+    <div class="m-tab" x-show="mobileTab === 'home'">
+      <!-- Hero card: главный показатель сегодня -->
+      <div class="m-hero" :class="(state.stats.margin_today_usdt || 0) >= 0 ? 'pos' : 'neg'">
+        <div class="m-hero-label">Маржа сегодня</div>
+        <div class="m-hero-value" x-text="fmtUsd(state.stats.margin_today_usdt || 0)"></div>
+        <div class="m-hero-sub" x-text="'неделя: ' + fmtUsd(state.stats.margin_week_usdt || 0)"></div>
+      </div>
+
+      <!-- Quick stats grid -->
+      <div class="m-stat-grid">
+        <div class="m-stat-card" @click="mobileTab = 'lk'">
+          <div class="m-stat-icon">📋</div>
+          <div class="m-stat-value" x-text="state.stats.lk_cards_total || 0"></div>
+          <div class="m-stat-label">ЛК карточек</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-emerald);">✓</div>
+          <div class="m-stat-value" x-text="state.stats.lk_done || 0"></div>
+          <div class="m-stat-label">отработано</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-amber);">⏳</div>
+          <div class="m-stat-value" x-text="state.stats.lk_in_work || 0"></div>
+          <div class="m-stat-label">в работе</div>
+        </div>
+        <div class="m-stat-card" :class="(state.stats.lk_blocks || 0) > 0 ? 'warn' : ''">
+          <div class="m-stat-icon" style="color: var(--hud-rose);">🚫</div>
+          <div class="m-stat-value" x-text="state.stats.lk_blocks || 0"></div>
+          <div class="m-stat-label">блоков</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon" style="color: var(--hud-cyan);">💬</div>
+          <div class="m-stat-value" x-text="state.stats.ai_replies_today || 0"></div>
+          <div class="m-stat-label">AI ответов</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-icon">🤝</div>
+          <div class="m-stat-value" x-text="state.stats.deals_total || 0"></div>
+          <div class="m-stat-label">сделок</div>
+        </div>
+      </div>
+
+      <!-- Recent activity -->
+      <div class="m-section-title">
+        <span>Лента событий</span>
+        <span class="m-section-count" x-text="logs.length + ' events'"></span>
+      </div>
+      <div class="m-event-list">
+        <template x-if="logs.length === 0">
+          <div class="m-empty">Пока тихо...</div>
+        </template>
+        <template x-for="(log, i) in logs.slice(0, 15)" :key="i + ':' + log.ts">
+          <div class="m-event-row" :class="'sev-' + (log.severity || 'info')">
+            <span class="m-event-time" x-text="fmtTime(log.ts)"></span>
+            <span class="m-event-tag" x-text="(log.character || log.type || 'sys').substring(0, 8)"></span>
+            <span class="m-event-msg" x-text="formatEvent(log)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: DISCORD -->
+    <div class="m-tab" x-show="mobileTab === 'discord'">
+      <!-- Mobile Discord: 3 уровня — list/chat/voice -->
+
+      <!-- Уровень 1: список каналов -->
+      <div x-show="!discordActiveChannel">
+        <div class="m-discord-me-row" x-show="me.user_id">
+          <template x-if="me.photo_url">
+            <img :src="me.photo_url" class="m-discord-me-avatar"/>
+          </template>
+          <template x-if="!me.photo_url">
+            <div class="m-discord-me-avatar-fallback" x-text="(me.username || me.first_name || 'A')[0].toUpperCase()"></div>
+          </template>
+          <div style="flex: 1; min-width: 0;">
+            <div class="m-discord-me-name" x-text="me.username ? '@' + me.username : (me.first_name || 'admin')"></div>
+            <div class="m-discord-me-status">
+              <span class="m-status-dot" :class="dcWsConnected ? 'online' : 'offline'"></span>
+              <span x-text="dcCurrentVoiceChannel ? 'в голосе' : (dcWsConnected ? 'online' : 'offline')"></span>
+            </div>
+          </div>
+        </div>
+        <div class="m-section-title">
+          <span>Каналы</span>
+          <button class="m-icon-btn" @click="openCreateChannel()">+</button>
+        </div>
+        <template x-for="cat in discordCategories" :key="cat.name">
+          <div>
+            <div class="m-cat-label" x-text="cat.name"></div>
+            <template x-for="ch in cat.channels" :key="ch.id">
+              <div class="m-channel-row" @click="openDiscordChannel(ch)">
+                <div class="m-channel-icon" x-text="ch.type === 'voice' ? '🔊' : '#'"></div>
+                <div class="m-channel-info">
+                  <div class="m-channel-name" x-text="ch.name"></div>
+                  <div class="m-channel-topic" x-text="ch.topic || (ch.type === 'voice' ? 'голосовая комната' : 'текстовый канал')"></div>
+                </div>
+                <div class="m-channel-meta">
+                  <span x-show="(ch.voice_participants?.length || 0) > 0"
+                        class="m-channel-badge"
+                        x-text="(ch.voice_participants?.length || 0) + ' 🎙'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Уровень 2: текстовый чат -->
+      <div class="m-chat" x-show="discordActiveChannel && discordActiveChannel.type === 'text'">
+        <div class="m-chat-messages" x-ref="mDcMessages">
+          <template x-if="discordMessages.length === 0">
+            <div class="m-empty" style="padding: 40px 20px;">
+              Сообщений нет.<br/>Начни обсуждение.
+            </div>
+          </template>
+          <template x-for="(m, idx) in discordMessages" :key="m.id">
+            <div class="m-msg">
+              <template x-if="m.author_avatar">
+                <img :src="m.author_avatar" class="m-msg-avatar"/>
+              </template>
+              <template x-if="!m.author_avatar">
+                <div class="m-msg-avatar-fallback" x-text="(m.author[0] || '?').toUpperCase()"></div>
+              </template>
+              <div class="m-msg-body">
+                <div class="m-msg-head">
+                  <span class="m-msg-author" x-text="'@' + m.author"></span>
+                  <span class="m-msg-time" x-text="fmtTime(m.ts)"></span>
+                </div>
+                <div class="m-msg-text" x-html="renderMessageText(m.text)"></div>
+                <div class="m-reactions" x-show="m._reacts && Object.keys(m._reacts).length > 0">
+                  <template x-for="[emoji, users] in Object.entries(m._reacts || {})" :key="emoji">
+                    <span class="m-reaction" @click="toggleReaction(m.id, emoji)"
+                          :class="users.includes(me.username || me.first_name) ? 'mine' : ''">
+                      <span x-text="emoji"></span>
+                      <span x-text="users.length"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="m-chat-input-row">
+          <input
+            class="m-chat-input"
+            type="text"
+            x-model="discordDraft"
+            @keydown.enter="sendDiscordMessage()"
+            :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
+          />
+          <button class="m-send-btn" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">↑</button>
+        </div>
+      </div>
+
+      <!-- Уровень 3: голосовая комната -->
+      <div class="m-voice-room" x-show="discordActiveChannel && discordActiveChannel.type === 'voice'">
+        <div class="m-voice-header">
+          <div class="m-voice-channel-name">
+            🔊 <span x-text="discordActiveChannel?.name"></span>
+          </div>
+          <div class="m-voice-channel-sub" x-text="discordActiveChannel?.topic || 'голосовая комната'"></div>
+        </div>
+
+        <div class="m-voice-participants">
+          <template x-for="p in dcVoiceParticipants" :key="p.session_id">
+            <div class="m-voice-user" :class="(p.muted ? 'muted ' : '') + (p.session_id === dcSessionId ? 'is-me' : '')">
+              <template x-if="p.photo_url">
+                <img :src="p.photo_url" class="m-voice-avatar"/>
+              </template>
+              <template x-if="!p.photo_url">
+                <div class="m-voice-avatar-fallback" x-text="(p.username || p.first_name || '?')[0].toUpperCase()"></div>
+              </template>
+              <div class="m-voice-name" x-text="p.username ? '@' + p.username : (p.first_name || 'guest')"></div>
+              <div class="m-voice-flags">
+                <span x-show="p.muted">🔇</span>
+                <span x-show="p.session_id === dcSessionId" class="m-voice-you">ТЫ</span>
+              </div>
+            </div>
+          </template>
+          <div x-show="dcVoiceParticipants.length === 0" class="m-empty" style="padding: 30px; grid-column: 1 / -1;">
+            Никого нет — будь первым
+          </div>
+        </div>
+
+        <!-- Action area: join/leave + mute/deafen -->
+        <div class="m-voice-actions">
+          <template x-if="!isInVoiceChannel(discordActiveChannel?.id)">
+            <button class="m-voice-join-btn" @click="joinDiscordVoice()">
+              🎙 Зайти в голос
+            </button>
+          </template>
+          <template x-if="isInVoiceChannel(discordActiveChannel?.id)">
+            <div class="m-voice-controls">
+              <button class="m-voice-ctrl" :class="dcMuted ? 'active' : ''" @click="toggleMute()">
+                <span x-text="dcMuted ? '🔇' : '🎙'"></span>
+                <span x-text="dcMuted ? 'mic off' : 'mic on'"></span>
+              </button>
+              <button class="m-voice-ctrl" :class="dcDeafened ? 'active' : ''" @click="toggleDeafen()">
+                <span x-text="dcDeafened ? '🔕' : '🔊'"></span>
+                <span x-text="dcDeafened ? 'наушники' : 'слушаю'"></span>
+              </button>
+              <button class="m-voice-leave-btn" @click="leaveDiscordVoice()">
+                🚪 Выйти
+              </button>
+            </div>
+          </template>
+        </div>
+
+        <div x-show="(dcVoiceParticipants?.length || 0) === 1 && isInVoiceChannel(discordActiveChannel?.id)"
+             style="padding: 16px; text-align: center; font-size: 12px; color: var(--text-dim);">
+          Один в комнате. Дождись пока другой админ зайдёт.
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: LK -->
+    <div class="m-tab" x-show="mobileTab === 'lk'">
+      <div class="m-section-title">
+        <span>ЛК карточки</span>
+        <span class="m-section-count" x-text="filteredCards.length + '/' + (state.stats.lk_cards_total || 0)"></span>
+      </div>
+      <div class="m-search">
+        <input class="m-search-input" placeholder="🔍 банк / ФИО / статус..." x-model="cardFilter"/>
+      </div>
+      <div class="m-card-list">
+        <template x-if="filteredCards.length === 0">
+          <div class="m-empty">Карточек нет</div>
+        </template>
+        <template x-for="c in filteredCards.slice(0, 40)" :key="c.card_id">
+          <div class="m-lk-card" @click="openDetailModal(c)">
+            <div class="m-lk-head">
+              <span class="m-lk-id" x-text="'#' + c.card_id"></span>
+              <span class="m-badge" :class="'s-' + (c.status || '').toLowerCase()"
+                    x-text="(c.status || '—').replace(/_/g, ' ')"></span>
+            </div>
+            <div class="m-lk-bank-fio">
+              <strong x-text="c.bank || '—'"></strong>
+              <span x-text="' · ' + (c.fio || '—')"></span>
+            </div>
+            <div class="m-lk-meta">
+              <span x-text="(c.payment_method || '—').replace('GUARANTOR_', 'GUAR.')"></span>
+              <span x-text="(c.price_usdt || 0) + '$'"></span>
+              <span x-show="c.supplier" x-text="'@' + c.supplier"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: FIN -->
+    <div class="m-tab" x-show="mobileTab === 'fin'">
+      <div class="m-fin-hero" :class="(state.stats.margin_today_usdt || 0) >= 0 ? 'pos' : 'neg'">
+        <div class="m-fin-row">
+          <div>
+            <div class="m-fin-label">Сегодня</div>
+            <div class="m-fin-value-big" x-text="fmtUsd(state.stats.margin_today_usdt || 0)"></div>
+          </div>
+          <div>
+            <div class="m-fin-label">Неделя</div>
+            <div class="m-fin-value-big" x-text="fmtUsd(state.stats.margin_week_usdt || 0)"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-stat-grid">
+        <div class="m-stat-card">
+          <div class="m-stat-value" x-text="state.recent_applications.length || 0"></div>
+          <div class="m-stat-label">заявок V2</div>
+        </div>
+        <div class="m-stat-card">
+          <div class="m-stat-value" x-text="state.stats.deals_total || 0"></div>
+          <div class="m-stat-label">сделок</div>
+        </div>
+      </div>
+
+      <div class="m-section-title">Последние заявки</div>
+      <div class="m-card-list">
+        <template x-if="(state.recent_applications || []).length === 0">
+          <div class="m-empty">Заявок нет</div>
+        </template>
+        <template x-for="app in (state.recent_applications || []).slice(0, 20)" :key="app.date + ':' + app.id">
+          <div class="m-app-card">
+            <div class="m-app-head">
+              <span class="m-app-id" x-text="'#' + app.id"></span>
+              <span class="m-app-date" x-text="app.date"></span>
+              <span class="m-app-margin"
+                    :class="(app.margin_usdt || 0) >= 0 ? 'pos' : 'neg'"
+                    x-text="fmtUsd(app.margin_usdt)"></span>
+            </div>
+            <div class="m-app-info">
+              <span x-text="(app.intake_bank || '—') + ' · ' + (app.intake_fio || '—')"></span>
+              <span x-text="(app.outputs_count || 0) + ' выводов'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- TAB: MORE -->
+    <div class="m-tab" x-show="mobileTab === 'more'">
+      <div class="m-more-profile" x-show="me.user_id">
+        <template x-if="me.photo_url">
+          <img :src="me.photo_url" class="m-more-avatar"/>
+        </template>
+        <template x-if="!me.photo_url">
+          <div class="m-more-avatar-fallback" x-text="(me.username || me.first_name || 'A')[0].toUpperCase()"></div>
+        </template>
+        <div class="m-more-name" x-text="me.username ? '@' + me.username : (me.first_name || 'admin')"></div>
+        <div class="m-more-uid" x-text="'ID: ' + (me.user_id || 0)"></div>
+      </div>
+
+      <div class="m-section-title">Менеджеры</div>
+      <div class="m-card-list">
+        <template x-for="m in managers.slice(0, 10)" :key="m.username">
+          <div class="m-manager-row">
+            <span class="m-status-dot" :class="m.online"></span>
+            <div style="flex: 1; min-width: 0;">
+              <div class="m-mgr-name" x-text="'@' + m.username"></div>
+              <div class="m-mgr-meta">
+                <span x-text="'💬 ' + m.messages"></span>
+                <span x-text="'💸 ' + m.payments_made"></span>
+                <span x-show="m.tags_received > 0" x-text="'🔔 ' + m.tags_received"></span>
+              </div>
+            </div>
+            <span class="m-mgr-idle" x-text="formatIdle(m.idle_sec)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="m-section-title">Действия</div>
+      <div class="m-action-list">
+        <button class="m-action-row" @click="toggleVoice()">
+          <span class="m-action-icon" x-text="voiceActive ? '🔴' : '🎤'"></span>
+          <span class="m-action-text" x-text="voiceActive ? 'Закончить голос с LEO' : 'Голос с LEO'"></span>
+          <span class="m-action-chev">›</span>
+        </button>
+        <button class="m-action-row" @click="refreshAll()">
+          <span class="m-action-icon">🔄</span>
+          <span class="m-action-text">Обновить всё</span>
+          <span class="m-action-chev">›</span>
+        </button>
+        <a class="m-action-row" href="/logout">
+          <span class="m-action-icon">🚪</span>
+          <span class="m-action-text">Выйти</span>
+          <span class="m-action-chev">›</span>
+        </a>
+      </div>
+
+      <div class="m-version">JARVIS · v2.0 · PRIDE Operations</div>
+    </div>
+  </main>
+
+  <!-- BOTTOM nav -->
+  <nav class="m-bottom-nav">
+    <button class="m-nav-btn" :class="mobileTab === 'home' ? 'active' : ''" @click="setMobileTab('home')">
+      <span class="m-nav-icon">🏢</span>
+      <span class="m-nav-label">Главная</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'discord' ? 'active' : ''" @click="setMobileTab('discord')">
+      <span class="m-nav-icon">💬</span>
+      <span class="m-nav-label">Чат</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'lk' ? 'active' : ''" @click="setMobileTab('lk')">
+      <span class="m-nav-icon">📋</span>
+      <span class="m-nav-label">ЛК</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'fin' ? 'active' : ''" @click="setMobileTab('fin')">
+      <span class="m-nav-icon">💰</span>
+      <span class="m-nav-label">Финансы</span>
+    </button>
+    <button class="m-nav-btn" :class="mobileTab === 'more' ? 'active' : ''" @click="setMobileTab('more')">
+      <span class="m-nav-icon">⚙</span>
+      <span class="m-nav-label">Ещё</span>
+    </button>
+  </nav>
+</div>
+<!-- ============================================================ -->
+<!-- /MOBILE shell                                                 -->
+<!-- ============================================================ -->
+
 
 <!-- ===== Command palette ===== -->
 <template x-if="paletteOpen">
@@ -2974,6 +4638,11 @@ function jarvis() {
     // === Modals ===
     statusModal: { open: false, card_id: '', card: {}, new_status: 'В_РАБОТЕ' },
     deleteModal: { open: false, card_id: '', card: {} },
+    // === Mobile state ===
+    isMobile: window.matchMedia && window.matchMedia('(max-width: 768px)').matches,
+    mobileTab: 'home',         // home | discord | lk | fin | more
+    mobileBackVisible: false,  // показывать кнопку «назад» в header
+
     // === Discord-hub state ===
     me: { user_id: 0, username: '', first_name: '', photo_url: '', auth_mode: 'basic' },
     discordChannels: [],
@@ -2982,6 +4651,7 @@ function jarvis() {
     discordDraft: '',
     discordChannelModal: { open: false, name: '', type: 'text', category: 'general', topic: '' },
     discordExpanded: false,
+    discordRailOpen: false,    // мобильный sidebar (slide-in)
     discordOnlineUsers: [],
     discordTyping: {},     // {channel_id: {username: ts}}
     discordReactions: {},  // {message_id: {emoji: [users]}}
@@ -3023,6 +4693,7 @@ function jarvis() {
       this.refreshNotes();
       this.refreshOutreach();
       this.refreshMe();
+      this._initMobileWatchers();
       this.refreshDiscordChannels();
       this.refreshDiscordOnline();
       this.connectDiscordWS();
@@ -3789,10 +5460,11 @@ function jarvis() {
     async openDiscordChannel(ch) {
       this.discordActiveChannel = ch;
       this.discordMessages = [];
+      // На мобиле — закрываем боковую панель после выбора канала
+      this.discordRailOpen = false;
       if (ch.type === 'text') {
         await this.refreshDiscordMessages();
       } else if (ch.type === 'voice') {
-        // Сразу подтянуть список участников голосового канала
         await this.refreshDiscordOnline();
       }
     },
@@ -4254,6 +5926,68 @@ function jarvis() {
       if (!u) return '?';
       const name = u.username || u.first_name || '';
       return (name[0] || '?').toUpperCase();
+    },
+
+    // === Mobile navigation helpers ===
+    get mobileHeaderTitle() {
+      if (this.mobileTab === 'home') return 'центр';
+      if (this.mobileTab === 'discord') {
+        if (this.discordActiveChannel) return this.discordActiveChannel.name;
+        return 'каналы';
+      }
+      if (this.mobileTab === 'lk') return 'ЛК';
+      if (this.mobileTab === 'fin') return 'финансы';
+      if (this.mobileTab === 'more') return 'настройки';
+      return '';
+    },
+
+    setMobileTab(t) {
+      this.mobileTab = t;
+      // Сброс под-уровней при переключении вкладок
+      if (t !== 'discord') {
+        // не сбрасываем discordActiveChannel чтобы при возврате юзер вернулся в свой канал
+      }
+      this.mobileBackVisible = false;
+      // Скролл к началу
+      this.$nextTick(() => {
+        const content = document.querySelector('.m-content');
+        if (content) content.scrollTop = 0;
+      });
+      this.playBeep(700);
+    },
+
+    mobileBack() {
+      // Если в discord открыт канал — возврат к списку каналов
+      if (this.mobileTab === 'discord' && this.discordActiveChannel) {
+        // Если в голосе — сначала выйти
+        if (this.dcCurrentVoiceChannel) {
+          this.leaveDiscordVoice();
+        }
+        this.discordActiveChannel = null;
+        this.mobileBackVisible = false;
+        return;
+      }
+      this.mobileBackVisible = false;
+    },
+
+    // Watcher для discordActiveChannel чтобы показывать back-кнопку
+    _initMobileWatchers() {
+      // Слушаем изменения размера экрана
+      const mq = window.matchMedia('(max-width: 768px)');
+      const handler = (e) => { this.isMobile = e.matches; };
+      if (mq.addEventListener) mq.addEventListener('change', handler);
+      else mq.addListener(handler);  // legacy
+
+      // Watch discordActiveChannel для backVisible
+      this.$watch('discordActiveChannel', (v) => {
+        if (this.isMobile) {
+          this.mobileBackVisible = !!v;
+        }
+      });
+      // Watch mobileTab — back hidden когда сменили вкладку
+      this.$watch('mobileTab', () => {
+        this.mobileBackVisible = !!(this.mobileTab === 'discord' && this.discordActiveChannel);
+      });
     },
 
     renderMessageText(text) {
