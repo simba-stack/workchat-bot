@@ -436,14 +436,36 @@ async def main():
     # модулей дашборд просто не стартует, бот продолжает работать как обычно.
     dashboard_task = asyncio.create_task(_start_dashboard_api())
 
+    # CRM-бот — отдельный aiogram bot для управления партнёрами/дропами.
+    # Запускается в том же процессе как async task — делит storage с main.
+    # При краше CRM (try/except) main продолжает работать.
+    crm_task = None
+    try:
+        from crm_bot import run_crm_bot
+        crm_task = asyncio.create_task(_safe_crm_task())
+        logger.info("CRM bot task created")
+    except Exception as e:
+        logger.warning("CRM bot module load failed: %s", e)
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot)
     finally:
         if not dashboard_task.done():
             dashboard_task.cancel()
+        if crm_task and not crm_task.done():
+            crm_task.cancel()
         await userbot.stop()
         await bot.session.close()
+
+
+async def _safe_crm_task():
+    """Запуск CRM-бота с try/except — чтоб его падение не валило main."""
+    try:
+        from crm_bot import run_crm_bot
+        await run_crm_bot()
+    except Exception as e:
+        logger.error("CRM bot crashed: %s — main bot continues", e)
 
 
 async def _start_dashboard_api():

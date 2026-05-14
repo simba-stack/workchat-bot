@@ -170,6 +170,37 @@ def _default_state() -> dict:
         "discord_pins": {},
         # Прочитанные сообщения: {user: {channel_id: last_read_ts}}
         "discord_reads": {},
+        # ==== CRM (новый бот-СRM для поставщиков, отдельный аккаунт) ====
+        # Конфиг CRM-системы.
+        # {admin_chat_id, password_chat_id, otr_chat_id, notify_chat_id}
+        "crm_config": {},
+        # Поставщики (Owner в старой модели).
+        # {owner_id: {tg_user_id, username, name, joined_at, last_active_ts,
+        #             total_drops, total_revenue_usd, banned_until, rating,
+        #             work_chat_id}}
+        "crm_owners": {},
+        # Дропы (клиенты партнёров).
+        # {drop_id: {owner_id, work_chat_id, fio, about, scan_file_ids[],
+        #            price_usdt, status: 'draft'|'pending'|'accepted'|'done',
+        #            accept_ts, send_ts, done_ts, prolit_count,
+        #            admin_msg_id, owner_msg_id, lk_card_ids[]}}
+        "crm_drops": {},
+        # ЛК банков под дропами.
+        # {droplk_id: {drop_id, owner_id, bank, value, deal,
+        #              sms_history: [{code, time}], status: 'new'|'pending'|'ready'|'done',
+        #              new_password, new_mail, new_number, ded_ip,
+        #              ded_login, ded_pass, link_pass, msgid_pass}}
+        "crm_drop_lks": {},
+        # CRM-чаты — какой чат закреплён за каким owner'ом + флаги admin/password.
+        # {chat_id_norm: {owner_id, is_admin, is_password, is_otr, registered_at}}
+        "crm_chats": {},
+        # Sequential ID counters
+        "crm_owners_seq": 0,
+        "crm_drops_seq": 0,
+        "crm_drop_lks_seq": 0,
+        # FSM-state поставщиков (action + payload).
+        # {tg_user_id: {action: 'newdrop_fio'|'editlk_value'|..., data: {...}, msg_id, expires_at}}
+        "crm_fsm": {},
         # Заметки от LEO (через голосовой чат или вручную через API).
         # Структура: [{id, ts, category, priority, text, source, author,
         #              tags[], synced_to_knowledge: bool, knowledge_url}]
@@ -2041,6 +2072,289 @@ class Storage:
                     await self._save_unlocked()
                     return True
             return False
+
+    # ============================================================
+    # CRM Bot — поставщики, дропы, ЛК банков
+    # ============================================================
+
+    # ---- CONFIG ----
+    def get_crm_config(self) -> dict:
+        return dict(self.state.get("crm_config") or {})
+
+    async def set_crm_config(self, **fields):
+        async with _lock:
+            cfg = self.state.setdefault("crm_config", {})
+            for k, v in fields.items():
+                cfg[k] = v
+            await self._save_unlocked()
+
+    # ---- OWNERS (поставщики) ----
+    def list_crm_owners(self) -> dict:
+        return dict(self.state.get("crm_owners") or {})
+
+    def get_crm_owner(self, owner_id) -> Optional[dict]:
+        return (self.state.get("crm_owners") or {}).get(str(owner_id))
+
+    def find_crm_owner_by_tg(self, tg_user_id: int) -> Optional[dict]:
+        for oid, o in (self.state.get("crm_owners") or {}).items():
+            if int(o.get("tg_user_id") or 0) == int(tg_user_id):
+                return dict(o, owner_id=oid)
+        return None
+
+    def find_crm_owner_by_username(self, username: str) -> Optional[dict]:
+        u = (username or "").lstrip("@").lower().strip()
+        if not u:
+            return None
+        for oid, o in (self.state.get("crm_owners") or {}).items():
+            if (o.get("username") or "").lower() == u:
+                return dict(o, owner_id=oid)
+        return None
+
+    async def add_crm_owner(
+        self, tg_user_id: int, username: str, name: str = "",
+        work_chat_id: Optional[int] = None,
+    ) -> str:
+        async with _lock:
+            seq = int(self.state.get("crm_owners_seq", 0)) + 1
+            self.state["crm_owners_seq"] = seq
+            owner_id = f"o{seq:03d}"
+            self.state.setdefault("crm_owners", {})[owner_id] = {
+                "owner_id": owner_id,
+                "tg_user_id": int(tg_user_id),
+                "username": (username or "").lstrip("@"),
+                "name": name or "",
+                "joined_at": time.time(),
+                "last_active_ts": time.time(),
+                "total_drops": 0,
+                "total_revenue_usd": 0.0,
+                "rating": 5.0,
+                "banned_until": 0,
+                "work_chat_id": work_chat_id,
+            }
+            await self._save_unlocked()
+            return owner_id
+
+    async def update_crm_owner(self, owner_id: str, **fields) -> bool:
+        async with _lock:
+            o = (self.state.get("crm_owners") or {}).get(str(owner_id))
+            if not o:
+                return False
+            for k, v in fields.items():
+                o[k] = v
+            o["last_active_ts"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    # ---- CHATS (CRM-чаты) ----
+    def get_crm_chat(self, chat_id) -> Optional[dict]:
+        key = _norm_chat_id(chat_id)
+        return (self.state.get("crm_chats") or {}).get(key)
+
+    def list_crm_chats(self) -> dict:
+        return dict(self.state.get("crm_chats") or {})
+
+    async def register_crm_chat(
+        self, chat_id, owner_id: str,
+        is_admin: bool = False, is_password: bool = False, is_otr: bool = False,
+    ):
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            self.state.setdefault("crm_chats", {})[key] = {
+                "chat_id": int(chat_id),
+                "owner_id": owner_id,
+                "is_admin": bool(is_admin),
+                "is_password": bool(is_password),
+                "is_otr": bool(is_otr),
+                "registered_at": time.time(),
+            }
+            await self._save_unlocked()
+
+    async def unregister_crm_chat(self, chat_id) -> bool:
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            chats = self.state.get("crm_chats") or {}
+            if key in chats:
+                del chats[key]
+                await self._save_unlocked()
+                return True
+            return False
+
+    def find_crm_admin_chat(self) -> Optional[int]:
+        """Возвращает chat_id админ-чата CRM (куда падают новые дропы)."""
+        for k, c in (self.state.get("crm_chats") or {}).items():
+            if c.get("is_admin"):
+                return int(c.get("chat_id") or 0)
+        return None
+
+    def find_crm_password_chat(self) -> Optional[int]:
+        """Возвращает chat_id password-чата (где заполняют RDP/пароли)."""
+        for k, c in (self.state.get("crm_chats") or {}).items():
+            if c.get("is_password"):
+                return int(c.get("chat_id") or 0)
+        return None
+
+    # ---- DROPS (клиенты) ----
+    def list_crm_drops(self, owner_id: Optional[str] = None) -> dict:
+        drops = self.state.get("crm_drops") or {}
+        if owner_id is None:
+            return dict(drops)
+        return {k: v for k, v in drops.items() if v.get("owner_id") == owner_id}
+
+    def get_crm_drop(self, drop_id) -> Optional[dict]:
+        return (self.state.get("crm_drops") or {}).get(str(drop_id))
+
+    async def add_crm_drop(
+        self, owner_id: str, fio: str, work_chat_id: Optional[int] = None,
+    ) -> str:
+        async with _lock:
+            seq = int(self.state.get("crm_drops_seq", 0)) + 1
+            self.state["crm_drops_seq"] = seq
+            drop_id = f"d{seq:04d}"
+            self.state.setdefault("crm_drops", {})[drop_id] = {
+                "drop_id": drop_id,
+                "owner_id": owner_id,
+                "work_chat_id": work_chat_id,
+                "fio": (fio or "").strip(),
+                "about": "",
+                "scan_file_ids": [],
+                "price_usdt": 0,
+                "status": "draft",     # draft / pending / accepted / done / brak
+                "created_at": time.time(),
+                "accept_ts": 0,
+                "send_ts": 0,
+                "done_ts": 0,
+                "prolit_count": 0,
+                "admin_msg_id": 0,
+                "owner_msg_id": 0,
+                "lk_card_ids": [],     # связь с нашими lk_cards (после «в работу»)
+            }
+            # bump owner's drop count
+            o = self.state.get("crm_owners", {}).get(owner_id)
+            if o:
+                o["total_drops"] = int(o.get("total_drops", 0)) + 1
+            await self._save_unlocked()
+            return drop_id
+
+    async def update_crm_drop(self, drop_id: str, **fields) -> bool:
+        async with _lock:
+            d = (self.state.get("crm_drops") or {}).get(str(drop_id))
+            if not d:
+                return False
+            for k, v in fields.items():
+                d[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def delete_crm_drop(self, drop_id: str) -> bool:
+        async with _lock:
+            drops = self.state.get("crm_drops") or {}
+            d = drops.get(str(drop_id))
+            if not d:
+                return False
+            # удалить все ЛК дропа
+            lks = self.state.get("crm_drop_lks") or {}
+            for lkid in list(lks.keys()):
+                if lks[lkid].get("drop_id") == drop_id:
+                    del lks[lkid]
+            del drops[str(drop_id)]
+            await self._save_unlocked()
+            return True
+
+    # ---- DROP LKs (ЛК банков) ----
+    def list_crm_drop_lks(self, drop_id: Optional[str] = None) -> dict:
+        lks = self.state.get("crm_drop_lks") or {}
+        if drop_id is None:
+            return dict(lks)
+        return {k: v for k, v in lks.items() if v.get("drop_id") == drop_id}
+
+    def get_crm_drop_lk(self, droplk_id) -> Optional[dict]:
+        return (self.state.get("crm_drop_lks") or {}).get(str(droplk_id))
+
+    async def add_crm_drop_lk(
+        self, drop_id: str, owner_id: str, bank: str, value: str = "",
+    ) -> str:
+        async with _lock:
+            seq = int(self.state.get("crm_drop_lks_seq", 0)) + 1
+            self.state["crm_drop_lks_seq"] = seq
+            lkid = f"lk{seq:04d}"
+            self.state.setdefault("crm_drop_lks", {})[lkid] = {
+                "droplk_id": lkid,
+                "drop_id": drop_id,
+                "owner_id": owner_id,
+                "bank": (bank or "").upper().strip(),
+                "value": (value or "").strip(),
+                "deal": "",
+                "sms_history": [],
+                "status": "new",   # new / pending / ready / done
+                "new_password": "",
+                "new_mail": "",
+                "new_number": "",
+                "ded_ip": "",
+                "ded_login": "Administrator",
+                "ded_pass": "",
+                "link_pass": "",
+                "msgid_pass": 0,
+                "created_at": time.time(),
+            }
+            await self._save_unlocked()
+            return lkid
+
+    async def update_crm_drop_lk(self, droplk_id: str, **fields) -> bool:
+        async with _lock:
+            lk = (self.state.get("crm_drop_lks") or {}).get(str(droplk_id))
+            if not lk:
+                return False
+            for k, v in fields.items():
+                lk[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def delete_crm_drop_lk(self, droplk_id: str) -> bool:
+        async with _lock:
+            lks = self.state.get("crm_drop_lks") or {}
+            if str(droplk_id) in lks:
+                del lks[str(droplk_id)]
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def append_crm_sms(self, droplk_id: str, code: str, time_str: str = ""):
+        async with _lock:
+            lk = (self.state.get("crm_drop_lks") or {}).get(str(droplk_id))
+            if not lk:
+                return False
+            sms = lk.setdefault("sms_history", [])
+            sms.append({"code": code, "time": time_str or time.strftime("%H:%M")})
+            await self._save_unlocked()
+            return True
+
+    # ---- FSM-state поставщиков (в DM и группе) ----
+    def get_crm_fsm(self, tg_user_id: int) -> dict:
+        return dict((self.state.get("crm_fsm") or {}).get(str(tg_user_id)) or {})
+
+    async def set_crm_fsm(
+        self, tg_user_id: int, action: Optional[str] = None,
+        data: Optional[dict] = None, msg_id: Optional[int] = None,
+        chat_id: Optional[int] = None,
+    ):
+        async with _lock:
+            fsm = self.state.setdefault("crm_fsm", {})
+            if action is None:
+                # Очистка
+                fsm.pop(str(tg_user_id), None)
+            else:
+                fsm[str(tg_user_id)] = {
+                    "action": action,
+                    "data": dict(data or {}),
+                    "msg_id": msg_id,
+                    "chat_id": chat_id,
+                    "updated_at": time.time(),
+                    "expires_at": time.time() + 1800,  # 30 мин
+                }
+            await self._save_unlocked()
+
+    async def clear_crm_fsm(self, tg_user_id: int):
+        await self.set_crm_fsm(tg_user_id, action=None)
 
 
 storage = Storage(config.STORAGE_PATH)
