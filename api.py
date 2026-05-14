@@ -57,6 +57,14 @@ TG_ADMINS = {
     int(x.strip()) for x in _tg_admins_raw.split(",")
     if x.strip().isdigit()
 }
+# Захардкоженный список админов (на случай если env потерян / новый член команды).
+# Эти ID имеют доступ к дашборду ВСЕГДА — независимо от env TG_ADMINS.
+_HARDCODED_TG_ADMINS = {
+    8151738775,   # SIMBA (owner)
+    397572312,    # admin
+    5830088389,   # admin (added 2026-05-14)
+}
+TG_ADMINS |= _HARDCODED_TG_ADMINS
 # Username бота (без @) — нужен для Telegram Login Widget.
 # Авто-резолвится из BOT_TOKEN через getMe если env не задан (см. ниже).
 TG_BOT_USERNAME = (os.getenv("TG_BOT_USERNAME", "") or "").lstrip("@").strip()
