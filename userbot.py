@@ -3812,8 +3812,37 @@ class UserbotService:
         fio = card.get("fio") or ""
         deal_id = (card.get("deal_id") or "").strip().lstrip("#").strip("-—")
         method = (card.get("payment_method") or "").upper()
-        # Резолвим work_chat с фоллбэками
-        wc = await self._resolve_work_chat_for_card(card_with_id)
+
+        # === СТРОГИЙ резолв work_chat ТОЛЬКО через @supplier ===
+        # Никаких fallback по ФИО / deals — это может попасть в чужой чат.
+        # Логика:
+        #   1) card.supplier — username поставщика (на чей счёт оформлено)
+        #   2) Ищем chat_id поставщика в managed_chats через client_username_index
+        #   3) Если не нашли → НЕ шлём уведомление (security-first).
+        wc = None
+        supplier = (card.get("supplier") or "").lstrip("@").strip()
+        supplier_resolved = False
+        if supplier:
+            try:
+                wc_key = storage.find_chat_by_client_username(supplier)
+                if wc_key:
+                    wc = int(wc_key)
+                    supplier_resolved = True
+                    # Сохраним work_chat_id в карточку для следующих операций
+                    if not card.get("work_chat_id"):
+                        try:
+                            await storage.update_lk_card(
+                                card_id, work_chat_id=wc,
+                            )
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(
+                    "block_no_work: supplier @%s lookup failed: %s",
+                    supplier, e,
+                )
+        # Если supplier пустой ИЛИ не нашли его в managed_chats — work_chat=None
+        # и клиента уведомлять НЕ будем (это безопаснее чем отправить чужому).
         did_anything = False
 
         # 1) Отменяем сделку, если она есть
@@ -3896,12 +3925,24 @@ class UserbotService:
                 )
             if client_notified:
                 lines.append(
-                    "📩 Клиенту отправлено уведомление — пусть разбирается в банке."
+                    f"📩 Поставщику <b>@{supplier}</b> отправлено уведомление "
+                    f"в его рабочую беседу."
+                )
+            elif not supplier:
+                lines.append(
+                    "⚠️ <b>Поставщик не указан</b> в карточке — "
+                    "уведомление НЕ отправлено. Свяжитесь с клиентом вручную."
+                )
+            elif not supplier_resolved:
+                lines.append(
+                    f"⚠️ Поставщик <b>@{supplier}</b> не найден в managed_chats — "
+                    f"уведомление НЕ отправлено. Свяжитесь вручную или сделайте "
+                    f"<code>/sync_clients</code>."
                 )
             else:
                 lines.append(
-                    "⚠️ Клиента уведомить не удалось (нет work_chat). "
-                    "Свяжитесь напрямую."
+                    f"⚠️ Уведомление поставщику <b>@{supplier}</b> не доставлено "
+                    f"(ошибка отправки). Свяжитесь вручную."
                 )
             lines.append(
                 "🏦 Нужно решить в банке вопрос — почему произошёл блок."

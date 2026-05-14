@@ -1231,26 +1231,42 @@
     white-space: pre-wrap;
   }
   .dc-input-wrap {
-    padding: 8px 14px;
+    padding: 10px 14px;
     border-top: 1px solid rgba(var(--primary-rgb), 0.1);
     display: flex;
-    gap: 8px;
+    gap: 10px;
     background: rgba(5, 8, 22, 0.7);
+    flex-shrink: 0;             /* не сжимаем bar */
+    align-items: stretch;
   }
   .dc-input {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;                /* критично: позволяем input уменьшиться */
     background: var(--bg-soft);
     border: 1px solid rgba(var(--primary-rgb), 0.25);
     color: var(--text);
-    padding: 8px 12px;
-    border-radius: 4px;
+    padding: 10px 14px;
+    border-radius: 6px;
     font-family: inherit;
-    font-size: 12px;
+    font-size: 13px;
   }
   .dc-input:focus {
     outline: none;
     border-color: var(--hud-primary);
     box-shadow: 0 0 8px rgba(var(--primary-rgb), 0.25);
+  }
+  /* Кнопка отправки — крупная, не сжимается */
+  .dc-input-wrap .btn {
+    flex-shrink: 0;
+    min-width: 100px;
+    padding: 10px 18px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+  /* dc-main должен уметь сжиматься — иначе input уезжает за пределы */
+  .dc-main {
+    min-width: 0;
   }
   .dc-avatar-img {
     width: 28px;
@@ -2953,7 +2969,7 @@
         @keydown.enter="sendDiscordMessage()"
         :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
       />
-      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">↑</button>
+      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">➤ Отправить</button>
     </div>
   </main>
 
