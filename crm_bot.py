@@ -126,8 +126,12 @@ def get_password_chat_id() -> int:
 
 class DropForm(StatesGroup):
     waiting_fio = State()
-    waiting_about = State()
+    waiting_about = State()       # legacy — оставлен для совместимости
     waiting_scan = State()
+    # Новые поля анкеты
+    waiting_social = State()
+    waiting_residence = State()
+    waiting_other_banks = State()
 
 
 class LKForm(StatesGroup):
@@ -578,6 +582,27 @@ async def cb_drop(call: CallbackQuery):
     await _show_drop(call.message, drop)
 
 
+def _check_drop_complete(drop: dict) -> dict:
+    """Возвращает dict с булевыми флагами заполненности всех обязательных полей.
+    Используется для чек-листа в карточке + для проверки готовности к dropsend."""
+    lks = crm_storage.list_crm_drop_lks(drop_id=drop.get("drop_id", ""))
+    return {
+        "fio": bool(drop.get("fio")),
+        "social": bool((drop.get("social") or "").strip()),
+        "residence": bool((drop.get("residence") or "").strip()),
+        "other_banks": bool((drop.get("other_banks") or "").strip()),
+        "scan": bool(drop.get("scan_file_ids")),
+        "lks": len(lks) > 0,
+    }
+
+
+def _drop_is_ready_to_send(drop: dict) -> bool:
+    """True если можно отдать в работу — все 6 пунктов заполнены."""
+    if drop.get("status") != "draft":
+        return False
+    return all(_check_drop_complete(drop).values())
+
+
 async def _show_drop(message: Message, drop: dict):
     lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
     status_emoji = _drop_status_emoji(drop.get("status", "draft"))
@@ -586,6 +611,10 @@ async def _show_drop(message: Message, drop: dict):
     owner_label = (
         owner and (owner.get("username") and f"@{owner['username']}" or owner.get("name"))
     ) or "—"
+    check = _check_drop_complete(drop)
+
+    def ck(v):
+        return "✅" if v else "❌"
 
     lines = [
         f"{status_emoji} <b>Клиент {drop.get('fio') or '—'}</b>",
@@ -593,40 +622,59 @@ async def _show_drop(message: Message, drop: dict):
         "",
         f"<b>Партнёр:</b> {owner_label}",
         f"<b>ID:</b> <code>{drop['drop_id']}</code>",
+        "",
+        "<b>ПРОГРЕСС:</b>",
+        f"  {ck(check['fio'])} ФИО",
+        f"  {ck(check['social'])} Соц. сеть"
+        + (f": <code>{(drop.get('social') or '')[:40]}</code>" if check['social'] else ""),
+        f"  {ck(check['residence'])} Место жительства"
+        + (f": <code>{(drop.get('residence') or '')[:40]}</code>" if check['residence'] else ""),
+        f"  {ck(check['other_banks'])} Доп. банки"
+        + (f": <code>{(drop.get('other_banks') or '')[:40]}</code>" if check['other_banks'] else ""),
+        f"  {ck(check['scan'])} Документы"
+        + (f" ({len(drop.get('scan_file_ids') or [])} фото)" if check['scan'] else ""),
+        f"  {ck(check['lks'])} ЛК банков"
+        + (f" ({len(lks)})" if check['lks'] else ""),
     ]
-    if drop.get("about"):
-        lines.append("")
-        lines.append(f"<b>Анкета:</b>\n{drop['about']}")
-    lines.append("")
-    lines.append(f"📎 Документы: <b>{len(drop.get('scan_file_ids') or [])}</b>")
-    lines.append(f"🏦 ЛК банков: <b>{len(lks)}</b>")
 
-    kb_rows = [
-        [InlineKeyboardButton(text="🏦 ЛК ИП", callback_data=f"droplk:{drop['drop_id']}")],
-    ]
-    if drop.get("scan_file_ids"):
-        kb_rows.append([InlineKeyboardButton(text="👁 Посмотреть доки", callback_data=f"showdoc:{drop['drop_id']}")])
-    kb_rows.extend([
-        [InlineKeyboardButton(
-            text="📎 " + ("Изменить" if drop.get("scan_file_ids") else "Добавить") + " доки",
-            callback_data=f"dropdoc:{drop['drop_id']}",
-        )],
-        [InlineKeyboardButton(
-            text="📝 " + ("Изменить" if drop.get("about") else "Добавить") + " анкету",
-            callback_data=f"dropanketa:{drop['drop_id']}",
-        )],
-    ])
-    if (
-        drop.get("status") == "draft"
-        and drop.get("about")
-        and drop.get("scan_file_ids")
-        and lks
-    ):
-        kb_rows.insert(0, [InlineKeyboardButton(
+    kb_rows = []
+    # «Отдать в работу» — наверху, только если всё заполнено
+    if _drop_is_ready_to_send(drop):
+        kb_rows.append([InlineKeyboardButton(
             text="🚀 Отдать в работу", callback_data=f"dropsend:{drop['drop_id']}",
         )])
+
+    # Кнопки заполнения каждого пункта анкеты
+    kb_rows.append([InlineKeyboardButton(
+        text=f"{ck(check['social'])} Соц. сеть",
+        callback_data=f"dropsocial:{drop['drop_id']}",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=f"{ck(check['residence'])} Место жительства",
+        callback_data=f"dropresidence:{drop['drop_id']}",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=f"{ck(check['other_banks'])} Доп. банки",
+        callback_data=f"dropotherbanks:{drop['drop_id']}",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=f"{ck(check['scan'])} Документы"
+             + (" (изменить)" if check['scan'] else ""),
+        callback_data=f"dropdoc:{drop['drop_id']}",
+    )])
+    if check["scan"]:
+        kb_rows.append([InlineKeyboardButton(
+            text="👁 Посмотреть доки", callback_data=f"showdoc:{drop['drop_id']}",
+        )])
+    kb_rows.append([InlineKeyboardButton(
+        text=f"{ck(check['lks'])} ЛК банков",
+        callback_data=f"droplk:{drop['drop_id']}",
+    )])
+
     if drop.get("status") in ("draft", "brak"):
-        kb_rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"dropdelete:{drop['drop_id']}")])
+        kb_rows.append([InlineKeyboardButton(
+            text="🗑 Удалить", callback_data=f"dropdelete:{drop['drop_id']}",
+        )])
     kb_rows.append([InlineKeyboardButton(text="◀️ К списку", callback_data="drops")])
     kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
 
@@ -684,20 +732,28 @@ async def cb_dropdelete_confirmed(call: CallbackQuery):
 # ЭТАП 2 — Анкета + документы
 # ════════════════════════════════════════════════════════════════
 
-@router.callback_query(F.data.startswith("dropanketa:"))
-async def cb_dropanketa(call: CallbackQuery, state: FSMContext):
-    drop_id = call.data.split(":", 1)[1]
+# ─── Соц. сеть / Место жительства / Доп. банки — отдельные FSM ───
+
+async def _start_anketa_field(
+    call: CallbackQuery, state: FSMContext,
+    drop_id: str, fsm_state: State, title: str, prompt: str, field: str,
+):
     drop = crm_storage.get_crm_drop(drop_id)
     if not drop:
         await call.answer("Клиент не найден", show_alert=True)
         return
     await call.answer()
-    await state.set_state(DropForm.waiting_about)
-    await state.update_data(drop_id=drop_id, menu_msg_id=call.message.message_id)
+    await state.set_state(fsm_state)
+    await state.update_data(
+        drop_id=drop_id, field=field,
+        menu_msg_id=call.message.message_id,
+    )
+    cur_val = drop.get(field) or ""
+    cur_text = f"\n<b>Текущее значение:</b>\n<code>{cur_val[:200]}</code>\n" if cur_val else ""
     try:
         await call.message.edit_text(
-            f"<b>📝 Анкета клиента {drop.get('fio')}</b>\n\n"
-            f"Введите текст анкеты (паспортные данные, ИНН, ОГРНИП и т.д.):\n\n"
+            f"<b>{title} — {drop.get('fio')}</b>\n\n"
+            f"{prompt}{cur_text}\n"
             f"<i>⚠ Бот реагирует на ваше следующее сообщение.</i>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="◀️ Отмена", callback_data=f"drop:{drop_id}"),
@@ -707,21 +763,97 @@ async def cb_dropanketa(call: CallbackQuery, state: FSMContext):
         pass
 
 
-@router.message(DropForm.waiting_about, F.text & ~F.text.startswith("/"))
-async def handle_about(message: Message, state: FSMContext):
+async def _save_anketa_field(message: Message, state: FSMContext, min_len: int = 2):
     data = await state.get_data()
-    about = (message.text or "").strip()
-    if len(about) < 5:
-        await ephemeral(message, "❌ Анкета слишком короткая (минимум 5 символов)")
-        return
     drop_id = data.get("drop_id")
-    await crm_storage.update_crm_drop(drop_id, about=about)
+    field = data.get("field")
+    if not drop_id or not field:
+        await state.clear()
+        return
+    value = (message.text or "").strip()
+    if len(value) < min_len:
+        await ephemeral(message, f"❌ Слишком коротко (минимум {min_len} символа)")
+        return
+    await crm_storage.update_crm_drop(drop_id, **{field: value})
     drop = crm_storage.get_crm_drop(drop_id)
     await _safe_delete(message.bot, message.chat.id, message.message_id)
     if data.get("menu_msg_id"):
         await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
-    await _show_drop(message, drop)
     await state.clear()
+    await _show_drop(message, drop)
+
+
+@router.callback_query(F.data.startswith("dropsocial:"))
+async def cb_dropsocial(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    await _start_anketa_field(
+        call, state, drop_id,
+        DropForm.waiting_social,
+        title="🌐 Соц. сеть",
+        prompt="Введите ссылки на соц. сети клиента (VK / Instagram / Telegram / Facebook). Можно несколько строк:",
+        field="social",
+    )
+
+
+@router.message(DropForm.waiting_social, F.text & ~F.text.startswith("/"))
+async def handle_social(message: Message, state: FSMContext):
+    await _save_anketa_field(message, state, min_len=3)
+
+
+@router.callback_query(F.data.startswith("dropresidence:"))
+async def cb_dropresidence(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    await _start_anketa_field(
+        call, state, drop_id,
+        DropForm.waiting_residence,
+        title="🏠 Место жительства",
+        prompt="Введите город / адрес проживания клиента:",
+        field="residence",
+    )
+
+
+@router.message(DropForm.waiting_residence, F.text & ~F.text.startswith("/"))
+async def handle_residence(message: Message, state: FSMContext):
+    await _save_anketa_field(message, state, min_len=3)
+
+
+@router.callback_query(F.data.startswith("dropotherbanks:"))
+async def cb_dropotherbanks(call: CallbackQuery, state: FSMContext):
+    drop_id = call.data.split(":", 1)[1]
+    await _start_anketa_field(
+        call, state, drop_id,
+        DropForm.waiting_other_banks,
+        title="🏦 Доп. банки клиента",
+        prompt=(
+            "Укажите ВСЕ банки где у клиента есть ИП/счета "
+            "(даже если мы пока не берём в работу).\n"
+            "Это важно для оценки клиента. Пример:\n"
+            "<code>Сбер — есть, ВТБ — был закрыт, Газпром — открыт 2 мес назад</code>"
+        ),
+        field="other_banks",
+    )
+
+
+@router.message(DropForm.waiting_other_banks, F.text & ~F.text.startswith("/"))
+async def handle_other_banks(message: Message, state: FSMContext):
+    await _save_anketa_field(message, state, min_len=3)
+
+
+# Legacy dropanketa — теперь редирект на checklist (отдельных полей нет)
+@router.callback_query(F.data.startswith("dropanketa:"))
+async def cb_dropanketa(call: CallbackQuery, state: FSMContext):
+    """Legacy анкета — теперь предлагает кнопки на под-поля."""
+    drop_id = call.data.split(":", 1)[1]
+    drop = crm_storage.get_crm_drop(drop_id)
+    if not drop:
+        await call.answer("Клиент не найден", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _show_drop(call.message, drop)
 
 
 @router.callback_query(F.data.startswith("dropdoc:"))
@@ -1017,12 +1149,19 @@ async def _render_admin_text(drop: dict) -> str:
     lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
     lines = [f"<b>ПОСТАВЩИК:</b> @{owner and owner.get('username') or '—'}\n"]
     lines.append(f"<b>ФИО:</b> {drop.get('fio') or '—'}")
+    if drop.get("social"):
+        lines.append(f"<b>Соц. сеть:</b> {drop['social']}")
+    if drop.get("residence"):
+        lines.append(f"<b>Место жительства:</b> {drop['residence']}")
+    if drop.get("other_banks"):
+        lines.append(f"<b>Доп. банки:</b> {drop['other_banks']}")
+    lines.append("")
     for lk in lks.values():
         lines.append(f"<b>Банк:</b> {lk.get('bank')}")
         lines.append(f"<code>{lk.get('value') or '—'}</code>")
         lines.append(f"<b>Сделка #:</b> {lk.get('deal') or '—'}")
     if drop.get("about"):
-        lines.append(f"\n<b>Информация:</b>\n{drop['about']}")
+        lines.append(f"\n<b>Доп. инфо:</b>\n{drop['about']}")
     if drop.get("status") == "accepted":
         lines.append(f"\n<b>ЗАПОЛНЕНИЕ АДМИНАМИ PRIDE:</b>")
         for lk in lks.values():
@@ -1087,13 +1226,16 @@ async def cb_dropsend(call: CallbackQuery):
     if drop.get("status") not in ("draft",):
         await call.answer("Уже отправлен или обработан", show_alert=True)
         return
-    if not drop.get("about") or not drop.get("scan_file_ids"):
-        await call.answer("Сначала заполните анкету и документы", show_alert=True)
+    # Жёсткая проверка чек-листа
+    if not _drop_is_ready_to_send(drop):
+        check = _check_drop_complete(drop)
+        missing = [k for k, v in check.items() if not v]
+        await call.answer(
+            "❌ Заполни всё: " + ", ".join(missing),
+            show_alert=True,
+        )
         return
     lks = crm_storage.list_crm_drop_lks(drop_id=drop_id)
-    if not lks:
-        await call.answer("Сначала добавьте хотя бы один ЛК", show_alert=True)
-        return
 
     admin_chat_id = get_admin_chat_id()
     if not admin_chat_id:
@@ -1102,6 +1244,26 @@ async def cb_dropsend(call: CallbackQuery):
 
     await call.answer("⏳ Отправляю...")
     bot = call.message.bot
+
+    # Проверим что бот ИМЕЕТ ДОСТУП к admin-чату ДО постинга фоток
+    # (chat_not_found = бот не в группе)
+    try:
+        chat_info = await bot.get_chat(admin_chat_id)
+        logger.info("Admin chat OK: id=%s title=%s", admin_chat_id, chat_info.title)
+    except Exception as e:
+        await ephemeral(
+            call.message,
+            f"❌ Бот не имеет доступа к admin-чату (id={admin_chat_id})\n\n"
+            f"<b>Что делать:</b>\n"
+            f"1. Найди бота через @BotFather, скопируй его username\n"
+            f"2. Добавь его в группу «Доступы» (chat_id {admin_chat_id})\n"
+            f"3. Сделай бота админом группы\n"
+            f"4. В группе пропиши <code>/crm_set_admin</code>\n\n"
+            f"Telegram error: <code>{e}</code>",
+            ttl=30,
+        )
+        return
+
     # 1) Постим фотки
     try:
         files = drop["scan_file_ids"]
@@ -1123,7 +1285,9 @@ async def cb_dropsend(call: CallbackQuery):
         await crm_storage.update_crm_drop(drop_id, admin_msg_id=ctrl.message_id)
     except Exception as e:
         logger.error("dropsend ctrl msg failed: %s", e)
-        await ephemeral(call.message, f"❌ Не удалось отправить в admin-чат: {e}")
+        # Откат статуса
+        await crm_storage.update_crm_drop(drop_id, status="draft")
+        await ephemeral(call.message, f"❌ Не удалось отправить в admin-чат: {e}", ttl=15)
         return
 
     # 3) Апдейтим у партнёра
