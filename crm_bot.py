@@ -1092,20 +1092,43 @@ async def cb_dropdoc_done(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("showdoc:"))
 async def cb_showdoc(call: CallbackQuery):
+    """Показать/скрыть документы. Toggle через сохранение msg_ids в state.
+    Повторный клик удаляет предыдущие фотки чтобы чат не засорялся."""
     drop_id = call.data.split(":", 1)[1]
     drop = crm_storage.get_crm_drop(drop_id)
     if not drop or not drop.get("scan_file_ids"):
         await call.answer("Документов нет", show_alert=True)
         return
-    await call.answer()
+    chat_id = call.message.chat.id
+    bot = call.message.bot
+    # Ключ для in-memory кэша: (chat_id, drop_id)
+    key = (chat_id, drop_id)
+    if not hasattr(cb_showdoc, "_open"):
+        cb_showdoc._open = {}
+    # Если уже открыто — закрываем (удаляем фотки)
+    if key in cb_showdoc._open:
+        await call.answer("Документы скрыты")
+        for mid in cb_showdoc._open.pop(key, []):
+            try:
+                await bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+        return
+    # Иначе — открываем (запоминаем msg_ids чтоб можно было закрыть)
+    await call.answer("Документы показаны (нажми ещё раз чтобы скрыть)")
     files = drop["scan_file_ids"]
+    posted_ids = []
     try:
         if len(files) == 1:
-            await call.message.bot.send_photo(call.message.chat.id, files[0])
+            m = await bot.send_photo(chat_id, files[0])
+            posted_ids.append(m.message_id)
         else:
             from aiogram.types import InputMediaPhoto
             media = [InputMediaPhoto(media=fid) for fid in files[:10]]
-            await call.message.bot.send_media_group(call.message.chat.id, media)
+            sent = await bot.send_media_group(chat_id, media)
+            for s in sent:
+                posted_ids.append(s.message_id)
+        cb_showdoc._open[key] = posted_ids
     except Exception as e:
         logger.warning("showdoc failed: %s", e)
         await ephemeral(call.message, f"❌ Не удалось показать: {e}")
@@ -3528,3 +3551,94 @@ if __name__ == "__main__":
         await crm_storage.load()
         await run_crm_bot()
     asyncio.run(_standalone())
+
+
+# ════════════════════════════════════════════════════════════════
+# IDEAS INBOX — команды управления группой идей
+# ════════════════════════════════════════════════════════════════
+
+@router.message(Command("ideas_set"))
+async def cmd_ideas_set(message: Message):
+    """Назначить текущую группу как ideas-inbox. Только для владельцев."""
+    if not is_owner(message.from_user.id):
+        return
+    if message.chat.type == "private":
+        await message.reply("Команду вызывай <b>в группе</b> для идей.")
+        return
+    await crm_storage.set_ideas_chat_id(message.chat.id)
+    await message.reply(
+        f"✅ Эта группа теперь <b>Ideas Inbox</b> (id <code>{message.chat.id}</code>).\n\n"
+        f"Все сообщения отсюда будут сохраняться как идеи/баги.\n"
+        f"Команды:\n"
+        f"• <code>/ideas</code> — список нерешённых (в ЛС бота)\n"
+        f"• <code>/ideas_all</code> — все включая закрытые\n"
+        f"• <code>/ideas_done N</code> — пометить идею #N как закрытую\n"
+        f"• <code>/ideas_clean</code> — удалить все закрытые"
+    )
+
+
+@router.message(Command("ideas"))
+async def cmd_ideas(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    items = crm_storage.list_ideas(only_unresolved=True)
+    if not items:
+        await message.reply("✅ Нет нерешённых идей.")
+        return
+    items.sort(key=lambda i: -(i.get("ts") or 0))
+    lines = [f"💡 <b>Нерешённых идей: {len(items)}</b>\n"]
+    for i in items[:30]:
+        kind_icon = "🐛" if i.get("kind") == "bug" else "💡"
+        author = i.get("author") or "?"
+        text = (i.get("text") or "")[:200]
+        lines.append(
+            f"\n<b>#{i['id']}</b> {kind_icon} <i>{author}</i>\n"
+            f"  {text}"
+        )
+    if len(items) > 30:
+        lines.append(f"\n<i>… и ещё {len(items) - 30}</i>")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("ideas_all"))
+async def cmd_ideas_all(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    items = crm_storage.list_ideas(only_unresolved=False)
+    if not items:
+        await message.reply("Пусто.")
+        return
+    items.sort(key=lambda i: -(i.get("ts") or 0))
+    lines = [f"📋 <b>Всего идей: {len(items)}</b>\n"]
+    for i in items[:30]:
+        is_bug = i.get("kind") == "bug"
+        kind_icon = "🐛" if is_bug else "💡"
+        status = "✅" if i.get("resolved") else "⏳"
+        text = (i.get("text") or "")[:150]
+        author = i.get("author") or "?"
+        lines.append(f"\n<b>#{i['id']}</b> {status} {kind_icon} {author}\n  {text}")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("ideas_done"))
+async def cmd_ideas_done(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply("Использование: <code>/ideas_done N</code>")
+        return
+    idea_id = int(parts[1])
+    ok = await crm_storage.mark_idea_resolved(idea_id, resolved=True)
+    if ok:
+        await message.reply(f"✅ Идея #{idea_id} закрыта.")
+    else:
+        await message.reply(f"❌ Идея #{idea_id} не найдена.")
+
+
+@router.message(Command("ideas_clean"))
+async def cmd_ideas_clean(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    n = await crm_storage.clear_resolved_ideas()
+    await message.reply(f"🧹 Удалено закрытых идей: <b>{n}</b>")

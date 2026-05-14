@@ -381,9 +381,40 @@ class UserbotService:
         @self.client.on(events.NewMessage(incoming=True))
         async def _on_new_message(event):
             try:
+                # Ideas-чат — отдельная обработка (сохраняем сообщения как идеи)
+                ideas_chat = storage.get_ideas_chat_id()
+                if ideas_chat and int(event.chat_id) == int(ideas_chat):
+                    await self._handle_ideas_message(event)
+                    return
                 await self._handle_ai_message(event)
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
+
+    async def _handle_ideas_message(self, event):
+        """Сохраняет сообщения из ideas-чата в storage.ideas_inbox.
+        Автоматически распознаёт «баг» / «идея» по словам."""
+        try:
+            text = (event.message.text or event.message.message or "").strip()
+            if not text or text.startswith("/"):
+                return
+            sender = await event.get_sender()
+            uname = getattr(sender, "username", None) or getattr(sender, "first_name", "") or "?"
+            low = text.lower()
+            kind = "bug" if any(w in low for w in ("баг", "bug", "ошибк", "не работает", "сломал")) else "idea"
+            idea_id = await storage.add_idea(
+                text=text, author=f"@{uname}" if uname else "?",
+                chat_id=int(event.chat_id),
+                msg_id=int(event.message.id),
+                kind=kind,
+            )
+            # Реагируем emoji'ем чтобы автор видел что сохранено
+            try:
+                await event.message.react("📝" if kind == "idea" else "🐛")
+            except Exception:
+                pass
+            logger.info("idea saved id=%s kind=%s by=%s", idea_id, kind, uname)
+        except Exception as e:
+            logger.warning("ideas handler failed: %s", e)
 
     async def _handle_chat_action(self, event):
         try:
@@ -6112,36 +6143,16 @@ class UserbotService:
                         pin_messages=True,
                         add_admins=False,
                         anonymous=False,
-                        manage_call=True,
+                        manage_call=False,
                     )
                     await self.client(EditAdminRequest(
-                        channel=channel, user_id=user,
-                        admin_rights=rights, rank=rank,
+                        channel=channel,
+                        user_id=uname_or_id,
+                        admin_rights=rights,
+                        rank=rank,
                     ))
-                    statuses[uname_or_id] = (
-                        f"{statuses.get(uname_or_id, '')} + админка ({rank})"
-                    ).strip(" +")
                 except Exception as e:
-                    logger.warning(
-                        "grant admin failed for @%s in chat=%s: %s",
-                        uname_or_id, channel.id, e,
-                    )
-
-        for u, s in statuses.items():
-            logger.info("invite chat=%s @%s -> %s", channel.id, u, s)
-
-        if config.USERBOT_AS_ADMIN and self._me:
-            try:
-                rights = ChatAdminRights(
-                    change_info=True, post_messages=True, edit_messages=True,
-                    delete_messages=True, ban_users=True, invite_users=True,
-                    pin_messages=True, add_admins=False, anonymous=False, manage_call=True,
-                )
-                await self.client(EditAdminRequest(
-                    channel=channel, user_id=self._me, admin_rights=rights, rank="Owner"
-                ))
-            except Exception as e:
-                logger.warning("Admin grant failed: %s", e)
+                    logger.warning("admin grant for @%s failed: %s", uname_or_id, e)
 
         invite = await self.client(ExportChatInviteRequest(channel))
 
@@ -6154,4 +6165,3 @@ class UserbotService:
             "invite_link": invite.link,
             "statuses": statuses,
         }
-# trigger redeploy

@@ -1348,6 +1348,56 @@ class Storage:
             self.state["lk_group_id"] = int(chat_id)
             await self._save_unlocked()
 
+    # ===== Ideas Inbox =====
+    def get_ideas_chat_id(self) -> int:
+        return int(self.state.get("ideas_chat_id") or 0)
+
+    async def set_ideas_chat_id(self, chat_id: int):
+        async with _lock:
+            self.state["ideas_chat_id"] = int(chat_id)
+            await self._save_unlocked()
+
+    def list_ideas(self, only_unresolved: bool = False) -> list:
+        items = list(self.state.get("ideas_inbox") or [])
+        if only_unresolved:
+            items = [i for i in items if not i.get("resolved")]
+        return items
+
+    async def add_idea(self, text: str, author: str = "", chat_id: int = 0,
+                       msg_id: int = 0, kind: str = "idea") -> int:
+        async with _lock:
+            inbox = self.state.setdefault("ideas_inbox", [])
+            new_id = (max((i.get("id") or 0) for i in inbox) + 1) if inbox else 1
+            inbox.append({
+                "id": new_id,
+                "text": (text or "").strip(),
+                "author": author or "",
+                "chat_id": int(chat_id),
+                "msg_id": int(msg_id),
+                "kind": kind,  # "idea" / "bug"
+                "ts": time.time(),
+                "resolved": False,
+            })
+            await self._save_unlocked()
+            return new_id
+
+    async def mark_idea_resolved(self, idea_id: int, resolved: bool = True) -> bool:
+        async with _lock:
+            for i in (self.state.get("ideas_inbox") or []):
+                if i.get("id") == idea_id:
+                    i["resolved"] = resolved
+                    await self._save_unlocked()
+                    return True
+            return False
+
+    async def clear_resolved_ideas(self) -> int:
+        async with _lock:
+            inbox = self.state.get("ideas_inbox") or []
+            before = len(inbox)
+            self.state["ideas_inbox"] = [i for i in inbox if not i.get("resolved")]
+            await self._save_unlocked()
+            return before - len(self.state["ideas_inbox"])
+
     def get_lk_card(self, card_id: str) -> Optional[dict]:
         return (self.state.get("lk_cards") or {}).get(str(card_id))
 
@@ -2419,23 +2469,22 @@ class Storage:
             if not lk:
                 return False
             sms = lk.setdefault("sms_history", [])
-            sms.append({"code": code, "time": time_str or time.strftime("%H:%M")})
+            sms.append({
+                "code": code,
+                "time": time_str or time.strftime("%d.%m.%Y %H:%M"),
+            })
             await self._save_unlocked()
             return True
 
-    # ---- FSM-state поставщиков (в DM и группе) ----
+    # ---- FSM состояние партнёров ----
     def get_crm_fsm(self, tg_user_id: int) -> dict:
-        return dict((self.state.get("crm_fsm") or {}).get(str(tg_user_id)) or {})
+        return (self.state.get("crm_fsm") or {}).get(str(tg_user_id)) or {}
 
-    async def set_crm_fsm(
-        self, tg_user_id: int, action: Optional[str] = None,
-        data: Optional[dict] = None, msg_id: Optional[int] = None,
-        chat_id: Optional[int] = None,
-    ):
+    async def set_crm_fsm(self, tg_user_id: int, action=None,
+                          data=None, msg_id=None, chat_id=None):
         async with _lock:
             fsm = self.state.setdefault("crm_fsm", {})
             if action is None:
-                # Очистка
                 fsm.pop(str(tg_user_id), None)
             else:
                 fsm[str(tg_user_id)] = {
