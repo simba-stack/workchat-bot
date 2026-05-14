@@ -1327,6 +1327,180 @@
     flex: 1;
   }
 
+  /* ===== Screen share stage (Discord-like big video) ===== */
+  .dc-screen-stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #050810;
+    padding: 14px 14px 10px;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .dc-screen-frame {
+    flex: 1;
+    position: relative;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(var(--primary-rgb), 0.2);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(var(--primary-rgb), 0.08) inset,
+      0 0 40px rgba(var(--primary-rgb), 0.08);
+    min-height: 0;
+  }
+  .dc-screen-frame video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: block;
+  }
+  .dc-screen-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: linear-gradient(180deg, rgba(5, 8, 18, 0.85) 0%, rgba(5, 8, 18, 0) 100%);
+    pointer-events: none;
+  }
+  .dc-screen-overlay > * { pointer-events: auto; }
+  .dc-screen-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .dc-screen-live {
+    background: var(--hud-rose);
+    color: #0a1421;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    animation: dc-live-pulse 1.4s ease-in-out infinite;
+    box-shadow: 0 0 12px rgba(251, 113, 133, 0.5);
+  }
+  @keyframes dc-live-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.85; transform: scale(0.96); }
+  }
+  .dc-screen-author {
+    font-weight: 700;
+    color: var(--hud-primary);
+  }
+  .dc-screen-suffix {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .dc-screen-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .dc-screen-switcher {
+    display: flex;
+    gap: 4px;
+    background: rgba(5, 8, 18, 0.6);
+    padding: 3px;
+    border-radius: 8px;
+  }
+  .dc-screen-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 5px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+  }
+  .dc-screen-tab.active {
+    background: rgba(var(--primary-rgb), 0.2);
+    color: var(--hud-primary);
+  }
+  .dc-screen-btn {
+    background: rgba(5, 8, 18, 0.7);
+    border: 1px solid rgba(var(--primary-rgb), 0.25);
+    color: var(--hud-primary);
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .dc-screen-btn:hover { background: rgba(var(--primary-rgb), 0.15); }
+
+  /* Roster — мини-аватарки под видео */
+  .dc-screen-roster {
+    display: flex;
+    gap: 10px;
+    padding: 12px 4px 4px;
+    overflow-x: auto;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+  }
+  .dc-screen-roster-user {
+    position: relative;
+    flex-shrink: 0;
+  }
+  .dc-screen-roster-avatar,
+  .dc-screen-roster-fallback {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(var(--primary-rgb), 0.25);
+    background: rgba(var(--primary-rgb), 0.15);
+    color: var(--hud-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    transition: all 0.18s ease;
+  }
+  .dc-screen-roster-user.is-me .dc-screen-roster-avatar,
+  .dc-screen-roster-user.is-me .dc-screen-roster-fallback {
+    border-color: var(--hud-amber);
+  }
+  .dc-screen-roster-user.speaking .dc-screen-roster-avatar,
+  .dc-screen-roster-user.speaking .dc-screen-roster-fallback {
+    border-color: var(--hud-emerald);
+    box-shadow:
+      0 0 0 2px var(--hud-emerald),
+      0 0 14px rgba(74, 222, 128, 0.6);
+    animation: dc-speak-pulse 1.2s ease-in-out infinite;
+  }
+  .dc-screen-roster-user.is-muted .dc-screen-roster-avatar,
+  .dc-screen-roster-user.is-muted .dc-screen-roster-fallback {
+    filter: grayscale(0.5);
+    opacity: 0.75;
+  }
+  .dc-screen-roster-mute {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: rgba(5, 8, 18, 0.95);
+    border: 1px solid rgba(var(--primary-rgb), 0.3);
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+  }
+
   /* ===== Voice activity pulse (Discord-like) ===== */
   /* Когда юзер говорит — анимированное зелёное кольцо вокруг аватарки */
   .dc-stage-user.speaking .dc-stage-avatar,
@@ -2944,8 +3118,65 @@
       </div>
     </div>
 
+    <!-- Screen share viewer (Discord-like big video) -->
+    <div class="dc-screen-stage"
+         x-show="discordActiveChannel?.type === 'voice' && (dcActiveScreenSession || dcScreenSharing) && isInVoiceChannel(discordActiveChannel?.id)">
+      <div class="dc-screen-frame">
+        <video id="dc-screen-video" autoplay playsinline></video>
+        <!-- Overlay header with sharer name + controls -->
+        <div class="dc-screen-overlay">
+          <div class="dc-screen-label">
+            <span class="dc-screen-live">● LIVE</span>
+            <span class="dc-screen-author" x-text="activeScreenLabel()"></span>
+            <span class="dc-screen-suffix">демонстрирует экран</span>
+          </div>
+          <div class="dc-screen-actions">
+            <!-- Переключатель если несколько одновременно шарят -->
+            <template x-if="(Object.keys(dcRemoteScreens).length + (dcScreenSharing ? 1 : 0)) > 1">
+              <div class="dc-screen-switcher">
+                <button x-show="dcScreenSharing"
+                        class="dc-screen-tab"
+                        :class="dcActiveScreenSession === '__local__' ? 'active' : ''"
+                        @click="switchScreenView('__local__')">Ты</button>
+                <template x-for="[sid, _stream] in Object.entries(dcRemoteScreens)" :key="sid">
+                  <button class="dc-screen-tab"
+                          :class="dcActiveScreenSession === sid ? 'active' : ''"
+                          @click="switchScreenView(sid)">
+                    <span x-text="(dcVoiceParticipants.find(p => p.session_id === sid)?.username) || 'Гость'"></span>
+                  </button>
+                </template>
+              </div>
+            </template>
+            <button class="dc-screen-btn" @click="fullscreenScreen()" title="Полный экран">⛶</button>
+          </div>
+        </div>
+      </div>
+      <!-- Mini-avatars row под видео — компактный показ участников -->
+      <div class="dc-screen-roster">
+        <template x-for="p in dcVoiceParticipants" :key="p.session_id">
+          <div class="dc-screen-roster-user"
+               :class="{
+                 'is-me': p.session_id === dcSessionId,
+                 'is-muted': p.muted,
+                 'speaking': p.session_id === dcSessionId
+                   ? (isSpeaking('__local__') && !p.muted)
+                   : isSpeaking(p.session_id)
+               }">
+            <template x-if="p.photo_url">
+              <img :src="p.photo_url" class="dc-screen-roster-avatar"/>
+            </template>
+            <template x-if="!p.photo_url">
+              <div class="dc-screen-roster-fallback" x-text="(p.username || p.first_name || '?')[0].toUpperCase()"></div>
+            </template>
+            <span x-show="p.muted" class="dc-screen-roster-mute">🔇</span>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Voice participants (inside voice-channel view) -->
-    <div class="dc-voice-stage" x-show="discordActiveChannel?.type === 'voice' && (dcVoiceParticipants?.length || 0) > 0">
+    <div class="dc-voice-stage"
+         x-show="discordActiveChannel?.type === 'voice' && (dcVoiceParticipants?.length || 0) > 0 && !dcActiveScreenSession && !dcScreenSharing">
       <template x-for="p in dcVoiceParticipants" :key="p.session_id">
         <div class="dc-stage-user"
              :class="{
@@ -3444,8 +3675,11 @@ function jarvis() {
     dcPushToTalk: false,      // если true — mic mute'ится по умолчанию, слушаем Space
     dcPttHeld: false,
     // Screen share
-    dcScreenSharing: false,
-    dcScreenStream: null,
+    dcScreenSharing: false,           // я расшариваю
+    dcScreenStream: null,             // мой локальный экран
+    dcRemoteScreens: {},              // {session_id: MediaStream} — чужие экраны
+    dcActiveScreenSession: null,      // какой экран сейчас показывается крупно
+                                       //  '__local__' = мой; иначе session_id
     // Custom status
     dcStatus: 'online',       // online | away | dnd | invisible
     dcStatusMenuOpen: false,
@@ -4554,6 +4788,34 @@ function jarvis() {
       }
       pc.ontrack = (ev) => {
         console.log('[voice] remote track received from', remoteSessionId, 'kind=' + ev.track.kind);
+        // === VIDEO TRACK = screen share ===
+        if (ev.track.kind === 'video') {
+          console.log('[screen] remote screen share from', remoteSessionId);
+          // Свой MediaStream для этого peer'а с его экраном
+          let stream = this.dcRemoteScreens[remoteSessionId];
+          if (!stream) {
+            stream = new MediaStream();
+            this.dcRemoteScreens = { ...this.dcRemoteScreens, [remoteSessionId]: stream };
+          }
+          stream.addTrack(ev.track);
+          // Авто-показать ему когда трек закончится (юзер выключил шеринг)
+          ev.track.onended = () => {
+            console.log('[screen] remote ended for', remoteSessionId);
+            try { stream.removeTrack(ev.track); } catch {}
+            const updated = { ...this.dcRemoteScreens };
+            delete updated[remoteSessionId];
+            this.dcRemoteScreens = updated;
+            if (this.dcActiveScreenSession === remoteSessionId) {
+              this.dcActiveScreenSession = this._pickActiveScreen();
+            }
+          };
+          // Авто-переключаемся на просмотр этого экрана
+          this.dcActiveScreenSession = remoteSessionId;
+          // Привязать к video элементу после render
+          this.$nextTick(() => this._bindRemoteScreenVideo(remoteSessionId));
+          return;
+        }
+        // === AUDIO TRACK ===
         // НЕ создаём новый audio element — добавляем track в ОБЩИЙ stream,
         // который уже играет с момента когда юзер тапнул «Зайти».
         // Это обход autoplay-блокировки iOS/Android: новые tracks
@@ -4670,6 +4932,20 @@ function jarvis() {
       if (!peer) return;
       // Stop VAD для этого peer'а
       this._stopVad(sessionId);
+      // Если этот peer шарил экран — снимаем его
+      if (this.dcRemoteScreens[sessionId]) {
+        const updated = { ...this.dcRemoteScreens };
+        delete updated[sessionId];
+        this.dcRemoteScreens = updated;
+        if (this.dcActiveScreenSession === sessionId) {
+          this.dcActiveScreenSession = this._pickActiveScreen();
+          if (this.dcActiveScreenSession === '__local__') {
+            this.$nextTick(() => this._bindLocalScreenVideo());
+          } else if (this.dcActiveScreenSession) {
+            this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
+          }
+        }
+      }
       // Удалим receiver-tracks этого peer'а из общего remote stream
       try {
         if (this.dcRemoteStream && peer.pc) {
@@ -4849,6 +5125,11 @@ function jarvis() {
       if (this.dcScreenSharing) {
         try { this._stopScreenShare(); } catch {}
       }
+      // Сбрасываем чужие экраны
+      this.dcRemoteScreens = {};
+      this.dcActiveScreenSession = null;
+      const screenEl = document.getElementById('dc-screen-video');
+      if (screenEl) try { screenEl.srcObject = null; } catch {}
       this.dcCurrentVoiceChannel = null;
       this.dcVoiceParticipants = [];
       this.playBeep(300);
@@ -5070,6 +5351,9 @@ function jarvis() {
           }
         }
         this.dcScreenSharing = true;
+        // Покажем себе свой превью
+        this.dcActiveScreenSession = '__local__';
+        this.$nextTick(() => this._bindLocalScreenVideo());
         console.log('[screen] sharing started');
       } catch (e) {
         if (e.name !== 'NotAllowedError') {
@@ -5077,6 +5361,61 @@ function jarvis() {
         }
         console.warn('[screen] start failed', e);
       }
+    },
+
+    _bindLocalScreenVideo() {
+      const el = document.getElementById('dc-screen-video');
+      if (!el || !this.dcScreenStream) return;
+      el.srcObject = this.dcScreenStream;
+      el.muted = true;  // свой экран без звука (мы и так слышим себя в системе)
+      el.play().catch(err => console.warn('[screen] local play:', err));
+    },
+
+    _bindRemoteScreenVideo(sessionId) {
+      const stream = this.dcRemoteScreens[sessionId];
+      const el = document.getElementById('dc-screen-video');
+      if (!el || !stream) return;
+      el.srcObject = stream;
+      el.muted = false;  // чужой экран — со звуком если есть
+      el.play().catch(err => console.warn('[screen] remote play:', err));
+    },
+
+    _pickActiveScreen() {
+      // Если есть свой шеринг — он первичный
+      if (this.dcScreenSharing && this.dcScreenStream) return '__local__';
+      // Иначе первый чужой
+      const remoteIds = Object.keys(this.dcRemoteScreens);
+      return remoteIds[0] || null;
+    },
+
+    switchScreenView(sessionId) {
+      // Ручное переключение между несколькими шарингами
+      this.dcActiveScreenSession = sessionId;
+      this.$nextTick(() => {
+        if (sessionId === '__local__') this._bindLocalScreenVideo();
+        else this._bindRemoteScreenVideo(sessionId);
+      });
+    },
+
+    activeScreenLabel() {
+      if (this.dcActiveScreenSession === '__local__') {
+        return (this.me && (this.me.username || this.me.first_name)) || 'Ты';
+      }
+      const peer = this.dcPeers[this.dcActiveScreenSession];
+      if (peer && peer.user) {
+        return peer.user.username || peer.user.first_name || 'Гость';
+      }
+      // Try to find from voice participants
+      const p = (this.dcVoiceParticipants || []).find(x => x.session_id === this.dcActiveScreenSession);
+      if (p) return p.username || p.first_name || 'Гость';
+      return 'Гость';
+    },
+
+    fullscreenScreen() {
+      const el = document.getElementById('dc-screen-video');
+      if (!el) return;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+      if (req) req.call(el).catch(() => {});
     },
 
     async _stopScreenShare() {
@@ -5102,6 +5441,13 @@ function jarvis() {
       } catch {}
       this.dcScreenStream = null;
       this.dcScreenSharing = false;
+      // Переключаемся на другой шеринг (если есть) или закрываем экран
+      if (this.dcActiveScreenSession === '__local__') {
+        this.dcActiveScreenSession = this._pickActiveScreen();
+        if (this.dcActiveScreenSession) {
+          this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
+        }
+      }
       console.log('[screen] sharing stopped');
     },
 
