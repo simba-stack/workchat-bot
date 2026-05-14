@@ -1974,21 +1974,19 @@
      =================================================================== */
   [x-cloak] { display: none !important; }
 
-  /* Desktop-shell — обёртка не должна влиять на layout.
-     display: contents делает div «прозрачным» — все дети ведут себя
-     как прямые потомки body (что и было до обёртки).
-     Alpine x-show всё равно может выставить display:none для скрытия. */
-  .desktop-shell {
-    display: contents;
-  }
-
   .mobile-shell {
     display: none;
   }
 
   @media (max-width: 768px) {
-    /* Прячем десктоп-shell */
-    .desktop-shell { display: none !important; }
+    /* На мобиле прячем десктопные top-level элементы */
+    .jarvis-header,
+    .view-tabs,
+    .jarvis-grid,
+    section:has(.discord-shell),
+    .discord-shell {
+      display: none !important;
+    }
 
     .mobile-shell {
       display: flex !important;
@@ -2931,9 +2929,8 @@
 </div>
 
 <!-- ============================================================ -->
-<!-- DESKTOP shell — скрыт на мобиле                              -->
+<!-- DESKTOP content — скрывается через CSS на мобиле             -->
 <!-- ============================================================ -->
-<div class="desktop-shell" x-show="!isMobile">
 
 <!-- HEADER -->
 <header class="jarvis-header">
@@ -3953,9 +3950,8 @@
   </div>
 </template>
 
-</div>
 <!-- ============================================================ -->
-<!-- /DESKTOP shell                                                -->
+<!-- /DESKTOP content                                              -->
 <!-- ============================================================ -->
 
 
