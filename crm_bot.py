@@ -1556,15 +1556,13 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
         return
 
     # ═══════ ЭТАП 7: интеграция с экосистемой PRIDE ═══════
-    # 1) Создаём lk_cards в нашем главном storage.lk_cards
-    #    (та же таблица что Группа 1 ЛК / userbot / дашборд использует)
-    try:
-        lk_card_ids = await _create_lk_cards_from_crm_drop(drop)
-        if lk_card_ids:
-            # Сохраняем связь crm_drop → lk_cards
-            await crm_storage.update_crm_drop(drop_id, lk_card_ids=lk_card_ids)
-    except Exception as e:
-        logger.warning("CRM→lk_cards bridge failed: %s", e)
+    # 1) Карточки lk_cards в Группе 1 НЕ создаём при accept!
+    #    Они создаются АССИСТЕНТОМ / CRM-ботом только после
+    #    «✅ Перевязка выполнена» (per-LK, в cb_smsadv stage=perevyaz_received).
+    # Это позволяет:
+    #    - не плодить «фантомные» карточки до перевязки
+    #    - ассистенту уточнить метод оплаты у клиента и записать его сразу в карточку
+    #    - партнёру не путаться: карточка появляется когда работа реально завершена
 
     # 2) Энкуим команду для userbot → запостит анкеты в Группу 1 ЛК PRIDE
     try:
@@ -2033,15 +2031,17 @@ async def cb_dropproblem(call: CallbackQuery):
 #  perevyaz_received — код пришёл
 #  done            — перевязка финализирована
 
+# Stage = lk.sms_stage. (label_anketa, next_button_label).
+# Если next_button_label = None — кнопки нет (waiting на клиента).
 _SMS_STAGE_LABELS = {
-    "":                  ("⚪ Старт",          "❓ Спросить готовность"),
-    "asking_ready":      ("⏳ Спросили готовность", "✅ Клиент готов"),
-    "client_ready":      ("✅ Клиент готов",   "📩 Дать код входа"),
-    "login_asked":       ("⏳ Ждём код входа от клиента", "✅ Вход успешен"),
-    "login_success":     ("✅ Вход выполнен",  "📩 Дать код перевязки"),
-    "perevyaz_asked":    ("⏳ Ждём код перевязки от клиента", "✅ Перевязка успешна"),
-    "perevyaz_success":  ("✅ Перевязка выполнена", "🏁 Завершить"),
-    "done":              ("🏁 Завершено",      None),
+    "":                ("⚪ Старт",                          "Готовность к СМС"),
+    "ready_asked":     ("⏳ Запросили готовность у клиента", None),
+    "ready_confirmed": ("✅ Клиент готов",                   "Запросить СМС вход"),
+    "login_asked":     ("⏳ Ждём код входа от клиента",      None),
+    "login_received":  ("✅ Код входа получен",              "Запросить перевяз"),
+    "perevyaz_asked":  ("⏳ Ждём код перевязки от клиента",  None),
+    "perevyaz_received":("✅ Код перевязки получен",         "🏁 Завершить"),
+    "done":            ("🏁 Завершено",                      None),
 }
 
 
@@ -2138,10 +2138,25 @@ async def cb_takesmscodedrop(call: CallbackQuery):
     await call.answer("📩 SMS-flow начат")
 
 
+def _client_lk_anketa(drop: dict, lk: dict) -> str:
+    """Анкета ЛК для клиента (банк, ФИО, новый логин/пароль/кодовое — то что
+    клиенту нужно знать для входа). Дед-данные НЕ показываем."""
+    bank = lk.get("bank") or "—"
+    fio = drop.get("fio") if drop else "—"
+    lines = [f"ФИО: <b>{fio}</b>", f"Банк: <b>{bank}</b>"]
+    if lk.get("new_login"):
+        lines.append(f"Логин: <code>{lk.get('new_login')}</code>")
+    if lk.get("new_password"):
+        lines.append(f"Пароль: <code>{lk.get('new_password')}</code>")
+    if lk.get("code_word"):
+        lines.append(f"Кодовое слово: <code>{lk.get('code_word')}</code>")
+    return "\n".join(lines)
+
+
 @router.callback_query(F.data.startswith("smsadv:"))
 async def cb_smsadv(call: CallbackQuery, state: FSMContext):
-    """Продвинуть SMS-flow на следующую стадию. Коды клиент пишет сам в свой
-    work_chat, менеджер ТОЛЬКО подтверждает успешность кнопкой."""
+    """Менеджер прокликивает SMS-flow в админ-чате. Коды клиент сам жмёт
+    кнопку и вводит в своём work_chat."""
     droplk_id = call.data.split(":", 1)[1]
     lk = crm_storage.get_crm_drop_lk(droplk_id)
     if not lk:
@@ -2152,58 +2167,158 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
     bot = call.message.bot
     stage = lk.get("sms_stage") or ""
     bank = lk.get("bank") or "—"
+    anketa = _client_lk_anketa(drop, lk)
 
     if stage == "":
-        # Спрашиваем готовность у клиента
-        await _send_to_client_chat(
-            bot, drop, owner,
-            f"Готовы дать код для входа в ЛК <b>{bank}</b>?",
+        # Шаг 1: менеджер запросил готовность → клиенту в чат
+        text = (
+            "📩 <b>Запрос СМС-кода для перепривязки</b>\n\n"
+            f"{anketa}\n\n"
+            "<b>Готовы дать код?</b>"
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="asking_ready")
-        await call.answer("✅ Спросили клиента")
-    elif stage == "asking_ready":
-        # Менеджер подтверждает что клиент согласен
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="client_ready")
-        await call.answer("✅ Клиент готов")
-    elif stage == "client_ready":
-        # Просим у клиента код входа в его чате
-        await _send_to_client_chat(
-            bot, drop, owner,
-            f"Пришлите <b>код входа в ЛК {bank}</b> следующим сообщением.",
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
+        ]])
+        try:
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="ready_asked")
+            await call.answer("📩 Запрос отправлен клиенту")
+        except Exception as e:
+            await call.answer(f"Ошибка отправки: {e}", show_alert=True)
+
+    elif stage == "ready_confirmed":
+        # Шаг 2: менеджер жмёт «Запросить СМС вход» → клиенту запрос кода
+        text = (
+            "📩 <b>Предоставьте СМС-код для входа</b>\n\n"
+            f"{anketa}\n\n"
+            "<b>Введите СМС-код по кнопке ниже</b>"
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_asked")
-        await call.answer("📩 Клиента попросили код входа")
-    elif stage == "login_asked":
-        # Менеджер видит код в чате клиента, прокликивает «успешный вход»
-        await _send_to_client_chat(
-            bot, drop, owner,
-            f"✅ Вход в ЛК <b>{bank}</b> выполнен успешно.",
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="✏️ Ввести СМС код",
+                callback_data=f"cligivecode:{droplk_id}:login",
+            ),
+        ]])
+        try:
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_asked")
+            await call.answer("📩 Запрошен код входа")
+        except Exception as e:
+            await call.answer(f"Ошибка: {e}", show_alert=True)
+
+    elif stage == "login_received":
+        # Шаг 3: менеджер жмёт «Запросить перевяз» → клиенту запрос кода перевязки
+        text = (
+            "📩 <b>Предоставьте СМС-код для перевязки</b>\n\n"
+            f"{anketa}\n\n"
+            "<b>Введите СМС-код по кнопке ниже</b>"
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_success")
-        await call.answer("✅ Клиента уведомили о входе")
-    elif stage == "login_success":
-        # Просим у клиента код перевязки
-        await _send_to_client_chat(
-            bot, drop, owner,
-            f"Пришлите <b>код перевязки для ЛК {bank}</b> следующим сообщением.",
-        )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_asked")
-        await call.answer("📩 Клиента попросили код перевязки")
-    elif stage == "perevyaz_asked":
-        # Перевязка выполнена — менеджер подтверждает
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="✏️ Ввести СМС код",
+                callback_data=f"cligivecode:{droplk_id}:perevyaz",
+            ),
+        ]])
+        try:
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_asked")
+            await call.answer("📩 Запрошен код перевязки")
+        except Exception as e:
+            await call.answer(f"Ошибка: {e}", show_alert=True)
+
+    elif stage == "perevyaz_received":
+        # Шаг 4: финал — карточка ЛК создаётся ТОЛЬКО ТЕПЕРЬ (после перевязки)
+        card_id = None
+        try:
+            card_id = await _create_single_lk_card(drop, lk, owner)
+        except Exception as e:
+            logger.warning("create lk_card after perevyaz failed: %s", e)
+        # Запоминаем связку
+        if card_id:
+            try:
+                existing = list(drop.get("lk_card_ids") or [])
+                if card_id not in existing:
+                    existing.append(card_id)
+                    await crm_storage.update_crm_drop(
+                        drop["drop_id"], lk_card_ids=existing,
+                    )
+            except Exception:
+                pass
+            # Эмитим userbot пост анкеты в Группу 1 ЛК
+            try:
+                await _queue_anketa_post_via_userbot(drop["drop_id"])
+            except Exception:
+                pass
+        # Уведомление клиенту
         await _send_to_client_chat(
             bot, drop, owner,
             f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
         )
-        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_success")
-        await call.answer("✅ Клиента уведомили о перевязке")
-    elif stage == "perevyaz_success":
-        # Финал
+        # Уведомление в work_chat партнёра — карточка в работе + запрос метода оплаты
+        try:
+            handoff = (
+                f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                f"📋 Карточка: #{card_id or '—'}\n"
+                f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
+                f"<i>Ассистент уточнит у клиента способ оплаты и пропишет в карточке.</i>"
+            )
+            await _notify_work_chat(bot, owner, handoff)
+        except Exception:
+            pass
         await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="done")
-        await call.answer("🏁 SMS-flow завершён")
+        await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
     else:
-        await call.answer()
+        await call.answer("Ждём ответа клиента...")
     await _post_or_update_sms_tracker(bot, droplk_id)
+
+
+@router.callback_query(F.data.startswith("cliready:"))
+async def cb_client_ready(call: CallbackQuery):
+    """Клиент в своём чате нажал «Да, готов»."""
+    droplk_id = call.data.split(":", 1)[1]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="ready_confirmed")
+    await call.answer("✅ Спасибо! Ожидайте.")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    try:
+        await call.message.reply("✅ Готовность подтверждена. Ждите запрос кода.")
+    except Exception:
+        pass
+    await _post_or_update_sms_tracker(call.message.bot, droplk_id)
+
+
+@router.callback_query(F.data.startswith("cligivecode:"))
+async def cb_client_givecode(call: CallbackQuery, state: FSMContext):
+    """Клиент жмёт «Ввести СМС код»."""
+    parts = call.data.split(":")
+    if len(parts) < 3:
+        await call.answer()
+        return
+    droplk_id, sms_kind = parts[1], parts[2]
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    await state.set_state(SMSForm.waiting_code)
+    await state.update_data(droplk_id=droplk_id, sms_kind=sms_kind)
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    try:
+        await call.message.reply(
+            "📩 <b>Пришлите СМС-код следующим сообщением</b>\n"
+            "<i>(только цифры)</i>"
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("smsreset:"))
@@ -2238,6 +2353,7 @@ async def cb_givemecode(call: CallbackQuery, state: FSMContext):
 
 @router.message(SMSForm.waiting_code, F.text & ~F.text.startswith("/"))
 async def handle_sms_code(message: Message, state: FSMContext):
+    """Клиент пишет код в своём work_chat — отправляется в админ-чат CRM."""
     data = await state.get_data()
     code = (message.text or "").strip()
     droplk_id = data.get("droplk_id")
@@ -2251,25 +2367,60 @@ async def handle_sms_code(message: Message, state: FSMContext):
         return
     drop = crm_storage.get_crm_drop(lk.get("drop_id"))
     await crm_storage.append_crm_sms(droplk_id, code=code)
-    # По типу записываем в соответствующее поле + переключаем stage
+    # Записываем в нужное поле + переключаем stage
     if sms_kind == "perevyaz":
         await crm_storage.update_crm_drop_lk(
-            droplk_id,
-            sms_perevyaz_code=code,
+            droplk_id, sms_perevyaz_code=code,
             sms_stage="perevyaz_received",
         )
     else:
         await crm_storage.update_crm_drop_lk(
-            droplk_id,
-            sms_login_code=code,
+            droplk_id, sms_login_code=code,
             sms_stage="login_received",
         )
     await state.clear()
+    # Удаляем сообщение клиента с кодом (чтоб не светилось в истории)
     try:
         await message.delete()
     except Exception:
         pass
+    # Подтверждение в чат клиента
+    try:
+        await message.bot.send_message(
+            message.chat.id,
+            f"✅ Код <b>{code}</b> отправлен на обработку. Ожидайте.",
+        )
+    except Exception:
+        pass
+    # Уведомление в админ-чат CRM с кодом
+    bank = lk.get("bank") or "—"
+    fio = drop.get("fio") if drop else "—"
+    kind_label = "перевязки" if sms_kind == "perevyaz" else "входа"
+    try:
+        admin_chat = await get_admin_chat_resolved(message.bot)
+        if admin_chat:
+            await message.bot.send_message(
+                admin_chat,
+                f"📩 <b>СМС-код для {kind_label}</b>\n\n"
+                f"ФИО: <b>{fio}</b>\nБанк: <b>{bank}</b>\n\n"
+                f"<b>Код:</b> <code>{code}</code>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="❌ Закрыть", callback_data="smsmsgclose"),
+                ]]),
+            )
+    except Exception as e:
+        logger.warning("admin sms notify failed: %s", e)
+    # Обновляем кнопки в анкете дропа
     await _post_or_update_sms_tracker(message.bot, droplk_id)
+
+
+@router.callback_query(F.data == "smsmsgclose")
+async def cb_smsmsgclose(call: CallbackQuery):
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.answer()
     # Обновляем сообщение в admin-чате
     admin_chat = get_admin_chat_id()
     if drop and admin_chat and drop.get("admin_msg_id"):
@@ -2369,12 +2520,49 @@ def _emit_crm_event(event_type: str, payload: dict, severity: str = "info") -> N
         logger.debug("emit_crm_event failed: %s", e)
 
 
+async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = None) -> Optional[str]:
+    """Создаёт ОДНУ карточку lk_card для конкретного ЛК (вызывается только
+    после успешной перевязки этого ЛК). Возвращает card_id или None."""
+    if not lk:
+        return None
+    if owner is None:
+        owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+    pricing = crm_storage.state.get("pricing") or {}
+    bank = (lk.get("bank") or "").upper()
+    price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
+    try:
+        card_id = await crm_storage.add_lk_card(
+            bank=bank,
+            fio=drop.get("fio") or "",
+            supplier=owner.get("username") or "",
+            price_usdt=price,
+            payment_method="",  # ассистент впишет после уточнения у клиента
+            status="В_РАБОТЕ",
+            work_chat_id=owner.get("work_chat_id") or 0,
+            client_username=owner.get("username") or "",
+            created_by="crm_bot:after_perevyaz",
+            deal_id=lk.get("deal") or "",
+        )
+        logger.info(
+            "post-perevyaz lk_card: drop=%s crm_lk=%s → lk_card=%s",
+            drop.get("drop_id"), lk.get("droplk_id"), card_id,
+        )
+        return card_id
+    except Exception as e:
+        logger.warning("create single lk_card failed: %s", e)
+        return None
+
+
 async def _create_lk_cards_from_crm_drop(drop: dict) -> list:
     """Создаёт записи в storage.lk_cards для каждого CRM ЛК этого дропа.
     Возвращает list created lk_card_ids.
 
     Это та же таблица lk_cards что использует userbot/web/группа 1 ЛК PRIDE.
-    Связь сохраняется в crm_drops[d].lk_card_ids."""
+    Связь сохраняется в crm_drops[d].lk_card_ids.
+
+    ⚠️ DEPRECATED: эта функция оставлена для обратной совместимости и для
+    миграции уже принятых дропов. В НОВОМ flow карточки создаются
+    ПЕР-ЛК через _create_single_lk_card() только после перевязки."""
     lks = crm_storage.list_crm_drop_lks(drop_id=drop["drop_id"])
     if not lks:
         return []
@@ -3238,12 +3426,13 @@ async def _load_simba_emoji_pack(bot) -> None:
                 continue
             result.append({"emoji": emoji, "document_id": str(doc_id)})
         _simba_emoji_cache = result
+
         logger.info(
             "SimbaBySnep loaded: %d positive emoji (filtered %d negative)",
             len(result), skipped,
         )
     except Exception as e:
-        logger.warning("SimbaBySnep load failed (fallback to plain): %s", e)
+        logger.warning("SimbaBySnep load failed: %s", e)
         _simba_emoji_cache = []
 
 
@@ -3255,12 +3444,8 @@ def _pick_simba() -> dict:
 
 
 def _decor(text: str) -> str:
-    """Префиксует текст ОДНИМ premium-эмодзи через <tg-emoji>.
-    Если в начале текста уже есть эмодзи (✅ 📈 💰 и т.п.) — НЕ добавляем
-    второй чтоб не было «гирлянды»."""
     if not text:
         return text
-    # Если первый символ — уже эмодзи или знак статуса, не префигурируем
     first = text.lstrip()[:2]
     if first and any(ord(c) > 0x2600 for c in first):
         return text
@@ -3273,59 +3458,44 @@ def _decor(text: str) -> str:
     return tag + " " + text
 
 
-# ════════════════════════════════════════════════════════════════
-# ENTRYPOINT — вызывается из bot.py как asyncio.create_task()
-# ════════════════════════════════════════════════════════════════
+# === ENTRYPOINT ===
 
 async def run_crm_bot():
-    """Главный entrypoint CRM-бота. Используется из bot.py."""
     if not CRM_BOT_TOKEN:
-        logger.warning("CRM bot: токен не задан, не запускаем.")
+        logger.warning("CRM bot token not set")
         return
-
     logger.info(
         "CRM bot init. Owners=%d Drops=%d LK=%d",
         len(crm_storage.list_crm_owners()),
         len(crm_storage.list_crm_drops()),
         len(crm_storage.list_crm_drop_lks()),
     )
-
     bot = Bot(
         token=CRM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-
-
     try:
         me = await bot.get_me()
-        logger.info("✅ CRM bot online: @%s (id=%s)", me.username, me.id)
+        logger.info("CRM bot online: @%s (id=%s)", me.username, me.id)
     except Exception as e:
-        logger.error("CRM bot getMe failed: %s", e)
+        logger.error("getMe failed: %s", e)
         await bot.session.close()
         return
-
-    # Загружаем SimbaBySnep premium-эмодзи (best-effort)
     try:
         await _load_simba_emoji_pack(bot)
-    except Exception as e:
-        logger.debug("simba pack load skipped: %s", e)
-
+    except Exception:
+        pass
     reminder_task = None
     try:
         reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
-        logger.info(
-            "CRM payment reminder loop started (every %ds, threshold %dd)",
-            _PAYMENT_LOOP_INTERVAL, PAYMENT_REMINDER_DAYS,
-        )
     except Exception as e:
-        logger.warning("CRM reminder loop start failed: %s", e)
-
+        logger.warning("reminder start failed: %s", e)
     try:
         await dp.start_polling(bot, polling_timeout=30)
     except Exception as e:
-        logger.error("CRM bot polling crashed: %s", e)
+        logger.error("polling crashed: %s", e)
     finally:
         if reminder_task and not reminder_task.done():
             reminder_task.cancel()
@@ -3336,10 +3506,7 @@ async def run_crm_bot():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     async def _standalone():
         await crm_storage.load()
         await run_crm_bot()
