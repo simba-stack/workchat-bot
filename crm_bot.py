@@ -96,8 +96,8 @@ EPHEMERAL_TTL = 5
 # ID групп — захардкожены по запросу владельца.
 # Чтобы переопределить — установи env CRM_ADMIN_CHAT_ID / CRM_PASSWORD_CHAT_ID.
 # Бот должен быть В этих группах + админ.
-HARDCODED_ADMIN_CHAT_ID = -1003390329578     # «Доступы» — приёмка дропов
-HARDCODED_PASSWORD_CHAT_ID = -1005217307307  # «Пароли» — RDP + новые пароли
+HARDCODED_ADMIN_CHAT_ID = -1003852131311     # «Доступы» PRIDE — приёмка дропов
+HARDCODED_PASSWORD_CHAT_ID = -1003788743917  # «Пароли» PRIDE — RDP + новые пароли
 
 
 def get_admin_chat_id() -> int:
