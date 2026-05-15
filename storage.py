@@ -1367,6 +1367,20 @@ class Storage:
         async with _lock:
             qs = self._payouts_state()
             arr = qs.setdefault(queue, [])
+            cid = item.get("card_id")
+            # Дедуп: если в этой очереди уже есть запись на этот card_id —
+            # МЕРЖИМ поля, не создаём новую. Это спасает от дублей при
+            # повторном изменении статуса / срабатывании бэкфилла.
+            if cid:
+                for existing in arr:
+                    if existing.get("card_id") == cid:
+                        for k, v in item.items():
+                            if v in (None, "", 0):
+                                continue
+                            existing[k] = v
+                        existing.setdefault("status", "pending")
+                        await self._save_unlocked()
+                        return existing.get("id") or 0
             new_id = (max((i.get("id") or 0) for i in arr) + 1) if arr else 1
             item = dict(item)
             item["id"] = new_id
@@ -1375,6 +1389,38 @@ class Storage:
             arr.append(item)
             await self._save_unlocked()
             return new_id
+
+    async def dedupe_payouts(self) -> int:
+        """Одноразовая чистка дублей по card_id в каждой очереди.
+        Оставляет первую запись, мержит остальные в неё. Возвращает кол-во удалённых."""
+        async with _lock:
+            qs = self._payouts_state()
+            removed = 0
+            for qname in ("release", "fund_release", "usdt"):
+                arr = qs.get(qname) or []
+                seen = {}  # card_id -> kept item
+                new_arr = []
+                for item in arr:
+                    cid = item.get("card_id")
+                    if not cid:
+                        new_arr.append(item)
+                        continue
+                    if cid in seen:
+                        # мержим в первого — берём непустые поля
+                        kept = seen[cid]
+                        for k, v in item.items():
+                            if v in (None, "", 0):
+                                continue
+                            if kept.get(k) in (None, "", 0):
+                                kept[k] = v
+                        removed += 1
+                    else:
+                        seen[cid] = item
+                        new_arr.append(item)
+                qs[qname] = new_arr
+            if removed > 0:
+                await self._save_unlocked()
+            return removed
 
     async def update_payout(self, queue: str, payout_id: int, **fields) -> bool:
         async with _lock:

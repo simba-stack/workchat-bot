@@ -55,6 +55,13 @@ async def _backfill_payouts_on_startup():
     Идемпотентно — пропускаем если карточка уже в какой-то очереди."""
     try:
         storage.reload_sync()
+        # Шаг 0: чистка дублей в очередях (если из-за прошлых багов их там накопилось)
+        try:
+            removed = await storage.dedupe_payouts()
+            if removed:
+                logger.info("[startup-backfill] deduped %d duplicate payout entries", removed)
+        except Exception as e:
+            logger.warning("startup dedupe error: %s", e)
         cards = storage.list_lk_cards() or {}
         added = 0
         for cid, card in cards.items():
@@ -1994,6 +2001,8 @@ async def api_payouts_released(req: Request, _: None = Depends(_auth)):
 @app.post("/api/payouts/set_deal_id")
 async def api_payouts_set_deal_id(req: Request, _: None = Depends(_auth)):
     """Менеджер ввёл номер сделки от клиента в fund_release очередь.
+    Также синхронизирует deal_id на саму карточку ЛК (чтобы анкета в TG-группе
+    тоже отразила номер сделки).
     body: {payout_id, deal_id}"""
     data = await req.json()
     payout_id = int(data.get("payout_id") or 0)
@@ -2003,6 +2012,19 @@ async def api_payouts_set_deal_id(req: Request, _: None = Depends(_auth)):
     ok = await storage.update_payout("fund_release", payout_id, deal_id=deal_id)
     if not ok:
         raise HTTPException(404, "payout not found")
+    # Найдём card_id из этой записи и обновим саму карточку
+    try:
+        arr = (storage._payouts_state().get("fund_release") or [])
+        item = next((i for i in arr if int(i.get("id") or 0) == payout_id), None)
+        if item and item.get("card_id"):
+            await storage.update_lk_card(item["card_id"], deal_id=deal_id)
+            # Запросим userbot обновить анкету в TG-группе ЛК
+            await storage.enqueue_dashboard_command(
+                f"__sync_lk_card {item['card_id']}",
+                source="dashboard-set-deal-id",
+            )
+    except Exception as e:
+        logger.warning("set_deal_id: card update failed: %s", e)
     return {"ok": True, "payout_id": payout_id, "deal_id": deal_id}
 
 

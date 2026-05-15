@@ -3080,29 +3080,26 @@
             <span x-text="p.fio"></span>
             <span style="color: #2a9d8f; font-weight: bold;" x-text="p.amount_usdt + '$'"></span>
           </div>
-          <!-- Шаг 1: если нет deal_id — ввести номер сделки от клиента -->
-          <div x-show="!p.deal_id" style="margin-top: 8px; display: flex; gap: 6px;">
-            <input type="text" placeholder="Номер сделки от клиента"
-                   x-model="payoutDraftDealId[p.id]"
-                   style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
-            <button class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 14px;">📝 Сохранить</button>
-          </div>
-          <!-- Шаг 2: есть deal_id, но ещё не пополнено — ввести сумму и нажать «Пополнено» -->
-          <div x-show="p.deal_id && !p.funded_amount" style="margin-top: 8px;">
-            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Сделка <b x-text="'#' + p.deal_id"></b></div>
-            <div style="display: flex; gap: 6px;">
-              <input type="number" placeholder="Сумма пополнения (USDT)"
-                     x-model="payoutDraftAmount[p.deal_id]"
-                     style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
-              <button class="btn" @click="payoutMarkFunded(p.deal_id)" style="padding: 6px 14px;">🤝 Пополнено</button>
+          <!-- Если deal_id ещё не пришёл от клиента — показываем подсказку (НЕ инпут).
+               AI сам выклянчит номер у клиента и поставит deal_id на карточку,
+               после чего карточка появится здесь уже с готовой кнопкой. -->
+          <div x-show="!p.deal_id" style="margin-top: 8px; font-size: 12px; color: var(--text-dim); font-style: italic;">
+            ⏳ Ждём номер сделки от клиента — AI попросит автоматически в его work_chat.
+            <div style="margin-top: 6px; display: flex; gap: 6px;">
+              <input type="text" placeholder="…или введи номер вручную (если клиент скинул в чат)"
+                     x-model="payoutDraftDealId[p.id]"
+                     style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-size: 12px;">
+              <button class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 10px; font-size: 11px;">Сохранить</button>
             </div>
           </div>
-          <!-- Шаг 3: сделка пополнена → кнопка «Отпустить» (закрытие выплаты, уведомление клиента) -->
-          <div x-show="p.deal_id && p.funded_amount" style="margin-top: 8px;">
-            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">
-              Сделка <b x-text="'#' + p.deal_id"></b> · пополнена на <b x-text="(p.funded_amount || 0) + ' USDT'"></b>
+          <!-- Готовая форма: deal_id есть, сумма известна (price_usdt = amount_usdt) → один клик «Подтвердить отпуск» -->
+          <div x-show="p.deal_id" style="margin-top: 8px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
+              📋 Сделка <b style="color: var(--hud-primary)" x-text="'#' + p.deal_id"></b>
+              · сумма <b x-text="(p.amount_usdt || 0) + ' USDT'"></b>
+              · всё готово к выплате
             </div>
-            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 6px 14px;">✅ Отпустить сделку</button>
+            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 8px 18px; font-weight: 700;">✅ ПОДТВЕРДИТЬ ОТПУСК</button>
           </div>
         </div>
       </template>

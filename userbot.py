@@ -1815,12 +1815,25 @@ class UserbotService:
                         continue
                     if c.get("payment_method") != "GUARANTOR_AFTER_WORK":
                         continue
-                    if c.get("status") != "ОТРАБОТАН":
+                    if c.get("status") not in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ"):
                         continue
-                    await storage.set_lk_card_status(
-                        cid, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
-                        deal_id=deal_id, by="record_deal",
-                    )
+                    # Карточка остаётся в статусе ОТРАБОТАН, обновляем только deal_id —
+                    # дашборд по факту наличия deal_id покажет «Подтвердить отпуск».
+                    await storage.update_lk_card(cid, deal_id=deal_id)
+                    # Обновляем deal_id в существующей записи fund_release очереди.
+                    # storage.add_payout с дедупом сам мержит, можно звать смело.
+                    try:
+                        await storage.add_payout("fund_release", {
+                            "card_id": cid,
+                            "bank": c.get("bank") or "",
+                            "fio": c.get("fio") or "",
+                            "supplier": c.get("supplier") or "",
+                            "work_chat_id": c.get("work_chat_id") or 0,
+                            "amount_usdt": float(c.get("price_usdt") or 0),
+                            "deal_id": deal_id,
+                        })
+                    except Exception as e:
+                        logger.warning("record_deal: payout upsert failed: %s", e)
                     await self._refresh_lk_card_post(cid)
                     await self._post_action_reply_to_lk_card(cid)
                     moved_card_id = cid
@@ -3652,23 +3665,33 @@ class UserbotService:
             card_id, field, update.get(field), event.sender_id,
         )
 
-        # Спец-логика: задан deal_id для ОТРАБОТАН + GUARANTOR_AFTER_WORK
-        # → автоматически переводим в ПОПОЛНИТЬ_И_ОТПУСТИТЬ.
+        # Спец-логика: задан deal_id для ОТРАБОТАН + GUARANTOR_AFTER_WORK →
+        # апдейтим payout-запись в очереди fund_release (storage.add_payout с дедупом
+        # сам мержит — если запись есть, обновит deal_id; если нет — создаст).
+        # Статус НЕ меняем на ПОПОЛНИТЬ_И_ОТПУСТИТЬ (это просто алиас) — оставляем ОТРАБОТАН.
         if field == "deal_id" and update["deal_id"]:
             try:
                 card = storage.get_lk_card(card_id) or {}
-                if (card.get("status") == "ОТРАБОТАН"
+                if (card.get("status") in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ")
                         and (card.get("payment_method") or "").upper()
                             == "GUARANTOR_AFTER_WORK"):
-                    await storage.set_lk_card_status(
-                        card_id, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
-                        by="manual_edit_deal_id",
-                    )
+                    try:
+                        await storage.add_payout("fund_release", {
+                            "card_id": card_id,
+                            "bank": card.get("bank") or "",
+                            "fio": card.get("fio") or "",
+                            "supplier": card.get("supplier") or "",
+                            "work_chat_id": card.get("work_chat_id") or 0,
+                            "amount_usdt": float(card.get("price_usdt") or 0),
+                            "deal_id": update["deal_id"],
+                        })
+                    except Exception as e:
+                        logger.warning("payout upsert (manual deal_id): %s", e)
                     await self._refresh_lk_card_post(card_id)
                     await self._post_action_reply_to_lk_card(card_id)
             except Exception as e:
                 logger.warning(
-                    "auto status change after deal_id edit failed: %s", e,
+                    "auto payout upsert after deal_id edit failed: %s", e,
                 )
 
         # Спец-логика: задан usdt_address для ОТРАБОТАН + USDT_TRC20 →
