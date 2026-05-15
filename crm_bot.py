@@ -3820,10 +3820,16 @@ async def run_crm_bot():
         pass
     reminder_task = None
     payout_task = None
-    try:
-        reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
-    except Exception as e:
-        logger.warning("reminder start failed: %s", e)
+    # Payment-due reminders ОТКЛЮЧЕНЫ по умолчанию. Чтобы включить —
+    # выставь env CRM_REMINDERS_ENABLED=1.
+    if os.getenv("CRM_REMINDERS_ENABLED", "0").lower() in ("1", "true", "yes", "on"):
+        try:
+            reminder_task = asyncio.create_task(_payment_reminder_loop(bot))
+            logger.info("CRM payment reminders ENABLED")
+        except Exception as e:
+            logger.warning("reminder start failed: %s", e)
+    else:
+        logger.info("CRM payment reminders DISABLED (env CRM_REMINDERS_ENABLED unset)")
     try:
         payout_task = asyncio.create_task(_payout_buttons_loop(bot))
         logger.info("CRM payout buttons loop started")
@@ -3980,6 +3986,7 @@ async def cmd_ideas_done(message: Message):
     if len(parts) < 2 or not parts[1].isdigit():
         await message.reply("Использование: <code>/ideas_done N</code>")
         return
+    idea_id = int(parts[1])
     idea_id = int(parts[1])
     ok = await crm_storage.mark_idea_resolved(idea_id, resolved=True)
     if ok:
