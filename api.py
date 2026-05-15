@@ -64,6 +64,9 @@ _HARDCODED_TG_ADMINS = {
     397572312,    # admin
     5830088389,   # admin (added 2026-05-14)
     8328099603,   # admin (added 2026-05-14)
+    7552445074,   # admin (added 2026-05-15)
+    8232753590,   # admin (added 2026-05-15)
+    8548697416,   # admin (added 2026-05-15)
 }
 TG_ADMINS |= _HARDCODED_TG_ADMINS
 # Username бота (без @) — нужен для Telegram Login Widget.
