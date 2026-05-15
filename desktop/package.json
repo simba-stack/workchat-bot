@@ -1,7 +1,7 @@
 {
   "name": "pride-jarvis",
   "productName": "PRIDE J.A.R.V.I.S.",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Desktop клиент для PRIDE CRM/Outreach (Electron-обёртка над workchat-bot)",
   "main": "main.js",
   "scripts": {

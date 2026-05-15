@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>PRIDE J.A.R.V.I.S.</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    user-select: none;
+    -webkit-app-region: drag; /* окно можно таскать за splash */
+  }
+  .wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+    gap: 28px;
+  }
+  /* Чёрный пульсирующий квадрат */
+  .pulse {
+    width: 96px;
+    height: 96px;
+    background: #000;
+    border-radius: 14px;
+    box-shadow:
+      0 0 0 0 rgba(0, 229, 255, 0.7),
+      0 12px 36px rgba(0, 0, 0, 0.55),
+      inset 0 0 24px rgba(0, 229, 255, 0.05);
+    animation: pulse 1.4s ease-in-out infinite;
+    position: relative;
+  }
+  .pulse::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #050a14 0%, #000 50%, #050a14 100%);
+  }
+  .pulse::after {
+    content: "P";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ff8c00;
+    font: 700 56px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-shadow: 0 0 18px rgba(255, 140, 0, 0.55);
+    animation: textFade 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% {
+      transform: scale(0.92);
+      box-shadow:
+        0 0 0 0 rgba(0, 229, 255, 0.6),
+        0 12px 36px rgba(0, 0, 0, 0.55),
+        inset 0 0 24px rgba(0, 229, 255, 0.05);
+    }
+    50% {
+      transform: scale(1.08);
+      box-shadow:
+        0 0 0 22px rgba(0, 229, 255, 0),
+        0 18px 56px rgba(0, 229, 255, 0.18),
+        inset 0 0 32px rgba(0, 229, 255, 0.12);
+    }
+  }
+  @keyframes textFade {
+    0%, 100% { opacity: 0.85; }
+    50%      { opacity: 1; }
+  }
+  .label {
+    color: #cfd8e3;
+    font: 600 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    opacity: 0.7;
+    animation: labelFade 2.2s ease-in-out infinite;
+  }
+  @keyframes labelFade {
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 0.95; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="pulse"></div>
+    <div class="label">PRIDE · J.A.R.V.I.S.</div>
+  </div>
+</body>
+</html>

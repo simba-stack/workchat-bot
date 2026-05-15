@@ -16,11 +16,20 @@ const path = require("path");
 const log = require("electron-log");
 const { autoUpdater } = require("electron-updater");
 
+// === Squirrel installer hooks ===
+// ВАЖНО: должно сработать ДО любых других app.on / globalShortcut вызовов.
+// При --squirrel-install / --squirrel-firstrun / --squirrel-updated / --squirrel-uninstall
+// модуль вызывает app.quit() и возвращает true — в этом случае выходим немедленно.
+if (require("electron-squirrel-startup")) {
+  app.quit();
+  process.exit(0);
+}
+
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
-  return;
+  process.exit(0);
 }
 
 // === Logging ===
@@ -33,9 +42,41 @@ const DASHBOARD_URL = process.env.PRIDE_URL ||
   "https://workchat-bot-production.up.railway.app/";
 
 let mainWindow = null;
+let splashWindow = null;
 let tray = null;
 let isQuitting = false;
 let updateState = { status: "idle", percent: 0, version: null };
+
+function createSplash() {
+  splashWindow = new BrowserWindow({
+    width: 320,
+    height: 320,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    movable: true,
+    skipTaskbar: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  splashWindow.loadFile(path.join(__dirname, "splash.html"));
+  splashWindow.once("ready-to-show", () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+}
+
+function destroySplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    try { splashWindow.close(); } catch (e) { /* silent */ }
+  }
+  splashWindow = null;
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -47,6 +88,7 @@ function createMainWindow() {
     icon: path.join(__dirname, "icon.png"),
     backgroundColor: "#0a0e1a",
     autoHideMenuBar: true,
+    show: false, // покажем только после did-finish-load (когда дашборд загрузился)
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -56,6 +98,19 @@ function createMainWindow() {
   });
 
   mainWindow.loadURL(DASHBOARD_URL);
+
+  // Когда дашборд полностью загрузился — закрыть splash и показать главное окно
+  const revealMain = () => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    destroySplash();
+  };
+  mainWindow.webContents.once("did-finish-load", revealMain);
+  mainWindow.webContents.once("did-fail-load", revealMain);
+  // Аварийный fallback: если за 15 секунд ничего не загрузилось — всё равно показать
+  setTimeout(revealMain, 15_000);
 
   mainWindow.on("close", (event) => {
     if (!isQuitting) {
@@ -246,6 +301,7 @@ autoUpdater.on("error", (err) => {
 
 // === Lifecycle ===
 app.whenReady().then(() => {
+  createSplash();
   createMainWindow();
   createTray();
 
@@ -282,7 +338,16 @@ app.on("activate", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
-  globalShortcut.unregisterAll();
+  // globalShortcut можно дёргать только если app был ready.
+  // app.isReady() добавлен в Electron 5+.
+  if (app.isReady()) {
+    try { globalShortcut.unregisterAll(); } catch (e) { log.error("unregisterAll:", e); }
+  }
 });
 
-if (require("electron-squirrel-startup")) app.quit();
+// will-quit отрабатывает позже before-quit и тоже может вызваться до ready
+app.on("will-quit", () => {
+  if (app.isReady()) {
+    try { globalShortcut.unregisterAll(); } catch (e) { /* silent */ }
+  }
+});
