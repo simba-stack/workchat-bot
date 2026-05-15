@@ -573,6 +573,13 @@ async def logout():
     return resp
 
 
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root(
     request: Request,
@@ -584,8 +591,11 @@ async def root(
     _check_auth(request, credentials)
     # UA-детект: телефон → мобильный дашборд
     if _is_mobile_ua(request) and _JARVIS_MOBILE_PATH.exists():
-        return HTMLResponse(_JARVIS_MOBILE_PATH.read_text(encoding="utf-8"))
-    return HTMLResponse(_load_html(DASHBOARD_DEFAULT))
+        return HTMLResponse(
+            _JARVIS_MOBILE_PATH.read_text(encoding="utf-8"),
+            headers=_NO_CACHE_HEADERS,
+        )
+    return HTMLResponse(_load_html(DASHBOARD_DEFAULT), headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/mobile", response_class=HTMLResponse)
@@ -2510,44 +2520,18 @@ async def control_lk_status(
             detail=f"new_status must be one of {sorted(allowed)}",
         )
 
-    # ПОПОЛНИТЬ_И_ОТПУСТИТЬ — это не отдельный статус карточки, а шорткат:
-    # эквивалент «ОТРАБОТАН + payment_method=GUARANTOR_AFTER_WORK + положить в очередь fund_release».
-    # Сохраняем статус как ОТРАБОТАН, выставляем метод оплаты и добавляем в очередь руками
-    # (userbot тоже сделает свою работу, но безопаснее задублировать чтобы не зависеть от его аптайма).
-    enqueue_fund_release = False
+    # ВАЖНО: payment_method НИКОГДА не меняется при смене статуса.
+    # Метод оплаты фиксируется один раз клиентом (через AI-tool set_payment_method)
+    # и далее НЕИЗМЕНЕН до конца жизни карточки, иначе бы AI и notify_status
+    # рассылали клиенту противоречивую инфу (то «выплата на TRC20», то «создайте сделку»).
+    # Алиас-статус ПОПОЛНИТЬ_И_ОТПУСТИТЬ просто переводим в ОТРАБОТАН — userbot
+    # _notify_client_status_change сам по payment_method карточки положит в нужную очередь.
     if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
-        enqueue_fund_release = True
         new_status = "ОТРАБОТАН"
-        # Зафиксируем метод оплаты на карточке (если ещё не задан или другой)
-        try:
-            await storage.update_lk_card(card_id, payment_method="GUARANTOR_AFTER_WORK")
-        except Exception as e:
-            logger.warning("update payment_method on shortcut failed: %s", e)
 
     ok = await storage.set_lk_card_status(card_id, new_status, by="dashboard")
     if not ok:
         raise HTTPException(status_code=404, detail="card not found")
-
-    # Если был шорткат — затолкаем карточку в очередь fund_release прямо здесь,
-    # чтобы пользователь сразу увидел её в разделе Выплаты.
-    if enqueue_fund_release:
-        try:
-            cards = storage.list_lk_cards() or {}
-            card = cards.get(card_id)
-            if card:
-                existing = storage.find_payout_by_card(card_id, queue="fund_release")
-                if not existing:
-                    await storage.add_payout("fund_release", {
-                        "card_id": card_id,
-                        "bank": card.get("bank") or "",
-                        "fio": card.get("fio") or "",
-                        "supplier": card.get("supplier") or "",
-                        "work_chat_id": card.get("work_chat_id") or 0,
-                        "amount_usdt": float(card.get("price_usdt") or 0),
-                        "deal_id": card.get("deal_id") or "",
-                    })
-        except Exception as e:
-            logger.warning("dashboard shortcut add_payout(fund_release) failed: %s", e)
 
     try:
         event_bus.emit_event(
