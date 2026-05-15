@@ -2251,6 +2251,7 @@
       <span x-text="'AI ' + (state.stats.ai_enabled ? 'ON' : 'OFF')"></span>
     </div>
     <div class="stat-pill" @click="goToView('office')" :class="currentView === 'office' ? 'active' : ''" title="Главная">🏢</div>
+    <div class="stat-pill" @click="downloadDesktop()" title="Скачать desktop-приложение" style="cursor: pointer;">📥 DESKTOP</div>
     <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
     <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 ВЫХОД</div>
     <div class="stat-pill"><span x-text="clockText"></span></div>
@@ -6046,6 +6047,11 @@ function jarvis() {
 
     // === CRM (Партнёры) ===
     // === Payouts ===
+    downloadDesktop() {
+      // Открываем страницу скачивания /desktop — там автодетект ОС
+      window.open("/desktop", "_blank");
+    },
+
     async refreshPayouts() {
       this.payoutLoading = true;
       try {

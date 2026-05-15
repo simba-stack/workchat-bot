@@ -550,6 +550,160 @@ async def jarvis_dashboard(
     return HTMLResponse(_load_html("jarvis"))
 
 
+# === Desktop app download page ===
+
+_DESKTOP_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>PRIDE J.A.R.V.I.S. Desktop</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    background: radial-gradient(ellipse at top, #0a1a2c 0%, #050810 80%);
+    color: #e0e8f0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 40px 20px;
+  }
+  .card {
+    max-width: 540px; width: 100%;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(0,229,255,0.2);
+    border-radius: 16px;
+    padding: 40px;
+    box-shadow: 0 0 60px rgba(0,229,255,0.1);
+  }
+  h1 {
+    margin: 0 0 8px 0; font-size: 26px; letter-spacing: 1px;
+    color: #00e5ff;
+  }
+  .sub { color: #8898a8; font-size: 13px; margin-bottom: 24px; }
+  .platforms {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-bottom: 20px;
+  }
+  .platform {
+    padding: 16px;
+    background: rgba(0,229,255,0.05);
+    border: 1px solid rgba(0,229,255,0.2);
+    border-radius: 10px;
+    text-decoration: none; color: inherit;
+    display: flex; flex-direction: column;
+    transition: all 0.2s;
+  }
+  .platform:hover {
+    background: rgba(0,229,255,0.1);
+    border-color: #00e5ff;
+    transform: translateY(-2px);
+  }
+  .platform .icon { font-size: 32px; margin-bottom: 8px; }
+  .platform .name { font-weight: 700; font-size: 14px; }
+  .platform .size { font-size: 11px; color: #8898a8; margin-top: 4px; }
+  .platform.recommended {
+    border-color: #00e5ff;
+    background: rgba(0,229,255,0.12);
+    grid-column: 1 / -1;
+  }
+  .platform.recommended .icon { font-size: 40px; }
+  .features {
+    list-style: none; padding: 0; margin: 0 0 20px 0;
+    color: #aab;
+    font-size: 13px;
+  }
+  .features li { padding: 4px 0; }
+  .features li::before { content: "✓ "; color: #00e5ff; }
+  .footer {
+    margin-top: 24px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 11px; color: #56657a; text-align: center;
+  }
+  .footer a { color: #5aa0c8; }
+  .version { font-family: monospace; }
+  .loading { color: #aaa; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🦁 PRIDE J.A.R.V.I.S.</h1>
+  <div class="sub">Desktop клиент · <span id="ver" class="version loading">загружаю версию...</span></div>
+
+  <ul class="features">
+    <li>Native окно без браузерной строки</li>
+    <li>Иконка в трее с быстрым доступом</li>
+    <li>Native push-уведомления о новых клиентах / выплатах / блоках</li>
+    <li>Hotkey Ctrl+Shift+J — показать/скрыть</li>
+    <li>Авто-обновления через GitHub Releases</li>
+  </ul>
+
+  <div class="platforms" id="platforms">
+    <div class="loading" style="grid-column: 1/-1; text-align: center; padding: 30px;">⏳ Получаю ссылки с GitHub Releases...</div>
+  </div>
+
+  <div class="footer">
+    Сборки на <a href="https://github.com/simba-stack/workchat-bot/releases/latest" target="_blank">GitHub Releases</a> ·
+    Auto-update встроен · v1.0.0+
+  </div>
+</div>
+
+<script>
+  // Подгружаем последний релиз с GitHub
+  fetch("https://api.github.com/repos/simba-stack/workchat-bot/releases/latest")
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(release => {
+      document.getElementById("ver").textContent = "версия " + release.tag_name;
+      document.getElementById("ver").classList.remove("loading");
+      const platforms = document.getElementById("platforms");
+      platforms.innerHTML = "";
+      const assets = release.assets || [];
+      const win = assets.find(a => /\\.exe$/i.test(a.name));
+      const mac = assets.find(a => /\\.dmg$/i.test(a.name));
+      const deb = assets.find(a => /\\.deb$/i.test(a.name));
+      // Определяем текущую ОС для рекомендуемой кнопки
+      const ua = navigator.userAgent.toLowerCase();
+      const isWin = ua.includes("win");
+      const isMac = ua.includes("mac");
+      function addCard(asset, icon, name, recommended) {
+        if (!asset) return;
+        const a = document.createElement("a");
+        a.className = "platform" + (recommended ? " recommended" : "");
+        a.href = asset.browser_download_url;
+        a.innerHTML = `
+          <span class="icon">${icon}</span>
+          <span class="name">${recommended ? "⬇️ " : ""}${name}</span>
+          <span class="size">${(asset.size / 1e6).toFixed(1)} MB</span>
+        `;
+        platforms.appendChild(a);
+      }
+      addCard(win, "🪟", "Windows (.exe)", isWin);
+      if (!isWin) addCard(mac, "🍎", "macOS (.dmg)", isMac);
+      else addCard(mac, "🍎", "macOS (.dmg)", false);
+      addCard(deb, "🐧", "Linux (.deb)", !isWin && !isMac);
+      if (platforms.children.length === 0) {
+        platforms.innerHTML = '<div class="loading" style="grid-column:1/-1;text-align:center">Сборок пока нет — попроси SIMBA выкатить релиз</div>';
+      }
+    })
+    .catch(err => {
+      document.getElementById("ver").textContent = "релизов пока нет";
+      document.getElementById("ver").classList.remove("loading");
+      document.getElementById("platforms").innerHTML =
+        '<div class="loading" style="grid-column:1/-1;text-align:center;padding:30px;">' +
+        '⚠️ Не удалось получить список релизов.<br>' +
+        '<a href="https://github.com/simba-stack/workchat-bot/releases" target="_blank" style="color:#00e5ff">Открыть страницу релизов вручную →</a>' +
+        '</div>';
+    });
+</script>
+</body>
+</html>"""
+
+
+@app.get("/desktop", response_class=HTMLResponse)
+async def desktop_download_page(request: Request):
+    """Страница скачивания desktop-приложения. Тянет последний релиз с GitHub."""
+    return HTMLResponse(_DESKTOP_PAGE_HTML)
+
+
 # === API endpoints (READ-ONLY) ===
 
 def _slim_card(cid: str, c: dict) -> dict:
@@ -2934,84 +3088,21 @@ async def api_command_enqueue(
     _record_session_activity(request, "command", {"text": text[:120], "cmd_id": entry.get("id")})
     try:
         event_bus.emit_event(
-            "dashboard-command",
-            {"text": text[:200], "cmd_id": entry.get("id"), "by": user},
-            severity="info",
+            "dashboard-command-enqueued",
+            payload={"id": entry.get("id"), "text": text[:120]},
+            character="dashboard",
         )
     except Exception:
         pass
-    return {"ok": True, "command": entry}
+    return {"ok": True, "id": entry.get("id")}
 
 
 @app.get("/api/commands")
 async def api_command_list(limit: int = 30, _: None = Depends(_auth)):
-    """Список последних команд (для отображения истории в дашборде)."""
     storage.reload_sync()
-    return {"commands": storage.list_dashboard_commands(limit=max(1, min(limit, 200)))}
-
-
-# === Push endpoint for external (AI) integrations ===
-
-API_PUSH_TOKEN = os.getenv("API_PUSH_TOKEN", "")
-
-
-class PushEvent(BaseModel):
-    type: str
-    payload: dict = {}
-    character: Optional[str] = None
-    severity: Optional[str] = "info"
-
-
-@app.post("/api/push")
-async def api_push_event(req: PushEvent, request: Request):
-    """Внешний канал — позволяет AI/скриптам пихать события в event_bus
-    без затрат на Anthropic. Аутентификация через Bearer token (env
-    API_PUSH_TOKEN). Если token не задан — endpoint отключён."""
-    if not API_PUSH_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="push disabled — set API_PUSH_TOKEN env",
-        )
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="bearer token required")
-    token = auth_header[7:].strip()
-    if not secrets.compare_digest(token, API_PUSH_TOKEN):
-        raise HTTPException(status_code=401, detail="invalid token")
-    try:
-        event_bus.emit_event(
-            req.type, req.payload or {},
-            character=req.character or "",
-            severity=req.severity or "info",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"ok": True}
-
-
-@app.post("/api/control/sync_lk_request")
-async def control_sync_lk_request(_: None = Depends(_auth)):
-    """Просит userbot.py запустить sync_lk_cards. Делаем через event_bus —
-    userbot подписывается и реагирует.
-    NOTE: реализация требует чтобы userbot слушал event 'request-sync-lk'.
-    Альтернатива — запустить вручную команду '/sync_lk' в Группе 1 ЛК.
-    """
-    try:
-        event_bus.emit_event(
-            "request-sync-lk",
-            {"by": "dashboard", "limit": 1000},
-            severity="info",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {
-        "ok": True,
-        "hint": (
-            "Запрос отправлен. Если userbot не подцепит — выполни в Группе 1 "
-            "ЛК команду '/sync_lk' или '/sync_lk 1000'."
-        ),
-    }
-
+    items = list(storage.state.get("dashboard_commands") or [])
+    items.sort(key=lambda x: -(x.get("ts") or 0))
+    return {"commands": items[:limit]}
 
 
 @app.get("/api/control/info")
