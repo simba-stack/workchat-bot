@@ -1,0 +1,288 @@
+// PRIDE J.A.R.V.I.S. Desktop — Electron main process
+// Обёртка над workchat-bot веб-дашбордом.
+//
+// Фичи:
+//   • Native окно без браузерной строки
+//   • Tray-иконка (свернуть → в трей, не закрывается)
+//   • Hotkeys: Cmd/Ctrl+Q quit, Cmd/Ctrl+R reload, F11 fullscreen, Cmd/Ctrl+Shift+J toggle окна
+//   • Native push-уведомления (через SSE → notifications API)
+//   • Auto-update через GitHub Releases с UI-баннером прогресса
+
+const {
+  app, BrowserWindow, Tray, Menu, shell, ipcMain, Notification,
+  globalShortcut, nativeImage, dialog,
+} = require("electron");
+const path = require("path");
+const log = require("electron-log");
+const { autoUpdater } = require("electron-updater");
+
+// Single instance lock
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  return;
+}
+
+// === Logging ===
+log.transports.file.level = "info";
+autoUpdater.logger = log;
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+const DASHBOARD_URL = process.env.PRIDE_URL ||
+  "https://workchat-bot-production.up.railway.app/";
+
+let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+let updateState = { status: "idle", percent: 0, version: null };
+
+function createMainWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 700,
+    title: "PRIDE J.A.R.V.I.S.",
+    icon: path.join(__dirname, "icon.png"),
+    backgroundColor: "#0a0e1a",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: "persist:pride",
+    },
+  });
+
+  mainWindow.loadURL(DASHBOARD_URL);
+
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      if (process.platform === "darwin") app.dock.hide();
+      if (!global.hiddenOnce) {
+        global.hiddenOnce = true;
+        showNotification("PRIDE свёрнут в трей", "Кликни иконку в трее чтобы открыть.");
+      }
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(DASHBOARD_URL)) return { action: "allow" };
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Когда renderer готов — отправим текущее update состояние
+  mainWindow.webContents.on("did-finish-load", () => {
+    sendUpdateState();
+  });
+}
+
+function createTray() {
+  let icon;
+  try {
+    const trayPath = path.join(__dirname, "tray-icon.png");
+    icon = nativeImage.createFromPath(trayPath);
+    if (icon.isEmpty()) {
+      icon = nativeImage.createFromPath(path.join(__dirname, "icon.png"));
+    }
+  } catch (e) {
+    log.error("tray icon load fail:", e);
+    return;
+  }
+  if (process.platform === "darwin") {
+    icon = icon.resize({ width: 16, height: 16 });
+  }
+  tray = new Tray(icon);
+  tray.setToolTip(`PRIDE J.A.R.V.I.S. v${app.getVersion()}`);
+
+  const menu = Menu.buildFromTemplate([
+    {
+      label: "Открыть J.A.R.V.I.S.",
+      click: () => showMainWindow(),
+    },
+    { type: "separator" },
+    { label: "🤝 Партнёры", click: () => navigateTo("#crm") },
+    { label: "💰 Выплаты", click: () => navigateTo("#payouts") },
+    { label: "📋 ЛК Отдел", click: () => navigateTo("#lk") },
+    { type: "separator" },
+    {
+      label: `Проверить обновления (текущая ${app.getVersion()})`,
+      click: () => {
+        autoUpdater.checkForUpdates().catch((e) => {
+          log.error("manual update check failed:", e);
+          dialog.showErrorBox("Ошибка обновления", String(e));
+        });
+      },
+    },
+    { label: "↻ Перезагрузить", click: () => mainWindow && mainWindow.reload() },
+    {
+      label: "Открыть в браузере",
+      click: () => shell.openExternal(DASHBOARD_URL),
+    },
+    { type: "separator" },
+    {
+      label: "Выйти",
+      click: () => { isQuitting = true; app.quit(); },
+    },
+  ]);
+  tray.setContextMenu(menu);
+
+  tray.on("click", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) mainWindow.hide();
+    else showMainWindow();
+  });
+}
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  mainWindow.show();
+  mainWindow.focus();
+  if (process.platform === "darwin") app.dock.show();
+}
+
+function navigateTo(hash) {
+  if (!mainWindow) return;
+  showMainWindow();
+  mainWindow.webContents.executeJavaScript(`location.hash = '${hash}'`).catch(() => {});
+}
+
+function showNotification(title, body, onClick) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({
+    title, body,
+    icon: path.join(__dirname, "icon.png"),
+    silent: false,
+  });
+  if (onClick) n.on("click", onClick);
+  n.show();
+}
+
+// === IPC: renderer pushes native notifications ===
+ipcMain.on("pride-notify", (_e, payload) => {
+  const { title, body, hash } = payload || {};
+  if (!title) return;
+  showNotification(title, body || "", () => {
+    if (mainWindow) {
+      showMainWindow();
+      if (hash) {
+        mainWindow.webContents.executeJavaScript(`location.hash = '${hash}'`).catch(() => {});
+      }
+    }
+  });
+});
+
+// === IPC: renderer asks current update state (banner) ===
+ipcMain.handle("pride-get-update-state", () => updateState);
+
+// === IPC: renderer clicked "Install now" in banner ===
+ipcMain.on("pride-install-update", () => {
+  log.info("user clicked install — quitAndInstall");
+  isQuitting = true;
+  autoUpdater.quitAndInstall();
+});
+
+// === IPC: renderer clicked "Check for updates" manually ===
+ipcMain.on("pride-check-updates", () => {
+  autoUpdater.checkForUpdates().catch((e) => log.error("check fail:", e));
+});
+
+// === Auto-update events ===
+function sendUpdateState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("pride-update-state", updateState);
+  }
+}
+
+autoUpdater.on("checking-for-update", () => {
+  log.info("checking for update...");
+  updateState = { status: "checking", percent: 0, version: null };
+  sendUpdateState();
+});
+autoUpdater.on("update-available", (info) => {
+  log.info("update available:", info.version);
+  updateState = { status: "downloading", percent: 0, version: info.version };
+  sendUpdateState();
+  showNotification(
+    `🎉 Новая версия ${info.version}`,
+    "Загружается в фоне, мы сообщим когда будет готово.",
+  );
+});
+autoUpdater.on("update-not-available", () => {
+  log.info("no update available");
+  updateState = { status: "uptodate", percent: 0, version: null };
+  sendUpdateState();
+});
+autoUpdater.on("download-progress", (progress) => {
+  updateState = {
+    status: "downloading",
+    percent: Math.round(progress.percent || 0),
+    version: updateState.version,
+    bytesPerSecond: progress.bytesPerSecond,
+    transferred: progress.transferred,
+    total: progress.total,
+  };
+  sendUpdateState();
+});
+autoUpdater.on("update-downloaded", (info) => {
+  log.info("update downloaded:", info.version);
+  updateState = { status: "ready", percent: 100, version: info.version };
+  sendUpdateState();
+  showNotification(
+    `✅ Обновление ${info.version} готово`,
+    "Нажми кнопку «Установить» в баннере вверху приложения.",
+    () => showMainWindow(),
+  );
+});
+autoUpdater.on("error", (err) => {
+  log.error("autoUpdater error:", err);
+  updateState = { status: "error", percent: 0, version: null, error: String(err) };
+  sendUpdateState();
+});
+
+// === Lifecycle ===
+app.whenReady().then(() => {
+  createMainWindow();
+  createTray();
+
+  globalShortcut.register("CommandOrControl+Shift+J", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) mainWindow.hide();
+    else showMainWindow();
+  });
+
+  // Проверка обновлений через 10 сек после старта + каждые 30 минут
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((e) => log.error("startup check:", e));
+  }, 10_000);
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch((e) => log.error("interval check:", e));
+  }, 30 * 60 * 1000);
+});
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    showMainWindow();
+  }
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin" && isQuitting) app.quit();
+});
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+  else if (mainWindow) showMainWindow();
+});
+
+app.on("before-quit", () => {
+  isQuitting = true;
+  globalShortcut.unregisterAll();
+});
+
+if (require("electron-squirrel-startup")) app.quit();
