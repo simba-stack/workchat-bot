@@ -648,50 +648,64 @@ _DESKTOP_PAGE_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-  // Подгружаем последний релиз с GitHub
-  fetch("https://api.github.com/repos/simba-stack/workchat-bot/releases/latest")
-    .then(r => r.ok ? r.json() : Promise.reject(r.status))
-    .then(release => {
-      document.getElementById("ver").textContent = "версия " + release.tag_name;
-      document.getElementById("ver").classList.remove("loading");
+  // Подгружаем манифест через НАШ proxy (а не напрямую GitHub — обходит CORS,
+  // и кнопки скачивания качают через наш домен).
+  fetch("/api/desktop/manifest")
+    .then(r => r.json())
+    .then(data => {
+      const verEl = document.getElementById("ver");
       const platforms = document.getElementById("platforms");
-      platforms.innerHTML = "";
-      const assets = release.assets || [];
-      const win = assets.find(a => /\\.exe$/i.test(a.name));
-      const mac = assets.find(a => /\\.dmg$/i.test(a.name));
-      const deb = assets.find(a => /\\.deb$/i.test(a.name));
-      // Определяем текущую ОС для рекомендуемой кнопки
-      const ua = navigator.userAgent.toLowerCase();
-      const isWin = ua.includes("win");
-      const isMac = ua.includes("mac");
-      function addCard(asset, icon, name, recommended) {
-        if (!asset) return;
-        const a = document.createElement("a");
-        a.className = "platform" + (recommended ? " recommended" : "");
-        a.href = asset.browser_download_url;
-        a.innerHTML = `
-          <span class="icon">${icon}</span>
-          <span class="name">${recommended ? "⬇️ " : ""}${name}</span>
-          <span class="size">${(asset.size / 1e6).toFixed(1)} MB</span>
-        `;
-        platforms.appendChild(a);
+      if (!data.ok) {
+        verEl.textContent = "релизов пока нет";
+        verEl.classList.remove("loading");
+        platforms.innerHTML =
+          '<div class="loading" style="grid-column:1/-1;text-align:center;padding:30px;">' +
+          '⚠️ Сборок пока нет (Actions ещё не выкатил релиз).<br>' +
+          'Подожди 5 минут после git push --tags' +
+          '</div>';
+        return;
       }
-      addCard(win, "🪟", "Windows (.exe)", isWin);
-      if (!isWin) addCard(mac, "🍎", "macOS (.dmg)", isMac);
-      else addCard(mac, "🍎", "macOS (.dmg)", false);
-      addCard(deb, "🐧", "Linux (.deb)", !isWin && !isMac);
-      if (platforms.children.length === 0) {
-        platforms.innerHTML = '<div class="loading" style="grid-column:1/-1;text-align:center">Сборок пока нет — попроси SIMBA выкатить релиз</div>';
+      verEl.textContent = "версия " + data.version;
+      verEl.classList.remove("loading");
+      platforms.innerHTML = "";
+
+      // Определяем текущую ОС
+      const ua = navigator.userAgent.toLowerCase();
+      const isWin = ua.includes("win") && !ua.includes("mac");
+      const isMac = ua.includes("mac");
+      const isLinux = ua.includes("linux") && !ua.includes("android");
+
+      // Сортируем: сначала рекомендуемая, потом остальные
+      const order = isWin ? ["win","mac","linux","zip"]
+                  : isMac ? ["mac","win","linux","zip"]
+                  :         ["linux","win","mac","zip"];
+      const sorted = order
+        .map(p => data.assets.find(a => a.platform === p))
+        .filter(Boolean);
+      sorted.forEach((asset, idx) => {
+        const recommended = idx === 0;
+        const labels = {win: "Windows (.exe)", mac: "macOS (.dmg)", linux: "Linux (.deb)", zip: "Архив (.zip)"};
+        const card = document.createElement("a");
+        card.className = "platform" + (recommended ? " recommended" : "");
+        card.href = asset.url; // наш /desktop/download/{platform}
+        card.setAttribute("download", asset.name);
+        card.innerHTML = `
+          <span class="icon">${asset.icon}</span>
+          <span class="name">${recommended ? "⬇️ " : ""}${labels[asset.platform] || asset.platform}</span>
+          <span class="size">${asset.size_mb} MB · ${asset.name}</span>
+        `;
+        platforms.appendChild(card);
+      });
+      if (sorted.length === 0) {
+        platforms.innerHTML = '<div class="loading" style="grid-column:1/-1;text-align:center;padding:30px;">Сборок нет</div>';
       }
     })
     .catch(err => {
-      document.getElementById("ver").textContent = "релизов пока нет";
+      document.getElementById("ver").textContent = "ошибка загрузки";
       document.getElementById("ver").classList.remove("loading");
       document.getElementById("platforms").innerHTML =
         '<div class="loading" style="grid-column:1/-1;text-align:center;padding:30px;">' +
-        '⚠️ Не удалось получить список релизов.<br>' +
-        '<a href="https://github.com/simba-stack/workchat-bot/releases" target="_blank" style="color:#00e5ff">Открыть страницу релизов вручную →</a>' +
-        '</div>';
+        '⚠️ ' + err + '</div>';
     });
 </script>
 </body>
@@ -700,8 +714,109 @@ _DESKTOP_PAGE_HTML = """<!DOCTYPE html>
 
 @app.get("/desktop", response_class=HTMLResponse)
 async def desktop_download_page(request: Request):
-    """Страница скачивания desktop-приложения. Тянет последний релиз с GitHub."""
+    """Страница скачивания desktop-приложения. Тянет последний релиз с GitHub
+    через server-side proxy (без CORS) и стримит файлы через свой домен."""
     return HTMLResponse(_DESKTOP_PAGE_HTML)
+
+
+# Кеш манифеста релиза (5 минут) чтобы не дёргать GitHub каждый клик
+_DESKTOP_MANIFEST_CACHE = {"ts": 0, "data": None}
+
+
+@app.get("/api/desktop/manifest")
+async def api_desktop_manifest():
+    """Сервер-сайд получение последнего релиза + перевод download URL'ов
+    на наш домен для проксирования."""
+    import time as _t
+    now = _t.time()
+    if _DESKTOP_MANIFEST_CACHE["data"] and (now - _DESKTOP_MANIFEST_CACHE["ts"]) < 300:
+        return _DESKTOP_MANIFEST_CACHE["data"]
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://api.github.com/repos/simba-stack/workchat-bot/releases/latest",
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            if r.status_code != 200:
+                return {"ok": False, "error": f"github {r.status_code}"}
+            release = r.json()
+    except Exception as e:
+        logger.warning("desktop manifest fetch failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+    assets_out = []
+    for a in release.get("assets", []) or []:
+        name = a.get("name") or ""
+        low = name.lower()
+        platform = None
+        icon = None
+        if low.endswith(".exe"):
+            platform, icon = "win", "🪟"
+        elif low.endswith(".dmg"):
+            platform, icon = "mac", "🍎"
+        elif low.endswith(".deb"):
+            platform, icon = "linux", "🐧"
+        elif low.endswith(".zip"):
+            platform, icon = "zip", "📦"
+        if not platform:
+            continue
+        assets_out.append({
+            "name": name,
+            "platform": platform,
+            "icon": icon,
+            "size_mb": round((a.get("size") or 0) / 1e6, 1),
+            "url": f"/desktop/download/{platform}",  # наш прокси
+            "github_url": a.get("browser_download_url"),
+        })
+    data = {
+        "ok": True,
+        "version": release.get("tag_name") or "?",
+        "name": release.get("name") or release.get("tag_name") or "?",
+        "published_at": release.get("published_at"),
+        "assets": assets_out,
+    }
+    _DESKTOP_MANIFEST_CACHE["ts"] = now
+    _DESKTOP_MANIFEST_CACHE["data"] = data
+    return data
+
+
+@app.get("/desktop/download/{platform}")
+async def desktop_download_proxy(platform: str):
+    """Скачивание сборки через наш домен. Стримит файл с GitHub Releases
+    чтобы пользователь видел загрузку с workchat-bot-production.up.railway.app,
+    а не с github.com."""
+    manifest = await api_desktop_manifest()
+    if not manifest.get("ok"):
+        raise HTTPException(503, f"manifest fetch failed: {manifest.get('error')}")
+    asset = next(
+        (a for a in manifest.get("assets", []) if a.get("platform") == platform),
+        None,
+    )
+    if not asset:
+        raise HTTPException(404, f"no asset for platform={platform}")
+    github_url = asset.get("github_url")
+    fname = asset.get("name") or f"pride-jarvis-{platform}.bin"
+
+    import httpx
+
+    async def file_stream():
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            async with client.stream("GET", github_url) as resp:
+                if resp.status_code != 200:
+                    yield b""
+                    return
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+
+    return StreamingResponse(
+        file_stream(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Source": "github-releases-proxy",
+        },
+    )
 
 
 # === API endpoints (READ-ONLY) ===
@@ -3073,11 +3188,8 @@ async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth)):
 async def api_command_enqueue(
     req: CommandReq, request: Request, _: None = Depends(_auth),
 ):
-    """Очередь команд для userbot. Дашборд отправляет сюда команды
-    free-form, userbot опрашивает каждые 5 сек и выполняет.
-
-    Источник команды (source) включает username админа, чтобы можно было
-    отличить кто что отправил в общую очередь (важно для tracking)."""
+    """Очередь команд для userbot — дашборд кидает текстовую команду,
+    userbot её подберёт и выполнит."""
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="empty text")
