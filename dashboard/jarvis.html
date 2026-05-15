@@ -3087,8 +3087,8 @@
                    style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
             <button class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 14px;">📝 Сохранить</button>
           </div>
-          <!-- Шаг 2: если есть deal_id — пополнить -->
-          <div x-show="p.deal_id" style="margin-top: 8px;">
+          <!-- Шаг 2: есть deal_id, но ещё не пополнено — ввести сумму и нажать «Пополнено» -->
+          <div x-show="p.deal_id && !p.funded_amount" style="margin-top: 8px;">
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Сделка <b x-text="'#' + p.deal_id"></b></div>
             <div style="display: flex; gap: 6px;">
               <input type="number" placeholder="Сумма пополнения (USDT)"
@@ -3096,6 +3096,13 @@
                      style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
               <button class="btn" @click="payoutMarkFunded(p.deal_id)" style="padding: 6px 14px;">🤝 Пополнено</button>
             </div>
+          </div>
+          <!-- Шаг 3: сделка пополнена → кнопка «Отпустить» (закрытие выплаты, уведомление клиента) -->
+          <div x-show="p.deal_id && p.funded_amount" style="margin-top: 8px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">
+              Сделка <b x-text="'#' + p.deal_id"></b> · пополнена на <b x-text="(p.funded_amount || 0) + ' USDT'"></b>
+            </div>
+            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 6px 14px;">✅ Отпустить сделку</button>
           </div>
         </div>
       </template>
@@ -6218,7 +6225,7 @@ function jarvis() {
         if (r.ok) {
           delete this.payoutDraftAmount[deal_id];
           await this.refreshPayouts();
-          alert("✅ Сделка пополнена, перенесена в «ОТПУСТИТЬ»");
+          alert("✅ Сделка отмечена пополненной. Теперь нажми «Отпустить сделку».");
         } else { alert("Ошибка: " + r.status); }
       } catch (e) { alert(String(e)); }
     },

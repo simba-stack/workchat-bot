@@ -6239,6 +6239,37 @@ class UserbotService:
                     )
             return f"✅ #{cid} → {new_status}"
 
+        # ===== PAYOUTS: «отпущено #lk0001» или «отпущено 12345» =====
+        # Шлётся из api.py /api/payouts/released когда менеджер жмёт «Отпустить» на дашборде.
+        # Закрывает гарант-выплату, шлёт клиенту уведомление, статус ЛК → ЗАВЕРШЁН.
+        m = re.match(r"^отпущено\s+#?(\S+)\s*$", text, re.I)
+        if m:
+            return await self._mark_guarantor_released(m.group(1).strip())
+
+        # ===== PAYOUTS: «выплачено #lk0001 TXHASH» =====
+        # Шлётся из api.py /api/payouts/usdt_paid после ввода TronScan хеша.
+        # Шлёт клиенту ссылку на tronscan, статус ЛК → ЗАВЕРШЁН.
+        m = re.match(r"^выплачено\s+#?(lk\d+)\s+(\S+)\s*$", text, re.I)
+        if m:
+            return await self._mark_usdt_paid(m.group(1).lower(), m.group(2).strip())
+
+        # ===== PAYOUTS: «сделка #DEAL пополнена SUM» =====
+        # Шлётся из api.py /api/payouts/deal_funded когда менеджер ввёл сумму пополнения.
+        # Не закрывает выплату — только помечает что сделка пополнена (ждём «Отпустить»).
+        m = re.match(r"^сделка\s+#?(\S+)\s+пополнена\s+([0-9]+(?:\.[0-9]+)?)\s*$", text, re.I)
+        if m:
+            deal_id = m.group(1).lstrip("#").strip()
+            amount = float(m.group(2))
+            match = storage.find_payout_by_deal(deal_id)
+            if not match:
+                return f"⚠️ сделка #{deal_id} не найдена в очередях"
+            q, item = match
+            try:
+                await storage.update_payout(q, item["id"], funded_amount=amount, funded_at=time.time())
+            except Exception as e:
+                return f"⚠️ update_payout failed: {e}"
+            return f"✅ сделка #{deal_id} помечена пополненной на {amount} USDT (жду «Отпустить»)"
+
         # ===== INTERNAL: sync LK card (от api.py — после правок в дашборде) =====
         m = re.match(r"^__sync_lk_card\s+(lk\d+)\s*$", text, re.I)
         if m:
