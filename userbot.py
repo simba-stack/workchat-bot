@@ -3641,6 +3641,8 @@ class UserbotService:
                 )
                 return True
             update["payment_method"] = normalized
+            # Явная админская правка метода — разрешаем перезапись guard'а в storage.
+            update["_allow_payment_method_change"] = True
         elif field in ("bank", "fio"):
             update[field] = raw_val.strip()
         elif field == "supplier":
@@ -6229,12 +6231,8 @@ class UserbotService:
                        "БЛОК_БЕЗ_ОТРАБОТКИ"}
             if new_status not in allowed:
                 return f"⚠️ статус {new_status} не разрешён. Допустимы: {sorted(allowed)}"
-            # Шорткат ПОПОЛНИТЬ_И_ОТПУСТИТЬ = ОТРАБОТАН + payment_method=GUARANTOR_AFTER_WORK
+            # ПОПОЛНИТЬ_И_ОТПУСТИТЬ — алиас для ОТРАБОТАН. Метод оплаты НЕ трогаем.
             if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
-                try:
-                    await storage.update_lk_card(cid, payment_method="GUARANTOR_AFTER_WORK")
-                except Exception as e:
-                    logger.warning("set payment_method shortcut: %s", e)
                 new_status = "ОТРАБОТАН"
             ok = await storage.set_lk_card_status(cid, new_status, by="leo")
             if not ok:

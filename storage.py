@@ -1710,9 +1710,29 @@ class Storage:
             c = cards.get(str(card_id))
             if c is None:
                 return False
+            # ЗАЩИТА: payment_method можно МЕНЯТЬ только если явно передан флаг
+            # _allow_payment_method_change=True. Иначе игнорируем (это спасает
+            # карточку от случайного перезатирания методом по умолчанию через
+            # шорткаты/бэкфилл).
+            allow_pm_change = bool(fields.pop("_allow_payment_method_change", False))
             for k, v in fields.items():
                 if k == "history":
                     continue
+                if k == "payment_method" and not allow_pm_change:
+                    old = (c.get("payment_method") or "").upper()
+                    new = (v or "").upper()
+                    if old and new and old != new:
+                        try:
+                            import logging
+                            logging.getLogger(__name__).warning(
+                                "REFUSED payment_method change for %s: %s → %s "
+                                "(pass _allow_payment_method_change=True если нужно)",
+                                card_id, old, new,
+                            )
+                        except Exception:
+                            pass
+                        continue
+                    # Разрешаем set если поле было пустым ИЛИ значения совпадают
                 c[k] = v
             await self._save_unlocked()
             return True
