@@ -6206,6 +6206,13 @@ class UserbotService:
                        "БЛОК_БЕЗ_ОТРАБОТКИ"}
             if new_status not in allowed:
                 return f"⚠️ статус {new_status} не разрешён. Допустимы: {sorted(allowed)}"
+            # Шорткат ПОПОЛНИТЬ_И_ОТПУСТИТЬ = ОТРАБОТАН + payment_method=GUARANTOR_AFTER_WORK
+            if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
+                try:
+                    await storage.update_lk_card(cid, payment_method="GUARANTOR_AFTER_WORK")
+                except Exception as e:
+                    logger.warning("set payment_method shortcut: %s", e)
+                new_status = "ОТРАБОТАН"
             ok = await storage.set_lk_card_status(cid, new_status, by="leo")
             if not ok:
                 return f"⚠️ карточка #{cid} не найдена"
@@ -6247,4 +6254,47 @@ class UserbotService:
                     else f"⚠️ #{cid}: sync не удался (нет lk_group/msg_id?)"
                 )
             except Exception as e:
-                logger.warni
+                logger.warning("__sync_lk_card %s failed: %s", cid, e)
+                return f"⚠️ #{cid}: sync exception {e!r}"
+
+        # ===== INTERNAL: notify client about status change (от api.py) =====
+        # api.py отправляет это после смены статуса карточки с дашборда.
+        # Шлёт клиенту сообщение в его work_chat по шаблону из _notify_client_status_change.
+        m = re.match(r"^__notify_status\s+(lk\d+)\s+(\S+)\s*$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            new_status = m.group(2).strip().upper()
+            try:
+                storage.reload_sync()
+            except Exception:
+                pass
+            try:
+                ok = await self._notify_client_status_change(cid, new_status)
+                return (
+                    f"✅ #{cid} → клиент уведомлён о {new_status}" if ok
+                    else f"⚠️ #{cid}: уведомление {new_status} не отправлено (work_chat не резолвится?)"
+                )
+            except Exception as e:
+                logger.warning("__notify_status %s %s failed: %s", cid, new_status, e)
+                return f"⚠️ #{cid} {new_status}: notify exception {e!r}"
+
+        # ===== INTERNAL: handle БЛОК_БЕЗ_ОТРАБОТКИ side-effects (от api.py) =====
+        # Отменяет сделку (если deal_id), уведомляет клиента, кидает reply работнику.
+        m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)
+        if m:
+            cid = m.group(1).lower()
+            try:
+                storage.reload_sync()
+            except Exception:
+                pass
+            try:
+                ok = await self._handle_block_no_work_actions(cid)
+                return (
+                    f"✅ #{cid}: БЛОК_БЕЗ_ОТРАБОТКИ обработан" if ok
+                    else f"⚠️ #{cid}: side-effects БЛОК_БЕЗ_ОТРАБОТКИ не отработали"
+                )
+            except Exception as e:
+                logger.warning("__handle_block_no_work %s failed: %s", cid, e)
+                return f"⚠️ #{cid}: block_no_work exception {e!r}"
+
+        return f"⚠️ unknown command: {text[:60]}"

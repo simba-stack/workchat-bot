@@ -45,6 +45,70 @@ from storage import storage
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PRIDE Dashboard", docs_url=None, redoc_url=None)
+
+
+@app.on_event("startup")
+async def _backfill_payouts_on_startup():
+    """Бэкфилл: карточки со статусом ПОПОЛНИТЬ_И_ОТПУСТИТЬ или ОТРАБОТАН,
+    которые по какой-то причине не попали в очереди выплат, добавляем
+    в правильную очередь по payment_method.
+    Идемпотентно — пропускаем если карточка уже в какой-то очереди."""
+    try:
+        storage.reload_sync()
+        cards = storage.list_lk_cards() or {}
+        added = 0
+        for cid, card in cards.items():
+            try:
+                if not cid:
+                    continue
+                status = (card.get("status") or "").upper()
+                method = (card.get("payment_method") or "").upper()
+                # Шорткат-статус: миграция на ОТРАБОТАН + метод по умолчанию
+                if status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
+                    await storage.set_lk_card_status(cid, "ОТРАБОТАН", by="backfill")
+                    if not method:
+                        await storage.update_lk_card(cid, payment_method="GUARANTOR_AFTER_WORK")
+                        method = "GUARANTOR_AFTER_WORK"
+                    status = "ОТРАБОТАН"
+                if status != "ОТРАБОТАН":
+                    continue
+                # Уже в очереди? — пропуск
+                if storage.find_payout_by_card(cid):
+                    continue
+                # Положить в правильную очередь
+                if method == "USDT_TRC20" and (card.get("usdt_address") or ""):
+                    await storage.add_payout("usdt", {
+                        "card_id": cid, "bank": card.get("bank") or "",
+                        "fio": card.get("fio") or "", "supplier": card.get("supplier") or "",
+                        "work_chat_id": card.get("work_chat_id") or 0,
+                        "usdt_address": card.get("usdt_address") or "",
+                        "amount_usdt": float(card.get("price_usdt") or 0),
+                    })
+                    added += 1
+                elif method in ("GUARANTOR_AFTER_WORK", "GUARANTOR_AFTER"):
+                    await storage.add_payout("fund_release", {
+                        "card_id": cid, "bank": card.get("bank") or "",
+                        "fio": card.get("fio") or "", "supplier": card.get("supplier") or "",
+                        "work_chat_id": card.get("work_chat_id") or 0,
+                        "amount_usdt": float(card.get("price_usdt") or 0),
+                        "deal_id": card.get("deal_id") or "",
+                    })
+                    added += 1
+                elif method == "GUARANTOR_BEFORE":
+                    await storage.add_payout("release", {
+                        "card_id": cid, "bank": card.get("bank") or "",
+                        "fio": card.get("fio") or "", "supplier": card.get("supplier") or "",
+                        "work_chat_id": card.get("work_chat_id") or 0,
+                        "amount_usdt": float(card.get("price_usdt") or 0),
+                        "deal_id": card.get("deal_id") or "",
+                    })
+                    added += 1
+            except Exception as e:
+                logger.warning("backfill card %s failed: %s", cid, e)
+        if added:
+            logger.info("[startup-backfill] added %d cards to payout queues", added)
+    except Exception as e:
+        logger.warning("startup backfill error: %s", e)
 security = HTTPBasic(auto_error=False)
 
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
@@ -2423,9 +2487,46 @@ async def control_lk_status(
             status_code=400,
             detail=f"new_status must be one of {sorted(allowed)}",
         )
+
+    # ПОПОЛНИТЬ_И_ОТПУСТИТЬ — это не отдельный статус карточки, а шорткат:
+    # эквивалент «ОТРАБОТАН + payment_method=GUARANTOR_AFTER_WORK + положить в очередь fund_release».
+    # Сохраняем статус как ОТРАБОТАН, выставляем метод оплаты и добавляем в очередь руками
+    # (userbot тоже сделает свою работу, но безопаснее задублировать чтобы не зависеть от его аптайма).
+    enqueue_fund_release = False
+    if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
+        enqueue_fund_release = True
+        new_status = "ОТРАБОТАН"
+        # Зафиксируем метод оплаты на карточке (если ещё не задан или другой)
+        try:
+            await storage.update_lk_card(card_id, payment_method="GUARANTOR_AFTER_WORK")
+        except Exception as e:
+            logger.warning("update payment_method on shortcut failed: %s", e)
+
     ok = await storage.set_lk_card_status(card_id, new_status, by="dashboard")
     if not ok:
         raise HTTPException(status_code=404, detail="card not found")
+
+    # Если был шорткат — затолкаем карточку в очередь fund_release прямо здесь,
+    # чтобы пользователь сразу увидел её в разделе Выплаты.
+    if enqueue_fund_release:
+        try:
+            cards = storage.list_lk_cards() or {}
+            card = cards.get(card_id)
+            if card:
+                existing = storage.find_payout_by_card(card_id, queue="fund_release")
+                if not existing:
+                    await storage.add_payout("fund_release", {
+                        "card_id": card_id,
+                        "bank": card.get("bank") or "",
+                        "fio": card.get("fio") or "",
+                        "supplier": card.get("supplier") or "",
+                        "work_chat_id": card.get("work_chat_id") or 0,
+                        "amount_usdt": float(card.get("price_usdt") or 0),
+                        "deal_id": card.get("deal_id") or "",
+                    })
+        except Exception as e:
+            logger.warning("dashboard shortcut add_payout(fund_release) failed: %s", e)
+
     try:
         event_bus.emit_event(
             "lk-status-changed",
