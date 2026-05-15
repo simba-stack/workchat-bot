@@ -3917,7 +3917,7 @@ function jarvis() {
     es: null,
     ws: null,
     connState: 'connecting',
-    connText: '🔌 Подключение...',
+    connText: '🔌 Подключение к серверу...',
     audioCtx: null,
     ambientNode: null,
 
@@ -4227,7 +4227,7 @@ function jarvis() {
       const attempt = Math.min(this._connRetry || 0, delays.length - 1);
       const delay = delays[attempt];
       this._connRetry = (this._connRetry || 0) + 1;
-      this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+      this.connText = '⏳ Идёт обновление, подождите пару минут...';
       console.log(`[conn] reconnect in ${delay}ms (attempt ${this._connRetry})`);
       if (this._connTimer) clearTimeout(this._connTimer);
       this._connTimer = setTimeout(() => this._tryConnect(), delay);
@@ -4236,7 +4236,7 @@ function jarvis() {
       // Прежде чем долбить WS/SSE — пингуем /healthz чтобы понять что сервер живой.
       // Это спасает во время Railway redeploy: пока сервер 502, не плодим коннекты.
       if ((this._connRetry || 0) > 0) {
-        this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+        this.connText = '⏳ Идёт обновление, подождите пару минут...';
       }
       try {
         const ctl = new AbortController();
@@ -4253,12 +4253,9 @@ function jarvis() {
       this._connectWS();
     },
     _onConnectionRestored() {
-      // Показать «Соединение восстановлено» на 4 секунды, потом скрыть
-      this.connText = '✅ Соединение восстановлено';
-      if (this._restoredTimer) clearTimeout(this._restoredTimer);
-      this._restoredTimer = setTimeout(() => {
-        if (this.connState === 'online') this.connText = '';
-      }, 4000);
+      // После реконнекта показываем «Соединение успешно» — НЕ скрываем,
+      // пользователь хочет видеть текст постоянно.
+      this.connText = '✅ Соединение успешно';
     },
     _closeAll() {
       try { if (this.ws) { this.ws.onclose = null; this.ws.close(); } } catch {}
@@ -4273,16 +4270,14 @@ function jarvis() {
       const wasOffline = this.connState === 'offline' || (this._connRetry || 0) > 0;
       this.connState = 'connecting';
       this.connText = wasOffline
-        ? '⏳ Идёт обновление системы, подождите пожалуйста...'
-        : '🔌 Подключение...';
+        ? '⏳ Идёт обновление, подождите пару минут...'
+        : '🔌 Подключение к серверу...';
       try {
         this.ws = new WebSocket(url);
         this.ws.onopen = () => {
-          const justReconnected = (this._connRetry || 0) > 0;
           this.connState = 'online';
           this._connRetry = 0;
-          if (justReconnected) this._onConnectionRestored();
-          else this.connText = '';
+          this.connText = '✅ Соединение успешно';
           // ping каждые 25 сек чтобы пройти все proxy keepalive окна
           this.wsPingInterval = setInterval(() => {
             try { this.ws.send(JSON.stringify({ cmd: 'ping' })); } catch {}
@@ -4294,7 +4289,7 @@ function jarvis() {
           if (this.connState === 'online') {
             // только что был online → пробуем SSE как fallback (быстрее)
             this.connState = 'offline';
-            this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+            this.connText = '⏳ Идёт обновление, подождите пару минут...';
             setTimeout(() => this._connectSSEFallback(), 800);
           } else {
             // WS вообще не поднялся — сразу backoff retry
@@ -4323,16 +4318,14 @@ function jarvis() {
       const wasOffline = this.connState === 'offline' || (this._connRetry || 0) > 0;
       this.connState = 'connecting';
       this.connText = wasOffline
-        ? '⏳ Идёт обновление системы, подождите пожалуйста...'
-        : '🔌 Подключение...';
+        ? '⏳ Идёт обновление, подождите пару минут...'
+        : '🔌 Подключение к серверу...';
       try {
         this.es = new EventSource('/api/events/stream');
         this.es.onopen = () => {
-          const justReconnected = (this._connRetry || 0) > 0;
           this.connState = 'online';
           this._connRetry = 0;
-          if (justReconnected) this._onConnectionRestored();
-          else this.connText = '';
+          this.connText = '✅ Соединение успешно';
         };
         this.es.onerror = () => {
           // EventSource сама ретраит пока сервер не вернёт явный 502/401.
