@@ -3913,7 +3913,7 @@ function jarvis() {
     es: null,
     ws: null,
     connState: 'connecting',
-    connText: 'CONNECTING',
+    connText: '🔌 Подключение...',
     audioCtx: null,
     ambientNode: null,
 
@@ -4194,59 +4194,162 @@ function jarvis() {
       } catch (e) {}
     },
 
-    // === Connect: пробуем WebSocket, fallback на SSE ===
+    // === Connect: пробуем WebSocket, fallback на SSE.
+    // Полностью переписано: автоматический реконнект с экспоненциальной задержкой,
+    // healthcheck перед попыткой, реакция на window 'online' event. ===
     connectSSE() {
-      this.connectWS();  // try WS first
+      // single entrypoint — внутри держим состояние и retry-loop
+      if (!this._connInit) {
+        this._connInit = true;
+        this._connRetry = 0;
+        // Когда браузер возвращает сеть — сбрасываем retry и подключаемся сразу
+        window.addEventListener('online', () => {
+          console.log('[conn] navigator online → reconnect');
+          this._connRetry = 0;
+          this._tryConnect();
+        });
+        // Когда таб становится видимым — тоже пнуть реконнект (если оффлайн)
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden && this.connState !== 'online') {
+            this._tryConnect();
+          }
+        });
+      }
+      this._tryConnect();
     },
-    connectWS() {
+    _scheduleReconnect() {
+      // Экспоненциальный backoff: 1.5 → 3 → 6 → 12 → 24 → 30 (cap) секунд
+      const delays = [1500, 3000, 6000, 12000, 24000, 30000];
+      const attempt = Math.min(this._connRetry || 0, delays.length - 1);
+      const delay = delays[attempt];
+      this._connRetry = (this._connRetry || 0) + 1;
+      this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+      console.log(`[conn] reconnect in ${delay}ms (attempt ${this._connRetry})`);
+      if (this._connTimer) clearTimeout(this._connTimer);
+      this._connTimer = setTimeout(() => this._tryConnect(), delay);
+    },
+    async _tryConnect() {
+      // Прежде чем долбить WS/SSE — пингуем /healthz чтобы понять что сервер живой.
+      // Это спасает во время Railway redeploy: пока сервер 502, не плодим коннекты.
+      if ((this._connRetry || 0) > 0) {
+        this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+      }
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 4000);
+        const r = await fetch('/healthz', { signal: ctl.signal, cache: 'no-store' });
+        clearTimeout(t);
+        if (!r.ok) throw new Error('healthz ' + r.status);
+      } catch (e) {
+        this.connState = 'offline';
+        this._scheduleReconnect();
+        return;
+      }
+      // Сервер живой — пробуем WS
+      this._connectWS();
+    },
+    _onConnectionRestored() {
+      // Показать «Соединение восстановлено» на 4 секунды, потом скрыть
+      this.connText = '✅ Соединение восстановлено';
+      if (this._restoredTimer) clearTimeout(this._restoredTimer);
+      this._restoredTimer = setTimeout(() => {
+        if (this.connState === 'online') this.connText = '';
+      }, 4000);
+    },
+    _closeAll() {
+      try { if (this.ws) { this.ws.onclose = null; this.ws.close(); } } catch {}
+      try { if (this.es) { this.es.onerror = null; this.es.close(); } } catch {}
+      this.ws = null; this.es = null;
+      if (this.wsPingInterval) { clearInterval(this.wsPingInterval); this.wsPingInterval = null; }
+    },
+    _connectWS() {
+      this._closeAll();
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url = `${proto}//${location.host}/ws`;
-      this.connState = 'connecting'; this.connText = 'WS CONNECTING';
+      const wasOffline = this.connState === 'offline' || (this._connRetry || 0) > 0;
+      this.connState = 'connecting';
+      this.connText = wasOffline
+        ? '⏳ Идёт обновление системы, подождите пожалуйста...'
+        : '🔌 Подключение...';
       try {
         this.ws = new WebSocket(url);
         this.ws.onopen = () => {
-          this.connState = 'online'; this.connText = 'WS ONLINE';
-          // ping periodically
+          const justReconnected = (this._connRetry || 0) > 0;
+          this.connState = 'online';
+          this._connRetry = 0;
+          if (justReconnected) this._onConnectionRestored();
+          else this.connText = '';
+          // ping каждые 25 сек чтобы пройти все proxy keepalive окна
           this.wsPingInterval = setInterval(() => {
             try { this.ws.send(JSON.stringify({ cmd: 'ping' })); } catch {}
           }, 25000);
         };
-        this.ws.onclose = () => {
-          this.connState = 'offline'; this.connText = 'WS LOST · SSE...';
-          if (this.wsPingInterval) clearInterval(this.wsPingInterval);
-          // Fallback на SSE
-          setTimeout(() => this.connectSSEFallback(), 1500);
+        this.ws.onclose = (ev) => {
+          console.log('[conn] WS closed', ev.code, ev.reason);
+          if (this.wsPingInterval) { clearInterval(this.wsPingInterval); this.wsPingInterval = null; }
+          if (this.connState === 'online') {
+            // только что был online → пробуем SSE как fallback (быстрее)
+            this.connState = 'offline';
+            this.connText = '⏳ Идёт обновление системы, подождите пожалуйста...';
+            setTimeout(() => this._connectSSEFallback(), 800);
+          } else {
+            // WS вообще не поднялся — сразу backoff retry
+            this.connState = 'offline';
+            this._scheduleReconnect();
+          }
         };
-        this.ws.onerror = () => {
-          // close handler сделает остальное
-        };
+        this.ws.onerror = () => { /* onclose отработает */ };
         this.ws.onmessage = (e) => {
           try {
             const m = JSON.parse(e.data);
             if (m.kind === 'event') {
               this.handleEvent(m);
             } else if (m.kind === 'state') {
-              // обновим частично
               if (m.ai_enabled !== undefined) this.state.stats.ai_enabled = m.ai_enabled;
             }
           } catch {}
         };
       } catch (e) {
-        this.connectSSEFallback();
+        console.warn('[conn] WS init failed', e);
+        this._connectSSEFallback();
       }
     },
-    connectSSEFallback() {
+    _connectSSEFallback() {
+      this._closeAll();
+      const wasOffline = this.connState === 'offline' || (this._connRetry || 0) > 0;
+      this.connState = 'connecting';
+      this.connText = wasOffline
+        ? '⏳ Идёт обновление системы, подождите пожалуйста...'
+        : '🔌 Подключение...';
       try {
         this.es = new EventSource('/api/events/stream');
-        this.es.onopen = () => { this.connState = 'online'; this.connText = 'SSE ONLINE'; };
-        this.es.onerror = () => { this.connState = 'offline'; this.connText = 'RECONNECT'; };
+        this.es.onopen = () => {
+          const justReconnected = (this._connRetry || 0) > 0;
+          this.connState = 'online';
+          this._connRetry = 0;
+          if (justReconnected) this._onConnectionRestored();
+          else this.connText = '';
+        };
+        this.es.onerror = () => {
+          // EventSource сама ретраит пока сервер не вернёт явный 502/401.
+          // Но мы перестраховываемся: закроем и запустим свой backoff (он сначала пингует /healthz).
+          console.log('[conn] SSE error → backoff reconnect');
+          this.connState = 'offline';
+          try { this.es.close(); } catch {}
+          this.es = null;
+          this._scheduleReconnect();
+        };
         this.es.onmessage = (e) => {
           try { this.handleEvent(JSON.parse(e.data)); } catch {}
         };
       } catch (e) {
-        this.connState = 'offline'; this.connText = 'OFFLINE';
+        this.connState = 'offline';
+        this._scheduleReconnect();
       }
     },
+    // Алиас для обратной совместимости (старый код мог звать connectWS/connectSSEFallback)
+    connectWS() { this._tryConnect(); },
+    connectSSEFallback() { this._connectSSEFallback(); },
 
     // ===== Voice chat (OpenAI Realtime API via WebRTC) =====
     async toggleVoice() {
