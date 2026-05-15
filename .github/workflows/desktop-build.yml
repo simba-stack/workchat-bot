@@ -4,11 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:  # позволяет запустить вручную из вкладки Actions
 
 jobs:
-  # Для первого релиза — собираем только Windows (быстро + не требует icns)
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write  # нужно для publisher-github (создание Release)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,37 +19,49 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # cache npm НЕ включаем — package-lock.json генерируется только после install
+
+      - name: Show desktop folder
+        working-directory: desktop
+        run: |
+          dir
+          node --version
+          npm --version
 
       - name: Install npm deps
         working-directory: desktop
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Build & publish to GitHub Releases (Windows)
         working-directory: desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish -- --platform=win32
+          DEBUG: electron-forge:*
+        run: npm run publish
 
-  # Опционально: Mac/Linux. Запускается параллельно, не блокирует Windows
+  # Mac/Linux отключены по умолчанию. Чтобы включить:
+  # Repo Settings → Variables → New repository variable: BUILD_MAC=1 / BUILD_LINUX=1
   build-mac:
-    if: ${{ vars.BUILD_MAC == '1' }}  # включи в Repo Settings → Variables
+    if: ${{ vars.BUILD_MAC == '1' }}
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - working-directory: desktop
-        run: npm install
+        run: npm install --no-audit --no-fund
       - working-directory: desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish -- --platform=darwin
+        run: npm run publish
 
   build-linux:
     if: ${{ vars.BUILD_LINUX == '1' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,8 +69,8 @@ jobs:
           node-version: '20'
       - run: sudo apt-get update && sudo apt-get install -y rpm fakeroot dpkg
       - working-directory: desktop
-        run: npm install
+        run: npm install --no-audit --no-fund
       - working-directory: desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish -- --platform=linux
+        run: npm run publish
