@@ -125,9 +125,58 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    log.info("window.open requested:", url);
+    // Сам дашборд — открываем как новое окно внутри Electron
     if (url.startsWith(DASHBOARD_URL)) return { action: "allow" };
+    // Telegram OAuth widget: открываем как popup ВНУТРИ приложения,
+    // иначе postMessage callback не дойдёт до opener'а (window.opener будет null).
+    // Поддерживаемые домены: oauth.telegram.org, telegram.org, t.me, web.telegram.org
+    const tgHosts = [
+      "https://oauth.telegram.org",
+      "https://my.telegram.org",
+      "https://telegram.org",
+      "https://web.telegram.org",
+      "https://t.me",
+    ];
+    if (tgHosts.some(h => url.startsWith(h))) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 480,
+          height: 640,
+          modal: true,
+          parent: mainWindow,
+          autoHideMenuBar: true,
+          backgroundColor: "#ffffff",
+          webPreferences: {
+            partition: "persist:pride",      // те же куки!
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        },
+      };
+    }
+    // Всё остальное — наружу в системный браузер
     shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  // Когда открывается popup Telegram — навешиваем закрытие при success/cancel
+  mainWindow.webContents.on("did-create-window", (childWindow, details) => {
+    log.info("child window created:", details.url);
+    // Telegram popup сам себя закрывает через window.close() после auth — Electron уважает это.
+    // Но на всякий случай: если URL вернулся на наш домен — закрываем popup и обновляем основное окно.
+    childWindow.webContents.on("did-navigate", (_e, navUrl) => {
+      log.info("popup navigated to:", navUrl);
+      if (navUrl.startsWith(DASHBOARD_URL)) {
+        // OAuth completed — popup ушёл обратно на наш домен → закрываем
+        try { childWindow.close(); } catch (e) { /* silent */ }
+        // На всякий случай форсим reload основного окна чтобы подхватить cookie auth
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          setTimeout(() => mainWindow.webContents.reload(), 300);
+        }
+      }
+    });
   });
 
   // Когда renderer готов — отправим текущее update состояние
