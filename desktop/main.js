@@ -10,11 +10,10 @@
 
 const {
   app, BrowserWindow, Tray, Menu, shell, ipcMain, Notification,
-  globalShortcut, nativeImage, dialog,
+  globalShortcut, nativeImage, dialog, net,
 } = require("electron");
 const path = require("path");
 const log = require("electron-log");
-const { autoUpdater } = require("electron-updater");
 
 // === Squirrel installer hooks ===
 // ВАЖНО: должно сработать ДО любых других app.on / globalShortcut вызовов.
@@ -34,9 +33,6 @@ if (!gotTheLock) {
 
 // === Logging ===
 log.transports.file.level = "info";
-autoUpdater.logger = log;
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
 
 const DASHBOARD_URL = process.env.PRIDE_URL ||
   "https://workchat-bot-production.up.railway.app/";
@@ -216,7 +212,7 @@ function createTray() {
     {
       label: `Проверить обновления (текущая ${app.getVersion()})`,
       click: () => {
-        autoUpdater.checkForUpdates().catch((e) => {
+        checkForUpdates(/*manual=*/ true).catch((e) => {
           log.error("manual update check failed:", e);
           dialog.showErrorBox("Ошибка обновления", String(e));
         });
@@ -283,70 +279,96 @@ ipcMain.on("pride-notify", (_e, payload) => {
 // === IPC: renderer asks current update state (banner) ===
 ipcMain.handle("pride-get-update-state", () => updateState);
 
-// === IPC: renderer clicked "Install now" in banner ===
+// === IPC: renderer clicked "Скачать" в баннере — открыть .exe в браузере ===
 ipcMain.on("pride-install-update", () => {
-  log.info("user clicked install — quitAndInstall");
-  isQuitting = true;
-  autoUpdater.quitAndInstall();
+  log.info("user clicked download — opening installer in browser");
+  if (updateState && updateState.downloadUrl) {
+    shell.openExternal(updateState.downloadUrl);
+  } else {
+    shell.openExternal(DASHBOARD_URL + "desktop");
+  }
 });
 
 // === IPC: renderer clicked "Check for updates" manually ===
 ipcMain.on("pride-check-updates", () => {
-  autoUpdater.checkForUpdates().catch((e) => log.error("check fail:", e));
+  checkForUpdates(/*manual=*/ true).catch((e) => log.error("manual check:", e));
 });
 
-// === Auto-update events ===
+// === Простой кастомный updater через наш /api/desktop/manifest ===
 function sendUpdateState() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("pride-update-state", updateState);
   }
 }
 
-autoUpdater.on("checking-for-update", () => {
-  log.info("checking for update...");
+function compareVersions(a, b) {
+  // "1.0.10" > "1.0.9" — числовое сравнение
+  const pa = String(a).replace(/^v/, "").split(".").map(n => parseInt(n) || 0);
+  const pb = String(b).replace(/^v/, "").split(".").map(n => parseInt(n) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+async function fetchManifest() {
+  return new Promise((resolve, reject) => {
+    const url = DASHBOARD_URL.replace(/\/$/, "") + "/api/desktop/manifest?refresh=1";
+    const req = net.request({ url, method: "GET" });
+    let body = "";
+    req.on("response", (res) => {
+      res.on("data", (chunk) => { body += chunk.toString(); });
+      res.on("end", () => {
+        try { resolve(JSON.parse(body)); }
+        catch (e) { reject(new Error("invalid JSON: " + body.substring(0, 100))); }
+      });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function checkForUpdates(manual = false) {
+  log.info("checking for updates (manual=" + manual + ")...");
   updateState = { status: "checking", percent: 0, version: null };
   sendUpdateState();
-});
-autoUpdater.on("update-available", (info) => {
-  log.info("update available:", info.version);
-  updateState = { status: "downloading", percent: 0, version: info.version };
-  sendUpdateState();
-  showNotification(
-    `🎉 Новая версия ${info.version}`,
-    "Загружается в фоне, мы сообщим когда будет готово.",
-  );
-});
-autoUpdater.on("update-not-available", () => {
-  log.info("no update available");
-  updateState = { status: "uptodate", percent: 0, version: null };
-  sendUpdateState();
-});
-autoUpdater.on("download-progress", (progress) => {
-  updateState = {
-    status: "downloading",
-    percent: Math.round(progress.percent || 0),
-    version: updateState.version,
-    bytesPerSecond: progress.bytesPerSecond,
-    transferred: progress.transferred,
-    total: progress.total,
-  };
-  sendUpdateState();
-});
-autoUpdater.on("update-downloaded", (info) => {
-  log.info("update downloaded:", info.version);
-  updateState = { status: "ready", percent: 100, version: info.version };
-  sendUpdateState();
-  showNotification(
-    `✅ Обновление ${info.version} готово`,
-    "Нажми кнопку «Установить» в баннере вверху приложения.",
-    () => showMainWindow(),
-  );
-});
-autoUpdater.on("error", (err) => {
-  log.error("autoUpdater error:", err);
-  updateState = { status: "error", percent: 0, version: null, error: String(err) };
-  sendUpdateState();
-});
+  try {
+    const data = await fetchManifest();
+    if (!data || !data.ok) throw new Error(data && data.error ? data.error : "no manifest");
+    const remote = String(data.version || "").replace(/^v/, "");
+    const local = app.getVersion();
+    log.info(`version check: local=${local} remote=${remote}`);
+    if (compareVersions(remote, local) > 0) {
+      const winAsset = (data.assets || []).find(a => a.platform === "win");
+      const downloadUrl = winAsset
+        ? DASHBOARD_URL.replace(/\/$/, "") + winAsset.url
+        : DASHBOARD_URL.replace(/\/$/, "") + "/desktop";
+      updateState = { status: "ready", percent: 100, version: remote, downloadUrl };
+      sendUpdateState();
+      showNotification(
+        `🎉 Доступна версия ${remote}`,
+        "Нажми «Скачать» в баннере вверху приложения чтобы обновиться.",
+        () => showMainWindow(),
+      );
+    } else {
+      updateState = { status: "uptodate", percent: 0, version: local };
+      sendUpdateState();
+      if (manual) {
+        showNotification(
+          "✅ У тебя свежая версия",
+          `Установлена ${local} — обновлений нет.`,
+        );
+      }
+    }
+  } catch (e) {
+    log.error("update check error:", e);
+    updateState = { status: "error", percent: 0, version: null, error: String(e) };
+    sendUpdateState();
+  }
+}
 
 // === Lifecycle ===
 app.whenReady().then(() => {
@@ -362,10 +384,10 @@ app.whenReady().then(() => {
 
   // Проверка обновлений через 10 сек после старта + каждые 30 минут
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((e) => log.error("startup check:", e));
+    checkForUpdates(false).catch((e) => log.error("startup check:", e));
   }, 10_000);
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch((e) => log.error("interval check:", e));
+    checkForUpdates(false).catch((e) => log.error("interval check:", e));
   }, 30 * 60 * 1000);
 });
 

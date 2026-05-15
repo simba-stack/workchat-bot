@@ -72,7 +72,7 @@ function injectUpdateBanner() {
     <div class="pub-progress" id="pride-update-progress" style="display:none;">
       <div class="pub-bar" id="pride-update-bar"></div>
     </div>
-    <button class="pub-btn" id="pride-update-btn" style="display:none;">Установить</button>
+    <button class="pub-btn" id="pride-update-btn" style="display:none;">Скачать</button>
     <span class="pub-close" id="pride-update-close" title="Скрыть">✕</span>
   `;
   document.body.appendChild(banner);
@@ -117,7 +117,7 @@ function renderUpdateState(state) {
   }
   if (state.status === "ready") {
     banner.classList.add("visible");
-    text.textContent = `✅ Обновление v${state.version || ""} загружено — готово к установке`;
+    text.textContent = `🎉 Доступна версия v${state.version || ""} — нажми «Скачать»`;
     progressBox.style.display = "none";
     btn.style.display = "inline-block";
     return;
