@@ -2566,7 +2566,3 @@ class Storage:
 
 
 storage = Storage(config.STORAGE_PATH)
-        await self.set_crm_fsm(tg_user_id, action=None)
-
-
-storage = Storage(config.STORAGE_PATH)
