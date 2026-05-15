@@ -1,14 +1,14 @@
 {
   "name": "pride-jarvis",
   "productName": "PRIDE J.A.R.V.I.S.",
-  "version": "1.0.7",
+  "version": "2.0.0",
   "description": "Desktop клиент для PRIDE CRM/Outreach (Electron-обёртка над workchat-bot)",
   "main": "main.js",
   "scripts": {
-    "start": "electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
-    "publish": "electron-forge publish"
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "publish": "electron-builder --publish always"
   },
   "keywords": ["pride", "crm", "jarvis"],
   "author": "SIMBA",
@@ -17,20 +17,66 @@
     "type": "git",
     "url": "https://github.com/simba-stack/workchat-bot"
   },
-  "config": {
-    "forge": "./forge.config.js"
+  "build": {
+    "appId": "com.pride.jarvis",
+    "productName": "PRIDE J.A.R.V.I.S.",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "icon.png",
+      "tray-icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "simba-stack",
+        "repo": "workchat-bot",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PRIDE J.A.R.V.I.S.",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.png",
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "icon.png",
+      "category": "Office"
+    }
   },
   "devDependencies": {
-    "@electron-forge/cli": "^7.4.0",
-    "@electron-forge/maker-squirrel": "^7.4.0",
-    "@electron-forge/maker-zip": "^7.4.0",
-    "@electron-forge/maker-deb": "^7.4.0",
-    "@electron-forge/maker-dmg": "^7.4.0",
-    "@electron-forge/publisher-github": "^7.4.0",
-    "electron": "^32.0.0"
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "electron-squirrel-startup": "^1.0.1",
-    "electron-log": "^5.1.0"
+    "electron-log": "^5.1.0",
+    "electron-updater": "^6.3.0"
   }
 }

@@ -4,13 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  workflow_dispatch:  # позволяет запустить вручную из вкладки Actions
+  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
-      contents: write  # нужно для publisher-github (создание Release)
+      contents: write   # нужно для electron-builder publish → GitHub Releases
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,26 +20,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Show desktop folder
-        working-directory: desktop
-        run: |
-          dir
-          node --version
-          npm --version
-
       - name: Install npm deps
         working-directory: desktop
         run: npm install --no-audit --no-fund
 
-      - name: Build & publish to GitHub Releases (Windows)
+      - name: Build & publish (Windows NSIS)
         working-directory: desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEBUG: electron-forge:*
-        run: npm run publish
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEBUG: electron-builder
+        run: npx electron-builder --win --publish always
 
-  # Mac/Linux отключены по умолчанию. Чтобы включить:
-  # Repo Settings → Variables → New repository variable: BUILD_MAC=1 / BUILD_LINUX=1
+  # Mac/Linux — опционально, включаются переменными BUILD_MAC=1 / BUILD_LINUX=1
   build-mac:
     if: ${{ vars.BUILD_MAC == '1' }}
     runs-on: macos-latest
@@ -54,8 +46,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - working-directory: desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish always
 
   build-linux:
     if: ${{ vars.BUILD_LINUX == '1' }}
@@ -67,10 +59,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: sudo apt-get update && sudo apt-get install -y rpm fakeroot dpkg
       - working-directory: desktop
         run: npm install --no-audit --no-fund
       - working-directory: desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --publish always

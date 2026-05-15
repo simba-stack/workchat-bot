@@ -1,28 +1,26 @@
-// PRIDE J.A.R.V.I.S. Desktop — Electron main process
-// Обёртка над workchat-bot веб-дашбордом.
+// PRIDE J.A.R.V.I.S. Desktop — Electron main process (v2.x)
+// Тулчейн: electron-builder + electron-updater (NSIS installer).
 //
 // Фичи:
 //   • Native окно без браузерной строки
 //   • Tray-иконка (свернуть → в трей, не закрывается)
-//   • Hotkeys: Cmd/Ctrl+Q quit, Cmd/Ctrl+R reload, F11 fullscreen, Cmd/Ctrl+Shift+J toggle окна
+//   • Hotkey Cmd/Ctrl+Shift+J — toggle окна
+//   • Splash-экран на старте (чёрный пульсирующий квадрат)
 //   • Native push-уведомления (через SSE → notifications API)
-//   • Auto-update через GitHub Releases с UI-баннером прогресса
+//   • TG OAuth popup открывается ВНУТРИ приложения (cookies-shared partition)
+//   • Cookie listener: автоматический reload main после успешной авторизации
+//   • SILENT auto-update через electron-updater + electron-builder
+//     - Проверка обновлений каждые 30 минут
+//     - Скачивание в фоне (без UI)
+//     - Установка молча при следующем рестарте (как Chrome)
 
 const {
   app, BrowserWindow, Tray, Menu, shell, ipcMain, Notification,
-  globalShortcut, nativeImage, dialog, net, session,
+  globalShortcut, nativeImage, dialog, session,
 } = require("electron");
 const path = require("path");
 const log = require("electron-log");
-
-// === Squirrel installer hooks ===
-// ВАЖНО: должно сработать ДО любых других app.on / globalShortcut вызовов.
-// При --squirrel-install / --squirrel-firstrun / --squirrel-updated / --squirrel-uninstall
-// модуль вызывает app.quit() и возвращает true — в этом случае выходим немедленно.
-if (require("electron-squirrel-startup")) {
-  app.quit();
-  process.exit(0);
-}
+const { autoUpdater } = require("electron-updater");
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -33,6 +31,14 @@ if (!gotTheLock) {
 
 // === Logging ===
 log.transports.file.level = "info";
+log.transports.console.level = "info";
+autoUpdater.logger = log;
+
+// === Auto-updater config (silent install) ===
+autoUpdater.autoDownload = true;             // качаем сразу в фоне
+autoUpdater.autoInstallOnAppQuit = true;     // ставим при выходе
+autoUpdater.allowDowngrade = false;
+autoUpdater.allowPrerelease = false;
 
 const DASHBOARD_URL = process.env.PRIDE_URL ||
   "https://workchat-bot-production.up.railway.app/";
@@ -43,6 +49,7 @@ let tray = null;
 let isQuitting = false;
 let updateState = { status: "idle", percent: 0, version: null };
 
+// === Splash window (показывается на старте) ===
 function createSplash() {
   splashWindow = new BrowserWindow({
     width: 320,
@@ -74,6 +81,7 @@ function destroySplash() {
   splashWindow = null;
 }
 
+// === Main window ===
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -84,7 +92,7 @@ function createMainWindow() {
     icon: path.join(__dirname, "icon.png"),
     backgroundColor: "#0a0e1a",
     autoHideMenuBar: true,
-    show: false, // покажем только после did-finish-load (когда дашборд загрузился)
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -95,7 +103,6 @@ function createMainWindow() {
 
   mainWindow.loadURL(DASHBOARD_URL);
 
-  // Когда дашборд полностью загрузился — закрыть splash и показать главное окно
   const revealMain = () => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
       mainWindow.show();
@@ -105,7 +112,6 @@ function createMainWindow() {
   };
   mainWindow.webContents.once("did-finish-load", revealMain);
   mainWindow.webContents.once("did-fail-load", revealMain);
-  // Аварийный fallback: если за 15 секунд ничего не загрузилось — всё равно показать
   setTimeout(revealMain, 15_000);
 
   mainWindow.on("close", (event) => {
@@ -120,12 +126,10 @@ function createMainWindow() {
     }
   });
 
+  // === TG OAuth popup внутри Electron (общие cookies persist:pride) ===
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     log.info("window.open requested:", url);
-    // Сам дашборд — открываем как новое окно внутри Electron
     if (url.startsWith(DASHBOARD_URL)) return { action: "allow" };
-    // Telegram OAuth widget: открываем как popup ВНУТРИ приложения.
-    // ВАЖНО: НЕ ставим modal:true — это иногда ломает window.opener в Electron.
     const tgHosts = [
       "https://oauth.telegram.org",
       "https://my.telegram.org",
@@ -144,19 +148,17 @@ function createMainWindow() {
           backgroundColor: "#ffffff",
           title: "Авторизация Telegram",
           webPreferences: {
-            partition: "persist:pride",      // те же куки что у main!
+            partition: "persist:pride",
             contextIsolation: true,
             nodeIntegration: false,
           },
         },
       };
     }
-    // Всё остальное — наружу в системный браузер
     shell.openExternal(url);
     return { action: "deny" };
   });
 
-  // Лог навигации child-окон (для отладки) + fallback на reload main
   mainWindow.webContents.on("did-create-window", (childWindow, details) => {
     log.info("child window created:", details.url);
     childWindow.webContents.on("did-navigate", (_e, navUrl) => {
@@ -164,8 +166,6 @@ function createMainWindow() {
     });
     childWindow.on("closed", () => {
       log.info("popup closed — checking if main needs reload");
-      // Если popup закрылся (юзер либо подтвердил, либо отменил), а main всё ещё на /login —
-      // перезагружаем main: при успешной авторизации cookie уже стоит, /login сам сделает 302→/
       if (mainWindow && !mainWindow.isDestroyed()) {
         const url = mainWindow.webContents.getURL();
         if (url.includes("/login") || url === DASHBOARD_URL || url === DASHBOARD_URL.replace(/\/$/, "")) {
@@ -179,12 +179,12 @@ function createMainWindow() {
     });
   });
 
-  // Когда renderer готов — отправим текущее update состояние
   mainWindow.webContents.on("did-finish-load", () => {
     sendUpdateState();
   });
 }
 
+// === Tray ===
 function createTray() {
   let icon;
   try {
@@ -204,10 +204,7 @@ function createTray() {
   tray.setToolTip(`PRIDE J.A.R.V.I.S. v${app.getVersion()}`);
 
   const menu = Menu.buildFromTemplate([
-    {
-      label: "Открыть J.A.R.V.I.S.",
-      click: () => showMainWindow(),
-    },
+    { label: "Открыть J.A.R.V.I.S.", click: () => showMainWindow() },
     { type: "separator" },
     { label: "🤝 Партнёры", click: () => navigateTo("#crm") },
     { label: "💰 Выплаты", click: () => navigateTo("#payouts") },
@@ -216,22 +213,16 @@ function createTray() {
     {
       label: `Проверить обновления (текущая ${app.getVersion()})`,
       click: () => {
-        checkForUpdates(/*manual=*/ true).catch((e) => {
+        autoUpdater.checkForUpdates().catch((e) => {
           log.error("manual update check failed:", e);
           dialog.showErrorBox("Ошибка обновления", String(e));
         });
       },
     },
     { label: "↻ Перезагрузить", click: () => mainWindow && mainWindow.reload() },
-    {
-      label: "Открыть в браузере",
-      click: () => shell.openExternal(DASHBOARD_URL),
-    },
+    { label: "Открыть в браузере", click: () => shell.openExternal(DASHBOARD_URL) },
     { type: "separator" },
-    {
-      label: "Выйти",
-      click: () => { isQuitting = true; app.quit(); },
-    },
+    { label: "Выйти", click: () => { isQuitting = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
 
@@ -266,7 +257,7 @@ function showNotification(title, body, onClick) {
   n.show();
 }
 
-// === IPC: renderer pushes native notifications ===
+// === IPC ===
 ipcMain.on("pride-notify", (_e, payload) => {
   const { title, body, hash } = payload || {};
   if (!title) return;
@@ -280,116 +271,91 @@ ipcMain.on("pride-notify", (_e, payload) => {
   });
 });
 
-// === IPC: renderer asks current update state (banner) ===
 ipcMain.handle("pride-get-update-state", () => updateState);
 
-// === IPC: renderer clicked "Скачать" в баннере — открыть .exe в браузере ===
 ipcMain.on("pride-install-update", () => {
-  log.info("user clicked download — opening installer in browser");
-  if (updateState && updateState.downloadUrl) {
-    shell.openExternal(updateState.downloadUrl);
-  } else {
-    shell.openExternal(DASHBOARD_URL + "desktop");
+  // Юзер кликнул «Установить сейчас» в баннере — заставляем установить немедленно.
+  log.info("user requested immediate update install");
+  if (updateState && updateState.status === "ready") {
+    isQuitting = true;
+    autoUpdater.quitAndInstall(true /* silent */, true /* forceRunAfter */);
   }
 });
 
-// === IPC: renderer clicked "Check for updates" manually ===
 ipcMain.on("pride-check-updates", () => {
-  checkForUpdates(/*manual=*/ true).catch((e) => log.error("manual check:", e));
+  autoUpdater.checkForUpdates().catch((e) => log.error("manual check:", e));
 });
 
-// === Простой кастомный updater через наш /api/desktop/manifest ===
+// === Auto-update events (electron-updater) ===
 function sendUpdateState() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("pride-update-state", updateState);
   }
 }
 
-function compareVersions(a, b) {
-  // "1.0.10" > "1.0.9" — числовое сравнение
-  const pa = String(a).replace(/^v/, "").split(".").map(n => parseInt(n) || 0);
-  const pb = String(b).replace(/^v/, "").split(".").map(n => parseInt(n) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] || 0, y = pb[i] || 0;
-    if (x > y) return 1;
-    if (x < y) return -1;
-  }
-  return 0;
-}
+autoUpdater.on("checking-for-update", () => {
+  log.info("[updater] checking for update");
+});
 
-async function fetchManifest() {
-  return new Promise((resolve, reject) => {
-    const url = DASHBOARD_URL.replace(/\/$/, "") + "/api/desktop/manifest?refresh=1";
-    const req = net.request({ url, method: "GET" });
-    let body = "";
-    req.on("response", (res) => {
-      res.on("data", (chunk) => { body += chunk.toString(); });
-      res.on("end", () => {
-        try { resolve(JSON.parse(body)); }
-        catch (e) { reject(new Error("invalid JSON: " + body.substring(0, 100))); }
-      });
-      res.on("error", reject);
-    });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-async function checkForUpdates(manual = false) {
-  log.info("checking for updates (manual=" + manual + ")...");
-  updateState = { status: "checking", percent: 0, version: null };
+autoUpdater.on("update-available", (info) => {
+  log.info("[updater] update available:", info.version);
+  updateState = {
+    status: "downloading",
+    percent: 0,
+    version: info.version,
+  };
   sendUpdateState();
-  try {
-    const data = await fetchManifest();
-    if (!data || !data.ok) throw new Error(data && data.error ? data.error : "no manifest");
-    const remote = String(data.version || "").replace(/^v/, "");
-    const local = app.getVersion();
-    log.info(`version check: local=${local} remote=${remote}`);
-    if (compareVersions(remote, local) > 0) {
-      const winAsset = (data.assets || []).find(a => a.platform === "win");
-      const downloadUrl = winAsset
-        ? DASHBOARD_URL.replace(/\/$/, "") + winAsset.url
-        : DASHBOARD_URL.replace(/\/$/, "") + "/desktop";
-      updateState = { status: "ready", percent: 100, version: remote, downloadUrl };
-      sendUpdateState();
-      showNotification(
-        `🎉 Доступна версия ${remote}`,
-        "Нажми «Скачать» в баннере вверху приложения чтобы обновиться.",
-        () => showMainWindow(),
-      );
-    } else {
-      updateState = { status: "uptodate", percent: 0, version: local };
-      sendUpdateState();
-      if (manual) {
-        showNotification(
-          "✅ У тебя свежая версия",
-          `Установлена ${local} — обновлений нет.`,
-        );
-      }
-    }
-  } catch (e) {
-    log.error("update check error:", e);
-    updateState = { status: "error", percent: 0, version: null, error: String(e) };
-    sendUpdateState();
-  }
-}
+});
+
+autoUpdater.on("update-not-available", () => {
+  log.info("[updater] no update");
+  updateState = { status: "uptodate", percent: 0, version: app.getVersion() };
+  sendUpdateState();
+});
+
+autoUpdater.on("download-progress", (progress) => {
+  updateState = {
+    status: "downloading",
+    percent: Math.round(progress.percent || 0),
+    version: updateState.version,
+    bytesPerSecond: progress.bytesPerSecond,
+    transferred: progress.transferred,
+    total: progress.total,
+  };
+  sendUpdateState();
+});
+
+autoUpdater.on("update-downloaded", (info) => {
+  log.info("[updater] downloaded:", info.version);
+  updateState = { status: "ready", percent: 100, version: info.version };
+  sendUpdateState();
+  // Тихая native-нотификация. НЕ форсим popup — пусть юзер сам перезапустит когда удобно.
+  // При выходе приложения NSIS-апдейтер сам молча применит обновление (autoInstallOnAppQuit).
+  showNotification(
+    `Обновление до v${info.version} готово`,
+    "Будет установлено автоматически при следующем запуске.",
+    () => showMainWindow(),
+  );
+});
+
+autoUpdater.on("error", (err) => {
+  log.error("[updater] error:", err);
+  updateState = { status: "error", percent: 0, version: null, error: String(err) };
+  sendUpdateState();
+});
 
 // === Lifecycle ===
 app.whenReady().then(() => {
-  // КРИТИЧНО: слушаем изменение cookie jarvis_session.
-  // Когда после TG-OAuth сервер выставляет cookie — мы сразу перезагружаем main
-  // (не полагаемся на window.opener.location.href = '/' из popup, который может не сработать).
+  // Cookie listener: jarvis_session появилась → авто-reload main (для TG OAuth)
   try {
     const sess = session.fromPartition("persist:pride");
     sess.cookies.on("changed", (_event, cookie, cause, removed) => {
       if (removed) return;
       if (cookie && cookie.name === "jarvis_session") {
-        log.info("AUTH cookie set, reloading main window", { cause, domain: cookie.domain });
+        log.info("AUTH cookie set, reloading main window");
         if (mainWindow && !mainWindow.isDestroyed()) {
-          // Грузим / напрямую, потому что страница /login сама редиректит при наличии cookie
           mainWindow.loadURL(DASHBOARD_URL);
         }
-        // Закрываем все child-окна (popup)
         for (const w of BrowserWindow.getAllWindows()) {
           if (w !== mainWindow && w !== splashWindow && !w.isDestroyed()) {
             try { w.close(); } catch (e) { /* silent */ }
@@ -411,12 +377,16 @@ app.whenReady().then(() => {
     else showMainWindow();
   });
 
-  // Проверка обновлений через 10 сек после старта + каждые 30 минут
+  // Первая проверка обновлений через 10 секунд, потом каждые 30 минут.
+  // Скачивание идёт в фоне (autoDownload=true), установка при следующем
+  // выходе из приложения (autoInstallOnAppQuit=true) — silent.
   setTimeout(() => {
-    checkForUpdates(false).catch((e) => log.error("startup check:", e));
+    autoUpdater.checkForUpdatesAndNotify()
+      .catch((e) => log.error("startup update check:", e));
   }, 10_000);
   setInterval(() => {
-    checkForUpdates(false).catch((e) => log.error("interval check:", e));
+    autoUpdater.checkForUpdates()
+      .catch((e) => log.error("interval update check:", e));
   }, 30 * 60 * 1000);
 });
 
@@ -438,14 +408,11 @@ app.on("activate", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
-  // globalShortcut можно дёргать только если app был ready.
-  // app.isReady() добавлен в Electron 5+.
   if (app.isReady()) {
     try { globalShortcut.unregisterAll(); } catch (e) { log.error("unregisterAll:", e); }
   }
 });
 
-// will-quit отрабатывает позже before-quit и тоже может вызваться до ready
 app.on("will-quit", () => {
   if (app.isReady()) {
     try { globalShortcut.unregisterAll(); } catch (e) { /* silent */ }
