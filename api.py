@@ -650,8 +650,22 @@ _DESKTOP_PAGE_HTML = """<!DOCTYPE html>
 <script>
   // Подгружаем манифест через НАШ proxy (а не напрямую GitHub — обходит CORS,
   // и кнопки скачивания качают через наш домен).
-  fetch("/api/desktop/manifest")
-    .then(r => r.json())
+  async function fetchManifest(refresh) {
+    const url = "/api/desktop/manifest" + (refresh ? "?refresh=1" : "");
+    const r = await fetch(url, { cache: "no-store" });
+    return r.json();
+  }
+  // Сначала обычный запрос. Если ассеты пустые (GitHub ещё не успел залить) —
+  // повторяем с refresh=1 чтобы пробить серверный кеш.
+  fetchManifest(false)
+    .then(async data => {
+      if (data && data.ok && (!data.assets || data.assets.length === 0)) {
+        await new Promise(r => setTimeout(r, 800));
+        const d2 = await fetchManifest(true);
+        if (d2 && d2.assets && d2.assets.length > 0) return d2;
+      }
+      return data;
+    })
     .then(data => {
       const verEl = document.getElementById("ver");
       const platforms = document.getElementById("platforms");
@@ -724,13 +738,21 @@ _DESKTOP_MANIFEST_CACHE = {"ts": 0, "data": None}
 
 
 @app.get("/api/desktop/manifest")
-async def api_desktop_manifest():
+async def api_desktop_manifest(refresh: int = 0):
     """Сервер-сайд получение последнего релиза + перевод download URL'ов
     на наш домен для проксирования."""
     import time as _t
     now = _t.time()
-    if _DESKTOP_MANIFEST_CACHE["data"] and (now - _DESKTOP_MANIFEST_CACHE["ts"]) < 300:
-        return _DESKTOP_MANIFEST_CACHE["data"]
+    cached = _DESKTOP_MANIFEST_CACHE["data"]
+    cached_assets = (cached or {}).get("assets") or []
+    # Используем кеш только если он непустой (assets есть) И клиент не запросил refresh.
+    # Пустой ответ кешируем максимум 30 сек чтобы не долбить GitHub, но всё равно перепроверяем.
+    age = now - _DESKTOP_MANIFEST_CACHE["ts"]
+    if not refresh and cached:
+        if cached_assets and age < 300:
+            return cached
+        if not cached_assets and age < 30:
+            return cached
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
