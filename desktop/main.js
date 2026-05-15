@@ -10,7 +10,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, shell, ipcMain, Notification,
-  globalShortcut, nativeImage, dialog, net,
+  globalShortcut, nativeImage, dialog, net, session,
 } = require("electron");
 const path = require("path");
 const log = require("electron-log");
@@ -124,9 +124,8 @@ function createMainWindow() {
     log.info("window.open requested:", url);
     // Сам дашборд — открываем как новое окно внутри Electron
     if (url.startsWith(DASHBOARD_URL)) return { action: "allow" };
-    // Telegram OAuth widget: открываем как popup ВНУТРИ приложения,
-    // иначе postMessage callback не дойдёт до opener'а (window.opener будет null).
-    // Поддерживаемые домены: oauth.telegram.org, telegram.org, t.me, web.telegram.org
+    // Telegram OAuth widget: открываем как popup ВНУТРИ приложения.
+    // ВАЖНО: НЕ ставим modal:true — это иногда ломает window.opener в Electron.
     const tgHosts = [
       "https://oauth.telegram.org",
       "https://my.telegram.org",
@@ -138,14 +137,14 @@ function createMainWindow() {
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
-          width: 480,
-          height: 640,
-          modal: true,
+          width: 520,
+          height: 720,
           parent: mainWindow,
           autoHideMenuBar: true,
           backgroundColor: "#ffffff",
+          title: "Авторизация Telegram",
           webPreferences: {
-            partition: "persist:pride",      // те же куки!
+            partition: "persist:pride",      // те же куки что у main!
             contextIsolation: true,
             nodeIntegration: false,
           },
@@ -157,19 +156,24 @@ function createMainWindow() {
     return { action: "deny" };
   });
 
-  // Когда открывается popup Telegram — навешиваем закрытие при success/cancel
+  // Лог навигации child-окон (для отладки) + fallback на reload main
   mainWindow.webContents.on("did-create-window", (childWindow, details) => {
     log.info("child window created:", details.url);
-    // Telegram popup сам себя закрывает через window.close() после auth — Electron уважает это.
-    // Но на всякий случай: если URL вернулся на наш домен — закрываем popup и обновляем основное окно.
     childWindow.webContents.on("did-navigate", (_e, navUrl) => {
       log.info("popup navigated to:", navUrl);
-      if (navUrl.startsWith(DASHBOARD_URL)) {
-        // OAuth completed — popup ушёл обратно на наш домен → закрываем
-        try { childWindow.close(); } catch (e) { /* silent */ }
-        // На всякий случай форсим reload основного окна чтобы подхватить cookie auth
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          setTimeout(() => mainWindow.webContents.reload(), 300);
+    });
+    childWindow.on("closed", () => {
+      log.info("popup closed — checking if main needs reload");
+      // Если popup закрылся (юзер либо подтвердил, либо отменил), а main всё ещё на /login —
+      // перезагружаем main: при успешной авторизации cookie уже стоит, /login сам сделает 302→/
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const url = mainWindow.webContents.getURL();
+        if (url.includes("/login") || url === DASHBOARD_URL || url === DASHBOARD_URL.replace(/\/$/, "")) {
+          setTimeout(() => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.loadURL(DASHBOARD_URL);
+            }
+          }, 400);
         }
       }
     });
@@ -372,6 +376,31 @@ async function checkForUpdates(manual = false) {
 
 // === Lifecycle ===
 app.whenReady().then(() => {
+  // КРИТИЧНО: слушаем изменение cookie jarvis_session.
+  // Когда после TG-OAuth сервер выставляет cookie — мы сразу перезагружаем main
+  // (не полагаемся на window.opener.location.href = '/' из popup, который может не сработать).
+  try {
+    const sess = session.fromPartition("persist:pride");
+    sess.cookies.on("changed", (_event, cookie, cause, removed) => {
+      if (removed) return;
+      if (cookie && cookie.name === "jarvis_session") {
+        log.info("AUTH cookie set, reloading main window", { cause, domain: cookie.domain });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          // Грузим / напрямую, потому что страница /login сама редиректит при наличии cookie
+          mainWindow.loadURL(DASHBOARD_URL);
+        }
+        // Закрываем все child-окна (popup)
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (w !== mainWindow && w !== splashWindow && !w.isDestroyed()) {
+            try { w.close(); } catch (e) { /* silent */ }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    log.error("cookie listener setup failed:", e);
+  }
+
   createSplash();
   createMainWindow();
   createTray();
