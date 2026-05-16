@@ -381,29 +381,33 @@ class UserbotService:
             except Exception as e:
                 logger.warning("Could not grant admin rights to userbot: %s", e)
 
-        # 5) Делаем работников админами с rank (используя текущую роль из storage).
+        # 5) Выдаём админку с rank работникам у которых worker_roles[uname].is_admin=True.
         # Также обогащаем statuses[uname] суффиксом «+ админка (Роль)»,
         # чтобы admin-нотификация в bot.py показывала роль рядом с никнеймом.
         try:
             for uname, user in users_to_invite:
-                # Берём роль из storage (worker_roles). Поле возвращается dict'ом
-                # с ключом 'rank' или просто строкой — поддержим оба варианта.
-                role_str = ""
-                try:
-                    role_data = storage.get_worker_role(uname)
-                    if isinstance(role_data, dict):
-                        role_str = (role_data.get("rank")
-                                    or role_data.get("role")
-                                    or "").strip()
-                    elif isinstance(role_data, str):
-                        role_str = role_data.strip()
-                except Exception:
-                    pass
-                # Только если статус «добавлен» (раньше уже выставили) — делаем
-                # его админом. Если был «уже в чате» — тоже выдаём админку
-                # (могло слететь после рестарта).
+                # Только если уже добавили в чат
                 current_status = statuses.get(uname, "")
                 if current_status not in ("добавлен", "уже в чате"):
+                    continue
+                # Берём роль из storage.worker_roles[uname.lower()] → {role, is_admin}
+                role_data = {}
+                try:
+                    role_data = storage.get_worker_role(uname) or {}
+                except Exception as e:
+                    logger.warning("get_worker_role @%s failed: %s", uname, e)
+                # Поддержим оба формата на всякий случай
+                if isinstance(role_data, str):
+                    role_str = role_data.strip()
+                    is_admin = bool(role_str)
+                else:
+                    role_str = (role_data.get("role")
+                                or role_data.get("rank") or "").strip()
+                    is_admin = bool(role_data.get("is_admin"))
+                if not is_admin:
+                    # Работник без флага админки — оставляем как обычный участник.
+                    if role_str:
+                        statuses[uname] = f"{current_status} ({role_str}, без админки)"
                     continue
                 try:
                     rights = ChatAdminRights(
@@ -547,6 +551,16 @@ class UserbotService:
                 await self._handle_ai_message(event)
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
+
+    async def stop(self):
+        """Аккуратный shutdown — отключаем Telethon клиент.
+        Вызывается из bot.py в finally при остановке бота."""
+        try:
+            if self.client and self.client.is_connected():
+                await self.client.disconnect()
+                logger.info("Userbot stopped")
+        except Exception as e:
+            logger.warning("userbot stop error: %s", e)
 
     async def _handle_ideas_message(self, event):
         """Сохраняет сообщения из ideas-чата в storage.ideas_inbox.

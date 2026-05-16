@@ -139,38 +139,46 @@ class HealthChecker:
             self._add("Storage методы", "ok", f"все {len(required)} методов на месте")
 
     def check_brain_tools(self):
-        """brain.py должен иметь список tools (для AI)."""
+        """brain.py должен иметь список tools для AI (ALL_TOOLS / TOOLS / любое)."""
         try:
             import brain
         except Exception as e:
-            self._add("brain.tools", "fail", f"импорт упал: {e!r}",
+            self._add("brain tools", "fail", f"импорт упал: {e!r}",
                       fix_hint="brain.py поломан")
             return
-        tools = getattr(brain, "TOOLS", None)
-        if not tools or not isinstance(tools, list):
+        # Поддержка разных имён: ALL_TOOLS (текущее), TOOLS (старое), CLAUDE_TOOLS
+        tools = None
+        chosen_name = None
+        for var in ("ALL_TOOLS", "TOOLS", "CLAUDE_TOOLS"):
+            v = getattr(brain, var, None)
+            if isinstance(v, list) and v:
+                tools = v
+                chosen_name = var
+                break
+        if not tools:
             self._add(
-                "brain.TOOLS", "fail",
-                "список TOOLS пустой или не список",
-                fix_hint="Проверь brain.py — там должен быть список TOOLS с tool-определениями для Claude.",
+                "brain.ALL_TOOLS", "fail",
+                "список tools не найден (нет ALL_TOOLS/TOOLS/CLAUDE_TOOLS)",
+                fix_hint="brain.py должен экспортировать ALL_TOOLS = [...] со схемами tool-ов для Claude.",
             )
             return
-        names = [t.get("name", "?") for t in tools]
+        names = [t.get("name", "?") for t in tools if isinstance(t, dict)]
         critical = {"set_payment_method", "create_lk_card", "record_deal"}
         missing = critical - set(names)
         if missing:
             self._add(
-                "brain.TOOLS", "fail",
-                f"критичные tools отсутствуют: {missing}",
+                f"brain.{chosen_name}", "fail",
+                f"критичные tools отсутствуют: {', '.join(missing)}",
                 fix_hint=(
                     "AI не сможет работать без этих tools. "
-                    "Восстанови из git: `git log -S '{}' --all --oneline brain.py`"
-                    .format(list(missing)[0])
+                    f"Поиск: git log -S 'name: {list(missing)[0]}' --all --oneline brain.py"
                 ),
             )
         else:
+            preview = ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
             self._add(
-                "brain.TOOLS", "ok",
-                f"{len(tools)} tools: {', '.join(names[:5])}{'...' if len(names)>5 else ''}",
+                f"brain.{chosen_name}", "ok",
+                f"{len(tools)} tools: {preview}",
             )
 
     def check_env_vars(self):
