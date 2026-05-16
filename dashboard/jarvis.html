@@ -3627,7 +3627,7 @@
     </div>
 
     <!-- Text messages -->
-    <div class="dc-messages" x-ref="dcMessages" x-show="discordActiveChannel?.type === 'text' || (discordActiveChannel?.type === 'voice' && isInVoiceChannel(discordActiveChannel?.id))">
+    <div class="dc-messages" x-ref="dcMessages" x-show="discordActiveChannel?.type === 'text' || discordActiveChannel?.type === 'voice'">
       <template x-if="discordMessages.length === 0 && discordActiveChannel?.type === 'text'">
         <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
           Сообщений нет. Начни обсуждение в #<span x-text="discordActiveChannel?.name || ''"></span>
@@ -3672,7 +3672,7 @@
       </template>
     </div>
 
-    <div class="dc-input-wrap" x-show="discordActiveChannel?.type === 'text' || (discordActiveChannel?.type === 'voice' && isInVoiceChannel(discordActiveChannel?.id))">
+    <div class="dc-input-wrap" x-show="discordActiveChannel?.type === 'text' || discordActiveChannel?.type === 'voice'">
       <input
         class="dc-input"
         type="text"
@@ -3921,6 +3921,26 @@
         <div>
           <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Звуки уведомлений</label>
           <button class="btn" @click="toggleSound()" :class="soundOn ? 'success' : ''" x-text="soundOn ? '🔊 ВКЛ' : '🔇 ВЫКЛ'"></button>
+        </div>
+
+        <!-- УВЕДОМЛЕНИЯ ИЗ ЧАТА HUB -->
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">💬 Уведомления из Hub-чата</label>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
+              <input type="checkbox" x-model="dcChatNotifyEnabled" @change="saveDcNotifySettings()" style="width: 16px; height: 16px; accent-color: var(--hud-primary);">
+              <span>Уведомлять о новых сообщениях</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
+              <input type="checkbox" x-model="dcChatNotifyPopups" @change="saveDcNotifySettings()" style="width: 16px; height: 16px; accent-color: var(--hud-primary);">
+              <span>Показывать popup-плашки в углу</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
+              <input type="checkbox" x-model="dcChatNotifyMuteVoice" @change="saveDcNotifySettings()" style="width: 16px; height: 16px; accent-color: var(--hud-primary);">
+              <span>Молчать когда я в голосе (Do Not Disturb)</span>
+            </label>
+            <button class="btn" @click="_toast('🔔 Тестовое уведомление', 'Если ты это видишь — popup'ы работают!', null)" style="margin-top: 6px; padding: 6px 14px; align-self: flex-start;">▶️ Тест popup'а</button>
+          </div>
         </div>
 
         <!-- ШРИФТ -->
@@ -4194,6 +4214,11 @@ function jarvis() {
     healthcheckLoading: false,
     healthcheckSummary: null,
     healthcheckText: '',
+    // Discord-чат уведомления (toggle + popup)
+    dcChatNotifyEnabled: localStorage.getItem('jarvis-dc-notify') !== '0',
+    dcChatNotifyPopups: localStorage.getItem('jarvis-dc-popups') !== '0',
+    dcChatNotifyMuteVoice: localStorage.getItem('jarvis-dc-mute-voice') === '1',
+    _toastQueue: [],
     // Backgrounds
     bgChoice: localStorage.getItem('jarvis-bg') || 'default',
     bgCustomUrl: localStorage.getItem('jarvis-bg-custom-url') || '',
@@ -5010,6 +5035,8 @@ function jarvis() {
         if (this.discordActiveChannel?.id === p.channel_id) {
           setTimeout(() => this.refreshDiscordMessages(), 200);
         }
+        // Popup-уведомление о сообщении в любом канале (если включено в Settings)
+        try { this._maybeNotifyDiscordMessage(p); } catch (e) { console.warn('notify err:', e); }
       }
       if (['discord-channel-created','discord-channel-deleted'].includes(t)) {
         setTimeout(() => this.refreshDiscordChannels(), 200);
@@ -5281,10 +5308,12 @@ function jarvis() {
       this.discordMessages = [];
       // На мобиле — закрываем боковую панель после выбора канала
       this.discordRailOpen = false;
-      if (ch.type === 'text') {
-        await this.refreshDiscordMessages();
-      } else if (ch.type === 'voice') {
-        await this.refreshDiscordOnline();
+      // Сообщения подгружаем В ЛЮБОМ случае — даже для voice-каналов есть чат.
+      // (раньше для voice ждали refreshDiscordMessages только после join — это давало
+      // пустую панель, пока юзер не написал что-то)
+      try { await this.refreshDiscordMessages(); } catch (e) { console.warn('msgs load fail:', e); }
+      if (ch.type === 'voice') {
+        try { await this.refreshDiscordOnline(); } catch (e) {}
       }
     },
 
@@ -5458,6 +5487,29 @@ function jarvis() {
         // Это устраняет glare. existing_peers тут только для UI/инфы.
         this.refreshDiscordOnline();
       } else if (msg.type === 'signal') {
+        // Спец-сигнал «я остановил демку» — явно очищаем экран этого peer'а,
+        // не дожидаясь WebRTC onended (он может не сработать на slow renegotiate).
+        if (msg.payload && msg.payload.type === 'screen-stop') {
+          const sid = msg.from;
+          if (this.dcRemoteScreens[sid]) {
+            const updated = { ...this.dcRemoteScreens };
+            delete updated[sid];
+            this.dcRemoteScreens = updated;
+            console.log('[screen] explicit stop from', sid);
+          }
+          if (this.dcActiveScreenSession === sid) {
+            this.dcActiveScreenSession = this._pickActiveScreen();
+            if (this.dcActiveScreenSession === '__local__') {
+              this.$nextTick(() => this._bindLocalScreenVideo());
+            } else if (this.dcActiveScreenSession) {
+              this.$nextTick(() => this._bindRemoteScreenVideo(this.dcActiveScreenSession));
+            } else {
+              const el = document.getElementById('dc-screen-video');
+              if (el) try { el.srcObject = null; } catch {}
+            }
+          }
+          return;
+        }
         await this.handleSignal(msg.from, msg.payload);
       }
     },
@@ -6324,16 +6376,26 @@ function jarvis() {
           } catch {}
         }
 
-        // === 3) ПАРАЛЛЕЛЬНО replaceTrack(null) + renegotiate всех peer'ов ===
-        // NB: peer.screenSender НЕ обнуляем — transceiver останется в pc
-        // и переиспользуется при следующем шаринге. Так быстрее и стабильнее.
+        // === 3) ЯВНЫЙ сигнал всем peer'ам что демка остановлена.
+        // Не полагаемся только на WebRTC onended (он может задержаться или не
+        // сработать) — шлём через signaling-канал сразу, чтобы UI собеседника
+        // мгновенно убрал чёрный экран и переключился на другой источник.
+        try {
+          for (const sid of Object.keys(this.dcPeers)) {
+            this.sendSignal(sid, { type: 'screen-stop' });
+          }
+          console.log('[screen] sent explicit screen-stop to all peers');
+        } catch (e) {
+          console.warn('[screen] failed to broadcast stop signal:', e);
+        }
+
+        // === 4) ПАРАЛЛЕЛЬНО removeTrack + renegotiate всех peer'ов ===
         const promises = [];
         for (const sid of Object.keys(this.dcPeers)) {
           const peer = this.dcPeers[sid];
           if (!peer.screenSender) continue;
           promises.push(this._removeSenderAndRenegotiate(sid, peer, peer.screenSender));
         }
-        // Не блокируемся — пусть renegotiate идёт в фоне
         await Promise.allSettled(promises);
         console.log('[screen] sharing stopped, peers cleaned:', promises.length);
       } finally {
@@ -6546,6 +6608,84 @@ function jarvis() {
     downloadDesktop() {
       // Открываем страницу скачивания /desktop — там автодетект ОС
       window.open("/desktop", "_blank");
+    },
+
+    // ===== Discord-чат уведомления =====
+    _maybeNotifyDiscordMessage(p) {
+      if (!this.dcChatNotifyEnabled) return;
+      // Не пиликать собственными сообщениями
+      const myUid = (this.state?.stats?.tg_user_id || 0);
+      if (p.author_id && Number(p.author_id) === Number(myUid)) return;
+      // Не пиликать если канал уже открыт И таб дашборда видим — юзер и так видит
+      const isActive = this.discordActiveChannel?.id === p.channel_id
+                       && document.visibilityState === 'visible'
+                       && this.currentView === 'discord';
+      if (isActive) return;
+      // Mute если я сейчас в голосовом канале (опционально)
+      if (this.dcChatNotifyMuteVoice && this._isAnywhereInVoice()) return;
+      // Звук
+      if (this.soundOn) {
+        try {
+          const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+          a.volume = 0.3; a.play().catch(() => {});
+        } catch (e) {}
+      }
+      // Popup-уведомление (toast). В Electron-desktop приложении preload.js
+      // дополнительно превратит это в native push.
+      const title = `💬 ${p.author_name || 'Сообщение'}`;
+      const body = (p.text || p.content || '').slice(0, 140);
+      this._toast(title, body, () => {
+        this.goToView('discord');
+        if (p.channel_id) {
+          const ch = this.discordChannels?.find(c => c.id === p.channel_id);
+          if (ch) this.openDiscordChannel(ch);
+        }
+      });
+      // Native push в Electron-приложении через preload bridge
+      try {
+        if (window.pride && window.pride.notify) {
+          window.pride.notify(title, body, '#discord');
+        }
+      } catch (e) {}
+    },
+    _isAnywhereInVoice() {
+      // Грубая проверка — если есть локальный stream или peers
+      return !!(this.dcLocalStream || (this.dcPeers && Object.keys(this.dcPeers).length));
+    },
+    _toast(title, body, onClick) {
+      // Динамически создаём toast в углу. Не блокируем UI.
+      try {
+        let host = document.getElementById('jarvis-toast-host');
+        if (!host) {
+          host = document.createElement('div');
+          host.id = 'jarvis-toast-host';
+          host.style.cssText = 'position:fixed;top:80px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:10px;max-width:340px;pointer-events:none;';
+          document.body.appendChild(host);
+        }
+        const card = document.createElement('div');
+        card.style.cssText = 'background:rgba(8,14,30,0.96);border:1px solid rgba(0,229,255,0.35);border-radius:10px;padding:12px 14px;color:#d6e3ff;font-family:Inter,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;pointer-events:auto;transform:translateX(120%);transition:transform 0.3s ease;';
+        const titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-weight:600;margin-bottom:4px;color:#00e5ff;';
+        titleEl.textContent = title;
+        const bodyEl = document.createElement('div');
+        bodyEl.style.cssText = 'color:#a8b6d4;font-size:12px;';
+        bodyEl.textContent = body;
+        card.appendChild(titleEl); card.appendChild(bodyEl);
+        card.onclick = () => { try { onClick && onClick(); } catch {} card.remove(); };
+        host.appendChild(card);
+        requestAnimationFrame(() => { card.style.transform = 'translateX(0)'; });
+        setTimeout(() => {
+          card.style.transform = 'translateX(120%)';
+          setTimeout(() => card.remove(), 350);
+        }, 6000);
+      } catch (e) { console.warn('toast err:', e); }
+    },
+    saveDcNotifySettings() {
+      try {
+        localStorage.setItem('jarvis-dc-notify', this.dcChatNotifyEnabled ? '1' : '0');
+        localStorage.setItem('jarvis-dc-popups', this.dcChatNotifyPopups ? '1' : '0');
+        localStorage.setItem('jarvis-dc-mute-voice', this.dcChatNotifyMuteVoice ? '1' : '0');
+      } catch (e) {}
     },
 
     saveTheme() {
