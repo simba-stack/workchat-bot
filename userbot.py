@@ -897,6 +897,21 @@ class UserbotService:
             await self._handle_accounting_v2_message(event)
             return
         chat_info = storage.get_chat_info(chat_id)
+
+        # 🔴 AUTO-TRIGGER: после перевязки CRM-бот пишет «✅ Перевязка ЛК ... успешно
+        # выполнена» / «ЛК ... перевязан и в работе» + «Метод оплаты: уточняется
+        # у клиента». Userbot ловит это сообщение и сам отправляет клиенту
+        # запрос на метод оплаты (раньше «Ассистент уточнит» — но AI не
+        # триггерился потому что сообщение от бота, не от клиента).
+        try:
+            if chat_info and event.message and event.message.text:
+                txt_low = event.message.text.lower()
+                if ("перевязка лк" in txt_low and "успешно выполнена" in txt_low) or \
+                   ("перевязан и в работе" in txt_low and "уточняется у клиента" in txt_low):
+                    await self._auto_ask_payment_method_after_perevyaz(event, chat_id, chat_info)
+        except Exception as e:
+            logger.warning("auto-ask payment method handler error: %s", e)
+
         # Команды takeover/forget работают в ЛЮБОЙ группе, даже если её
         # ещё нет в managed_chats — это и есть смысл takeover'а.
         if not event.message:
@@ -3066,6 +3081,52 @@ class UserbotService:
         r"^\s*ассистент[,\s]+(?:выдай|дай|сделай)\s+админ(?:ку|а|ом|ину)?\s+@?(\w+)\b",
         re.I | re.M,
     )
+
+    # Anti-spam: для одного chat_id отправляем только ОДИН раз за 10 минут
+    _last_perevyaz_ask: dict = {}
+
+    async def _auto_ask_payment_method_after_perevyaz(self, event, chat_id, chat_info):
+        """После «✅ Перевязка ЛК <банк> успешно выполнена» сами тегаем клиента
+        и спрашиваем метод оплаты. Раньше эту роль играл AI, но он не
+        триггерился на сообщения от ботов."""
+        from storage import _norm_chat_id as _norm
+        key = _norm(chat_id)
+        # Anti-spam: 10 минут защиты от повтора
+        last = self._last_perevyaz_ask.get(key, 0)
+        if last and time.time() - last < 600:
+            return
+        # Уже задан метод оплаты? — не спрашиваем
+        if (chat_info.get("payment_method") or "").strip():
+            return
+        self._last_perevyaz_ask[key] = time.time()
+        client_uname = (chat_info.get("client_username") or "").lstrip("@")
+        client_id = chat_info.get("client_id") or 0
+        client_tag = (
+            f"<a href='tg://user?id={client_id}'>👋</a> "
+            if client_id else (f"@{client_uname} " if client_uname else "")
+        )
+        msg = (
+            f"{client_tag}<b>Перевязка успешно завершена.</b>\n\n"
+            f"Подскажите — как хотите получить выплату по этому ЛК?\n\n"
+            f"💸 <b>USDT TRC20</b> — пришлите ваш TRC20-адрес\n"
+            f"🤝 <b>Гарант в Continental</b> — оформляем сделку с @PRIDE_CL\n"
+            f"   • <b>до отработки</b> — мы пополним сделку сразу и начнём перевязку\n"
+            f"   • <b>после отработки</b> — пополним и отпустим по факту работы счёта"
+        )
+        try:
+            target = await self._resolve_chat_target(chat_id)
+            await self.client.send_message(
+                target, msg, parse_mode="html", link_preview=False,
+            )
+            logger.info(
+                "AUTO-ASK payment method: chat=%s client=@%s",
+                chat_id, client_uname,
+            )
+            _e("auto-ask-payment-method", {
+                "chat_id": chat_id, "client_username": client_uname,
+            }, character="chat", severity="info")
+        except Exception as e:
+            logger.warning("auto-ask payment method send fail: %s", e)
 
     async def _maybe_handle_ai_admin_command(
         self, event, text: str, chat_id,
