@@ -2547,16 +2547,30 @@ async def control_lk_status(
 
     # ВАЖНО: payment_method НИКОГДА не меняется при смене статуса.
     # Метод оплаты фиксируется один раз клиентом (через AI-tool set_payment_method)
-    # и далее НЕИЗМЕНЕН до конца жизни карточки, иначе бы AI и notify_status
-    # рассылали клиенту противоречивую инфу (то «выплата на TRC20», то «создайте сделку»).
-    # Алиас-статус ПОПОЛНИТЬ_И_ОТПУСТИТЬ просто переводим в ОТРАБОТАН — userbot
-    # _notify_client_status_change сам по payment_method карточки положит в нужную очередь.
-    if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
-        new_status = "ОТРАБОТАН"
-
+    # и далее НЕИЗМЕНЕН до конца жизни карточки.
+    # ПОПОЛНИТЬ_И_ОТПУСТИТЬ — ПОЛНОЦЕННЫЙ статус (не алиас). Цикл для
+    # GUARANTOR_AFTER_WORK: В_РАБОТЕ → ОТРАБОТАН → ПОПОЛНИТЬ_И_ОТПУСТИТЬ → ЗАВЕРШЁН.
     ok = await storage.set_lk_card_status(card_id, new_status, by="dashboard")
     if not ok:
         raise HTTPException(status_code=404, detail="card not found")
+
+    # При выставлении статуса ПОПОЛНИТЬ_И_ОТПУСТИТЬ — карточка должна быть
+    # в очереди fund_release. Сразу добавляем (storage.add_payout дедуплицирует).
+    if new_status == "ПОПОЛНИТЬ_И_ОТПУСТИТЬ":
+        try:
+            card = (storage.list_lk_cards() or {}).get(card_id) or {}
+            if card:
+                await storage.add_payout("fund_release", {
+                    "card_id": card_id,
+                    "bank": card.get("bank") or "",
+                    "fio": card.get("fio") or "",
+                    "supplier": card.get("supplier") or "",
+                    "work_chat_id": card.get("work_chat_id") or 0,
+                    "amount_usdt": float(card.get("price_usdt") or 0),
+                    "deal_id": card.get("deal_id") or "",
+                })
+        except Exception as e:
+            logger.warning("auto-enqueue fund_release on status change failed: %s", e)
 
     try:
         event_bus.emit_event(
@@ -2583,7 +2597,8 @@ async def control_lk_status(
             )
         except Exception:
             pass
-    elif new_status in ("БЛОК", "БРАК", "ОТРАБОТАН", "ЗАВЕРШЁН", "ЗАВЕРШЕН"):
+    elif new_status in ("БЛОК", "БРАК", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                        "ЗАВЕРШЁН", "ЗАВЕРШЕН"):
         # Простое уведомление клиенту — отдельной командой через юзербот
         try:
             await storage.enqueue_dashboard_command(

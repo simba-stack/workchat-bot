@@ -2058,11 +2058,18 @@ class UserbotService:
                         continue
                     if c.get("status") not in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ"):
                         continue
-                    # Карточка остаётся в статусе ОТРАБОТАН, обновляем только deal_id —
-                    # дашборд по факту наличия deal_id покажет «Подтвердить отпуск».
+                    # 1) Обновляем deal_id на карточке
                     await storage.update_lk_card(cid, deal_id=deal_id)
-                    # Обновляем deal_id в существующей записи fund_release очереди.
-                    # storage.add_payout с дедупом сам мержит, можно звать смело.
+                    # 2) Меняем статус → ПОПОЛНИТЬ_И_ОТПУСТИТЬ (это финальный статус
+                    #    перед ЗАВЕРШЁН для GUARANTOR_AFTER_WORK). Цикл:
+                    #    В_РАБОТЕ → ОТРАБОТАН → ПОПОЛНИТЬ_И_ОТПУСТИТЬ → ЗАВЕРШЁН.
+                    try:
+                        await storage.set_lk_card_status(
+                            cid, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", by="record_deal",
+                        )
+                    except Exception as e:
+                        logger.warning("record_deal: status change failed: %s", e)
+                    # 3) Кладём в очередь fund_release (с дедупом — обновит или создаст)
                     try:
                         await storage.add_payout("fund_release", {
                             "card_id": cid,
@@ -3909,15 +3916,21 @@ class UserbotService:
         )
 
         # Спец-логика: задан deal_id для ОТРАБОТАН + GUARANTOR_AFTER_WORK →
-        # апдейтим payout-запись в очереди fund_release (storage.add_payout с дедупом
-        # сам мержит — если запись есть, обновит deal_id; если нет — создаст).
-        # Статус НЕ меняем на ПОПОЛНИТЬ_И_ОТПУСТИТЬ (это просто алиас) — оставляем ОТРАБОТАН.
+        # 1) переводим статус в ПОПОЛНИТЬ_И_ОТПУСТИТЬ (это полноценный статус)
+        # 2) кладём в очередь fund_release (с дедупом).
+        # Цикл статусов: В_РАБОТЕ → ОТРАБОТАН → ПОПОЛНИТЬ_И_ОТПУСТИТЬ → ЗАВЕРШЁН.
         if field == "deal_id" and update["deal_id"]:
             try:
                 card = storage.get_lk_card(card_id) or {}
                 if (card.get("status") in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ")
                         and (card.get("payment_method") or "").upper()
                             == "GUARANTOR_AFTER_WORK"):
+                    try:
+                        await storage.set_lk_card_status(
+                            card_id, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", by="manual_edit_deal_id",
+                        )
+                    except Exception as e:
+                        logger.warning("status change after deal_id edit: %s", e)
                     try:
                         await storage.add_payout("fund_release", {
                             "card_id": card_id,
