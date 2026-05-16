@@ -6016,26 +6016,28 @@ class UserbotService:
         """Страховка от ситуации «AI забыл вызвать record_deal».
 
         Если клиент прислал чистый номер сделки (5-7 цифр с # или без), и в
-        этом work_chat есть карточка ЛК со статусом ОТРАБОТАН или
-        ПОПОЛНИТЬ_И_ОТПУСТИТЬ и методом GUARANTOR_AFTER_WORK —
-        автоматически:
-          • обновляем card.deal_id
-          • переводим статус → ПОПОЛНИТЬ_И_ОТПУСТИТЬ
-          • кладём в очередь fund_release
-          • шлём клиенту подтверждение
+        этом work_chat есть подходящая карточка ЛК (ОТРАБОТАН + GUARANTOR_AFTER_WORK) —
+        автоматически применяем.
 
-        Возвращает True если deal_id применён."""
-        # Чистое число 5-7 цифр (опционально с # и пробелами): «78802», «#78802 единственная сделка»
+        Логика выбора КАРТОЧКИ когда их несколько:
+          1) Если только 1 candidate — применяем сразу.
+          2) Если несколько — пытаемся определить по контексту сообщения:
+             - reply-to на анкету конкретного ЛК → берём ту
+             - в тексте упомянут банк (Альфа/Озон/ВТБ/...) → фильтруем по банку
+             - в тексте упомянут ФИО (любая часть) → фильтруем по ФИО
+          3) Если после фильтра остался ровно 1 — применяем.
+          4) Иначе — шлём клиенту вопрос «уточните для какого ЛК» и НЕ применяем."""
+        # Чистое число 5-7 цифр: «78802», «#78802 Альфа», «78802 Иванов»
         import re as _re_dd
         m = _re_dd.match(r"^\s*#?\s*(\d{5,7})\b", text_raw)
         if not m:
             return False
         deal_id = m.group(1)
-        # Ищем подходящую карточку в этом work_chat
+        # Собираем ВСЕ подходящие карточки в этом work_chat
         try:
             from storage import _norm_chat_id as _norm
             wc_norm = _norm(chat_id)
-            target_card = None
+            candidates = []
             for cid, c in (storage.list_lk_cards() or {}).items():
                 if _norm(c.get("work_chat_id") or 0) != wc_norm:
                     continue
@@ -6045,14 +6047,95 @@ class UserbotService:
                     "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
                 ):
                     continue
-                target_card = (cid, c)
-                break
-            if not target_card:
+                candidates.append((cid, c))
+            if not candidates:
                 return False
-            cid, c = target_card
         except Exception as e:
             logger.warning("autodetect deal_id: card lookup fail: %s", e)
             return False
+
+        text_lc = text_raw.lower()
+        # Случай 1: ровно одна — применяем
+        if len(candidates) == 1:
+            cid, c = candidates[0]
+        else:
+            # Несколько кандидатов — пытаемся отфильтровать
+            filtered = list(candidates)
+
+            # Фильтр 1: reply-to на анкету конкретного ЛК
+            try:
+                reply_msg = await event.get_reply_message()
+                if reply_msg and reply_msg.id:
+                    reply_msg_id = int(reply_msg.id)
+                    by_msg = [
+                        (cid, c) for (cid, c) in filtered
+                        if int(c.get("lk_group_msg_id") or 0) == reply_msg_id
+                    ]
+                    if by_msg:
+                        filtered = by_msg
+            except Exception:
+                pass
+
+            # Фильтр 2: упомянут банк в тексте (только если ещё больше 1)
+            if len(filtered) > 1:
+                by_bank = [
+                    (cid, c) for (cid, c) in filtered
+                    if (c.get("bank") or "").lower() in text_lc
+                ]
+                if by_bank:
+                    filtered = by_bank
+
+            # Фильтр 3: упомянуто ФИО или фамилия (только если ещё больше 1)
+            if len(filtered) > 1:
+                def fio_match(c):
+                    fio = (c.get("fio") or "").lower()
+                    if not fio:
+                        return False
+                    # Любая часть ФИО длиной 3+ символа в тексте
+                    for token in fio.split():
+                        if len(token) >= 3 and token in text_lc:
+                            return True
+                    return False
+                by_fio = [(cid, c) for (cid, c) in filtered if fio_match(c)]
+                if by_fio:
+                    filtered = by_fio
+
+            if len(filtered) == 1:
+                cid, c = filtered[0]
+                logger.info(
+                    "autodetect deal_id: matched 1 of %d candidates by context",
+                    len(candidates),
+                )
+            else:
+                # Не смогли однозначно определить → спрашиваем клиента
+                logger.info(
+                    "autodetect deal_id: %d candidates, %d after filter — asking client",
+                    len(candidates), len(filtered),
+                )
+                try:
+                    lines = [
+                        f"⚠️ Получил номер <b>#{deal_id}</b>, но у вас сейчас "
+                        f"несколько ЛК ожидают номер сделки:",
+                        "",
+                    ]
+                    for cid_x, c_x in candidates:
+                        lines.append(
+                            f"• <b>{c_x.get('bank') or '—'}</b> · "
+                            f"{c_x.get('fio') or '—'} · {c_x.get('price_usdt') or 0} USDT"
+                        )
+                    lines.append("")
+                    lines.append(
+                        "Уточните: для какого ЛК этот номер? Напишите банк или ФИО — "
+                        "например «<code>78802 Альфа</code>» или «<code>78802 Иванов</code>»."
+                    )
+                    target = await self._resolve_chat_target(chat_id)
+                    await self.client.send_message(
+                        target, "\n".join(lines), parse_mode="html",
+                        link_preview=False,
+                    )
+                except Exception as e:
+                    logger.warning("autodetect deal_id: ambiguity msg fail: %s", e)
+                return True  # обработано (вопрос задан), AI не нужен
 
         logger.info(
             "AUTO deal_id: chat=%s card=%s deal_id=%s (метод GUARANTOR_AFTER_WORK)",
