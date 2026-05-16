@@ -1,0 +1,102 @@
+name: Python Healthcheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Syntax check ALL .py files
+        run: |
+          set -e
+          for f in $(find . -name "*.py" -not -path "./desktop/*" -not -path "./.git/*"); do
+            echo "→ $f"
+            python -m py_compile "$f" || { echo "❌ SYNTAX ERROR in $f"; exit 1; }
+          done
+          echo "✅ All .py files compile"
+
+      - name: Import all modules (offline check)
+        env:
+          # Минимальные env-переменные чтобы import-time проверки прошли
+          BOT_TOKEN: "ci-dummy-token"
+          API_ID: "1"
+          API_HASH: "ci-dummy"
+          ANTHROPIC_API_KEY: "ci-dummy"
+          ADMIN_ID: "0"
+        run: |
+          python -c "
+          import sys
+          modules = ['config','storage','brain','memory','accounting2','userbot',
+                    'event_bus','learn','leo','admin_router','crm_bot']
+          failed = []
+          for m in modules:
+              try:
+                  __import__(m)
+                  print(f'✅ {m}')
+              except Exception as e:
+                  print(f'❌ {m}: {e}')
+                  failed.append((m, str(e)))
+          if failed:
+              print()
+              print('=== FAILED IMPORTS ===')
+              for m, e in failed:
+                  print(f'{m}: {e}')
+              sys.exit(1)
+          print()
+          print('🎉 All modules import cleanly')
+          "
+
+      - name: Run offline health checks
+        env:
+          BOT_TOKEN: "ci-dummy-token"
+          API_ID: "1"
+          API_HASH: "ci-dummy"
+          ANTHROPIC_API_KEY: "ci-dummy"
+          ADMIN_ID: "0"
+        run: |
+          python -c "
+          import asyncio
+          from health_check import HealthChecker
+          async def main():
+              h = HealthChecker()
+              # Только offline-проверки (которые не дёргают TG/Anthropic/OpenAI)
+              h.check_python_modules()
+              h.check_userbot_methods()
+              h.check_storage_methods()
+              h.check_brain_tools()
+              h.check_storage_state()
+              h.check_workers_config()
+              h.check_dashboard_html()
+              fails = [r for r in h.results if r['status'] == 'fail']
+              warns = [r for r in h.results if r['status'] == 'warn']
+              for r in h.results:
+                  emoji = {'ok':'✅','warn':'⚠️','fail':'❌'}[r['status']]
+                  print(f\"{emoji} {r['name']} — {r['message']}\")
+                  if r['fix_hint'] and r['status'] != 'ok':
+                      print(f\"   ↳ {r['fix_hint']}\")
+              print()
+              print(f'Summary: OK={len(h.results)-len(fails)-len(warns)} WARN={len(warns)} FAIL={len(fails)}')
+              if fails:
+                  print()
+                  print('❌ Build FAILED — fix critical issues above')
+                  exit(1)
+              print('🎉 All offline checks passed')
+          asyncio.run(main())
+          "

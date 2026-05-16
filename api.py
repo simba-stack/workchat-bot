@@ -373,6 +373,31 @@ async def healthz():
     return {"status": "ok", "subscribers": event_bus.subscriber_count()}
 
 
+@app.get("/api/health/full")
+async def api_health_full(_: None = Depends(_auth)):
+    """Полная проверка всех систем (требует авторизации админа).
+    Возвращает JSON со списком проверок: {ok, warn, fail}.
+    Также доступно через TG: команда /healthcheck в @PrideCRMv4 (для админов)."""
+    try:
+        from health_check import HealthChecker
+        h = HealthChecker()
+        results = await h.run_all()
+        summary = {
+            "ok": sum(1 for r in results if r["status"] == "ok"),
+            "warn": sum(1 for r in results if r["status"] == "warn"),
+            "fail": sum(1 for r in results if r["status"] == "fail"),
+        }
+        return {
+            "ok": True,
+            "summary": summary,
+            "results": results,
+            "telegram_message": h.format_telegram_message(),
+        }
+    except Exception as e:
+        logger.exception("/api/health/full failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 # === Telegram OAuth ===
 
 @app.get("/login", response_class=HTMLResponse)

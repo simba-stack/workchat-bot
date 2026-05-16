@@ -56,6 +56,32 @@ async def cmd_admin(message: Message, state: FSMContext):
     await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
 
 
+@router.message(Command("healthcheck"))
+async def cmd_healthcheck(message: Message):
+    """Прогоняет проверку всех систем и шлёт отчёт. Доступно только админам."""
+    if not storage.is_admin(message.from_user.id):
+        return  # silent ignore
+    status_msg = await message.answer("⏳ Прогоняю проверку всех систем...")
+    try:
+        from health_check import HealthChecker
+        h = HealthChecker()
+        await h.run_all()
+        text = h.format_telegram_message()
+        try:
+            await status_msg.edit_text(text, parse_mode="HTML",
+                                       disable_web_page_preview=True)
+        except Exception:
+            # если сообщение получилось слишком длинным — шлём новым
+            await message.answer(text, parse_mode="HTML",
+                                 disable_web_page_preview=True)
+    except Exception as e:
+        await status_msg.edit_text(
+            f"❌ Healthcheck сам упал: <code>{e}</code>\n\n"
+            f"Это значит что-то очень серьёзное — посмотри логи Railway.",
+            parse_mode="HTML",
+        )
+
+
 @router.callback_query(F.data.startswith("adm:"))
 async def on_cb(call: CallbackQuery, state: FSMContext):
     if not storage.is_admin(call.from_user.id):

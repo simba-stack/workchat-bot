@@ -658,6 +658,11 @@ async def main():
     except Exception as e:
         logger.warning("CRM bot module load failed: %s", e)
 
+    # === HEALTHCHECK на старте ===
+    # Прогоняем все системы и шлём отчёт в HEALTH_CHAT_ID (если задан).
+    # Делается в фоне чтобы не блокировать запуск polling.
+    asyncio.create_task(_run_startup_healthcheck())
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot)
@@ -670,6 +675,35 @@ async def main():
             await userbot.stop()
         except Exception as e:
             logger.warning("Userbot stop error: %s", e)
+
+
+async def _run_startup_healthcheck():
+    """На старте бота прогоняет health_check и постит отчёт в HEALTH_CHAT_ID.
+
+    HEALTH_CHAT_ID — env-переменная с chat_id куда слать отчёты. Если пусто,
+    fallback на ADMIN_ID (личка владельца).
+    """
+    # Дать всему остальному встать перед healthcheck
+    await asyncio.sleep(5)
+    try:
+        from health_check import HealthChecker
+        h = HealthChecker()
+        await h.run_all()
+        text = h.format_telegram_message()
+        target = int(
+            os.getenv("HEALTH_CHAT_ID", "0") or
+            config.ADMIN_ID or 0
+        )
+        if not target:
+            logger.warning(
+                "HEALTH_CHAT_ID не задан и ADMIN_ID = 0 — healthcheck не отправлен"
+            )
+            return
+        await bot.send_message(target, text, parse_mode="HTML",
+                               disable_web_page_preview=True)
+        logger.info("Healthcheck sent to chat %s", target)
+    except Exception as e:
+        logger.exception("startup healthcheck failed: %s", e)
 
 
 async def _safe_crm_task():
