@@ -16,7 +16,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, shell, ipcMain, Notification,
-  globalShortcut, nativeImage, dialog, session,
+  globalShortcut, nativeImage, dialog, session, desktopCapturer,
 } = require("electron");
 const path = require("path");
 const log = require("electron-log");
@@ -346,6 +346,39 @@ autoUpdater.on("error", (err) => {
 
 // === Lifecycle ===
 app.whenReady().then(() => {
+  // === Screen share (getDisplayMedia) handler ===
+  // Electron блокирует getDisplayMedia по умолчанию. Регистрируем хэндлер
+  // который через desktopCapturer выдаёт первый экран. На Windows 11 / macOS
+  // useSystemPicker=true вызовет нативный OS-пикер.
+  try {
+    const sess = session.fromPartition("persist:pride");
+    sess.setDisplayMediaRequestHandler(async (request, callback) => {
+      try {
+        log.info("[screen-share] requested by:", request.frame?.url);
+        const sources = await desktopCapturer.getSources({
+          types: ["screen", "window"],
+          thumbnailSize: { width: 0, height: 0 },
+          fetchWindowIcons: false,
+        });
+        if (!sources || sources.length === 0) {
+          log.warn("[screen-share] no sources");
+          callback({}); // отказ
+          return;
+        }
+        // Берём первый источник (обычно — основной экран). Для multi-screen UI
+        // можно показать кастомный пикер, но для начала достаточно автоматики.
+        callback({ video: sources[0], audio: "loopback" });
+        log.info("[screen-share] granted source:", sources[0].name);
+      } catch (e) {
+        log.error("[screen-share] handler error:", e);
+        try { callback({}); } catch (_) {}
+      }
+    }, { useSystemPicker: true });
+    log.info("setDisplayMediaRequestHandler registered");
+  } catch (e) {
+    log.error("setDisplayMediaRequestHandler setup failed:", e);
+  }
+
   // Cookie listener: jarvis_session появилась → авто-reload main (для TG OAuth)
   try {
     const sess = session.fromPartition("persist:pride");

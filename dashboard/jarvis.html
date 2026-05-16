@@ -75,6 +75,21 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     color: var(--text);
+    background:
+      radial-gradient(ellipse at 30% 10%, rgba(var(--primary-rgb), 0.10) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 90%, rgba(var(--primary-rgb), 0.06) 0%, transparent 50%),
+      linear-gradient(135deg, var(--bg-deep) 0%, #080b22 50%, var(--bg-deep) 100%);
+    background-attachment: fixed;
+    transition: background 0.5s;
+  }
+  /* Кастомный фон (картинка) — поверх дефолтного градиента, через body::after.
+     Управляется атрибутом data-bg на <html>: pulse / aurora / matrix / city / space / custom-URL */
+  body[data-bg-custom="1"] {
+    background:
+      linear-gradient(rgba(0, 0, 0, var(--bg-dim, 0.55)),
+                      rgba(0, 0, 0, var(--bg-dim, 0.55))),
+      var(--bg-custom-img, none) center/cover no-repeat fixed,
+      var(--bg-deep);
   }
   code, pre, .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
 
@@ -129,12 +144,53 @@
     font-size: 12px;
     color: var(--text-dim);
     line-height: 1.4;
-    background:
-      radial-gradient(ellipse at 30% 10%, rgba(var(--primary-rgb), 0.10) 0%, transparent 50%),
-      radial-gradient(ellipse at 80% 90%, rgba(var(--primary-rgb), 0.06) 0%, transparent 50%),
-      linear-gradient(135deg, var(--bg-deep) 0%, #080b22 50%, var(--bg-deep) 100%);
-    transition: background 0.5s;
   }
+  /* ===== BACKGROUND GALLERY — preview-плитки выбора фона ===== */
+  .bg-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .bg-tile {
+    position: relative;
+    aspect-ratio: 16/9;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    background-size: cover;
+    background-position: center;
+    transition: all 0.15s ease;
+    overflow: hidden;
+  }
+  .bg-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.4); }
+  .bg-tile.active {
+    border-color: var(--hud-primary);
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.35);
+  }
+  .bg-tile-name {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 6px 10px;
+    background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .bg-tile-check {
+    position: absolute;
+    top: 6px; right: 6px;
+    width: 22px; height: 22px;
+    background: var(--hud-primary);
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: #001824;
+  }
+  .bg-tile.active .bg-tile-check { display: flex; }
   body::before {
     content: '';
     position: fixed;
@@ -3809,25 +3865,72 @@
     <!-- APPEARANCE -->
     <div x-show="settingsActiveSection === 'appearance'" class="jarvis-panel" style="padding: 20px;">
       <h3 style="margin: 0 0 16px 0;">🎨 Внешний вид</h3>
-      <div style="display: grid; gap: 16px;">
+      <div style="display: grid; gap: 22px;">
+
+        <!-- ТЕМА -->
         <div>
-          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Тема</label>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn" @click="theme='jarvis'; saveTheme && saveTheme()" :class="theme === 'jarvis' ? 'success' : ''">🟦 JARVIS</button>
-            <button class="btn" @click="theme='ironman'; saveTheme && saveTheme()" :class="theme === 'ironman' ? 'success' : ''">🟥 IRON MAN</button>
-            <button class="btn" @click="theme='stealth'; saveTheme && saveTheme()" :class="theme === 'stealth' ? 'success' : ''">⬜ STEALTH</button>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Цветовая тема</label>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn" @click="theme='jarvis'; saveTheme()" :class="theme === 'jarvis' ? 'success' : ''">🟦 JARVIS</button>
+            <button class="btn" @click="theme='ironman'; saveTheme()" :class="theme === 'ironman' ? 'success' : ''">🟥 IRON MAN</button>
+            <button class="btn" @click="theme='stealth'; saveTheme()" :class="theme === 'stealth' ? 'success' : ''">⬜ STEALTH</button>
           </div>
         </div>
+
+        <!-- ФОНОВАЯ ЗАСТАВКА -->
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Фоновая заставка</label>
+          <div class="bg-gallery">
+            <template x-for="bg in bgPresets" :key="bg.id">
+              <div class="bg-tile" :class="bgChoice === bg.id ? 'active' : ''"
+                   @click="applyBackground(bg.id)"
+                   :style="bg.style">
+                <div class="bg-tile-name" x-text="bg.name"></div>
+                <div class="bg-tile-check">✓</div>
+              </div>
+            </template>
+          </div>
+          <!-- Custom URL -->
+          <div style="margin-top: 14px;">
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Свой URL картинки (4K-обои, фотка, всё что хочешь):</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" placeholder="https://example.com/wallpaper.jpg"
+                     x-model="bgCustomUrl"
+                     @keyup.enter="applyCustomBackground()"
+                     style="flex: 1; padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+              <button class="btn success" @click="applyCustomBackground()" style="padding: 8px 16px;">Применить</button>
+            </div>
+            <div style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">
+              Можно скопировать ссылку с unsplash.com / wallhaven.cc / любого CDN. Сохранится в браузере, доступно только тебе.
+            </div>
+          </div>
+          <!-- Затемнение -->
+          <div style="margin-top: 14px;" x-show="bgChoice !== 'default'">
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">
+              Затемнение фона: <b x-text="Math.round(bgDim * 100) + '%'"></b>
+            </label>
+            <input type="range" min="0" max="0.9" step="0.05" x-model.number="bgDim" @input="applyDim()"
+                   style="width: 300px; accent-color: var(--hud-primary);">
+          </div>
+          <div style="margin-top: 14px;" x-show="bgChoice !== 'default'">
+            <button class="btn" @click="applyBackground('default')">↺ Сбросить на дефолт</button>
+          </div>
+        </div>
+
+        <!-- ЗВУКИ -->
         <div>
           <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Звуки уведомлений</label>
           <button class="btn" @click="toggleSound()" :class="soundOn ? 'success' : ''" x-text="soundOn ? '🔊 ВКЛ' : '🔇 ВЫКЛ'"></button>
         </div>
+
+        <!-- ШРИФТ -->
         <div>
           <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Шрифт интерфейса</label>
           <div style="font-size: 12px; color: var(--text-dim);">
             <b>Inter</b> + JetBrains Mono (для кода) — постоянно. Этот стек использует Vercel, Stripe, Linear, Railway.
           </div>
         </div>
+
       </div>
     </div>
 
@@ -4091,6 +4194,28 @@ function jarvis() {
     healthcheckLoading: false,
     healthcheckSummary: null,
     healthcheckText: '',
+    // Backgrounds
+    bgChoice: localStorage.getItem('jarvis-bg') || 'default',
+    bgCustomUrl: localStorage.getItem('jarvis-bg-custom-url') || '',
+    bgDim: parseFloat(localStorage.getItem('jarvis-bg-dim') || '0.55'),
+    bgPresets: [
+      { id: 'default', name: 'Дефолт (JARVIS HUD)',
+        style: 'background: radial-gradient(ellipse at 30% 30%, rgba(0,229,255,0.18), transparent 50%), linear-gradient(135deg, #050818, #080b22);' },
+      { id: 'aurora', name: 'Аврора',
+        url: 'https://images.unsplash.com/photo-1483347756197-71ef80e95f73?w=1920&q=80' },
+      { id: 'space', name: 'Космос',
+        url: 'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?w=1920&q=80' },
+      { id: 'mountains', name: 'Горы ночью',
+        url: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=80' },
+      { id: 'cyberpunk', name: 'Киберпанк',
+        url: 'https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=1920&q=80' },
+      { id: 'forest', name: 'Туманный лес',
+        url: 'https://images.unsplash.com/photo-1448375240586-882707db888b?w=1920&q=80' },
+      { id: 'ocean', name: 'Океан',
+        url: 'https://images.unsplash.com/photo-1505142468610-359e7d316be0?w=1920&q=80' },
+      { id: 'matrix', name: 'Matrix-зелёный',
+        style: 'background: radial-gradient(circle at 50% 50%, #003b00, #000); background-image: linear-gradient(rgba(0,255,0,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,0,0.05) 1px, transparent 1px); background-size: 20px 20px;' },
+    ],
     state: {
       stats: {
         lk_cards_total: 0, lk_cards_by_status: {}, lk_cards_by_method: {},
@@ -4258,6 +4383,7 @@ function jarvis() {
     },
 
     async init() {
+      this.initBackgrounds();
       this.bootStatus = 'FETCHING STATE';
       await this.refresh();
       await this.refreshSparklines();
@@ -6426,6 +6552,76 @@ function jarvis() {
       try { localStorage.setItem('jarvis-theme', this.theme); } catch (e) {}
       // Применить тему — обычно есть watcher или CSS-переменные на data-theme
       try { document.documentElement.setAttribute('data-theme', this.theme); } catch (e) {}
+    },
+
+    // ===== Backgrounds =====
+    _bgUrlFor(id) {
+      const p = (this.bgPresets || []).find(x => x.id === id);
+      if (!p) return '';
+      if (p.url) return p.url;
+      return '';
+    },
+    applyBackground(id) {
+      this.bgChoice = id;
+      try { localStorage.setItem('jarvis-bg', id); } catch (e) {}
+      const body = document.body;
+      if (id === 'default') {
+        body.removeAttribute('data-bg-custom');
+        body.style.removeProperty('--bg-custom-img');
+        body.style.removeProperty('--bg-dim');
+      } else if (id === 'matrix') {
+        // Inline-стили matrix-фона на body
+        body.setAttribute('data-bg-custom', '0');
+        body.style.background = 'radial-gradient(circle at 50% 50%, #003b00, #000)';
+        body.style.backgroundImage = 'linear-gradient(rgba(0,255,0,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,0,0.06) 1px, transparent 1px), radial-gradient(circle at 50% 50%, #003b00, #000)';
+        body.style.backgroundSize = '20px 20px, 20px 20px, 100% 100%';
+        body.style.backgroundAttachment = 'fixed';
+      } else {
+        const url = this._bgUrlFor(id);
+        if (!url) return;
+        body.setAttribute('data-bg-custom', '1');
+        body.style.setProperty('--bg-custom-img', `url("${url}")`);
+        body.style.setProperty('--bg-dim', String(this.bgDim));
+        // Сбросим inline-стили matrix если были
+        body.style.background = '';
+        body.style.backgroundImage = '';
+        body.style.backgroundSize = '';
+      }
+    },
+    applyCustomBackground() {
+      const url = (this.bgCustomUrl || '').trim();
+      if (!url) return alert('Введи URL картинки');
+      if (!/^https?:\/\//i.test(url)) return alert('URL должен начинаться с http(s)://');
+      try { localStorage.setItem('jarvis-bg-custom-url', url); } catch (e) {}
+      this.bgChoice = 'custom';
+      try { localStorage.setItem('jarvis-bg', 'custom'); } catch (e) {}
+      const body = document.body;
+      body.setAttribute('data-bg-custom', '1');
+      body.style.setProperty('--bg-custom-img', `url("${url}")`);
+      body.style.setProperty('--bg-dim', String(this.bgDim));
+      body.style.background = '';
+      body.style.backgroundImage = '';
+      body.style.backgroundSize = '';
+    },
+    applyDim() {
+      try { localStorage.setItem('jarvis-bg-dim', String(this.bgDim)); } catch (e) {}
+      document.body.style.setProperty('--bg-dim', String(this.bgDim));
+    },
+    initBackgrounds() {
+      // Пропатчим preview-style для URL-based пресетов
+      try {
+        for (const p of this.bgPresets) {
+          if (p.url && !p.style) {
+            p.style = `background-image: url("${p.url}"); background-size: cover; background-position: center;`;
+          }
+        }
+      } catch (e) {}
+      // Применим сохранённый выбор
+      if (this.bgChoice === 'custom' && this.bgCustomUrl) {
+        this.applyCustomBackground();
+      } else if (this.bgChoice && this.bgChoice !== 'default') {
+        this.applyBackground(this.bgChoice);
+      }
     },
 
     async runHealthcheck() {
