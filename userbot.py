@@ -303,6 +303,134 @@ class UserbotService:
         # Удаление срабатывает когда approved_by содержит ID Тимона И ID любого админа.
         self._pending_delete_all_lk: dict[str, dict] = {}
 
+    async def create_work_chat(self, client_name: str, client_id: int = 0) -> dict:
+        """Создаёт супергруппу-беседу под клиента, инвайтит работников,
+        делает userbot админом, регистрирует чат в managed_chats и возвращает
+        invite-ссылку.
+
+        bot.py зовёт это после капчи в @PRIDE_INVITE_bot. Без этой функции
+        invite-flow ломается (создание не доходит до ссылки).
+
+        Returns: {chat_id, title, invite_link, statuses}
+          где statuses — словарь {worker_username: "добавлен"/"не существует"/...}
+        """
+        title = config.CHAT_TITLE_TEMPLATE.format(client_name=client_name)
+        about = config.CHAT_DESCRIPTION_TEMPLATE.format(client_name=client_name)
+
+        # 1) Создаём супергруппу
+        result = await self.client(CreateChannelRequest(
+            title=title, about=about, megagroup=True,
+        ))
+        channel = result.chats[0]
+        logger.info("Created group '%s' (id=%s) for client=%s", title, channel.id, client_id)
+
+        # 2) Резолвим работников из config.WORKERS
+        statuses: dict[str, str] = {}
+        users_to_invite = []
+        for username in (config.WORKERS or []):
+            uname = (username or "").lstrip("@").strip()
+            if not uname:
+                continue
+            try:
+                entity = await self.client.get_entity(uname)
+                users_to_invite.append((uname, entity))
+                statuses[uname] = "найден"
+            except UsernameNotOccupiedError:
+                statuses[uname] = "не существует"
+            except Exception as e:
+                statuses[uname] = f"ошибка резолва: {e}"
+
+        # 3) Добавляем по одному
+        for uname, user in users_to_invite:
+            try:
+                await self.client(InviteToChannelRequest(channel, [user]))
+                statuses[uname] = "добавлен"
+            except UserPrivacyRestrictedError:
+                statuses[uname] = "запрещены приглашения (Privacy)"
+            except UserNotMutualContactError:
+                statuses[uname] = "нет в контактах"
+            except PeerFloodError:
+                statuses[uname] = "флуд-лимит Telegram"
+            except FloodWaitError as e:
+                statuses[uname] = f"flood wait {e.seconds}s"
+            except UserAlreadyParticipantError:
+                statuses[uname] = "уже в чате"
+            except Exception as e:
+                statuses[uname] = f"ошибка: {e}"
+
+        # 4) Делаем userbot админом (нужно для welcome / kick / pin / call)
+        if getattr(config, "USERBOT_AS_ADMIN", True) and self._me:
+            try:
+                rights = ChatAdminRights(
+                    change_info=True, post_messages=True, edit_messages=True,
+                    delete_messages=True, ban_users=True, invite_users=True,
+                    pin_messages=True, add_admins=False, anonymous=False,
+                    manage_call=True,
+                )
+                await self.client(EditAdminRequest(
+                    channel=channel, user_id=self._me,
+                    admin_rights=rights, rank="Owner",
+                ))
+            except Exception as e:
+                logger.warning("Could not grant admin rights to userbot: %s", e)
+
+        # 5) Делаем работников админами с rank (используя текущую роль из storage)
+        try:
+            for uname, user in users_to_invite:
+                try:
+                    role = ""
+                    try:
+                        role = storage.get_worker_role(uname) or ""
+                    except Exception:
+                        pass
+                    rights = ChatAdminRights(
+                        change_info=False, post_messages=True, edit_messages=True,
+                        delete_messages=True, ban_users=False, invite_users=True,
+                        pin_messages=True, add_admins=False, anonymous=False,
+                        manage_call=True,
+                    )
+                    await self.client(EditAdminRequest(
+                        channel=channel, user_id=user,
+                        admin_rights=rights, rank=role or "",
+                    ))
+                except Exception as e:
+                    logger.warning("grant admin to @%s failed: %s", uname, e)
+        except Exception as e:
+            logger.warning("workers admin grant pass failed: %s", e)
+
+        # 6) Invite-ссылка
+        invite = await self.client(ExportChatInviteRequest(channel))
+        invite_link = invite.link
+
+        # 7) Регистрируем чат в managed_chats (нужно для welcome polling и AI)
+        try:
+            await storage.register_chat(
+                chat_id=int(channel.id),
+                client_id=int(client_id or 0),
+                client_name=client_name,
+            )
+        except Exception as e:
+            logger.warning("register_chat failed: %s", e)
+
+        # 8) Эмитим событие на дашборд
+        try:
+            _e("chat-created", {
+                "chat_id": int(channel.id),
+                "client_id": int(client_id or 0),
+                "client_name": client_name,
+                "title": title,
+                "workers_statuses": statuses,
+            }, character="chat", severity="success")
+        except Exception:
+            pass
+
+        return {
+            "chat_id": int(channel.id),
+            "title": title,
+            "invite_link": invite_link,
+            "statuses": statuses,
+        }
+
     def _get_welcome_lock(self, chat_id) -> asyncio.Lock:
         """Lock на отправку welcome для конкретного чата.
 
