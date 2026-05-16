@@ -2299,7 +2299,14 @@ class UserbotService:
             payment_method=payment_method,
             deal_id=deal_id,
             usdt_address=usdt_address,
-            status="В_РАБОТЕ",
+            # Для GUARANTOR_BEFORE с уже заданным deal_id — статус
+            # ОЖИДАЕТ_ПОПОЛНЕНИЯ (нам нужно пополнить сделку до старта работы).
+            # Для остальных методов или GUARANTOR_BEFORE без deal_id — В_РАБОТЕ.
+            status=(
+                "ОЖИДАЕТ_ПОПОЛНЕНИЯ"
+                if (payment_method or "").upper() == "GUARANTOR_BEFORE" and deal_id
+                else "В_РАБОТЕ"
+            ),
             client_id=client_id,
             client_username=client_username,
             work_chat_id=chat_id,
@@ -4419,8 +4426,27 @@ class UserbotService:
         usdt_addr = (card.get("usdt_address") or "").strip()
         deal_id = (card.get("deal_id") or "").lstrip("#").strip()
 
+        # ── ОЖИДАЕТ_ПОПОЛНЕНИЯ (GUARANTOR_BEFORE — клиент дал номер, мы пополняем) ──
+        if new_status == "ОЖИДАЕТ_ПОПОЛНЕНИЯ":
+            deal_line = f" <b>#{deal_id}</b>" if deal_id else ""
+            msg = (
+                f"✅ <b>Номер сделки{deal_line} зафиксирован</b>\n\n"
+                f"ЛК <b>{bank}</b> ({fio}).\n\n"
+                f"Сделка принята в систему. <b>Мы пополним её в течение часа</b> "
+                f"и сразу возьмём ваш счёт на перевязку. Как только сделка будет "
+                f"пополнена — напишем сюда подтверждение."
+            )
+        # ── В_РАБОТЕ для GUARANTOR_BEFORE = «сделка пополнена, начинаем работу» ──
+        elif new_status == "В_РАБОТЕ" and method == "GUARANTOR_BEFORE":
+            deal_line = f" <b>#{deal_id}</b>" if deal_id else ""
+            msg = (
+                f"💰 <b>Сделка{deal_line} пополнена</b>\n\n"
+                f"ЛК <b>{bank}</b> ({fio}).\n\n"
+                f"Начинаем перевязку счёта — операционисты возьмут в работу. "
+                f"Как только всё будет готово, пришлём подтверждение."
+            )
         # ── шаблоны для БЛОК / БРАК (метод оплаты не влияет) ──
-        if new_status == "БЛОК":
+        elif new_status == "БЛОК":
             msg = (
                 f"🚫 <b>Блокировка ЛК {bank}</b>\n\n"
                 f"К сожалению, на ваш ЛК <b>{bank}</b> ({fio}) банк наложил блокировку "
@@ -5596,6 +5622,7 @@ class UserbotService:
             "В_РАБОТЕ": "🟢",
             "ОТРАБОТАН": "✅",
             "ПОПОЛНИТЬ_И_ОТПУСТИТЬ": "💎",
+            "ОЖИДАЕТ_ПОПОЛНЕНИЯ": "⏳",
             "БЛОК": "🚫",
         }
 
@@ -6763,6 +6790,7 @@ class UserbotService:
             cid = m.group(1).lower()
             new_status = m.group(2).strip().upper()
             allowed = {"В_РАБОТЕ", "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                       "ОЖИДАЕТ_ПОПОЛНЕНИЯ",
                        "ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК",
                        "БЛОК_БЕЗ_ОТРАБОТКИ"}
             if new_status not in allowed:
