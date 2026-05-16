@@ -953,6 +953,21 @@ class UserbotService:
         except Exception as e:
             logger.warning("auto-detect payment method failed: %s", e)
 
+        # AUTO-DETECT номера сделки от клиента для GUARANTOR_AFTER_WORK карточки.
+        # Страховка на случай если AI забудет вызвать record_deal. Срабатывает
+        # когда клиент шлёт чистое число 5-7 цифр (с # или без) и в этом
+        # work_chat есть ОТРАБОТАН-карточка с методом GUARANTOR_AFTER_WORK.
+        try:
+            msg_text_raw = ((event.message and event.message.text) or "").strip()
+            if msg_text_raw and await self._maybe_autodetect_deal_id(
+                event, chat_id, msg_text_raw,
+            ):
+                # deal_id применён, карточка → ПОПОЛНИТЬ_И_ОТПУСТИТЬ, в fund_release,
+                # клиенту отправлено подтверждение. AI больше отвечать не нужно.
+                return
+        except Exception as e:
+            logger.warning("auto-detect deal_id failed: %s", e)
+
         # SILENT MODE: после add_partner_to_crm AI молчит 30 минут пока
         # клиент заполняет анкету в @PrideCONTROLE_bot. Снимается явным
         # запросом помощи или истечением TTL.
@@ -5994,6 +6009,137 @@ class UserbotService:
                 "AI silent mode lifted for chat=%s — CRM ready marker detected",
                 chat_id,
             )
+
+    async def _maybe_autodetect_deal_id(
+        self, event, chat_id, text_raw: str,
+    ) -> bool:
+        """Страховка от ситуации «AI забыл вызвать record_deal».
+
+        Если клиент прислал чистый номер сделки (5-7 цифр с # или без), и в
+        этом work_chat есть карточка ЛК со статусом ОТРАБОТАН или
+        ПОПОЛНИТЬ_И_ОТПУСТИТЬ и методом GUARANTOR_AFTER_WORK —
+        автоматически:
+          • обновляем card.deal_id
+          • переводим статус → ПОПОЛНИТЬ_И_ОТПУСТИТЬ
+          • кладём в очередь fund_release
+          • шлём клиенту подтверждение
+
+        Возвращает True если deal_id применён."""
+        # Чистое число 5-7 цифр (опционально с # и пробелами): «78802», «#78802 единственная сделка»
+        import re as _re_dd
+        m = _re_dd.match(r"^\s*#?\s*(\d{5,7})\b", text_raw)
+        if not m:
+            return False
+        deal_id = m.group(1)
+        # Ищем подходящую карточку в этом work_chat
+        try:
+            from storage import _norm_chat_id as _norm
+            wc_norm = _norm(chat_id)
+            target_card = None
+            for cid, c in (storage.list_lk_cards() or {}).items():
+                if _norm(c.get("work_chat_id") or 0) != wc_norm:
+                    continue
+                if (c.get("payment_method") or "").upper() != "GUARANTOR_AFTER_WORK":
+                    continue
+                if (c.get("status") or "").upper() not in (
+                    "ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ",
+                ):
+                    continue
+                target_card = (cid, c)
+                break
+            if not target_card:
+                return False
+            cid, c = target_card
+        except Exception as e:
+            logger.warning("autodetect deal_id: card lookup fail: %s", e)
+            return False
+
+        logger.info(
+            "AUTO deal_id: chat=%s card=%s deal_id=%s (метод GUARANTOR_AFTER_WORK)",
+            chat_id, cid, deal_id,
+        )
+        # 1) Обновить deal_id
+        try:
+            await storage.update_lk_card(cid, deal_id=deal_id)
+        except Exception as e:
+            logger.warning("autodetect deal_id: update_lk_card fail: %s", e)
+
+        # 2) Статус → ПОПОЛНИТЬ_И_ОТПУСТИТЬ
+        try:
+            await storage.set_lk_card_status(
+                cid, "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", by="auto_deal_id",
+            )
+        except Exception as e:
+            logger.warning("autodetect deal_id: status change fail: %s", e)
+
+        # 3) В очередь fund_release (storage.add_payout сам дедуплицирует)
+        try:
+            await storage.add_payout("fund_release", {
+                "card_id": cid,
+                "bank": c.get("bank") or "",
+                "fio": c.get("fio") or "",
+                "supplier": c.get("supplier") or "",
+                "work_chat_id": c.get("work_chat_id") or 0,
+                "amount_usdt": float(c.get("price_usdt") or 0),
+                "deal_id": deal_id,
+            })
+        except Exception as e:
+            logger.warning("autodetect deal_id: add_payout fail: %s", e)
+
+        # 4) Также сохраняем как deal-запись в storage.deals (если ещё нет)
+        try:
+            if not storage.get_deal(deal_id):
+                await storage.add_deal(
+                    deal_id=deal_id,
+                    client_username=(c.get("client_username") or c.get("supplier") or "").lstrip("@"),
+                    fio=c.get("fio") or "",
+                    bank=c.get("bank") or "",
+                    amount=str(c.get("price_usdt") or 0),
+                    fee="",
+                    method="GUARANTOR_AFTER_WORK",
+                    status="ПОПОЛНИТЬ",
+                    work_chat_id=int(c.get("work_chat_id") or 0),
+                )
+        except Exception as e:
+            logger.warning("autodetect deal_id: add_deal fail: %s", e)
+
+        # 5) Refresh анкеты в группе ЛК + reply на анкету
+        try:
+            await self._refresh_lk_card_post(cid)
+        except Exception:
+            pass
+        try:
+            await self._post_action_reply_to_lk_card(cid)
+        except Exception:
+            pass
+
+        # 6) Отправляем клиенту подтверждение
+        try:
+            bank = c.get("bank") or "—"
+            amount = c.get("price_usdt") or 0
+            msg = (
+                f"✅ <b>Номер сделки #{deal_id} зафиксирован.</b>\n\n"
+                f"ЛК <b>{bank}</b> · сумма <b>{amount} USDT</b>.\n\n"
+                f"Ожидайте — <b>мы пополним сделку</b> и сразу её отпустим. "
+                f"Средства придут в гаранте в течение дня."
+            )
+            target = await self._resolve_chat_target(chat_id)
+            await self.client.send_message(
+                target, msg, parse_mode="html", link_preview=False,
+            )
+        except Exception as e:
+            logger.warning("autodetect deal_id: client notify fail: %s", e)
+
+        # 7) Эмит-событие на дашборд
+        try:
+            _e("auto-deal-id-applied", {
+                "chat_id": chat_id, "card_id": cid, "deal_id": deal_id,
+                "bank": c.get("bank"), "fio": c.get("fio"),
+            }, character="chat", severity="success")
+        except Exception:
+            pass
+
+        return True
 
     async def _maybe_autodetect_payment_method(
         self, event, chat_id, text_lc: str,
