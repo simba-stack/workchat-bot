@@ -1519,6 +1519,59 @@ class UserbotService:
             }, severity="warning")
             return
 
+        # 🔴 GUARD: если AI говорит клиенту «/clients» НО CRM-бот ещё НЕ
+        # добавлен в чат (нет crm_owner записи) — насильно дёргаем
+        # add_partner_to_crm СНАЧАЛА, потом уже отдаём ответ. Иначе клиент
+        # пишет /clients, а бот не отвечает — потому что его нет в чате.
+        if reply and "/clients" in reply.lower():
+            try:
+                client_uname = (chat_info.get("client_username") or "").lstrip("@").strip()
+                client_uid = int(chat_info.get("client_id") or 0)
+                # Проверяем — есть ли уже owner для этого клиента
+                owner = None
+                try:
+                    if client_uid:
+                        owner = storage.find_crm_owner_by_tg(client_uid)
+                    if not owner and client_uname:
+                        owner = storage.find_crm_owner_by_username(client_uname)
+                except Exception as e:
+                    logger.warning("crm_owner lookup fail: %s", e)
+                if not owner and client_uname:
+                    logger.warning(
+                        "AI: /clients в ответе БЕЗ предварительного "
+                        "add_partner_to_crm — форсим вызов tool для @%s",
+                        client_uname,
+                    )
+                    try:
+                        res = await self._tool_add_partner_to_crm(
+                            chat_id=chat_id, client_username=client_uname,
+                        )
+                        logger.info("forced add_partner_to_crm result: %s", res)
+                        if res.get("status") != "ok":
+                            # Если совсем плохо — НЕ отправляем reply (юзеру /clients
+                            # без CRM в чате бесполезен), эскалируем работнику.
+                            logger.error(
+                                "Failed to add CRM bot for @%s — suppressing /clients reply",
+                                client_uname,
+                            )
+                            _e("ai-crm-add-failed", {
+                                "chat_id": chat_id, "client_username": client_uname,
+                                "error": res.get("error"),
+                            }, severity="error")
+                            return
+                        # Дать CRM-боту 1-2 сек чтобы welcome message пришёл
+                        await asyncio.sleep(1.5)
+                    except Exception as e:
+                        logger.exception("forced add_partner_to_crm failed: %s", e)
+                        return
+                elif owner:
+                    logger.info(
+                        "AI: /clients в ответе — CRM-owner УЖЕ есть для @%s, форс не нужен",
+                        client_uname,
+                    )
+            except Exception as e:
+                logger.warning("/clients guard error: %s", e)
+
         # 🔴🔴🔴 ФИЛЬТР: запрещённые темы (брак на нашей стороне, пересдача
         # отклонённых счетов, спекуляции про сотрудников, обещания компенсаций).
         # Полный список — knowledge/policy.md «ЗАПРЕЩЁННЫЕ ТЕМЫ В ОТВЕТАХ КЛИЕНТУ».
