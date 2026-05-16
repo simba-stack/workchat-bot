@@ -501,7 +501,12 @@ class HealthChecker:
         return self.results
 
     def format_telegram_message(self, max_len: int = 4000) -> str:
-        """Форматирует результаты в TG-сообщение (HTML, ≤4000 chars)."""
+        """Форматирует результаты в TG-сообщение (HTML, ≤4000 chars).
+        ВАЖНО: все динамические строки прогоняются через html.escape() —
+        TG строго парсит HTML и валит запрос если встречает `<word>` который
+        не является валидным тегом (b/i/code/pre/a и т.п.)."""
+        from html import escape as _esc
+
         n_ok = sum(1 for r in self.results if r["status"] == "ok")
         n_warn = sum(1 for r in self.results if r["status"] == "warn")
         n_fail = sum(1 for r in self.results if r["status"] == "fail")
@@ -530,12 +535,15 @@ class HealthChecker:
             if not block:
                 continue
             for r in block:
-                msg = f"{emoji} <b>{r['name']}</b>"
-                if r["message"]:
-                    msg += f" — {r['message']}"
+                name = _esc(str(r.get("name", "")))
+                message = _esc(str(r.get("message", "")))
+                fix_hint = _esc(str(r.get("fix_hint", "")))
+                msg = f"{emoji} <b>{name}</b>"
+                if message:
+                    msg += f" — {message}"
                 lines.append(msg)
-                if r["status"] in ("fail", "warn") and r["fix_hint"]:
-                    lines.append(f"   <i>↳ {r['fix_hint']}</i>")
+                if r["status"] in ("fail", "warn") and fix_hint:
+                    lines.append(f"   <i>↳ {fix_hint}</i>")
             lines.append("")
         text = "\n".join(lines).strip()
         if len(text) > max_len:
