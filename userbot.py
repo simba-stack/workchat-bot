@@ -373,6 +373,10 @@ class UserbotService:
         # Структура: {chat_key: {msg_id, requested_by, approved_by: set, expires_at}}.
         # Удаление срабатывает когда approved_by содержит ID Тимона И ID любого админа.
         self._pending_delete_all_lk: dict[str, dict] = {}
+        # Pending подтверждение карточки ЛК от клиента после /checkchatforLKCARD.
+        # Структура: {chat_key: {bank, fio, price_usdt, payment_method, deal_id,
+        #                       usdt_address, requested_at, expires_at}}.
+        self._pending_lk_card_confirm: dict[str, dict] = {}
 
     async def create_work_chat(self, client_name: str, client_id: int = 0) -> dict:
         """Создаёт супергруппу-беседу под клиента, инвайтит работников,
@@ -1026,6 +1030,69 @@ class UserbotService:
                             logger.warning("override payment_method on demand: %s", e)
         except Exception as e:
             logger.warning("auto-detect payment method failed: %s", e)
+
+        # PENDING LK CONFIRM: если ждём подтверждения от клиента после
+        # /checkchatforLKCARD — обрабатываем «да»/«нет» здесь, минуя AI.
+        try:
+            from storage import _norm_chat_id as _norm_x
+            chat_key_x = _norm_x(chat_id)
+            pending_card = self._pending_lk_card_confirm.get(chat_key_x)
+            if pending_card and pending_card.get("expires_at", 0) > time.time():
+                msg_text_pc = ((event.message and event.message.text) or "").lower().strip()
+                if msg_text_pc:
+                    affirm = any(w in msg_text_pc for w in (
+                        "да", "верно", "подтверждаю", "правильно", "ага", "ок ",
+                        "ок.", "ок,", "ок!", "ok", "yes", "👍", "✅",
+                    )) and len(msg_text_pc) < 60
+                    if affirm:
+                        # Создаём карточку
+                        pc = self._pending_lk_card_confirm.pop(chat_key_x)
+                        try:
+                            card_id = await storage.add_lk_card(
+                                bank=pc.get("bank") or "",
+                                fio=pc.get("fio") or "",
+                                price_usdt=float(pc.get("price_usdt") or 0),
+                                payment_method=pc.get("payment_method") or "",
+                                deal_id=pc.get("deal_id") or "",
+                                usdt_address=pc.get("usdt_address") or "",
+                                status="В_РАБОТЕ",
+                                supplier=pc.get("client_username") or "",
+                                client_id=int(pc.get("client_id") or 0),
+                                client_username=pc.get("client_username") or "",
+                                work_chat_id=int(chat_id or 0),
+                                created_by="checkchatforlkcard_confirmed",
+                            )
+                            try:
+                                await self._refresh_lk_card_post(card_id)
+                            except Exception:
+                                pass
+                            target = await self._resolve_chat_target(chat_id)
+                            await self.client.send_message(
+                                target,
+                                f"✅ Спасибо! Карточка <code>#{card_id}</code> создана. "
+                                f"Передаём операционистам — выплата по факту отработки "
+                                f"(или сразу — если выбран гарант до).",
+                                parse_mode="html",
+                            )
+                            _e("lk-card-confirmed-by-client", {
+                                "card_id": card_id, "chat_id": chat_id,
+                            }, character="lk", severity="success")
+                        except Exception as e:
+                            logger.warning("confirmed card create fail: %s", e)
+                            try:
+                                target = await self._resolve_chat_target(chat_id)
+                                await self.client.send_message(
+                                    target,
+                                    f"⚠️ Подтвердили, но создание карточки упало: {e}. "
+                                    f"Передал админам.",
+                                )
+                            except Exception:
+                                pass
+                        return
+                    # «нет» / «исправь ...» — НЕ создаём, оставляем pending,
+                    # дальше AI обработает текст и предложит правильные значения
+        except Exception as e:
+            logger.warning("pending lk confirm handler error: %s", e)
 
         # AUTO-DETECT номера сделки от клиента для GUARANTOR_AFTER_WORK карточки.
         # Страховка на случай если AI забудет вызвать record_deal. Срабатывает
@@ -3162,48 +3229,66 @@ class UserbotService:
             except Exception:
                 price_usdt = 0
 
-        # Создаём карточку
+        # СОХРАНЯЕМ pending — клиент должен подтвердить.
+        from storage import _norm_chat_id
+        chat_key = _norm_chat_id(chat_id)
+        method_label = {
+            "USDT_TRC20": "USDT TRC20",
+            "GUARANTOR_BEFORE": "Сделка в Continental (ДО отработки)",
+            "GUARANTOR_AFTER_WORK": "Сделка в Continental (ПОСЛЕ отработки)",
+            "GUARANTOR_AFTER": "Сделка в Continental (после перевязки)",
+        }.get(payment_method or "", payment_method or "уточняется")
+
+        self._pending_lk_card_confirm[chat_key] = {
+            "bank": bank,
+            "fio": fio,
+            "price_usdt": float(price_usdt or 0),
+            "payment_method": payment_method or "",
+            "deal_id": deal_id or "",
+            "usdt_address": usdt_addr or "",
+            "client_username": client_username or "",
+            "client_id": int(client_id or 0),
+            "requested_at": time.time(),
+            "expires_at": time.time() + 24 * 60 * 60,  # 24 часа
+        }
+
+        # Отправляем клиенту сообщение с запросом подтверждения
+        client_tag = (
+            f"<a href='tg://user?id={client_id}'>{fio}</a>"
+            if client_id else (f"@{client_username}" if client_username else "Клиент")
+        )
+        confirm_msg = (
+            f"📋 <b>Мне нужно создать карточку вашего ЛК.</b>\n\n"
+            f"{client_tag}, вот информация которую я собрал из нашего чата:\n\n"
+            f"• <b>Банк:</b> {bank}\n"
+            f"• <b>ФИО:</b> {fio}\n"
+            f"• <b>Цена ЛК:</b> {price_usdt}$\n"
+            f"• <b>Метод оплаты:</b> {method_label}\n"
+        )
+        if deal_id:
+            confirm_msg += f"• <b>Номер сделки:</b> #{deal_id}\n"
+        if usdt_addr:
+            confirm_msg += f"• <b>USDT-адрес:</b> <code>{usdt_addr}</code>\n"
+        confirm_msg += (
+            f"\nПодскажите — <b>всё верно?</b>\n"
+            f"Если да — напишите «<b>да</b>» / «верно» / «подтверждаю».\n"
+            f"Если нет — напишите что исправить."
+        )
+
         try:
-            card_id = await storage.add_lk_card(
-                bank=bank,
-                fio=fio,
-                price_usdt=float(price_usdt or 0),
-                payment_method=payment_method or "",
-                deal_id=deal_id or "",
-                usdt_address=usdt_addr or "",
-                status="В_РАБОТЕ",
-                supplier=(client_username or ""),
-                client_id=int(client_id or 0),
-                client_username=client_username or "",
-                work_chat_id=int(chat_id or 0),
-                created_by="checkchatforlkcard",
+            target = await self._resolve_chat_target(chat_id)
+            await self.client.send_message(
+                target, confirm_msg, parse_mode="html", link_preview=False,
             )
-            await event.reply(
-                f"✅ Восстановил карточку <code>#{card_id}</code>:\n"
-                f"• Банк: <b>{bank}</b>\n"
-                f"• ФИО: {fio}\n"
-                f"• Цена: <b>{price_usdt}$</b>\n"
-                f"• Метод оплаты: {payment_method or '—'}\n"
-                f"• USDT-адрес: <code>{usdt_addr or '—'}</code>\n"
-                f"• Сделка: <code>#{deal_id or '—'}</code>\n"
-                f"• Статус: В_РАБОТЕ\n\n"
-                f"Если данные неверны — поправь через <code>#{card_id} поле значение</code>.",
-                parse_mode="html",
-            )
-            try:
-                await self._refresh_lk_card_post(card_id)
-            except Exception:
-                pass
-            _e("lk-card-restored-from-chat", {
-                "card_id": card_id, "chat_id": chat_id,
-                "bank": bank, "fio": fio, "price_usdt": price_usdt,
-                "msg_count": msg_count,
-            }, character="lk", severity="success")
         except Exception as e:
-            try:
-                await event.reply(f"⚠️ Создание карточки упало: {e}")
-            except Exception:
-                pass
+            logger.warning("checkchat confirm send fail: %s", e)
+        try:
+            _e("lk-card-confirm-requested", {
+                "chat_id": chat_id, "bank": bank, "fio": fio,
+                "price_usdt": price_usdt, "method": payment_method,
+            }, character="lk", severity="info")
+        except Exception:
+            pass
 
     async def _cmd_invite_user(self, event, chat_id, username: str):
         """Приглашение пользователя в чат по @username (от админа)."""
