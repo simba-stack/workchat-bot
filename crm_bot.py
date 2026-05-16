@@ -399,6 +399,84 @@ async def cmd_start_group(message: Message):
     )
 
 
+# ─── +партнер @username (от userbot/PRIDE ASSISTANT) ─────────────
+# Юзербот шлёт эту команду в work-чат клиента сразу после добавления CRM-бота.
+# Мы регистрируем @username как CRM-owner и привязываем к этой группе как work_chat.
+
+import re as _re_partner
+_PARTNER_RE = _re_partner.compile(r"^\s*\+\s*партн[её]р\s+@?(\w+)\s*$", _re_partner.IGNORECASE)
+
+
+@router.message(F.text.regexp(r"^\s*\+\s*партн[её]р").as_("matched"))
+async def cmd_add_partner_command(message: Message):
+    """Регистрирует партнёра по username и привязывает чат как work_chat.
+    Идемпотентно — повторный вызов просто обновит привязку."""
+    text = (message.text or "").strip()
+    m = _PARTNER_RE.match(text)
+    if not m:
+        return
+    username = m.group(1).strip().lstrip("@")
+    if not username:
+        return
+    chat_id = message.chat.id
+    # Пытаемся резолвить user_id участника группы по username
+    target_user = None
+    try:
+        from aiogram.exceptions import TelegramBadRequest
+        # Сканируем последние сообщения чата чтобы найти юзера с этим username.
+        # Лучше всего — пройти по message.chat.get_administrators() и members,
+        # но aiogram не даёт listing участников без spec API. Найдём через
+        # storage.find_chat_by_client_username (юзербот уже знает кто в чате).
+        from storage import storage as main_storage
+        chat_key = main_storage.find_chat_by_client_username(username)
+        info = main_storage.get_chat_info(chat_key) if chat_key else None
+        if info:
+            target_user = {
+                "tg_user_id": int(info.get("client_id") or 0),
+                "username": username,
+                "name": info.get("client_name") or username,
+            }
+    except Exception as e:
+        logger.warning("partner-add lookup fail: %s", e)
+
+    if not target_user or not target_user.get("tg_user_id"):
+        await message.reply(
+            f"⚠️ Не нашёл @{username} в managed-чатах. "
+            "Партнёр должен быть участником рабочей беседы PRIDE.",
+        )
+        return
+
+    # Создаём/обновляем CRM-owner запись
+    owner = crm_storage.find_crm_owner_by_tg(target_user["tg_user_id"])
+    if owner:
+        await crm_storage.update_crm_owner(
+            owner["owner_id"],
+            username=target_user["username"],
+            name=target_user["name"],
+            work_chat_id=chat_id,
+        )
+        owner_id = owner["owner_id"]
+        logger.info("CRM partner re-bound: owner=%s chat=%s @%s",
+                    owner_id, chat_id, target_user["username"])
+    else:
+        owner_id = await crm_storage.add_crm_owner(
+            tg_user_id=target_user["tg_user_id"],
+            username=target_user["username"],
+            name=target_user["name"],
+            work_chat_id=chat_id,
+        )
+        logger.info("CRM partner registered: owner=%s chat=%s @%s",
+                    owner_id, chat_id, target_user["username"])
+
+    await message.reply(
+        f"✅ <b>Партнёр @{username} добавлен.</b>\n\n"
+        f"@{username}, чтобы оформить ваш счёт — пропишите команду "
+        f"<code>/clients</code> прямо в этом чате, нажмите кнопку "
+        f"«Добавить клиента» и заполните анкету. Когда всё заполнено — "
+        f"«Отдать в работу», и наши операционисты возьмут счёт на перевязку.",
+    )
+
+
 # ─── /profile ───────────────────────────────────────────────────
 
 @router.message(Command("profile"))
