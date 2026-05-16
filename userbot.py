@@ -860,7 +860,47 @@ class UserbotService:
         chat_info = storage.get_chat_info(chat_id)
         # Команды takeover/forget работают в ЛЮБОЙ группе, даже если её
         # ещё нет в managed_chats — это и есть смысл takeover'а.
-        if not event.message or not (event.message.text or "").strip():
+        if not event.message:
+            return
+        # Если в сообщении только фото / документ / стикер БЕЗ текста — отвечаем
+        # клиенту просьбой переписать текстом (Claude через basic API не видит
+        # изображения, а кидать в чат «...» как раньше — было багом).
+        if not (event.message.text or "").strip():
+            try:
+                has_media = bool(getattr(event.message, "photo", None)
+                                 or getattr(event.message, "document", None)
+                                 or getattr(event.message, "video", None)
+                                 or getattr(event.message, "sticker", None))
+            except Exception:
+                has_media = False
+            if has_media and chat_info:
+                # Это сообщение от клиента (не worker'а — проверка дальше)
+                try:
+                    sender_obj = await event.get_sender()
+                    sender_u = (getattr(sender_obj, "username", "") or "").lower()
+                    workers_lc = {w.lower() for w in storage.get_workers()}
+                    is_worker_media = (
+                        sender_u in workers_lc
+                        or (getattr(sender_obj, "id", 0) in storage.get_admins())
+                    )
+                except Exception:
+                    is_worker_media = False
+                if not is_worker_media:
+                    try:
+                        target = await self._resolve_chat_target(chat_id)
+                        await self.client.send_message(
+                            target,
+                            "Получил вложение — но я пока работаю только с "
+                            "текстом. Напишите коротко что в нём (банк, ФИО, "
+                            "сумма, номер сделки и т.п.), я сразу обработаю.",
+                            parse_mode="html",
+                        )
+                        _e("ai-media-only-prompted", {
+                            "chat_id": chat_id,
+                            "type": "photo" if event.message.photo else "media",
+                        }, character="chat", severity="info")
+                    except Exception as e:
+                        logger.warning("media-only prompt failed: %s", e)
             return
         try:
             if await self._maybe_handle_takeover_command(event, chat_id, chat_info):
