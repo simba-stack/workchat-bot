@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PRIDE · J.A.R.V.I.S.</title>
+<!-- Inter — тот самый «приятный глазу» шрифт что и на Railway/Vercel/Stripe.
+     JetBrains Mono подгружаем для блоков с кодом / IP / хешами (моноширинный). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -64,8 +69,66 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; min-height: 100vh; overflow-x: hidden; }
   body {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03"; /* красивые альтернативные глифы Inter */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     color: var(--text);
+  }
+  code, pre, .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
+
+  /* ===== SETTINGS PAGE — Linear/Vercel-стиль карточки ===== */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .settings-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .settings-card:hover {
+    border-color: rgba(var(--primary-rgb), 0.5);
+    background: rgba(var(--primary-rgb), 0.04);
+    transform: translateY(-1px);
+  }
+  .settings-card.active {
+    border-color: var(--hud-primary);
+    box-shadow: 0 0 0 1px rgba(var(--primary-rgb), 0.35);
+  }
+  .settings-card-icon {
+    font-size: 24px;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(var(--primary-rgb), 0.08);
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .settings-card-body {
+    flex: 1;
+    min-width: 0;
+  }
+  .settings-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+  .settings-card-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.4;
     background:
       radial-gradient(ellipse at 30% 10%, rgba(var(--primary-rgb), 0.10) 0%, transparent 50%),
       radial-gradient(ellipse at 80% 90%, rgba(var(--primary-rgb), 0.06) 0%, transparent 50%),
@@ -2267,6 +2330,7 @@
   <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
   <button class="view-tab" :class="currentView === 'payouts' ? 'active' : ''" @click="goToView('payouts')">💰 Выплаты</button>
   <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
+  <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
 
@@ -3595,6 +3659,203 @@
   </aside>
 </section>
 
+<!-- ===== SETTINGS — полноценный раздел настроек ===== -->
+<section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
+  <div style="margin-bottom: 24px;">
+    <h2 style="margin: 0 0 6px 0; font-size: 24px; font-weight: 700; color: var(--text);">⚙️ Настройки</h2>
+    <div style="font-size: 13px; color: var(--text-dim);">Конфигурация системы PRIDE J.A.R.V.I.S.</div>
+  </div>
+
+  <!-- Подразделы — кликабельные карточки в стиле Linear/Vercel -->
+  <div class="settings-grid">
+
+    <!-- ====== ПРОФИЛЬ & ДОСТУП ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'profile'" :class="settingsActiveSection === 'profile' ? 'active' : ''">
+      <div class="settings-card-icon">👤</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Профиль и доступ</div>
+        <div class="settings-card-sub">Учётная запись, TG-админы, выход</div>
+      </div>
+    </div>
+
+    <!-- ====== РАБОТНИКИ & РОЛИ ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'workers'" :class="settingsActiveSection === 'workers' ? 'active' : ''">
+      <div class="settings-card-icon">🎭</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Работники и роли</div>
+        <div class="settings-card-sub">Список работников, их ранги, права</div>
+      </div>
+    </div>
+
+    <!-- ====== TG-ЧАТЫ ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'chats'" :class="settingsActiveSection === 'chats' ? 'active' : ''">
+      <div class="settings-card-icon">💬</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Telegram-чаты</div>
+        <div class="settings-card-sub">Brain, ЛК-группа, Идеи, Координация</div>
+      </div>
+    </div>
+
+    <!-- ====== AI ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'ai'" :class="settingsActiveSection === 'ai' ? 'active' : ''">
+      <div class="settings-card-icon">🤖</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">AI-модель</div>
+        <div class="settings-card-sub">Claude/Haiku, idle-time, голосовой LEO</div>
+      </div>
+    </div>
+
+    <!-- ====== ПРАЙС ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'pricing'" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
+      <div class="settings-card-icon">💸</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Прайс ЛК</div>
+        <div class="settings-card-sub">Цены за банки, USDT/гарант, наценки</div>
+      </div>
+    </div>
+
+    <!-- ====== INVITE / WELCOME ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'invite'" :class="settingsActiveSection === 'invite' ? 'active' : ''">
+      <div class="settings-card-icon">📨</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Invite-бот</div>
+        <div class="settings-card-sub">Welcome-сообщение, GIF, эмодзи</div>
+      </div>
+    </div>
+
+    <!-- ====== ВНЕШНИЙ ВИД ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'appearance'" :class="settingsActiveSection === 'appearance' ? 'active' : ''">
+      <div class="settings-card-icon">🎨</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Внешний вид</div>
+        <div class="settings-card-sub">Тема, шрифт, звуки</div>
+      </div>
+    </div>
+
+    <!-- ====== СИСТЕМА ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'system'" :class="settingsActiveSection === 'system' ? 'active' : ''">
+      <div class="settings-card-icon">🏥</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Состояние системы</div>
+        <div class="settings-card-sub">Healthcheck, deploy-инфо, логи</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Контент выбранного подраздела ===== -->
+  <div class="settings-panel" style="margin-top: 24px;">
+
+    <!-- PROFILE -->
+    <div x-show="settingsActiveSection === 'profile'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">👤 Профиль и доступ</h3>
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
+        Управление через Telegram-бота <code>@PrideCRMv4</code>: команды <code>/admin</code>, <code>/healthcheck</code>.
+      </div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <a class="btn" href="/logout" style="padding: 8px 18px;">🚪 Выйти из дашборда</a>
+        <button class="btn" @click="window.open('https://t.me/PrideCRMv4', '_blank')">📲 Открыть бота</button>
+      </div>
+    </div>
+
+    <!-- WORKERS -->
+    <div x-show="settingsActiveSection === 'workers'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">🎭 Работники и роли</h3>
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
+        Список настраивается через <code>/admin → 👷 Работники</code> и <code>/admin → 🎭 Роли работников</code>.
+      </div>
+      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_workers', '_blank')">📲 Открыть в боте</button>
+    </div>
+
+    <!-- CHATS -->
+    <div x-show="settingsActiveSection === 'chats'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💬 Telegram-чаты</h3>
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
+        Настраиваются через <code>/admin → 🧠 Brain-чат / 📋 ЛК-группа / 📒 Бухгалтерия / 💡 Идеи / 🤝 Координация</code>.
+      </div>
+      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin', '_blank')">📲 Открыть в боте</button>
+    </div>
+
+    <!-- AI -->
+    <div x-show="settingsActiveSection === 'ai'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">🤖 AI-модель и поведение</h3>
+      <div style="display: grid; gap: 12px; font-size: 13px;">
+        <div>Активна модель: <code x-text="state.stats.ai_model || 'claude-haiku-4-5'"></code></div>
+        <div>AI отвечает в чатах: <b x-text="state.stats.ai_enabled ? '✅ ВКЛ' : '❌ ВЫКЛ'"></b></div>
+        <div>Idle-таймер: <code x-text="(state.stats.idle_minutes || 5) + ' мин'"></code> ожидания работника</div>
+      </div>
+      <div style="margin-top: 16px; display: flex; gap: 10px;">
+        <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_ai', '_blank')">📲 Настроить в боте</button>
+      </div>
+    </div>
+
+    <!-- PRICING -->
+    <div x-show="settingsActiveSection === 'pricing'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💸 Прайс ЛК</h3>
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
+        В брейн-чате напиши «<code>прайс</code>» — увидишь текущие цены.<br>
+        Чтобы поменять: «<code>Ассистент поставь цену [банк] [сумма]</code>».
+      </div>
+    </div>
+
+    <!-- INVITE -->
+    <div x-show="settingsActiveSection === 'invite'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">📨 Invite-бот / Welcome</h3>
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
+        Настраивается через <code>/admin → 📨 Invite-бот</code>: GIF, эмодзи, текст welcome.
+      </div>
+      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_invite', '_blank')">📲 Открыть в боте</button>
+    </div>
+
+    <!-- APPEARANCE -->
+    <div x-show="settingsActiveSection === 'appearance'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">🎨 Внешний вид</h3>
+      <div style="display: grid; gap: 16px;">
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Тема</label>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn" @click="theme='jarvis'; saveTheme && saveTheme()" :class="theme === 'jarvis' ? 'success' : ''">🟦 JARVIS</button>
+            <button class="btn" @click="theme='ironman'; saveTheme && saveTheme()" :class="theme === 'ironman' ? 'success' : ''">🟥 IRON MAN</button>
+            <button class="btn" @click="theme='stealth'; saveTheme && saveTheme()" :class="theme === 'stealth' ? 'success' : ''">⬜ STEALTH</button>
+          </div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Звуки уведомлений</label>
+          <button class="btn" @click="toggleSound()" :class="soundOn ? 'success' : ''" x-text="soundOn ? '🔊 ВКЛ' : '🔇 ВЫКЛ'"></button>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Шрифт интерфейса</label>
+          <div style="font-size: 12px; color: var(--text-dim);">
+            <b>Inter</b> + JetBrains Mono (для кода) — постоянно. Этот стек использует Vercel, Stripe, Linear, Railway.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SYSTEM -->
+    <div x-show="settingsActiveSection === 'system'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">🏥 Состояние системы</h3>
+      <div style="display: grid; gap: 14px;">
+        <div>
+          <button class="btn success" @click="runHealthcheck()" :disabled="healthcheckLoading" style="padding: 10px 20px;">
+            <span x-show="!healthcheckLoading">▶️ Прогнать healthcheck</span>
+            <span x-show="healthcheckLoading">⏳ Проверяю системы...</span>
+          </button>
+        </div>
+        <div x-show="healthcheckSummary">
+          <div style="display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px;">
+            <span>✅ OK: <b x-text="healthcheckSummary?.ok || 0"></b></span>
+            <span>⚠️ WARN: <b x-text="healthcheckSummary?.warn || 0"></b></span>
+            <span>❌ FAIL: <b x-text="healthcheckSummary?.fail || 0"></b></span>
+          </div>
+          <pre style="white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto; font-family: 'JetBrains Mono', monospace;"
+               x-html="healthcheckText || ''"></pre>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
 <!-- ===== Create channel modal ===== -->
 <template x-if="discordChannelModal.open">
   <div class="modal-mask" @click="discordChannelModal.open = false">
@@ -3825,6 +4086,11 @@ function jarvis() {
     currentView: (window.location.hash || '#office').replace('#', '') || 'office',
     theme: localStorage.getItem('jarvis-theme') || 'jarvis',
     soundOn: localStorage.getItem('jarvis-sound') === '1',
+    // Settings view state
+    settingsActiveSection: localStorage.getItem('jarvis-settings-section') || 'profile',
+    healthcheckLoading: false,
+    healthcheckSummary: null,
+    healthcheckText: '',
     state: {
       stats: {
         lk_cards_total: 0, lk_cards_by_status: {}, lk_cards_by_method: {},
@@ -4709,6 +4975,10 @@ function jarvis() {
       location.hash = '#' + view;
       if (view === 'crm') { this.refreshCrm(); }
       if (view === 'payouts') { this.refreshPayouts(); }
+      if (view === 'settings') {
+        // запомним выбор
+        try { localStorage.setItem('jarvis-settings-section', this.settingsActiveSection); } catch (e) {}
+      }
     },
     banksFromCards() {
       const out = {};
@@ -6150,6 +6420,32 @@ function jarvis() {
     downloadDesktop() {
       // Открываем страницу скачивания /desktop — там автодетект ОС
       window.open("/desktop", "_blank");
+    },
+
+    saveTheme() {
+      try { localStorage.setItem('jarvis-theme', this.theme); } catch (e) {}
+      // Применить тему — обычно есть watcher или CSS-переменные на data-theme
+      try { document.documentElement.setAttribute('data-theme', this.theme); } catch (e) {}
+    },
+
+    async runHealthcheck() {
+      this.healthcheckLoading = true;
+      this.healthcheckSummary = null;
+      this.healthcheckText = '';
+      try {
+        const r = await fetch('/api/health/full', { credentials: 'include' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || 'unknown error');
+        this.healthcheckSummary = data.summary;
+        // Сервер уже формирует HTML-сообщение для TG — отрендерим в <pre>
+        this.healthcheckText = data.telegram_message || '';
+      } catch (e) {
+        this.healthcheckText = '❌ Healthcheck упал: ' + String(e);
+        this.healthcheckSummary = { ok: 0, warn: 0, fail: 1 };
+      } finally {
+        this.healthcheckLoading = false;
+      }
     },
 
     async refreshPayouts() {
