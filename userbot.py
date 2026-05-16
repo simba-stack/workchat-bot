@@ -324,10 +324,17 @@ class UserbotService:
         channel = result.chats[0]
         logger.info("Created group '%s' (id=%s) for client=%s", title, channel.id, client_id)
 
-        # 2) Резолвим работников из config.WORKERS
+        # 2) Резолвим работников. Берём из storage.get_workers() (актуальный список,
+        # настраиваемый через админку), с fallback на config.DEFAULT_WORKERS.
         statuses: dict[str, str] = {}
         users_to_invite = []
-        for username in (config.WORKERS or []):
+        try:
+            workers_list = storage.get_workers() or []
+        except Exception:
+            workers_list = []
+        if not workers_list:
+            workers_list = list(getattr(config, "DEFAULT_WORKERS", []) or [])
+        for username in workers_list:
             uname = (username or "").lstrip("@").strip()
             if not uname:
                 continue
