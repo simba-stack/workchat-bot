@@ -347,9 +347,8 @@ autoUpdater.on("error", (err) => {
 // === Lifecycle ===
 app.whenReady().then(() => {
   // === Screen share (getDisplayMedia) handler ===
-  // Electron блокирует getDisplayMedia по умолчанию. Регистрируем хэндлер
-  // который через desktopCapturer выдаёт первый экран. На Windows 11 / macOS
-  // useSystemPicker=true вызовет нативный OS-пикер.
+  // Открывает кастомный пикер (picker.html), пользователь выбирает экран/окно,
+  // мы резолвим callback со выбранным source.
   try {
     const sess = session.fromPartition("persist:pride");
     sess.setDisplayMediaRequestHandler(async (request, callback) => {
@@ -357,24 +356,81 @@ app.whenReady().then(() => {
         log.info("[screen-share] requested by:", request.frame?.url);
         const sources = await desktopCapturer.getSources({
           types: ["screen", "window"],
-          thumbnailSize: { width: 0, height: 0 },
-          fetchWindowIcons: false,
+          thumbnailSize: { width: 320, height: 200 },
+          fetchWindowIcons: true,
         });
         if (!sources || sources.length === 0) {
           log.warn("[screen-share] no sources");
-          callback({}); // отказ
+          callback({});
           return;
         }
-        // Берём первый источник (обычно — основной экран). Для multi-screen UI
-        // можно показать кастомный пикер, но для начала достаточно автоматики.
-        callback({ video: sources[0], audio: "loopback" });
-        log.info("[screen-share] granted source:", sources[0].name);
+        // Сериализуем источники для отправки в picker-окно
+        const serialized = sources.map(s => ({
+          id: s.id,
+          name: s.name,
+          thumbnail: s.thumbnail ? s.thumbnail.toDataURL() : null,
+          appIcon: s.appIcon ? s.appIcon.toDataURL() : null,
+        }));
+        // Создаём пикер-окно
+        const picker = new BrowserWindow({
+          width: 880, height: 620,
+          minWidth: 600, minHeight: 400,
+          parent: mainWindow,
+          modal: true,
+          frame: true,
+          autoHideMenuBar: true,
+          backgroundColor: "#0a0e1a",
+          title: "Выбери что транслировать",
+          webPreferences: {
+            preload: path.join(__dirname, "picker-preload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        });
+        picker.loadFile(path.join(__dirname, "picker.html"));
+        let resolved = false;
+        const resolveOnce = (result) => {
+          if (resolved) return;
+          resolved = true;
+          try { callback(result); } catch (e) { log.error("callback fail:", e); }
+          if (!picker.isDestroyed()) picker.close();
+        };
+        // IPC: picker-ready → шлём sources
+        const onReady = (_e) => {
+          if (!picker.isDestroyed()) picker.webContents.send("picker-sources", serialized);
+        };
+        const onConfirm = (_e, sourceId) => {
+          const source = sources.find(s => s.id === sourceId);
+          if (source) {
+            log.info("[screen-share] picked:", source.name);
+            resolveOnce({ video: source, audio: "loopback" });
+          } else {
+            log.warn("[screen-share] picked unknown id:", sourceId);
+            resolveOnce({});
+          }
+        };
+        const onCancel = (_e) => {
+          log.info("[screen-share] cancelled by user");
+          resolveOnce({});
+        };
+        ipcMain.on("picker-ready", onReady);
+        ipcMain.on("picker-confirm", onConfirm);
+        ipcMain.on("picker-cancel", onCancel);
+        picker.on("closed", () => {
+          ipcMain.removeListener("picker-ready", onReady);
+          ipcMain.removeListener("picker-confirm", onConfirm);
+          ipcMain.removeListener("picker-cancel", onCancel);
+          if (!resolved) {
+            log.info("[screen-share] picker closed without choice");
+            resolveOnce({});
+          }
+        });
       } catch (e) {
         log.error("[screen-share] handler error:", e);
         try { callback({}); } catch (_) {}
       }
-    }, { useSystemPicker: true });
-    log.info("setDisplayMediaRequestHandler registered");
+    }, { useSystemPicker: false });
+    log.info("setDisplayMediaRequestHandler registered (custom picker)");
   } catch (e) {
     log.error("setDisplayMediaRequestHandler setup failed:", e);
   }
