@@ -862,45 +862,10 @@ class UserbotService:
         # ещё нет в managed_chats — это и есть смысл takeover'а.
         if not event.message:
             return
-        # Если в сообщении только фото / документ / стикер БЕЗ текста — отвечаем
-        # клиенту просьбой переписать текстом (Claude через basic API не видит
-        # изображения, а кидать в чат «...» как раньше — было багом).
-        if not (event.message.text or "").strip():
-            try:
-                has_media = bool(getattr(event.message, "photo", None)
-                                 or getattr(event.message, "document", None)
-                                 or getattr(event.message, "video", None)
-                                 or getattr(event.message, "sticker", None))
-            except Exception:
-                has_media = False
-            if has_media and chat_info:
-                # Это сообщение от клиента (не worker'а — проверка дальше)
-                try:
-                    sender_obj = await event.get_sender()
-                    sender_u = (getattr(sender_obj, "username", "") or "").lower()
-                    workers_lc = {w.lower() for w in storage.get_workers()}
-                    is_worker_media = (
-                        sender_u in workers_lc
-                        or (getattr(sender_obj, "id", 0) in storage.get_admins())
-                    )
-                except Exception:
-                    is_worker_media = False
-                if not is_worker_media:
-                    try:
-                        target = await self._resolve_chat_target(chat_id)
-                        await self.client.send_message(
-                            target,
-                            "Получил вложение — но я пока работаю только с "
-                            "текстом. Напишите коротко что в нём (банк, ФИО, "
-                            "сумма, номер сделки и т.п.), я сразу обработаю.",
-                            parse_mode="html",
-                        )
-                        _e("ai-media-only-prompted", {
-                            "chat_id": chat_id,
-                            "type": "photo" if event.message.photo else "media",
-                        }, character="chat", severity="info")
-                    except Exception as e:
-                        logger.warning("media-only prompt failed: %s", e)
+        # Если в сообщении нет ни текста ни фото — игнорируем (стикеры, документы
+        # пока не поддерживаются полноценно; фото идёт в AI через Claude Vision).
+        has_photo = bool(getattr(event.message, "photo", None))
+        if not (event.message.text or "").strip() and not has_photo:
             return
         try:
             if await self._maybe_handle_takeover_command(event, chat_id, chat_info):
@@ -1749,16 +1714,29 @@ class UserbotService:
 
     async def _fetch_history_for_claude(self, chat_id, client_id: int) -> list[dict]:
         msgs: list[dict] = []
+        last_user_msg_id_with_photo = None  # для Vision на последнем сообщении
         try:
             async for m in self.client.iter_messages(chat_id, limit=config.AI_HISTORY_LIMIT):
                 txt = (m.text or "").strip()
-                if not txt:
+                has_photo = bool(getattr(m, "photo", None))
+                # Сообщения без текста И без фото — пропускаем
+                if not txt and not has_photo:
                     continue
                 if self._me and m.sender_id == self._me.id:
-                    msgs.insert(0, {"role": "assistant", "content": txt})
+                    if txt:
+                        msgs.insert(0, {"role": "assistant", "content": txt})
                 elif client_id and m.sender_id == client_id:
-                    msgs.insert(0, {"role": "user", "content": txt})
+                    # Сохраняем id ПЕРВОГО (в итерации = последнего) фото клиента
+                    if has_photo and last_user_msg_id_with_photo is None:
+                        last_user_msg_id_with_photo = m.id
+                    content_text = txt or "(прислал изображение без подписи)"
+                    msgs.insert(0, {
+                        "role": "user", "content": content_text,
+                        "_msg_id": m.id, "_has_photo": has_photo,
+                    })
                 else:
+                    if not txt:
+                        continue
                     try:
                         s = await m.get_sender()
                     except Exception:
@@ -1773,6 +1751,61 @@ class UserbotService:
             msgs.pop(0)
         while msgs and msgs[-1]["role"] != "user":
             msgs.pop()
+
+        # === CLAUDE VISION: для ПОСЛЕДНЕГО клиентского сообщения с фото
+        # подгружаем изображение и заменяем content на list-of-blocks.
+        # Только последнее (не вся история — иначе раздувание токенов и денег).
+        if last_user_msg_id_with_photo and msgs:
+            try:
+                # Найти последнее user-сообщение с фото в msgs (это и есть оно)
+                for i in range(len(msgs) - 1, -1, -1):
+                    msg = msgs[i]
+                    if (msg.get("_has_photo")
+                            and msg.get("_msg_id") == last_user_msg_id_with_photo):
+                        # Скачиваем фото
+                        try:
+                            tg_msg = await self.client.get_messages(
+                                chat_id, ids=last_user_msg_id_with_photo,
+                            )
+                            if tg_msg and tg_msg.photo:
+                                import io, base64
+                                buf = io.BytesIO()
+                                await self.client.download_media(tg_msg, file=buf)
+                                data = buf.getvalue()
+                                if data and len(data) < 5 * 1024 * 1024:  # < 5 MB
+                                    b64 = base64.standard_b64encode(data).decode()
+                                    text = msg.get("content") or ""
+                                    msg["content"] = [
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": "image/jpeg",
+                                                "data": b64,
+                                            },
+                                        },
+                                        {"type": "text", "text": text or "Смотри изображение."},
+                                    ]
+                                    logger.info(
+                                        "Claude Vision: attached photo to msg=%s "
+                                        "(%d KB)", last_user_msg_id_with_photo,
+                                        len(data) // 1024,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "Vision: photo too big or empty (%d bytes)",
+                                        len(data) if data else 0,
+                                    )
+                        except Exception as e:
+                            logger.warning("Vision download failed: %s", e)
+                        break
+            except Exception as e:
+                logger.warning("Vision processing top-level fail: %s", e)
+
+        # Очистка вспомогательных полей перед отдачей в Claude API
+        for m in msgs:
+            m.pop("_msg_id", None)
+            m.pop("_has_photo", None)
         return msgs
 
     async def _fetch_brain_notes(self) -> str:
