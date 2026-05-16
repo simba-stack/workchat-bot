@@ -188,6 +188,19 @@ _FORBIDDEN_CLIENT_PATTERNS = [
     r"\b(?:сейчас|сегодня|немедленно)\s+(?:выплатим|переведём|перечислим)",
     # Принятие обвинений в спам-режиме
     r"\bты\s+(?:абсолютно|совершенно)\s+прав\W{0,5}мы",
+    # 🔴 Запрет: предлагать клиенту цену ВЫШЕ чем он назвал.
+    # AI не должен «исправлять» клиента типа «вы наверное имели в виду 400»,
+    # «по нашему прайсу X», «а может за Y», «с учётом долга у вас выйдет Z».
+    # Если клиент назвал 170 — AI соглашается на 170. Точка.
+    r"\bпо\s+(?:нашему\s+)?прайсу\s+\d+\W{0,4}\$",
+    r"\bвы\s+наверн(?:о|ое)\s+имели\s+в\s+виду",
+    r"\bвы\s+(?:точно|правда)\s+имели\s+в\s+виду\s+\d+",
+    r"\bу\s+нас\s+прайс\s+вы(?:ше|сше)",
+    r"\bнаша\s+цена\s+\d+\W{0,4}\$",
+    r"\bу\s+нас\s+цена\s+вы(?:ше|сше)",
+    r"\bа\s+может\s+за\s+\d+",
+    r"\bс\s+учёт(?:ом|ом)\s+долг\w*\s+(?:у\s+)?вас\s+выйдет\s+\d+",
+    r"\bвыплата\s+составит\s+\d+\W{0,4}\$",
 ]
 _FORBIDDEN_RX = [
     re.compile(p, re.IGNORECASE | re.MULTILINE)
@@ -2993,6 +3006,10 @@ class UserbotService:
         """Команды админов в managed-чате клиента (work_chat):
           'Ассистент добавь @nick'        — пригласить пользователя в чат
           'Ассистент выдай админку @nick' — выдать админ-права в чате
+          '/checkchatforLKCARD'           — найти данные перевязки в истории
+                                            этого чата и создать карточку ЛК
+                                            (если её ещё нет)
+          '/checklk'                      — короткий алиас
 
         Работает только в managed_chats (рабочие беседы клиентов) — чтобы не
         случилось что админ напишет такое в Группе 1 ЛК и юзербот добавит
@@ -3008,7 +3025,185 @@ class UserbotService:
         if m:
             await self._cmd_grant_admin(event, chat_id, m.group(1))
             return True
+        # /checkchatforLKCARD или /checklk — восстановление карточки из контекста
+        text_low = text.lower().strip()
+        if (text_low.startswith("/checkchatforlkcard")
+                or text_low.startswith("/checklk")):
+            await self._cmd_check_chat_for_lk_card(event, chat_id)
+            return True
         return False
+
+    async def _cmd_check_chat_for_lk_card(self, event, chat_id):
+        """Сканирует историю чата (последние 200 сообщений) и пытается
+        восстановить карточку ЛК если она не была создана автоматически.
+
+        Что ищем в истории:
+          • «✅ Перевязка ЛК <банк> успешно выполнена» / «ЛК <банк> перевязан»
+          • «Карточка: #lkXXX» — если карточка уже есть, выходим
+          • ФИО клиента (из chat_info или supplier)
+          • Банк (из перевяз-сообщения)
+          • Цена (упоминание $/USDT)
+          • Метод оплаты (USDT / гарант / сделка)
+          • USDT-адрес (TX... 34 chars)
+          • Номер сделки (deal_id 5-7 цифр)
+        """
+        try:
+            await event.reply("⏳ Сканирую историю чата для восстановления карточки ЛК...")
+        except Exception:
+            pass
+        # Параметры из chat_info
+        info = storage.get_chat_info(chat_id) or {}
+        client_username = (info.get("client_username") or "").lstrip("@").strip()
+        client_id = info.get("client_id") or 0
+        # Поиск в истории
+        bank = None
+        fio = None
+        price_usdt = None
+        payment_method = None
+        usdt_addr = None
+        deal_id = None
+        existing_card_id = None
+        msg_count = 0
+        try:
+            async for m in self.client.iter_messages(chat_id, limit=200):
+                msg_count += 1
+                txt = ((m.text or m.message) or "").strip()
+                if not txt:
+                    continue
+                low = txt.lower()
+                # 1) Если уже есть карточка — выходим
+                em = re.search(r"#?(lk\d{3,4})\b", txt, re.I)
+                if em and ("карточк" in low or "лк перевяз" in low):
+                    existing_card_id = em.group(1).lower()
+                    break
+                # 2) Перевязка → банк
+                if not bank:
+                    pem = re.search(
+                        r"перевязк[аи]\s+лк\s+([а-яёa-z\d-]+)",
+                        low,
+                    )
+                    if pem:
+                        bank = pem.group(1).upper()
+                    else:
+                        pem2 = re.search(
+                            r"лк\s+([а-яёa-z\d-]+)\s+перевязан",
+                            low,
+                        )
+                        if pem2:
+                            bank = pem2.group(1).upper()
+                # 3) Цена $
+                if not price_usdt:
+                    pr = re.search(r"\b(\d{2,4})\s*\$", txt)
+                    if pr:
+                        try:
+                            price_usdt = float(pr.group(1))
+                        except Exception:
+                            pass
+                # 4) Метод оплаты
+                if not payment_method:
+                    if any(t in low for t in ("usdt", "trc20", "трц20")):
+                        payment_method = "USDT_TRC20"
+                    elif any(t in low for t in ("гарант до", "до отработ", "до перевяз")):
+                        payment_method = "GUARANTOR_BEFORE"
+                    elif any(t in low for t in ("гарант после", "после отработ")):
+                        payment_method = "GUARANTOR_AFTER_WORK"
+                # 5) USDT-адрес TRX (T + 33 alphanum)
+                if not usdt_addr:
+                    ua = re.search(r"\bT[A-HJ-NP-Za-km-z1-9]{33}\b", txt)
+                    if ua:
+                        usdt_addr = ua.group(0)
+                # 6) Номер сделки
+                if not deal_id:
+                    dm = re.search(r"#(\d{5,7})\b", txt)
+                    if dm:
+                        deal_id = dm.group(1)
+                # 7) ФИО — берём из chat_info.client_name если есть
+                if not fio and info.get("client_name"):
+                    fio = info["client_name"]
+        except Exception as e:
+            try:
+                await event.reply(f"⚠️ Ошибка сканирования: {e}")
+            except Exception:
+                pass
+            return
+
+        if existing_card_id:
+            try:
+                await event.reply(
+                    f"ℹ️ В чате уже есть карточка <code>#{existing_card_id}</code>. "
+                    f"Восстановление не требуется. Если она потерялась — используй "
+                    f"<code>#{existing_card_id}</code> в брейн-чате для проверки.",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+            return
+
+        if not bank:
+            try:
+                await event.reply(
+                    f"⚠️ Не нашёл признак успешной перевязки в последних "
+                    f"{msg_count} сообщениях. Карточка не создана.\n"
+                    f"Ожидаемые маркеры: «✅ Перевязка ЛК <банк> успешно выполнена», "
+                    f"«ЛК <банк> перевязан». Если перевязка была — создай карточку вручную.",
+                )
+            except Exception:
+                pass
+            return
+
+        if not fio:
+            fio = (client_username and f"@{client_username}") or "—"
+
+        if not price_usdt:
+            # Попробовать из прайса
+            try:
+                prices = storage.get_lk_prices() or {}
+                price_usdt = float(prices.get(bank.lower()) or 0)
+            except Exception:
+                price_usdt = 0
+
+        # Создаём карточку
+        try:
+            card_id = await storage.add_lk_card(
+                bank=bank,
+                fio=fio,
+                price_usdt=float(price_usdt or 0),
+                payment_method=payment_method or "",
+                deal_id=deal_id or "",
+                usdt_address=usdt_addr or "",
+                status="В_РАБОТЕ",
+                supplier=(client_username or ""),
+                client_id=int(client_id or 0),
+                client_username=client_username or "",
+                work_chat_id=int(chat_id or 0),
+                created_by="checkchatforlkcard",
+            )
+            await event.reply(
+                f"✅ Восстановил карточку <code>#{card_id}</code>:\n"
+                f"• Банк: <b>{bank}</b>\n"
+                f"• ФИО: {fio}\n"
+                f"• Цена: <b>{price_usdt}$</b>\n"
+                f"• Метод оплаты: {payment_method or '—'}\n"
+                f"• USDT-адрес: <code>{usdt_addr or '—'}</code>\n"
+                f"• Сделка: <code>#{deal_id or '—'}</code>\n"
+                f"• Статус: В_РАБОТЕ\n\n"
+                f"Если данные неверны — поправь через <code>#{card_id} поле значение</code>.",
+                parse_mode="html",
+            )
+            try:
+                await self._refresh_lk_card_post(card_id)
+            except Exception:
+                pass
+            _e("lk-card-restored-from-chat", {
+                "card_id": card_id, "chat_id": chat_id,
+                "bank": bank, "fio": fio, "price_usdt": price_usdt,
+                "msg_count": msg_count,
+            }, character="lk", severity="success")
+        except Exception as e:
+            try:
+                await event.reply(f"⚠️ Создание карточки упало: {e}")
+            except Exception:
+                pass
 
     async def _cmd_invite_user(self, event, chat_id, username: str):
         """Приглашение пользователя в чат по @username (от админа)."""
