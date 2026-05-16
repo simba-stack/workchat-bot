@@ -468,6 +468,17 @@ async def cmd_add_partner_command(message: Message):
         logger.info("CRM partner registered: owner=%s chat=%s @%s",
                     owner_id, chat_id, target_user["username"])
 
+    # КРИТИЧНО: регистрируем chat → owner в crm_chats. Без этой записи
+    # хэндлер `/clients` в группе вернёт "❌ Эта группа не закреплена".
+    try:
+        await crm_storage.register_crm_chat(
+            chat_id=chat_id, owner_id=owner_id,
+            is_admin=False, is_password=False, is_otr=False,
+        )
+        logger.info("crm_chats: registered chat=%s → owner=%s", chat_id, owner_id)
+    except Exception as e:
+        logger.warning("register_crm_chat failed: %s", e)
+
     await message.reply(
         f"✅ <b>Партнёр @{username} добавлен.</b>\n\n"
         f"@{username}, чтобы оформить ваш счёт — пропишите команду "
