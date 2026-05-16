@@ -1441,6 +1441,11 @@ class UserbotService:
                 pass
             return
 
+        # /checkchatforLKCARD <chat_id> — восстановление карточки ЛК из брейн-чата
+        if low.startswith("/checkchatforlkcard") or low.startswith("/checklk"):
+            await self._handle_checkchat_brain_command(event, text)
+            return
+
         # /sync_lk — синхронизация карточек ЛК из истории Группы 1
         if (
             low.startswith("/sync_lk")
@@ -3163,6 +3168,65 @@ class UserbotService:
             await self._cmd_check_chat_for_lk_card(event, chat_id)
             return True
         return False
+
+    async def _handle_checkchat_brain_command(self, event, text: str):
+        """Запуск /checkchatforLKCARD <chat_id> из брейн-чата (или любого
+        не-managed чата). Резолвит chat_id из аргумента, потом вызывает
+        обычную логику сканирования."""
+        # Парсим chat_id из аргумента
+        parts = (text or "").strip().split()
+        if len(parts) < 2:
+            try:
+                await event.reply(
+                    "⚠️ Используй: <code>/checkchatforLKCARD &lt;chat_id&gt;</code>\n"
+                    "Или просто <code>/checkchatforLKCARD</code> прямо в work_chat клиента — "
+                    "там chat_id берётся автоматически.",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+            return
+        try:
+            target_chat_id = int(parts[1])
+        except ValueError:
+            try:
+                await event.reply(
+                    f"⚠️ chat_id должен быть числом. Получил: <code>{parts[1]}</code>",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+            return
+        # Проверяем что чат есть в managed_chats (мы можем его читать)
+        info = storage.get_chat_info(target_chat_id)
+        if not info:
+            try:
+                await event.reply(
+                    f"⚠️ Чат <code>{target_chat_id}</code> не найден в managed_chats. "
+                    f"Возможно chat_id указан неверно (должен быть отрицательным -100xxx) "
+                    f"или беседа не зарегистрирована.",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+            return
+        # Делаем shim-event с подменённым chat_id для существующей логики
+        class _ShimEvent:
+            def __init__(self, real_event, target):
+                self._real = real_event
+                self.chat_id = target
+                # reply отправляет в брейн-чат
+                self.reply = real_event.reply
+        shim = _ShimEvent(event, target_chat_id)
+        try:
+            await event.reply(
+                f"⏳ Сканирую чат <code>{target_chat_id}</code> "
+                f"({info.get('client_name') or '—'})...",
+                parse_mode="html",
+            )
+        except Exception:
+            pass
+        await self._cmd_check_chat_for_lk_card(shim, target_chat_id)
 
     async def _cmd_check_chat_for_lk_card(self, event, chat_id):
         """Сканирует историю чата (последние 200 сообщений) и пытается
