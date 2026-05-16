@@ -381,15 +381,31 @@ class UserbotService:
             except Exception as e:
                 logger.warning("Could not grant admin rights to userbot: %s", e)
 
-        # 5) Делаем работников админами с rank (используя текущую роль из storage)
+        # 5) Делаем работников админами с rank (используя текущую роль из storage).
+        # Также обогащаем statuses[uname] суффиксом «+ админка (Роль)»,
+        # чтобы admin-нотификация в bot.py показывала роль рядом с никнеймом.
         try:
             for uname, user in users_to_invite:
+                # Берём роль из storage (worker_roles). Поле возвращается dict'ом
+                # с ключом 'rank' или просто строкой — поддержим оба варианта.
+                role_str = ""
                 try:
-                    role = ""
-                    try:
-                        role = storage.get_worker_role(uname) or ""
-                    except Exception:
-                        pass
+                    role_data = storage.get_worker_role(uname)
+                    if isinstance(role_data, dict):
+                        role_str = (role_data.get("rank")
+                                    or role_data.get("role")
+                                    or "").strip()
+                    elif isinstance(role_data, str):
+                        role_str = role_data.strip()
+                except Exception:
+                    pass
+                # Только если статус «добавлен» (раньше уже выставили) — делаем
+                # его админом. Если был «уже в чате» — тоже выдаём админку
+                # (могло слететь после рестарта).
+                current_status = statuses.get(uname, "")
+                if current_status not in ("добавлен", "уже в чате"):
+                    continue
+                try:
                     rights = ChatAdminRights(
                         change_info=False, post_messages=True, edit_messages=True,
                         delete_messages=True, ban_users=False, invite_users=True,
@@ -398,10 +414,13 @@ class UserbotService:
                     )
                     await self.client(EditAdminRequest(
                         channel=channel, user_id=user,
-                        admin_rights=rights, rank=role or "",
+                        admin_rights=rights, rank=role_str or "",
                     ))
+                    role_suffix = f" ({role_str})" if role_str else ""
+                    statuses[uname] = f"{current_status} + админка{role_suffix}"
                 except Exception as e:
                     logger.warning("grant admin to @%s failed: %s", uname, e)
+                    statuses[uname] = f"{current_status} (админка не выдана: {e})"
         except Exception as e:
             logger.warning("workers admin grant pass failed: %s", e)
 
