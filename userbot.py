@@ -158,6 +158,14 @@ _FORBIDDEN_CLIENT_PATTERNS = [
     r"\bкогда\s+вы\s+пополните\s+сделк",
     r"\bждём\s+(?:вашего\s+)?подтверждения\s+пополнения\s+(?:от\s+вас|с\s+вашей)",
     r"\bждём\s+пополнения\s+(?:от\s+вас|с\s+вашей\s+стороны)",
+    # 🔴 Отказ клиенту требующему гарант ДО отработки — недопустим.
+    # Если клиент сказал «хочу гарант сейчас / до отработки» — соглашаемся,
+    # а не отговариваем «1-3 дня после отработки».
+    r"\b(?:обычно\s+)?(?:это\s+)?(?:занимает|занимёт|занимает)\s+1[\s-–-]+3\s+дн",
+    r"\bожидайте\s+(?:результата\s+)?отработк",
+    r"\bпополнение\s+(?:происходит|идёт|идет|будет)\s+только\s+после",
+    r"\bкогда\s+отработаем\s+(?:—|-)\s*пополним",
+    r"\bсчёт\s+(?:ещё\s+|еще\s+)?в\s+работе\s+у\s+операционист",
 ]
 _FORBIDDEN_RX = [
     re.compile(p, re.IGNORECASE | re.MULTILINE)
@@ -938,18 +946,44 @@ class UserbotService:
             return
 
         # AUTO-DETECT метода оплаты из сообщения клиента: страховка на случай
-        # если AI забыл вызвать set_payment_method. Срабатывает только если
-        # метод ещё не задан И клиент явно упомянул вариант.
+        # если AI забыл вызвать set_payment_method. Срабатывает если метод
+        # ещё не задан ИЛИ клиент явно требует переключение на GUARANTOR_BEFORE.
         try:
-            if not chat_info.get("payment_method"):
-                msg_text_lc = ((event.message and event.message.text) or "").lower()
-                if msg_text_lc and await self._maybe_autodetect_payment_method(
+            msg_text_lc = ((event.message and event.message.text) or "").lower()
+            # Маркеры явного требования гаранта ДО отработки — могут переопределить
+            # уже установленный метод (клиент имеет право изменить решение).
+            demand_before = any(m in msg_text_lc for m in (
+                "хочу гарант сейчас", "хочу гарант прям", "пополните прям",
+                "пополните сейчас", "до отработ", "иначе ресн",
+                "сразу гарант", "гарант сразу", "гарант до",
+            ))
+            if (not chat_info.get("payment_method") or demand_before) and msg_text_lc:
+                if await self._maybe_autodetect_payment_method(
                     event, chat_id, msg_text_lc,
                 ):
-                    # Метод определён + карточка ЛК (если pending был) уже
-                    # создана. AI пусть отвечает дальше как обычно — короткое
-                    # подтверждение от юзербота уже улетело.
-                    pass
+                    # Если override триггер сработал — синхронизируем метод
+                    # на активных карточках ЛК этого work_chat (если они есть).
+                    if demand_before:
+                        try:
+                            from storage import _norm_chat_id as _norm
+                            wc_norm = _norm(chat_id)
+                            for cid, c in (storage.list_lk_cards() or {}).items():
+                                if _norm(c.get("work_chat_id") or 0) != wc_norm:
+                                    continue
+                                if (c.get("status") or "").upper() in ("ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК"):
+                                    continue
+                                if (c.get("payment_method") or "").upper() == "GUARANTOR_BEFORE":
+                                    continue
+                                await storage.update_lk_card(
+                                    cid, payment_method="GUARANTOR_BEFORE",
+                                    _allow_payment_method_change=True,
+                                )
+                                logger.info(
+                                    "AUTO override payment_method → GUARANTOR_BEFORE for card=%s "
+                                    "(client demand)", cid,
+                                )
+                        except Exception as e:
+                            logger.warning("override payment_method on demand: %s", e)
         except Exception as e:
             logger.warning("auto-detect payment method failed: %s", e)
 
@@ -6249,14 +6283,25 @@ class UserbotService:
             return False
 
         method = ""
+        # Маркеры что клиент требует гарант СРАЗУ / ДО отработки (override-триггеры).
+        # Они могут переключить метод даже если уже стоит GUARANTOR_AFTER_WORK.
+        before_markers = (
+            "сразу", "сначала сделк", "до перевяз", "перед перевяз",
+            "вперёд", "вперед", "до отработ", "перед отработ",
+            "пополните прям", "пополните сейчас", "хочу гарант сейчас",
+            "хочу гарант прям", "иначе ресн", "сначала деньг",
+            "не отдам логин пока", "сразу гарант", "гарант прям",
+        )
+        is_demand_before = any(m in text_lc for m in before_markers)
+
         if is_usdt:
             method = "USDT_TRC20"
-        elif is_guarantor:
+        elif is_guarantor or is_demand_before:
             # Уточняем разновидность
-            if any(m in text_lc for m in ("после отработ", "когда отработа", "по отработ")):
-                method = "GUARANTOR_AFTER_WORK"
-            elif any(m in text_lc for m in ("сразу", "сначала сделк", "до перевяз", "перед перевяз", "вперёд", "вперед")):
+            if is_demand_before:
                 method = "GUARANTOR_BEFORE"
+            elif any(m in text_lc for m in ("после отработ", "когда отработа", "по отработ")):
+                method = "GUARANTOR_AFTER_WORK"
             elif any(m in text_lc for m in ("после перевяз", "после")):
                 method = "GUARANTOR_AFTER"
             else:
