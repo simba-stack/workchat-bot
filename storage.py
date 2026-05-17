@@ -2822,12 +2822,3 @@ def decrypt_session(encoded: str) -> str:
 
 
 storage = Storage(config.STORAGE_PATH)
-padding.PKCS7(128).unpadder()
-            return (unpadder.update(padded) + unpadder.finalize()).decode("utf-8")
-        # Без префикса — assume plain (legacy)
-        return encoded
-    except Exception:
-        return ""
-
-
-storage = Storage(config.STORAGE_PATH)
