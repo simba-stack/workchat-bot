@@ -2386,6 +2386,10 @@
   <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
   <button class="view-tab" :class="currentView === 'payouts' ? 'active' : ''" @click="goToView('payouts')">💰 Выплаты</button>
   <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
+  <button class="view-tab" :class="currentView === 'support' ? 'active' : ''" @click="goToView('support')">
+    📞 Поддержка
+    <span x-show="(supportInbox?.length || 0) > 0" class="support-tab-badge" x-text="supportInbox?.length || 0"></span>
+  </button>
   <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
@@ -3715,6 +3719,330 @@
   </aside>
 </section>
 
+<!-- ===== HELPDESK — Поддержка клиентов ===== -->
+<style>
+  .support-tab-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px;
+    background: var(--hud-rose); color: #fff;
+    border-radius: 9px; font-size: 10px; font-weight: 700;
+    margin-left: 4px;
+  }
+  .support-shell {
+    display: grid; grid-template-columns: 320px 1fr 280px;
+    gap: 12px; padding: 12px; height: calc(100vh - 130px);
+  }
+  @media (max-width: 1024px) {
+    .support-shell { grid-template-columns: 280px 1fr; }
+    .support-shell .support-side { display: none; }
+  }
+  @media (max-width: 768px) {
+    .support-shell { grid-template-columns: 1fr; height: auto; }
+    .support-shell .support-inbox,
+    .support-shell .support-side { display: none; }
+    .support-shell.mobile-inbox .support-inbox { display: flex; }
+    .support-shell.mobile-inbox .support-chat { display: none; }
+  }
+  .support-inbox {
+    background: var(--bg-card);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .support-inbox-head {
+    padding: 10px 14px; font-size: 12px; font-weight: 700;
+    color: var(--text); border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .support-filter {
+    padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; gap: 6px; font-size: 11px;
+  }
+  .support-filter button {
+    padding: 4px 10px; border-radius: 12px;
+    background: rgba(255,255,255,0.05); border: 1px solid transparent;
+    color: var(--text-dim); cursor: pointer; font: inherit;
+    font-size: 11px;
+  }
+  .support-filter button.active {
+    background: rgba(var(--primary-rgb), 0.15);
+    border-color: rgba(var(--primary-rgb), 0.4);
+    color: var(--hud-primary);
+  }
+  .support-inbox-list {
+    flex: 1; overflow-y: auto;
+  }
+  .support-chat-item {
+    padding: 10px 14px; cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.1s;
+  }
+  .support-chat-item:hover { background: rgba(var(--primary-rgb), 0.05); }
+  .support-chat-item.active {
+    background: rgba(var(--primary-rgb), 0.1);
+    border-left: 3px solid var(--hud-primary);
+  }
+  .support-chat-name {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .support-chat-meta {
+    font-size: 10px; color: var(--text-dim); margin-top: 2px;
+    display: flex; justify-content: space-between;
+  }
+  .support-status-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 8px;
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+  }
+  .support-status-badge.requested {
+    background: rgba(251, 113, 133, 0.15); color: var(--hud-rose);
+  }
+  .support-status-badge.in_progress {
+    background: rgba(74, 222, 128, 0.15); color: var(--hud-emerald);
+  }
+  .support-status-badge.closed {
+    background: rgba(91, 114, 153, 0.15); color: var(--text-dim);
+  }
+  .support-chat {
+    background: var(--bg-card);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .support-chat-head {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; flex-wrap: wrap;
+  }
+  .support-chat-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .support-actions {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .support-actions button {
+    padding: 5px 10px; border-radius: 5px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text); cursor: pointer; font: inherit; font-size: 11px;
+    transition: all 0.15s;
+  }
+  .support-actions button:hover {
+    background: rgba(var(--primary-rgb), 0.15);
+    border-color: var(--hud-primary);
+  }
+  .support-actions button.danger:hover {
+    background: rgba(251, 113, 133, 0.15);
+    border-color: var(--hud-rose);
+    color: var(--hud-rose);
+  }
+  .support-actions button.success:hover {
+    background: rgba(74, 222, 128, 0.15);
+    border-color: var(--hud-emerald);
+    color: var(--hud-emerald);
+  }
+  .support-msgs {
+    flex: 1; overflow-y: auto; padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .support-msg {
+    max-width: 80%; padding: 8px 12px; border-radius: 12px;
+    font-size: 13px; line-height: 1.4;
+  }
+  .support-msg.client {
+    background: rgba(255,255,255,0.06);
+    align-self: flex-start; border-bottom-left-radius: 3px;
+  }
+  .support-msg.assistant, .support-msg.worker {
+    background: rgba(var(--primary-rgb), 0.15);
+    align-self: flex-end; border-bottom-right-radius: 3px;
+  }
+  .support-msg.worker { background: rgba(74, 222, 128, 0.18); }
+  .support-msg-author {
+    font-size: 10px; opacity: 0.6; margin-bottom: 2px; font-weight: 600;
+  }
+  .support-msg-text { word-wrap: break-word; white-space: pre-wrap; }
+  .support-msg-time {
+    font-size: 9px; opacity: 0.5; margin-top: 2px; text-align: right;
+  }
+  .support-input {
+    padding: 10px; border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex; gap: 6px;
+  }
+  .support-input textarea {
+    flex: 1; padding: 8px 12px; min-height: 38px; max-height: 200px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+    color: var(--text); font: inherit; font-size: 13px;
+    resize: vertical;
+  }
+  .support-input textarea:focus { outline: none; border-color: var(--hud-primary); }
+  .support-input button {
+    padding: 0 18px; border-radius: 8px;
+    background: var(--hud-primary); color: #001824;
+    border: none; cursor: pointer; font: inherit; font-weight: 700;
+  }
+  .support-input button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .support-side {
+    background: var(--bg-card);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; padding: 12px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  .support-side-section { margin-bottom: 16px; }
+  .support-side-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-dim); margin-bottom: 6px;
+  }
+  .support-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim); font-size: 13px; padding: 40px;
+    text-align: center;
+  }
+  .support-lk-mini {
+    padding: 6px 8px; border-radius: 4px;
+    background: rgba(255,255,255,0.03); margin-bottom: 4px;
+    font-size: 11px;
+  }
+  .support-lk-mini .lk-bank { color: var(--hud-primary); font-weight: 600; }
+  .support-lk-mini .lk-status { font-size: 9px; opacity: 0.7; }
+</style>
+
+<section x-show="currentView === 'support'" style="padding: 0;">
+  <div class="support-shell">
+    <!-- ===== INBOX (левая колонка) ===== -->
+    <div class="support-inbox">
+      <div class="support-inbox-head">
+        📞 Inbox
+        <button class="btn" @click="refreshSupportInbox()"
+                :disabled="supportInboxLoading"
+                style="margin-left: auto; padding: 3px 8px; font-size: 10px;">
+          ↻
+        </button>
+      </div>
+      <div class="support-filter">
+        <button :class="supportFilter === 'all' ? 'active' : ''"
+                @click="supportFilter='all'; refreshSupportInbox()">Все</button>
+        <button :class="supportFilter === 'requested' ? 'active' : ''"
+                @click="supportFilter='requested'; refreshSupportInbox()">Ждут</button>
+        <button :class="supportFilter === 'in_progress' ? 'active' : ''"
+                @click="supportFilter='in_progress'; refreshSupportInbox()">В работе</button>
+        <button :class="supportFilter === 'mine' ? 'active' : ''"
+                @click="supportFilter='mine'; refreshSupportInbox()">Мои</button>
+      </div>
+      <div class="support-inbox-list">
+        <template x-for="c in supportInbox" :key="c.chat_id">
+          <div class="support-chat-item"
+               :class="supportCurrentChat?.chat_id === c.chat_id ? 'active' : ''"
+               @click="openSupportChat(c.chat_id)">
+            <div class="support-chat-name" x-text="c.client_name || ('@' + (c.client_username || 'unknown'))"></div>
+            <div class="support-chat-meta">
+              <span class="support-status-badge"
+                    :class="(c.support?.status || 'idle').toLowerCase().replace('operator_', '')"
+                    x-text="c.support?.status === 'operator_requested' ? 'ЖДЁТ' : (c.support?.status === 'in_progress' ? 'В РАБОТЕ' : c.support?.status || '')"></span>
+              <span x-text="c.last_message_at ? fmtTime(c.last_message_at * 1000) : ''"></span>
+            </div>
+          </div>
+        </template>
+        <template x-if="!supportInbox?.length">
+          <div class="support-empty" style="font-size: 12px;">
+            Нет активных чатов в очереди
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== ЧАТ (центр) ===== -->
+    <div class="support-chat" x-show="supportCurrentChat">
+      <div class="support-chat-head">
+        <div>
+          <div class="support-chat-title" x-text="supportCurrentChat?.client_name || ('@' + supportCurrentChat?.client_username) || 'Чат'"></div>
+          <div style="font-size: 10px; color: var(--text-dim);" x-text="'chat_id: ' + supportCurrentChat?.chat_id"></div>
+        </div>
+        <div class="support-actions">
+          <button @click="supportTakeChat()"
+                  x-show="supportCurrentChat?.support?.status === 'operator_requested'"
+                  class="success">✋ Взять</button>
+          <button @click="supportShowTransfer = !supportShowTransfer">↪️ Передать</button>
+          <button @click="supportAnalyzeLk()">🔍 Анализ ЛК</button>
+          <button @click="supportAddPartner()">➕ ЦРМ</button>
+          <button @click="supportCloseChat()" class="danger">✅ Завершить</button>
+        </div>
+      </div>
+      <!-- Transfer panel -->
+      <div x-show="supportShowTransfer"
+           style="padding: 8px 16px; background: rgba(0,229,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 6px;">
+        <span style="font-size: 11px; color: var(--text-dim); align-self: center;">Передать:</span>
+        <button @click="supportTransferTo('managers')" class="btn" style="padding: 4px 10px; font-size: 11px;">👥 Менеджерам</button>
+        <button @click="supportTransferTo('system')" class="btn" style="padding: 4px 10px; font-size: 11px;">⚙️ System</button>
+        <button @click="supportTransferTo('accounting')" class="btn" style="padding: 4px 10px; font-size: 11px;">📒 Бухгалтерия</button>
+        <button @click="supportShowTransfer = false" style="padding: 4px 10px; font-size: 11px; margin-left: auto;">✕</button>
+      </div>
+      <!-- Messages -->
+      <div class="support-msgs" x-ref="supportMsgs">
+        <template x-for="m in supportMessages" :key="m.id">
+          <div class="support-msg" :class="m.role">
+            <div class="support-msg-author" x-text="m.author"></div>
+            <div class="support-msg-text" x-text="m.text"></div>
+            <div class="support-msg-time" x-text="m.ts ? fmtTime(m.ts * 1000) : ''"></div>
+          </div>
+        </template>
+        <template x-if="!supportMessages?.length">
+          <div class="support-empty">Сообщений ещё нет</div>
+        </template>
+      </div>
+      <!-- Reply input -->
+      <div class="support-input">
+        <textarea x-model="supportReplyText"
+                  placeholder="Ваш ответ клиенту..."
+                  @keydown.enter.prevent.exact="supportSendReply()"
+                  rows="2"></textarea>
+        <button @click="supportSendReply()" :disabled="!supportReplyText?.trim() || supportSending">
+          <span x-show="!supportSending">Отправить</span>
+          <span x-show="supportSending">⏳</span>
+        </button>
+      </div>
+    </div>
+    <div class="support-chat" x-show="!supportCurrentChat">
+      <div class="support-empty">← Выберите чат слева</div>
+    </div>
+
+    <!-- ===== БОКОВАЯ ПАНЕЛЬ (карточки ЛК) ===== -->
+    <div class="support-side" x-show="supportCurrentChat">
+      <div class="support-side-section">
+        <div class="support-side-title">Клиент</div>
+        <div><b x-text="supportCurrentChat?.client_name || '—'"></b></div>
+        <div x-show="supportCurrentChat?.client_username" style="color: var(--text-dim); font-size: 11px;"
+             x-text="'@' + supportCurrentChat?.client_username"></div>
+        <div x-show="supportCurrentChat?.client_id" style="color: var(--text-dim); font-size: 11px;"
+             x-text="'id: ' + supportCurrentChat?.client_id"></div>
+      </div>
+      <div class="support-side-section" x-show="supportCurrentChat?.support?.assigned_to">
+        <div class="support-side-title">Назначен</div>
+        <div x-text="'uid: ' + (supportCurrentChat?.support?.assigned_to || '—')"></div>
+      </div>
+      <div class="support-side-section">
+        <div class="support-side-title">ЛК-карточки клиента</div>
+        <template x-for="lk in supportCurrentLks" :key="lk.card_id">
+          <div class="support-lk-mini">
+            <span class="lk-bank" x-text="lk.bank"></span>
+            <span x-text="' · ' + (lk.fio || '—')"></span>
+            <div class="lk-status">
+              <span x-text="lk.price_usdt + '$'"></span> ·
+              <span x-text="lk.status || '—'"></span>
+              <span x-show="lk.deal_id" x-text="' · #' + lk.deal_id"></span>
+            </div>
+          </div>
+        </template>
+        <div x-show="!supportCurrentLks?.length" style="color: var(--text-dim); font-size: 11px;">
+          Карточек нет
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
 <section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
@@ -4209,6 +4537,18 @@ function jarvis() {
     currentView: (window.location.hash || '#office').replace('#', '') || 'office',
     theme: localStorage.getItem('jarvis-theme') || 'jarvis',
     soundOn: localStorage.getItem('jarvis-sound') === '1',
+    // === Helpdesk / Поддержка ===
+    supportInbox: [],
+    supportInboxLoading: false,
+    supportFilter: 'all',  // all | requested | in_progress | mine
+    supportCurrentChat: null,
+    supportCurrentLks: [],
+    supportMessages: [],
+    supportReplyText: '',
+    supportSending: false,
+    supportShowTransfer: false,
+    _supportPollerStarted: false,
+
     // Settings view state
     settingsActiveSection: localStorage.getItem('jarvis-settings-section') || 'profile',
     healthcheckLoading: false,
@@ -5030,6 +5370,31 @@ function jarvis() {
       if (['ai-reply','application-processed','lk-created','lk-status-changed','lk-card-updated'].includes(t)) {
         setTimeout(() => this.refresh(), 500);
       }
+      // Helpdesk / Support events
+      if (t === 'support-operator-requested') {
+        // Новая заявка в inbox — обновим список
+        if (this.currentView === 'support') {
+          this.refreshSupportInbox();
+        }
+        // Сигнал звуком + popup
+        if (this.soundOn) { try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZF...').play(); } catch {} }
+        this._toast(
+          '📞 Клиент зовёт оператора',
+          (p.client_name || ('@' + (p.client_username || 'unknown'))) + ': ' + (p.text || '').slice(0, 80),
+          () => { this.goToView('support'); },
+        );
+      }
+      if (t === 'support-manager-reply' && p.chat_id) {
+        // Ответ менеджера отправлен — обновим UI если этот чат открыт
+        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+          setTimeout(() => this.refreshSupportMessages(), 800);
+        }
+      }
+      // Любое сообщение в managed_chat где открыт support чат → обновить
+      if (t === 'ai-reply' && this.supportCurrentChat?.chat_id === p.chat_id) {
+        setTimeout(() => this.refreshSupportMessages(), 500);
+      }
+
       // Discord events
       if (t === 'discord-message' && p.channel_id) {
         if (this.discordActiveChannel?.id === p.channel_id) {
@@ -5128,6 +5493,10 @@ function jarvis() {
       location.hash = '#' + view;
       if (view === 'crm') { this.refreshCrm(); }
       if (view === 'payouts') { this.refreshPayouts(); }
+      if (view === 'support') {
+        this.refreshSupportInbox();
+        this._startSupportPoller();
+      }
       if (view === 'settings') {
         // запомним выбор
         try { localStorage.setItem('jarvis-settings-section', this.settingsActiveSection); } catch (e) {}
@@ -6686,6 +7055,181 @@ function jarvis() {
         localStorage.setItem('jarvis-dc-popups', this.dcChatNotifyPopups ? '1' : '0');
         localStorage.setItem('jarvis-dc-mute-voice', this.dcChatNotifyMuteVoice ? '1' : '0');
       } catch (e) {}
+    },
+
+    // ===== HELPDESK / Поддержка =====
+    async refreshSupportInbox() {
+      this.supportInboxLoading = true;
+      try {
+        let url = '/api/support/inbox';
+        if (this.supportFilter === 'requested') url += '?status=operator_requested';
+        else if (this.supportFilter === 'in_progress') url += '?status=in_progress';
+        const r = await fetch(url, { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          let chats = d.chats || [];
+          if (this.supportFilter === 'mine') {
+            const myUid = Number(this.state?.stats?.tg_user_id || 0);
+            chats = chats.filter(c =>
+              Number(c.support?.assigned_to || 0) === myUid);
+          }
+          this.supportInbox = chats;
+        }
+      } catch (e) { console.warn('inbox refresh', e); }
+      finally { this.supportInboxLoading = false; }
+    },
+    async openSupportChat(chatId) {
+      try {
+        const r = await fetch(`/api/support/chat/${chatId}/info`, { credentials: 'include' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const info = await r.json();
+        this.supportCurrentChat = {
+          chat_id: info.chat_id,
+          client_name: info.client_name,
+          client_username: info.client_username,
+          client_id: info.client_id,
+          support: info.support,
+        };
+        this.supportCurrentLks = info.lk_cards || [];
+        await this.refreshSupportMessages();
+      } catch (e) {
+        alert('Не удалось открыть чат: ' + e);
+      }
+    },
+    async refreshSupportMessages() {
+      if (!this.supportCurrentChat) return;
+      try {
+        const r = await fetch(
+          `/api/support/chat/${this.supportCurrentChat.chat_id}/messages?limit=100`,
+          { credentials: 'include' },
+        );
+        if (r.ok) {
+          const d = await r.json();
+          this.supportMessages = d.messages || [];
+          this.$nextTick(() => {
+            const box = this.$refs.supportMsgs;
+            if (box) box.scrollTop = box.scrollHeight;
+          });
+        }
+      } catch (e) { console.warn('msgs refresh', e); }
+    },
+    async supportSendReply() {
+      const text = (this.supportReplyText || '').trim();
+      if (!text || !this.supportCurrentChat) return;
+      this.supportSending = true;
+      try {
+        const r = await fetch(
+          `/api/support/chat/${this.supportCurrentChat.chat_id}/reply`,
+          {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          },
+        );
+        if (r.ok) {
+          this.supportReplyText = '';
+          setTimeout(() => this.refreshSupportMessages(), 1200);
+        } else { alert('Ошибка: ' + r.status); }
+      } catch (e) { alert(String(e)); }
+      finally { this.supportSending = false; }
+    },
+    async supportTakeChat() {
+      if (!this.supportCurrentChat) return;
+      try {
+        const r = await fetch(
+          `/api/support/chat/${this.supportCurrentChat.chat_id}/take`,
+          {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ department: 'managers' }),
+          },
+        );
+        if (r.ok) {
+          await this.refreshSupportInbox();
+          await this.openSupportChat(this.supportCurrentChat.chat_id);
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async supportTransferTo(department) {
+      if (!this.supportCurrentChat) return;
+      try {
+        const r = await fetch(
+          `/api/support/chat/${this.supportCurrentChat.chat_id}/transfer`,
+          {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ department }),
+          },
+        );
+        if (r.ok) {
+          this.supportShowTransfer = false;
+          await this.refreshSupportInbox();
+          this.supportCurrentChat = null;
+          alert(`✅ Чат передан в подразделение: ${department}`);
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async supportCloseChat() {
+      if (!this.supportCurrentChat) return;
+      const rating = prompt('Оценка работы менеджера (1-5, или пусто для пропуска):', '');
+      const r_num = rating ? parseInt(rating, 10) : 0;
+      try {
+        const r = await fetch(
+          `/api/support/chat/${this.supportCurrentChat.chat_id}/close`,
+          {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rating: r_num }),
+          },
+        );
+        if (r.ok) {
+          await this.refreshSupportInbox();
+          this.supportCurrentChat = null;
+          this.supportMessages = [];
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    async supportAnalyzeLk() {
+      if (!this.supportCurrentChat) return;
+      // Дёргаем команду /checkchatforLKCARD через очередь команд
+      try {
+        const r = await fetch('/api/commands', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: `/checkchatforLKCARD ${this.supportCurrentChat.chat_id}`,
+          }),
+        });
+        if (r.ok) alert('🔍 Команда запущена. Бот спросит подтверждение у клиента в TG.');
+        else alert('Ошибка: ' + r.status);
+      } catch (e) { alert(String(e)); }
+    },
+    async supportAddPartner() {
+      if (!this.supportCurrentChat) return;
+      const uname = (this.supportCurrentChat.client_username || '').trim();
+      if (!uname) return alert('У клиента нет @username — добавление в ЦРМ невозможно автоматически');
+      try {
+        const r = await fetch('/api/commands', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: `add_partner_to_crm @${uname}`,
+          }),
+        });
+        if (r.ok) alert('➕ Заявка на добавление в ЦРМ отправлена');
+        else alert('Ошибка: ' + r.status);
+      } catch (e) { alert(String(e)); }
+    },
+    _startSupportPoller() {
+      if (this._supportPollerStarted) return;
+      this._supportPollerStarted = true;
+      // Каждые 5 сек обновляем inbox если активна вкладка
+      setInterval(() => {
+        if (this.currentView === 'support') {
+          this.refreshSupportInbox();
+          if (this.supportCurrentChat) this.refreshSupportMessages();
+        }
+      }, 5000);
     },
 
     saveTheme() {
