@@ -2,6 +2,7 @@ aiogram==3.27.0
 telethon==1.43.2
 python-dotenv==1.0.1
 cryptg
+cryptography>=42.0.0
 anthropic==0.40.0
 httpx>=0.27.0
 fastapi>=0.110.0

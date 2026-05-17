@@ -7233,6 +7233,11 @@ class UserbotService:
                             cmd_id, "empty", status="skipped",
                         )
                         continue
+                    # SMS-команды обрабатывает ОТДЕЛЬНЫЙ worker в crm_bot.py
+                    # (нужен bot-инстанс CRM-бота для отправки сообщений
+                    # с inline-кнопками). Пропускаем — пусть CRM подберёт.
+                    if re.match(r"^__sms_(advance|reset)\s+\S+\s*$", text, re.I):
+                        continue
                     try:
                         result = await self._execute_dashboard_command(text)
                     except Exception as e:
@@ -7495,21 +7500,68 @@ class UserbotService:
             reply_text = m.group(3).strip()
             if not reply_text:
                 return "⚠️ пустой текст"
+            # Используем сессию менеджера если она есть, иначе PRIDE ASSISTANT.
+            sent_via = "pride_assistant"
             try:
+                from storage import decrypt_session
+                sess_data = storage.get_worker_session(manager_uid)
+                if sess_data and sess_data.get("string_session"):
+                    try:
+                        decrypted = decrypt_session(sess_data["string_session"])
+                        if decrypted:
+                            from telethon import TelegramClient
+                            from telethon.sessions import StringSession
+                            mgr_cli = TelegramClient(
+                                StringSession(decrypted), config.API_ID, config.API_HASH,
+                            )
+                            await mgr_cli.connect()
+                            if await mgr_cli.is_user_authorized():
+                                await mgr_cli.send_message(
+                                    chat_id, reply_text, parse_mode="html",
+                                    link_preview=False,
+                                )
+                                try:
+                                    await mgr_cli.disconnect()
+                                except Exception:
+                                    pass
+                                sent_via = f"manager_{manager_uid}"
+                                logger.info(
+                                    "[helpdesk] manager_session=%s sent reply to chat=%s",
+                                    manager_uid, chat_id,
+                                )
+                                _e("support-manager-reply", {
+                                    "chat_id": chat_id, "manager_uid": manager_uid,
+                                    "text": reply_text[:200], "via": sent_via,
+                                }, character="chat", severity="info")
+                                return f"✅ отправлено через сессию менеджера в чат {chat_id}"
+                            else:
+                                logger.warning(
+                                    "manager session %s not authorized, falling back",
+                                    manager_uid,
+                                )
+                                try:
+                                    await mgr_cli.disconnect()
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.warning(
+                            "manager session reply failed (%s), fallback to PRIDE ASSISTANT",
+                            e,
+                        )
+                # Fallback: через основной userbot (PRIDE ASSISTANT)
                 target = await self._resolve_chat_target(chat_id)
-                # TODO: использовать сессию менеджера (Phase 2). Пока через PRIDE ASSISTANT.
                 await self.client.send_message(
                     target, reply_text, parse_mode="html", link_preview=False,
                 )
                 logger.info(
-                    "[helpdesk] manager=%s replied to chat=%s: %s",
-                    manager_uid, chat_id, reply_text[:120],
+                    "[helpdesk] PRIDE ASSISTANT (fallback) replied to chat=%s for manager=%s",
+                    chat_id, manager_uid,
                 )
                 _e("support-manager-reply", {
                     "chat_id": chat_id, "manager_uid": manager_uid,
-                    "text": reply_text[:200],
+                    "text": reply_text[:200], "via": sent_via,
                 }, character="chat", severity="info")
-                return f"✅ отправлено в чат {chat_id}"
+                return f"✅ отправлено (fallback PRIDE ASSISTANT) в чат {chat_id}"
             except Exception as e:
                 logger.warning("support reply send fail: %s", e)
                 return f"⚠️ send failed: {e}"

@@ -529,6 +529,296 @@ async def api_support_messages(chat_id: int, limit: int = 50, _: None = Depends(
     return {"ok": True, "chat_id": chat_id, "messages": msgs[-limit:]}
 
 
+# ============== MANAGER TG SESSIONS ==============
+# Хранилище pending login-клиентов: manager_uid -> {client, phone, phone_code_hash}
+# В памяти процесса — на время одной login-сессии (5-15 минут).
+_pending_login_clients: dict = {}
+
+
+@app.get("/api/support/me/session/status")
+async def api_manager_session_status(request: Request, _: None = Depends(_auth)):
+    """Проверка статуса TG-сессии текущего менеджера."""
+    manager_uid = _try_session_auth(request) or 0
+    if not manager_uid:
+        return {"ok": False, "connected": False, "error": "not_authenticated"}
+    sess = storage.get_worker_session(manager_uid)
+    if not sess:
+        return {"ok": True, "connected": False}
+    return {
+        "ok": True, "connected": True,
+        "phone": sess.get("phone") or "",
+        "connected_at": sess.get("connected_at") or 0,
+    }
+
+
+@app.post("/api/support/me/session/connect")
+async def api_manager_session_connect(request: Request, _: None = Depends(_auth)):
+    """Старт TG-логина: получаем телефон, отправляем код."""
+    manager_uid = _try_session_auth(request) or 0
+    if not manager_uid:
+        raise HTTPException(401, "auth required")
+    data = await request.json()
+    phone = (data.get("phone") or "").strip()
+    if not phone or len(phone) < 8:
+        raise HTTPException(400, "phone required (+7...)")
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        cli = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
+        await cli.connect()
+        sent = await cli.send_code_request(phone)
+        # Сохраняем pending-объект до завершения логина
+        _pending_login_clients[manager_uid] = {
+            "client": cli, "phone": phone,
+            "phone_code_hash": sent.phone_code_hash,
+            "created_at": _time.time() if False else __import__("time").time(),
+        }
+        return {"ok": True, "code_sent": True, "phone": phone}
+    except Exception as e:
+        logger.exception("manager session connect failed: %s", e)
+        raise HTTPException(500, f"connect failed: {e}")
+
+
+@app.post("/api/support/me/session/verify")
+async def api_manager_session_verify(request: Request, _: None = Depends(_auth)):
+    """Завершение TG-логина: код + опциональный 2FA-пароль."""
+    manager_uid = _try_session_auth(request) or 0
+    if not manager_uid:
+        raise HTTPException(401, "auth required")
+    pending = _pending_login_clients.get(manager_uid)
+    if not pending:
+        raise HTTPException(400, "no pending login — start with /connect first")
+    data = await request.json()
+    code = (data.get("code") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not code:
+        raise HTTPException(400, "code required")
+    cli = pending["client"]
+    phone = pending["phone"]
+    phone_code_hash = pending["phone_code_hash"]
+    try:
+        from telethon.errors import SessionPasswordNeededError
+        try:
+            await cli.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        except SessionPasswordNeededError:
+            if not password:
+                return {"ok": False, "need_password": True}
+            await cli.sign_in(password=password)
+        # Сохраняем зашифрованную сессию
+        from storage import encrypt_session
+        from telethon.sessions import StringSession
+        string_sess = cli.session.save()
+        encrypted = encrypt_session(string_sess)
+        await storage.set_worker_session(manager_uid, encrypted, phone=phone)
+        # Закрываем pending client (он больше не нужен в этом коннекте)
+        try:
+            await cli.disconnect()
+        except Exception:
+            pass
+        _pending_login_clients.pop(manager_uid, None)
+        return {"ok": True, "connected": True, "phone": phone}
+    except Exception as e:
+        logger.exception("manager session verify failed: %s", e)
+        raise HTTPException(400, f"verify failed: {e}")
+
+
+@app.post("/api/support/me/session/disconnect")
+async def api_manager_session_disconnect(request: Request, _: None = Depends(_auth)):
+    """Удалить сохранённую TG-сессию менеджера."""
+    manager_uid = _try_session_auth(request) or 0
+    if not manager_uid:
+        raise HTTPException(401, "auth required")
+    ok = await storage.remove_worker_session(manager_uid)
+    # Если был pending — закрыть
+    pending = _pending_login_clients.pop(manager_uid, None)
+    if pending:
+        try:
+            await pending["client"].disconnect()
+        except Exception:
+            pass
+    return {"ok": True, "removed": ok}
+
+
+# ============== END MANAGER SESSIONS ==============
+
+
+# ============== SYSTEM DEPARTMENT (SMS / ДОСТУПЫ / ПАРОЛИ) ==============
+
+@app.get("/api/system/pending_lk")
+async def api_system_pending_lk(_: None = Depends(_auth)):
+    """Список ЛК-карточек в активном SMS-флоу: ждут код входа, перевязки или
+    в процессе. Источник — crm_drop_lks из storage (CRM-бот ведёт sms_stage)."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    ) or {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        # Активные стадии SMS-флоу
+        if stage in ("", "done"):
+            continue
+        drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
+        out.append({
+            "droplk_id": lkid,
+            "drop_id": lk.get("drop_id"),
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "",
+            "owner_id": drop.get("owner_id") or "",
+            "sms_stage": stage,
+            "sms_login_code": lk.get("sms_login_code") or "",
+            "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
+            "value": lk.get("value") or "",
+            "ded_login": lk.get("ded_login") or "",
+            "created_at": lk.get("created_at") or 0,
+        })
+    out.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return {"ok": True, "items": out, "lks": out}
+
+
+@app.post("/api/system/lk/{droplk_id}/sms_action")
+async def api_system_sms_action(droplk_id: str, request: Request, _: None = Depends(_auth)):
+    """Триггерит SMS-stage переход через очередь команд CRM-боту.
+    Эквивалент кнопки smsadv в TG-группе ЛК."""
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    action = (data.get("action") or "").strip()  # 'advance' | 'reset'
+    if action not in ("advance", "reset"):
+        raise HTTPException(400, "action must be 'advance' or 'reset'")
+    # Шлём команду через dashboard_commands — userbot/crm_bot подхватит
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__sms_{action} {droplk_id}",
+            source=f"dashboard-system-sms-{action}",
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    try:
+        event_bus.emit_event("system-sms-action", {
+            "droplk_id": droplk_id, "action": action,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "droplk_id": droplk_id, "action": action}
+
+
+@app.get("/api/system/access_codes")
+async def api_system_access_codes(limit: int = 50, _: None = Depends(_auth)):
+    """Последние полученные СМС-коды от клиентов (раздел ДОСТУПЫ)."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    ) or {}
+    codes = []
+    for lkid, lk in lks_raw.items():
+        history = lk.get("sms_history") or []
+        drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
+        for h in history:
+            codes.append({
+                "droplk_id": lkid,
+                "bank": lk.get("bank") or "",
+                "fio": drop.get("fio") or "",
+                "kind": h.get("kind") or "?",
+                "code": h.get("code") or "",
+                "ts": h.get("ts") or 0,
+                "stage": h.get("stage") or "",
+            })
+    codes.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+    limited = codes[:limit]
+    return {"ok": True, "items": limited, "codes": limited}
+
+
+@app.get("/api/system/passwords")
+async def api_system_passwords(_: None = Depends(_auth)):
+    """Список ЛК с заполненными паролями / дедиками (раздел ПАРОЛИ)."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    ) or {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        # Только те где есть хоть какие-то новые credentials
+        if not any(lk.get(k) for k in (
+            "new_login", "new_password", "new_mail", "new_number",
+            "ded_login", "ded_password", "ded_ip", "code_word",
+        )):
+            continue
+        drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
+        out.append({
+            "droplk_id": lkid,
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "",
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "",
+            "ded_password": lk.get("ded_password") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "updated_at": lk.get("updated_at") or 0,
+        })
+    out.sort(key=lambda x: x.get("updated_at") or 0, reverse=True)
+    return {"ok": True, "items": out}
+
+
+# ============== ACCOUNTING (Бухгалтерия) ==============
+
+@app.get("/api/accounting/payouts_full")
+async def api_accounting_payouts_full(_: None = Depends(_auth)):
+    """Полный обзор выплат для бухгалтерии: 3 очереди + статистика."""
+    storage.reload_sync()
+    usdt = storage.list_payouts("usdt") or []
+    release = storage.list_payouts("release") or []
+    fund_release = storage.list_payouts("fund_release") or []
+    total_amount_usdt = sum(
+        float(p.get("amount_usdt") or 0) for p in (usdt + release + fund_release)
+    )
+    return {
+        "ok": True,
+        "queues": {
+            "usdt": usdt, "release": release, "fund_release": fund_release,
+        },
+        "stats": {
+            "count_usdt": len(usdt),
+            "count_release": len(release),
+            "count_fund_release": len(fund_release),
+            "total_pending_usdt": total_amount_usdt,
+        },
+    }
+
+
+@app.post("/api/accounting/payouts/{queue}/{payout_id}/note")
+async def api_accounting_add_note(
+    queue: str, payout_id: int, request: Request, _: None = Depends(_auth),
+):
+    """Добавить заметку бухгалтера к payout-записи."""
+    if queue not in ("usdt", "release", "fund_release"):
+        raise HTTPException(400, "invalid queue")
+    data = await request.json()
+    note = (data.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "note required")
+    if len(note) > 500:
+        raise HTTPException(400, "note too long (max 500)")
+    manager_uid = _try_session_auth(request) or 0
+    ok = await storage.update_payout(queue, payout_id,
+                                     accounting_note=note,
+                                     accounting_note_by=manager_uid,
+                                     accounting_note_at=__import__("time").time())
+    if not ok:
+        raise HTTPException(404, "payout not found")
+    return {"ok": True, "payout_id": payout_id, "queue": queue}
+
+
 # ============== END HELPDESK ==============
 
 

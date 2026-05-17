@@ -2452,12 +2452,171 @@ async def cb_client_givecode(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("smsreset:"))
 async def cb_smsreset(call: CallbackQuery):
     droplk_id = call.data.split(":", 1)[1]
+    await _sms_reset_flow(call.message.bot, droplk_id)
+    await call.answer("🔄 Flow сброшен")
+
+
+async def _sms_reset_flow(bot, droplk_id: str) -> str:
+    """Сбрасывает SMS-флоу до старта. Возвращает текст результата."""
     await crm_storage.update_crm_drop_lk(
         droplk_id, sms_stage="",
         sms_login_code="", sms_perevyaz_code="",
     )
-    await call.answer("🔄 Flow сброшен")
-    await _post_or_update_sms_tracker(call.message.bot, droplk_id)
+    try:
+        await _post_or_update_sms_tracker(bot, droplk_id)
+    except Exception:
+        pass
+    return f"🔄 SMS-flow сброшен для {droplk_id}"
+
+
+async def _sms_advance_flow(bot, droplk_id: str) -> str:
+    """Программный аналог нажатия кнопки smsadv: продвигает SMS-флоу
+    на следующую стадию. Используется из дашборда (без CallbackQuery)."""
+    lk = crm_storage.get_crm_drop_lk(droplk_id)
+    if not lk:
+        return f"⚠️ ЛК {droplk_id} не найден"
+    drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+    owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
+    if not (drop and owner and owner.get("work_chat_id")):
+        return f"⚠️ Нет work_chat у владельца ЛК {droplk_id}"
+    stage = lk.get("sms_stage") or ""
+    bank = lk.get("bank") or "—"
+    anketa = _client_lk_anketa(drop, lk)
+    try:
+        if stage == "":
+            text = (
+                "📩 <b>Запрос СМС-кода для перепривязки</b>\n\n"
+                f"{anketa}\n\n"
+                "<b>Готовы дать код?</b>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
+            ]])
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="ready_asked")
+            result = "📩 Запрос готовности отправлен клиенту"
+        elif stage == "ready_confirmed":
+            text = (
+                "📩 <b>Предоставьте СМС-код для входа</b>\n\n"
+                f"{anketa}\n\n"
+                "<b>Введите СМС-код по кнопке ниже</b>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✏️ Ввести СМС код",
+                    callback_data=f"cligivecode:{droplk_id}:login",
+                ),
+            ]])
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="login_asked")
+            result = "📩 Запрошен код входа"
+        elif stage == "login_received":
+            text = (
+                "📩 <b>Предоставьте СМС-код для перевязки</b>\n\n"
+                f"{anketa}\n\n"
+                "<b>Введите СМС-код по кнопке ниже</b>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✏️ Ввести СМС код",
+                    callback_data=f"cligivecode:{droplk_id}:perevyaz",
+                ),
+            ]])
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="perevyaz_asked")
+            result = "📩 Запрошен код перевязки"
+        elif stage == "perevyaz_received":
+            # Финал: создание карточки + завершение
+            card_id = None
+            try:
+                card_id = await _create_single_lk_card(drop, lk, owner)
+            except Exception as e:
+                logger.warning("dashboard sms_advance: create card failed: %s", e)
+            if card_id:
+                try:
+                    existing = list(drop.get("lk_card_ids") or [])
+                    if card_id not in existing:
+                        existing.append(card_id)
+                        await crm_storage.update_crm_drop(
+                            drop["drop_id"], lk_card_ids=existing,
+                        )
+                except Exception:
+                    pass
+                try:
+                    await _queue_anketa_post_via_userbot(drop["drop_id"])
+                except Exception:
+                    pass
+            await _send_to_client_chat(
+                bot, drop, owner,
+                f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
+            )
+            try:
+                handoff = (
+                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                    f"📋 Карточка: #{card_id or '—'}\n"
+                    f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
+                    f"<i>Ассистент уточнит у клиента способ оплаты и пропишет в карточке.</i>"
+                )
+                await _notify_work_chat(bot, owner, handoff)
+            except Exception:
+                pass
+            await crm_storage.update_crm_drop_lk(droplk_id, sms_stage="done")
+            result = f"🏁 Перевязка завершена, карточка #{card_id or '—'}"
+        else:
+            result = f"⏳ Ждём ответа клиента (stage={stage})"
+        try:
+            await _post_or_update_sms_tracker(bot, droplk_id)
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        logger.exception("sms_advance_flow %s failed", droplk_id)
+        return f"⚠️ Ошибка: {e}"
+
+
+async def _dashboard_command_worker_crm(bot):
+    """Фоновая задача: каждые 5 сек опрашивает dashboard_commands и
+    обрабатывает SMS-команды, которые требуют CRM-бот. Userbot пропустит
+    эти команды (возвращает unknown), и они застрянут — поэтому ЭТОТ
+    воркер должен опрашивать первым."""
+    import re as _re
+    logger.info("CRM dashboard_command_worker started")
+    while True:
+        try:
+            await asyncio.sleep(5)
+            try:
+                crm_storage.reload_sync()
+            except Exception:
+                pass
+            pending = crm_storage.get_pending_dashboard_commands() if hasattr(
+                crm_storage, "get_pending_dashboard_commands"
+            ) else []
+            for cmd in (pending or []):
+                cmd_id = cmd.get("id")
+                text = (cmd.get("text") or "").strip()
+                # Только SMS-команды
+                m_adv = _re.match(r"^__sms_advance\s+(\S+)\s*$", text, _re.I)
+                m_rst = _re.match(r"^__sms_reset\s+(\S+)\s*$", text, _re.I)
+                if not (m_adv or m_rst):
+                    continue
+                try:
+                    if m_adv:
+                        result = await _sms_advance_flow(bot, m_adv.group(1))
+                    else:
+                        result = await _sms_reset_flow(bot, m_rst.group(1))
+                except Exception as e:
+                    result = f"⚠️ exception: {e}"
+                try:
+                    await crm_storage.mark_dashboard_command_done(cmd_id, result)
+                except Exception as e:
+                    logger.warning(
+                        "mark_dashboard_command_done %s failed: %s", cmd_id, e,
+                    )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning("crm dashboard worker tick failed: %s", e)
+            await asyncio.sleep(10)
 
 
 @router.callback_query(F.data.startswith("givemecode:"))
@@ -3982,6 +4141,7 @@ async def run_crm_bot():
         pass
     reminder_task = None
     payout_task = None
+    dashboard_worker_task = None
     # Payment-due reminders ОТКЛЮЧЕНЫ по умолчанию. Чтобы включить —
     # выставь env CRM_REMINDERS_ENABLED=1.
     if os.getenv("CRM_REMINDERS_ENABLED", "0").lower() in ("1", "true", "yes", "on"):
@@ -3998,12 +4158,19 @@ async def run_crm_bot():
     except Exception as e:
         logger.warning("payout buttons loop start failed: %s", e)
     try:
+        dashboard_worker_task = asyncio.create_task(_dashboard_command_worker_crm(bot))
+        logger.info("CRM dashboard_command_worker started")
+    except Exception as e:
+        logger.warning("crm dashboard_worker start failed: %s", e)
+    try:
         await dp.start_polling(bot, polling_timeout=30)
     except Exception as e:
         logger.error("polling crashed: %s", e)
     finally:
         if reminder_task and not reminder_task.done():
             reminder_task.cancel()
+        if dashboard_worker_task and not dashboard_worker_task.done():
+            dashboard_worker_task.cancel()
         try:
             await bot.session.close()
         except Exception:

@@ -2390,6 +2390,11 @@
     📞 Поддержка
     <span x-show="(supportInbox?.length || 0) > 0" class="support-tab-badge" x-text="supportInbox?.length || 0"></span>
   </button>
+  <button class="view-tab" :class="currentView === 'system' ? 'active' : ''" @click="goToView('system')">
+    ⚙️ System
+    <span x-show="(systemPendingLks?.length || 0) > 0" class="support-tab-badge" x-text="systemPendingLks?.length || 0"></span>
+  </button>
+  <button class="view-tab" :class="currentView === 'accounting' ? 'active' : ''" @click="goToView('accounting')">📒 Бухгалтерия</button>
   <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
@@ -4043,6 +4048,174 @@
   </div>
 </section>
 
+<!-- ===== SYSTEM (СМС / ДОСТУПЫ / ПАРОЛИ) ===== -->
+<section x-show="currentView === 'system'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+  <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center;">
+    <h2 style="margin: 0; font-size: 22px; font-weight: 700;">⚙️ System</h2>
+    <span style="font-size: 13px; color: var(--text-dim);">— перевязки, СМС-коды, пароли и дедики</span>
+    <button class="btn" @click="refreshSystem()" :disabled="systemLoading" style="margin-left: auto;">↻ Обновить</button>
+  </div>
+
+  <!-- Sub-tabs -->
+  <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06);">
+    <button class="view-tab" :class="systemSection === 'pending' ? 'active' : ''" @click="systemSection='pending'">📋 ЛК в работе</button>
+    <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📩 ДОСТУПЫ (коды)</button>
+    <button class="view-tab" :class="systemSection === 'passwords' ? 'active' : ''" @click="systemSection='passwords'">🔐 ПАРОЛИ / Дедики</button>
+  </div>
+
+  <!-- ===== LK в работе ===== -->
+  <div x-show="systemSection === 'pending'" class="jarvis-panel" style="padding: 14px;">
+    <div class="panel-title">📋 ЛК на перевязке — <span x-text="systemPendingLks?.length || 0"></span></div>
+    <div style="max-height: 70vh; overflow-y: auto;">
+      <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
+        <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; margin-bottom: 8px; background: rgba(255,255,255,0.02);">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <b style="color: var(--hud-primary); font-size: 15px;" x-text="lk.bank"></b>
+              <span style="margin-left: 8px;" x-text="lk.fio || '—'"></span>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                <code x-text="lk.droplk_id"></code> · стадия: <b x-text="lk.sms_stage"></b>
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')" style="padding: 6px 14px; font-size: 12px;">▶️ Следующий шаг</button>
+              <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')" style="padding: 6px 12px; font-size: 12px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">⟲ Сбросить</button>
+            </div>
+          </div>
+          <div x-show="lk.sms_login_code || lk.sms_perevyaz_code" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.06); display: flex; gap: 16px; font-size: 12px;">
+            <span x-show="lk.sms_login_code">
+              🔑 Вход: <code x-text="lk.sms_login_code"></code>
+            </span>
+            <span x-show="lk.sms_perevyaz_code">
+              🔄 Перевяз: <code x-text="lk.sms_perevyaz_code"></code>
+            </span>
+          </div>
+        </div>
+      </template>
+      <div x-show="(systemPendingLks?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
+        ✅ Пусто — все ЛК отработаны или в простом статусе
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ДОСТУПЫ (коды) ===== -->
+  <div x-show="systemSection === 'access'" class="jarvis-panel" style="padding: 14px;">
+    <div class="panel-title">📩 ДОСТУПЫ — последние СМС-коды от клиентов</div>
+    <div style="max-height: 70vh; overflow-y: auto;">
+      <template x-for="(c, i) in systemAccessCodes" :key="i">
+        <div style="padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 12px; align-items: center;">
+          <div style="font-size: 11px; color: var(--text-dim); min-width: 100px;" x-text="c.ts ? fmtTime(c.ts * 1000) : '—'"></div>
+          <div style="flex: 1;">
+            <b x-text="c.bank"></b>
+            <span style="margin-left: 6px;" x-text="c.fio"></span>
+            <span style="margin-left: 8px; font-size: 10px; padding: 1px 6px; border-radius: 6px; background: rgba(0,229,255,0.1); color: var(--hud-primary);" x-text="c.kind === 'perevyaz' ? 'перевязка' : 'вход'"></span>
+          </div>
+          <code style="font-size: 16px; font-weight: 700; color: var(--hud-emerald); letter-spacing: 2px;" x-text="c.code"></code>
+        </div>
+      </template>
+      <div x-show="(systemAccessCodes?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
+        Пока нет полученных кодов
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ПАРОЛИ / Дедики ===== -->
+  <div x-show="systemSection === 'passwords'" class="jarvis-panel" style="padding: 14px;">
+    <div class="panel-title">🔐 ПАРОЛИ — новые credentials и дедики</div>
+    <div style="max-height: 70vh; overflow-y: auto;">
+      <template x-for="p in systemPasswords" :key="p.droplk_id">
+        <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; margin-bottom: 8px; background: rgba(255,255,255,0.02);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <b style="color: var(--hud-primary);" x-text="p.bank"></b>
+              <span style="margin-left: 8px;" x-text="p.fio"></span>
+              <code style="margin-left: 8px; color: var(--text-dim); font-size: 11px;" x-text="p.droplk_id"></code>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; font-size: 12px;">
+            <div x-show="p.new_login">🆔 Логин: <code x-text="p.new_login"></code></div>
+            <div x-show="p.new_password">🔑 Пароль: <code x-text="p.new_password"></code></div>
+            <div x-show="p.new_mail">📧 Почта: <code x-text="p.new_mail"></code></div>
+            <div x-show="p.new_number">📱 Телефон: <code x-text="p.new_number"></code></div>
+            <div x-show="p.code_word">🔐 Код.слово: <code x-text="p.code_word"></code></div>
+            <div x-show="p.ded_login" style="grid-column: 1 / -1; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.06); color: var(--text-dim);">
+              🖥 Дедик: <code x-text="p.ded_login"></code> /
+              <code x-text="p.ded_password"></code> @ <code x-text="p.ded_ip"></code>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div x-show="(systemPasswords?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
+        Пока нет заполненных credentials
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== БУХГАЛТЕРИЯ ===== -->
+<section x-show="currentView === 'accounting'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+  <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+    <h2 style="margin: 0; font-size: 22px; font-weight: 700;">📒 Бухгалтерия</h2>
+    <span style="font-size: 13px; color: var(--text-dim);">— все выплаты + заметки</span>
+    <button class="btn" @click="refreshAccounting()" :disabled="accountingLoading" style="margin-left: auto;">↻ Обновить</button>
+  </div>
+
+  <!-- Stats -->
+  <div x-show="accountingData.stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 16px;">
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div style="font-size: 10px; color: var(--text-dim);">USDT в очереди</div>
+      <div style="font-size: 22px; color: var(--hud-emerald);" x-text="accountingData.stats?.count_usdt || 0"></div>
+    </div>
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div style="font-size: 10px; color: var(--text-dim);">Отпустить</div>
+      <div style="font-size: 22px; color: var(--hud-primary);" x-text="accountingData.stats?.count_release || 0"></div>
+    </div>
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div style="font-size: 10px; color: var(--text-dim);">Пополнить и отпустить</div>
+      <div style="font-size: 22px; color: var(--hud-amber);" x-text="accountingData.stats?.count_fund_release || 0"></div>
+    </div>
+    <div class="jarvis-panel" style="padding: 12px;">
+      <div style="font-size: 10px; color: var(--text-dim);">Всего к выплате</div>
+      <div style="font-size: 22px;" x-text="(accountingData.stats?.total_pending_usdt || 0) + '$'"></div>
+    </div>
+  </div>
+
+  <!-- 3 очереди как таблицы -->
+  <template x-for="qName in ['usdt', 'release', 'fund_release']" :key="qName">
+    <div class="jarvis-panel" style="padding: 12px; margin-bottom: 14px;">
+      <div class="panel-title">
+        <span x-text="qName === 'usdt' ? '💸 USDT TRC20' : (qName === 'release' ? '🤝 Отпустить сделку' : '💎 Пополнить и отпустить')"></span>
+        — <span x-text="(accountingData.queues?.[qName]?.length || 0)"></span>
+      </div>
+      <div style="max-height: 50vh; overflow-y: auto;">
+        <template x-for="p in (accountingData.queues?.[qName] || [])" :key="p.id">
+          <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <b style="color: var(--hud-primary);" x-text="p.bank"></b>
+              <span x-text="p.fio"></span>
+              <span style="color: var(--hud-emerald); font-weight: 700;" x-text="(p.amount_usdt || 0) + '$'"></span>
+              <span x-show="p.deal_id" style="font-size: 11px; color: var(--text-dim);" x-text="'сделка #' + p.deal_id"></span>
+              <span x-show="p.usdt_address" style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace;" x-text="(p.usdt_address || '').slice(0, 12) + '...'"></span>
+            </div>
+            <!-- Заметка -->
+            <div style="margin-top: 6px; display: flex; gap: 6px; align-items: center;">
+              <input type="text" placeholder="Заметка бухгалтера..."
+                     x-model="accountingNotes[qName + ':' + p.id]"
+                     :value="p.accounting_note || ''"
+                     style="flex: 1; padding: 5px 10px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-size: 12px;">
+              <button class="btn" @click="accountingAddNote(qName, p.id)" style="padding: 5px 12px; font-size: 11px;">💾</button>
+              <span x-show="p.accounting_note" style="font-size: 11px; color: var(--text-dim);" x-text="'было: ' + (p.accounting_note || '')"></span>
+            </div>
+          </div>
+        </template>
+        <div x-show="(accountingData.queues?.[qName]?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 16px; font-size: 12px;">
+          пусто
+        </div>
+      </div>
+    </div>
+  </template>
+</section>
+
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
 <section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
@@ -4135,9 +4308,88 @@
       <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
         Управление через Telegram-бота <code>@PrideCRMv4</code>: команды <code>/admin</code>, <code>/healthcheck</code>.
       </div>
-      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px;">
         <a class="btn" href="/logout" style="padding: 8px 18px;">🚪 Выйти из дашборда</a>
         <button class="btn" @click="window.open('https://t.me/PrideCRMv4', '_blank')">📲 Открыть бота</button>
+      </div>
+
+      <!-- ===== TG SESSION CONNECT ===== -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 18px; margin-top: 8px;">
+        <h4 style="margin: 0 0 8px 0; font-size: 14px;">🔗 Подключение моего Telegram-аккаунта</h4>
+        <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
+          Когда вы отвечаете клиенту через Поддержку, сообщения уходят с <b>вашего личного TG-аккаунта</b>
+          (клиент видит ваше имя и фото). Если не подключено — ответы идут от PRIDE ASSISTANT.
+        </div>
+
+        <!-- Статус: не подключено -->
+        <div x-show="!tgSession.connected && tgSession.step === 'idle'" style="display: grid; gap: 10px; max-width: 380px;">
+          <div style="font-size: 12px;">
+            <span style="color: var(--text-dim);">Статус:</span>
+            <span style="color: var(--hud-rose);">❌ не подключено</span>
+          </div>
+          <input type="tel" placeholder="+7..." x-model="tgSession.phone"
+                 style="padding: 8px 12px; background: rgba(255,255,255,0.04);
+                        border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+                        color: var(--text); font-family: 'JetBrains Mono', monospace;">
+          <button class="btn success" @click="tgSessionConnect()" :disabled="tgSession.loading"
+                  style="padding: 10px 16px; align-self: flex-start;">
+            <span x-show="!tgSession.loading">📱 Получить код</span>
+            <span x-show="tgSession.loading">⏳ Отправляю...</span>
+          </button>
+          <div style="font-size: 11px; color: var(--text-dim);">
+            Telegram пришлёт код подтверждения вам в TG-аккаунт.
+          </div>
+        </div>
+
+        <!-- Статус: код отправлен, ввод кода -->
+        <div x-show="!tgSession.connected && tgSession.step === 'code'" style="display: grid; gap: 10px; max-width: 380px;">
+          <div style="font-size: 12px;">
+            ✉️ Код отправлен на <b x-text="tgSession.phone"></b>
+          </div>
+          <input type="text" placeholder="12345" x-model="tgSession.code" maxlength="7"
+                 style="padding: 8px 12px; background: rgba(255,255,255,0.04);
+                        border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+                        color: var(--text); font-family: 'JetBrains Mono', monospace;
+                        letter-spacing: 4px; text-align: center; font-size: 18px;">
+          <div x-show="tgSession.needPassword">
+            <input type="password" placeholder="2FA пароль (если включён)"
+                   x-model="tgSession.password"
+                   style="padding: 8px 12px; width: 100%; background: rgba(255,255,255,0.04);
+                          border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+                          color: var(--text); font-family: 'JetBrains Mono', monospace;">
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn success" @click="tgSessionVerify()" :disabled="tgSession.loading"
+                    style="padding: 10px 16px;">
+              <span x-show="!tgSession.loading">✅ Подтвердить</span>
+              <span x-show="tgSession.loading">⏳ Проверяю...</span>
+            </button>
+            <button class="btn" @click="tgSessionCancel()">Отменить</button>
+          </div>
+        </div>
+
+        <!-- Статус: подключено -->
+        <div x-show="tgSession.connected" style="display: grid; gap: 10px; max-width: 380px;">
+          <div style="font-size: 12px;">
+            <span style="color: var(--text-dim);">Статус:</span>
+            <span style="color: var(--hud-emerald);">✅ подключено</span>
+          </div>
+          <div style="font-size: 12px;">
+            Телефон: <code x-text="tgSession.phone || '—'"></code>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim);">
+            Ваши ответы в Поддержке отправляются с вашего TG-аккаунта.
+          </div>
+          <button class="btn" @click="tgSessionDisconnect()" :disabled="tgSession.loading"
+                  style="padding: 8px 14px; align-self: flex-start;
+                         background: rgba(251,113,133,0.15); color: var(--hud-rose);">
+            🔌 Отключить
+          </button>
+        </div>
+
+        <div x-show="tgSession.error" style="margin-top: 12px; color: var(--hud-rose); font-size: 12px;">
+          <b>Ошибка:</b> <span x-text="tgSession.error"></span>
+        </div>
       </div>
     </div>
 
@@ -4537,6 +4789,18 @@ function jarvis() {
     currentView: (window.location.hash || '#office').replace('#', '') || 'office',
     theme: localStorage.getItem('jarvis-theme') || 'jarvis',
     soundOn: localStorage.getItem('jarvis-sound') === '1',
+    // === TG session connect (per-manager) ===
+    tgSession: {
+      connected: false,
+      phone: '',
+      code: '',
+      password: '',
+      needPassword: false,
+      step: 'idle',  // idle | code | done
+      loading: false,
+      error: '',
+    },
+
     // === Helpdesk / Поддержка ===
     supportInbox: [],
     supportInboxLoading: false,
@@ -4548,6 +4812,20 @@ function jarvis() {
     supportSending: false,
     supportShowTransfer: false,
     _supportPollerStarted: false,
+
+    // === System (Phase 3) — SMS / ДОСТУПЫ / ПАРОЛИ ===
+    systemSection: 'pending',  // pending | access | passwords
+    systemPendingLks: [],
+    systemAccessCodes: [],
+    systemPasswords: [],
+    systemLoading: false,
+    _systemPollerStarted: false,
+
+    // === Accounting (Phase 4) — Бухгалтерия ===
+    accountingData: { queues: {}, stats: null },
+    accountingNotes: {},
+    accountingLoading: false,
+    _accountingPollerStarted: false,
 
     // Settings view state
     settingsActiveSection: localStorage.getItem('jarvis-settings-section') || 'profile',
@@ -5497,7 +5775,16 @@ function jarvis() {
         this.refreshSupportInbox();
         this._startSupportPoller();
       }
+      if (view === 'system') {
+        this.refreshSystem();
+        this._startSystemPoller();
+      }
+      if (view === 'accounting') {
+        this.refreshAccounting();
+        this._startAccountingPoller();
+      }
       if (view === 'settings') {
+        this.tgSessionStatus();
         // запомним выбор
         try { localStorage.setItem('jarvis-settings-section', this.settingsActiveSection); } catch (e) {}
       }
@@ -7057,6 +7344,88 @@ function jarvis() {
       } catch (e) {}
     },
 
+    // ===== TG SESSION (per-manager) =====
+    async tgSessionStatus() {
+      try {
+        const r = await fetch('/api/support/me/session/status', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          this.tgSession.connected = !!d.connected;
+          if (d.phone) this.tgSession.phone = d.phone;
+        }
+      } catch (e) { console.warn('tg status', e); }
+    },
+    async tgSessionConnect() {
+      this.tgSession.error = '';
+      const phone = (this.tgSession.phone || '').trim();
+      if (!phone) { this.tgSession.error = 'Введите телефон'; return; }
+      this.tgSession.loading = true;
+      try {
+        const r = await fetch('/api/support/me/session/connect', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone }),
+        });
+        if (r.ok) {
+          this.tgSession.step = 'code';
+          this.tgSession.error = '';
+        } else {
+          const t = await r.text();
+          this.tgSession.error = 'HTTP ' + r.status + ': ' + t.slice(0, 200);
+        }
+      } catch (e) { this.tgSession.error = String(e); }
+      finally { this.tgSession.loading = false; }
+    },
+    async tgSessionVerify() {
+      this.tgSession.error = '';
+      const code = (this.tgSession.code || '').trim();
+      const password = (this.tgSession.password || '').trim();
+      if (!code) { this.tgSession.error = 'Введите код'; return; }
+      this.tgSession.loading = true;
+      try {
+        const r = await fetch('/api/support/me/session/verify', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, password }),
+        });
+        const d = await r.json();
+        if (r.ok && d.ok && d.connected) {
+          this.tgSession.connected = true;
+          this.tgSession.step = 'idle';
+          this.tgSession.code = '';
+          this.tgSession.password = '';
+          this.tgSession.needPassword = false;
+        } else if (d.need_password) {
+          this.tgSession.needPassword = true;
+          this.tgSession.error = 'Включён 2FA — введите пароль ниже';
+        } else {
+          this.tgSession.error = d.detail || 'Не удалось подтвердить';
+        }
+      } catch (e) { this.tgSession.error = String(e); }
+      finally { this.tgSession.loading = false; }
+    },
+    tgSessionCancel() {
+      this.tgSession.step = 'idle';
+      this.tgSession.code = '';
+      this.tgSession.password = '';
+      this.tgSession.error = '';
+      this.tgSession.needPassword = false;
+    },
+    async tgSessionDisconnect() {
+      if (!confirm('Отключить ваш TG-аккаунт от Поддержки? Ответы клиентам снова будут идти от PRIDE ASSISTANT.')) return;
+      this.tgSession.loading = true;
+      try {
+        const r = await fetch('/api/support/me/session/disconnect', {
+          method: 'POST', credentials: 'include',
+        });
+        if (r.ok) {
+          this.tgSession.connected = false;
+          this.tgSession.phone = '';
+        }
+      } catch (e) { this.tgSession.error = String(e); }
+      finally { this.tgSession.loading = false; }
+    },
+
     // ===== HELPDESK / Поддержка =====
     async refreshSupportInbox() {
       this.supportInboxLoading = true;
@@ -7230,6 +7599,124 @@ function jarvis() {
           if (this.supportCurrentChat) this.refreshSupportMessages();
         }
       }, 5000);
+    },
+
+    // ===== System (Phase 3) — СМС / ДОСТУПЫ / ПАРОЛИ =====
+    async refreshSystem() {
+      if (this.systemLoading) return;
+      this.systemLoading = true;
+      try {
+        const [pendingRes, accessRes, pwdRes] = await Promise.all([
+          fetch('/api/system/pending_lk', { credentials: 'include' }),
+          fetch('/api/system/access_codes', { credentials: 'include' }),
+          fetch('/api/system/passwords', { credentials: 'include' }),
+        ]);
+        if (pendingRes.ok) {
+          const j = await pendingRes.json();
+          this.systemPendingLks = j.items || [];
+        }
+        if (accessRes.ok) {
+          const j = await accessRes.json();
+          this.systemAccessCodes = j.items || [];
+        }
+        if (pwdRes.ok) {
+          const j = await pwdRes.json();
+          this.systemPasswords = j.items || [];
+        }
+      } catch (e) {
+        console.error('refreshSystem error', e);
+      } finally {
+        this.systemLoading = false;
+      }
+    },
+    async systemSmsAction(droplk_id, action) {
+      if (!droplk_id) return;
+      try {
+        const r = await fetch(`/api/system/lk/${encodeURIComponent(droplk_id)}/sms_action`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          alert('Ошибка SMS action: ' + r.status + ' ' + t);
+          return;
+        }
+        const j = await r.json();
+        if (j && j.ok) {
+          // Подсветим, что команда улетела в CRM-бот
+          this._toastQueue.push({
+            kind: 'ok',
+            text: action === 'advance' ? '▶️ СМС-шаг отправлен' : '⟲ СМС-флоу сброшен',
+          });
+        }
+        await this.refreshSystem();
+      } catch (e) {
+        alert(String(e));
+      }
+    },
+    _startSystemPoller() {
+      if (this._systemPollerStarted) return;
+      this._systemPollerStarted = true;
+      setInterval(() => {
+        if (this.currentView === 'system') this.refreshSystem();
+      }, 7000);
+    },
+
+    // ===== Accounting (Phase 4) — Бухгалтерия =====
+    async refreshAccounting() {
+      if (this.accountingLoading) return;
+      this.accountingLoading = true;
+      try {
+        const r = await fetch('/api/accounting/payouts_full', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          this.accountingData = {
+            queues: j.queues || {},
+            stats: j.stats || null,
+          };
+          // Подтянем уже сохранённые заметки в локальный модельный объект
+          ['usdt', 'release', 'fund_release'].forEach(q => {
+            (this.accountingData.queues[q] || []).forEach(p => {
+              const key = q + ':' + p.id;
+              if (this.accountingNotes[key] === undefined) {
+                this.accountingNotes[key] = p.accounting_note || '';
+              }
+            });
+          });
+        }
+      } catch (e) {
+        console.error('refreshAccounting error', e);
+      } finally {
+        this.accountingLoading = false;
+      }
+    },
+    async accountingAddNote(queue, payout_id) {
+      const key = queue + ':' + payout_id;
+      const note = (this.accountingNotes[key] || '').trim();
+      try {
+        const r = await fetch(`/api/accounting/payouts/${encodeURIComponent(queue)}/${encodeURIComponent(payout_id)}/note`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note }),
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          alert('Ошибка сохранения заметки: ' + r.status + ' ' + t);
+          return;
+        }
+        this._toastQueue.push({ kind: 'ok', text: '💾 Заметка сохранена' });
+        await this.refreshAccounting();
+      } catch (e) {
+        alert(String(e));
+      }
+    },
+    _startAccountingPoller() {
+      if (this._accountingPollerStarted) return;
+      this._accountingPollerStarted = true;
+      setInterval(() => {
+        if (this.currentView === 'accounting') this.refreshAccounting();
+      }, 10000);
     },
 
     saveTheme() {
