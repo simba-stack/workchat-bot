@@ -898,6 +898,95 @@ class UserbotService:
             return
         chat_info = storage.get_chat_info(chat_id)
 
+        # 📞 HELPDESK TRIGGER: клиент пишет «позвать оператора», «нужен менеджер» —
+        # переводим чат в inbox менеджера + замолкаем AI.
+        try:
+            if (chat_info and event.message and event.message.text
+                    and event.message.sender_id == chat_info.get("client_id")):
+                low_text = event.message.text.lower().strip()
+                operator_triggers = (
+                    "позвать оператор", "позови оператор", "оператора",
+                    "нужен менеджер", "позвать менеджер", "хочу с человеком",
+                    "позови человека", "нужен живой человек",
+                    "оператор!", "оператор?",
+                )
+                if any(t in low_text for t in operator_triggers) and len(low_text) < 80:
+                    sup = chat_info.get("support") or {}
+                    if sup.get("status") not in ("operator_requested", "in_progress"):
+                        await storage.set_support_state(
+                            chat_id, status="operator_requested",
+                            department="managers", opened_at=time.time(),
+                            assigned_to=0,
+                        )
+                        from storage import _norm_chat_id as _norm
+                        self._ai_silent_until[_norm(chat_id)] = time.time() + 4 * 60 * 60
+                        try:
+                            target = await self._resolve_chat_target(chat_id)
+                            await self.client.send_message(
+                                target,
+                                "📞 <b>Зову оператора.</b>\n\n"
+                                "Менеджер свяжется с вами в течение нескольких минут. "
+                                "AI больше не отвечает в этом чате.",
+                                parse_mode="html",
+                            )
+                            _e("support-operator-requested", {
+                                "chat_id": chat_id,
+                                "client_username": chat_info.get("client_username") or "",
+                                "client_name": chat_info.get("client_name") or "",
+                                "text": event.message.text[:120],
+                            }, character="chat", severity="warning")
+                        except Exception as e:
+                            logger.warning("operator-request notify fail: %s", e)
+                        return
+        except Exception as e:
+            logger.warning("helpdesk trigger handler error: %s", e)
+
+        # Bump last-message timestamp в managed_chats (для сортировки inbox)
+        try:
+            if chat_info and event.message:
+                await storage.bump_last_message_ts(chat_id)
+        except Exception:
+            pass
+
+        # Кешируем сообщение в support_msg_cache для дашборда (helpdesk).
+        # Храним последние 100 сообщений на чат.
+        try:
+            if chat_info and event.message and event.message.text:
+                from storage import _norm_chat_id as _nrm
+                cache = storage.state.setdefault("support_msg_cache", {})
+                key = str(_nrm(chat_id))
+                arr = cache.setdefault(key, [])
+                sender_id_x = event.message.sender_id
+                client_id_x = chat_info.get("client_id") or 0
+                if self._me and sender_id_x == self._me.id:
+                    author_role = "assistant"
+                    author_name = "PRIDE ASSISTANT"
+                elif sender_id_x == client_id_x:
+                    author_role = "client"
+                    author_name = chat_info.get("client_name") or "Клиент"
+                else:
+                    author_role = "worker"
+                    try:
+                        s = await event.get_sender()
+                        author_name = (
+                            (getattr(s, "first_name", None) or "")
+                            + (" " + getattr(s, "last_name", "") if getattr(s, "last_name", None) else "")
+                        ).strip() or "Сотрудник"
+                    except Exception:
+                        author_name = "Сотрудник"
+                arr.append({
+                    "id": event.message.id,
+                    "ts": time.time(),
+                    "role": author_role,
+                    "author": author_name,
+                    "sender_id": sender_id_x,
+                    "text": event.message.text[:4000],
+                })
+                if len(arr) > 100:
+                    del arr[: len(arr) - 100]
+        except Exception as e:
+            logger.warning("support_msg_cache update fail: %s", e)
+
         # 🔴 AUTO-TRIGGER: после перевязки CRM-бот пишет «✅ Перевязка ЛК ... успешно
         # выполнена» / «ЛК ... перевязан и в работе» + «Метод оплаты: уточняется
         # у клиента». Userbot ловит это сообщение и сам отправляет клиенту
@@ -7396,6 +7485,34 @@ class UserbotService:
             except Exception as e:
                 logger.warning("__notify_status %s %s failed: %s", cid, new_status, e)
                 return f"⚠️ #{cid} {new_status}: notify exception {e!r}"
+
+        # ===== HELPDESK: отправка ответа менеджера в work_chat клиента =====
+        # Команда вида: __support_reply <chat_id> <manager_uid> <текст>
+        m = re.match(r"^__support_reply\s+(-?\d+)\s+(\d+)\s+(.+)$", text, re.I | re.DOTALL)
+        if m:
+            chat_id = int(m.group(1))
+            manager_uid = int(m.group(2))
+            reply_text = m.group(3).strip()
+            if not reply_text:
+                return "⚠️ пустой текст"
+            try:
+                target = await self._resolve_chat_target(chat_id)
+                # TODO: использовать сессию менеджера (Phase 2). Пока через PRIDE ASSISTANT.
+                await self.client.send_message(
+                    target, reply_text, parse_mode="html", link_preview=False,
+                )
+                logger.info(
+                    "[helpdesk] manager=%s replied to chat=%s: %s",
+                    manager_uid, chat_id, reply_text[:120],
+                )
+                _e("support-manager-reply", {
+                    "chat_id": chat_id, "manager_uid": manager_uid,
+                    "text": reply_text[:200],
+                }, character="chat", severity="info")
+                return f"✅ отправлено в чат {chat_id}"
+            except Exception as e:
+                logger.warning("support reply send fail: %s", e)
+                return f"⚠️ send failed: {e}"
 
         # ===== INTERNAL: handle БЛОК_БЕЗ_ОТРАБОТКИ side-effects (от api.py) =====
         # Отменяет сделку (если deal_id), уведомляет клиента, кидает reply работнику.

@@ -674,6 +674,136 @@ class Storage:
     def get_managed_chat_ids(self) -> list:
         return list(self.state.get("managed_chats", {}).keys())
 
+    # === SUPPORT / HELPDESK (Phase 1: триггер «позвать оператора») ===
+
+    def get_support_state(self, chat_id) -> dict:
+        """Возвращает поддержку-состояние чата (status, dept, assigned_to, ratings)."""
+        info = self.get_chat_info(chat_id) or {}
+        return dict(info.get("support") or {})
+
+    async def set_support_state(self, chat_id, **fields):
+        """Обновляет support-state чата. Поля:
+          status: 'idle' | 'operator_requested' | 'in_progress' | 'closed'
+          department: 'managers' | 'system' | 'accounting'
+          assigned_to: int (tg_user_id менеджера)
+          opened_at, closed_at, rating, last_unread_count
+        """
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            sup = info.setdefault("support", {})
+            for k, v in fields.items():
+                sup[k] = v
+            await self._save_unlocked()
+            return True
+
+    def list_support_inbox(
+        self, status: Optional[str] = None,
+        department: Optional[str] = None,
+        assigned_to: Optional[int] = None,
+    ) -> list:
+        """Возвращает список чатов с support-состоянием (для inbox дашборда)."""
+        out = []
+        for key, info in (self.state.get("managed_chats") or {}).items():
+            sup = info.get("support") or {}
+            sup_status = sup.get("status") or "idle"
+            if status and sup_status != status:
+                continue
+            if department and sup.get("department") != department:
+                continue
+            if assigned_to and sup.get("assigned_to") != assigned_to:
+                continue
+            out.append({
+                "chat_id": key,
+                "client_name": info.get("client_name") or "",
+                "client_username": info.get("client_username") or "",
+                "client_id": info.get("client_id") or 0,
+                "support": dict(sup),
+                "last_message_at": info.get("last_message_at") or 0,
+            })
+        # Свежие сверху
+        out.sort(key=lambda x: x.get("last_message_at") or 0, reverse=True)
+        return out
+
+    async def support_take(self, chat_id, manager_uid: int,
+                           department: str = "managers") -> bool:
+        """Менеджер берёт чат на себя: status=in_progress."""
+        return await self.set_support_state(
+            chat_id,
+            status="in_progress",
+            assigned_to=int(manager_uid),
+            department=department,
+            taken_at=time.time(),
+        )
+
+    async def support_release(self, chat_id) -> bool:
+        """Менеджер отдаёт чат обратно AI. status=idle, очищаем assigned_to."""
+        return await self.set_support_state(
+            chat_id, status="idle", assigned_to=0,
+            released_at=time.time(),
+        )
+
+    async def support_close(self, chat_id, rating: int = 0) -> bool:
+        """Закрытие чата с опциональной оценкой."""
+        return await self.set_support_state(
+            chat_id, status="closed", rating=int(rating),
+            closed_at=time.time(),
+        )
+
+    async def support_transfer(self, chat_id, department: str,
+                                from_manager: int = 0) -> bool:
+        """Передать чат в другое подразделение. Снимаем assigned_to."""
+        return await self.set_support_state(
+            chat_id, status="operator_requested",
+            department=department, assigned_to=0,
+            transferred_at=time.time(),
+            transferred_from=int(from_manager),
+        )
+
+    async def bump_last_message_ts(self, chat_id, ts: Optional[float] = None):
+        """Обновляет timestamp последнего сообщения в чате (для сортировки inbox)."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info:
+                info["last_message_at"] = float(ts or time.time())
+                await self._save_unlocked()
+
+    # === WORKER SESSIONS (per-manager Telethon sessions) ===
+
+    def get_worker_session(self, manager_uid: int) -> Optional[dict]:
+        """Возвращает данные сессии менеджера: {string_session, phone, connected_at}.
+        string_session возвращается зашифрованной — для расшифровки нужен SESSION_SECRET."""
+        sessions = self.state.get("worker_sessions") or {}
+        return sessions.get(str(int(manager_uid)))
+
+    async def set_worker_session(self, manager_uid: int, encrypted_session: str,
+                                  phone: str = ""):
+        """Сохраняет зашифрованную StringSession менеджера в storage."""
+        async with _lock:
+            sessions = self.state.setdefault("worker_sessions", {})
+            sessions[str(int(manager_uid))] = {
+                "string_session": encrypted_session,
+                "phone": phone or "",
+                "connected_at": time.time(),
+                "last_active": time.time(),
+            }
+            await self._save_unlocked()
+
+    async def remove_worker_session(self, manager_uid: int) -> bool:
+        async with _lock:
+            sessions = self.state.setdefault("worker_sessions", {})
+            if str(int(manager_uid)) in sessions:
+                del sessions[str(int(manager_uid))]
+                await self._save_unlocked()
+                return True
+            return False
+
+    def list_worker_sessions(self) -> dict:
+        return dict(self.state.get("worker_sessions") or {})
+
     async def mark_welcome_sent(self, chat_id):
         key = _norm_chat_id(chat_id)
         async with _lock:

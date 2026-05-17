@@ -373,6 +373,165 @@ async def healthz():
     return {"status": "ok", "subscribers": event_bus.subscriber_count()}
 
 
+# ============== HELPDESK / SUPPORT ==============
+
+@app.get("/api/support/inbox")
+async def api_support_inbox(
+    status: Optional[str] = None,
+    department: Optional[str] = None,
+    request: Request = None,
+    _: None = Depends(_auth),
+):
+    """Inbox чатов для менеджеров. По умолчанию — все active (operator_requested + in_progress)."""
+    storage.reload_sync()
+    if status:
+        chats = storage.list_support_inbox(status=status, department=department)
+    else:
+        # All active
+        ch1 = storage.list_support_inbox(status="operator_requested", department=department)
+        ch2 = storage.list_support_inbox(status="in_progress", department=department)
+        chats = ch1 + ch2
+    return {"ok": True, "chats": chats}
+
+
+@app.get("/api/support/chat/{chat_id}/info")
+async def api_support_chat_info(chat_id: int, _: None = Depends(_auth)):
+    """Возвращает support-state + базовые данные о клиенте + список ЛК-карточек."""
+    storage.reload_sync()
+    info = storage.get_chat_info(chat_id)
+    if not info:
+        raise HTTPException(404, "chat not found")
+    # ЛК-карточки этого work_chat
+    lks = []
+    try:
+        for cid, c in (storage.list_lk_cards() or {}).items():
+            if (c.get("work_chat_id") or 0) == int(chat_id):
+                lks.append({
+                    "card_id": cid,
+                    "bank": c.get("bank") or "",
+                    "fio": c.get("fio") or "",
+                    "price_usdt": c.get("price_usdt") or 0,
+                    "payment_method": c.get("payment_method") or "",
+                    "status": c.get("status") or "",
+                    "deal_id": c.get("deal_id") or "",
+                })
+    except Exception as e:
+        logger.warning("inbox chat lks: %s", e)
+    return {
+        "ok": True,
+        "chat_id": chat_id,
+        "client_name": info.get("client_name") or "",
+        "client_username": info.get("client_username") or "",
+        "client_id": info.get("client_id") or 0,
+        "support": info.get("support") or {},
+        "lk_cards": lks,
+    }
+
+
+@app.post("/api/support/chat/{chat_id}/take")
+async def api_support_take(chat_id: int, request: Request, _: None = Depends(_auth)):
+    """Менеджер берёт чат на себя."""
+    manager_uid = _try_session_auth(request) or 0
+    if not manager_uid:
+        raise HTTPException(401, "auth required")
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    dept = data.get("department") or "managers"
+    ok = await storage.support_take(chat_id, manager_uid=manager_uid, department=dept)
+    if not ok:
+        raise HTTPException(404, "chat not found")
+    try:
+        event_bus.emit_event("support-chat-taken", {
+            "chat_id": chat_id, "manager_uid": manager_uid, "department": dept,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "chat_id": chat_id, "manager_uid": manager_uid}
+
+
+@app.post("/api/support/chat/{chat_id}/reply")
+async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_auth)):
+    """Отправка ответа менеджера в work_chat клиента (через userbot)."""
+    manager_uid = _try_session_auth(request) or 0
+    data = await request.json()
+    text = (data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text required")
+    if len(text) > 4000:
+        raise HTTPException(400, "text too long (max 4000)")
+    # Очередь команда userbot'у
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__support_reply {chat_id} {manager_uid} {text}",
+            source="dashboard-support-reply",
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "chat_id": chat_id, "queued": True}
+
+
+@app.post("/api/support/chat/{chat_id}/transfer")
+async def api_support_transfer(chat_id: int, request: Request, _: None = Depends(_auth)):
+    """Передать чат в другое подразделение."""
+    manager_uid = _try_session_auth(request) or 0
+    data = await request.json()
+    dept = data.get("department") or ""
+    if dept not in ("managers", "system", "accounting"):
+        raise HTTPException(400, "invalid department")
+    ok = await storage.support_transfer(chat_id, dept, from_manager=manager_uid)
+    if not ok:
+        raise HTTPException(404, "chat not found")
+    try:
+        event_bus.emit_event("support-chat-transferred", {
+            "chat_id": chat_id, "department": dept, "from": manager_uid,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "chat_id": chat_id, "department": dept}
+
+
+@app.post("/api/support/chat/{chat_id}/close")
+async def api_support_close(chat_id: int, request: Request, _: None = Depends(_auth)):
+    """Закрыть чат + опциональная оценка от клиента (rating 1-5)."""
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    rating = int(data.get("rating") or 0)
+    if rating < 0 or rating > 5:
+        raise HTTPException(400, "rating must be 0-5")
+    ok = await storage.support_close(chat_id, rating=rating)
+    if not ok:
+        raise HTTPException(404, "chat not found")
+    # AI подключается обратно (просто чистим silent_until косвенно через release)
+    await storage.support_release(chat_id)
+    try:
+        event_bus.emit_event("support-chat-closed", {
+            "chat_id": chat_id, "rating": rating,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "chat_id": chat_id, "rating": rating}
+
+
+@app.get("/api/support/chat/{chat_id}/messages")
+async def api_support_messages(chat_id: int, limit: int = 50, _: None = Depends(_auth)):
+    """Возвращает последние N сообщений из work_chat (через userbot)."""
+    if limit > 200:
+        limit = 200
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__support_fetch_messages {chat_id} {limit}",
+            source="dashboard-support-msgs",
+        )
+    except Exception:
+        pass
+    # Возвращаем из storage что есть (заполняется userbot'ом отдельно).
+    # Для MVP — отдаём пустой список + событие; UI пинает SSE и обновляет когда придёт.
+    cache = storage.state.setdefault("support_msg_cache", {})
+    msgs = cache.get(str(chat_id), [])
+    return {"ok": True, "chat_id": chat_id, "messages": msgs[-limit:]}
+
+
+# ============== END HELPDESK ==============
+
+
 @app.get("/api/health/full")
 async def api_health_full(_: None = Depends(_auth)):
     """Полная проверка всех систем (требует авторизации админа).
