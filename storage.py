@@ -2767,14 +2767,14 @@ class Storage:
 # ============================================================
 
 def _session_crypto_key() -> bytes:
-    """Возвращает 32-байтный ключ для AES шифрования из SESSION_SECRET env."""
+    """32-байтный ключ AES из env SESSION_SECRET."""
     import hashlib, os
     secret = os.getenv("SESSION_SECRET", "") or "pride-default-fallback-please-change"
     return hashlib.sha256(secret.encode()).digest()
 
 
 def encrypt_session(plaintext: str) -> str:
-    """Шифрует StringSession через AES-256-CBC + base64. Возвращает строку для хранения."""
+    """Шифрует StringSession через AES-256-CBC + base64. Префикс v1: / v0: fallback."""
     if not plaintext:
         return ""
     try:
@@ -2790,14 +2790,12 @@ def encrypt_session(plaintext: str) -> str:
         ct = enc.update(padded) + enc.finalize()
         return "v1:" + _b64.b64encode(iv + ct).decode("ascii")
     except Exception:
-        # Fallback: base64 без шифрования (помечаем prefix v0:).
-        # Опасно — но лучше чем ничего если cryptography недоступна.
         import base64 as _b64
         return "v0:" + _b64.b64encode(plaintext.encode("utf-8")).decode("ascii")
 
 
 def decrypt_session(encoded: str) -> str:
-    """Расшифровывает StringSession обратно. Если префикс v0: — простой base64."""
+    """Расшифровывает StringSession. v0: — простой base64, v1: — AES."""
     if not encoded:
         return ""
     try:
@@ -2815,7 +2813,6 @@ def decrypt_session(encoded: str) -> str:
             padded = dec.update(ct) + dec.finalize()
             unpadder = padding.PKCS7(128).unpadder()
             return (unpadder.update(padded) + unpadder.finalize()).decode("utf-8")
-        # Без префикса — assume plain (legacy)
         return encoded
     except Exception:
         return ""
