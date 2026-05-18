@@ -219,6 +219,37 @@
     mix-blend-mode: screen;
   }
 
+  .system-layout {
+    display: grid;
+    grid-template-columns: 1fr 260px;
+    gap: 14px;
+  }
+  @media (max-width: 1100px) {
+    .system-layout { grid-template-columns: 1fr; }
+  }
+  .system-main { min-width: 0; }
+  .system-stats-side {}
+
+  .crm-photos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 6px;
+    margin: 10px 0;
+  }
+  .crm-photo-thumb {
+    width: 100%;
+    height: 90px;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .crm-photo-thumb:hover {
+    transform: scale(1.04);
+    border-color: var(--hud-primary);
+  }
+
   .crm-card {
     background: rgba(255,255,255,0.02);
     border: 1px solid rgba(255,255,255,0.06);
@@ -4405,19 +4436,43 @@
     <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
   </div>
 
+  <!-- Период фильтр -->
+  <div style="display: flex; gap: 6px; margin-bottom: 14px; align-items: center; flex-wrap: wrap;">
+    <span style="font-size: 11px; color: var(--text-dim);">📅 Период:</span>
+    <button class="dept-tab" :class="systemPeriod === 'all' ? 'active' : ''" @click="systemPeriod='all'; refreshSystem()">Все</button>
+    <button class="dept-tab" :class="systemPeriod === 'day' ? 'active' : ''" @click="systemPeriod='day'; refreshSystem()">📅 День</button>
+    <button class="dept-tab" :class="systemPeriod === 'week' ? 'active' : ''" @click="systemPeriod='week'; refreshSystem()">📅 Неделя</button>
+    <button class="dept-tab" :class="systemPeriod === 'month' ? 'active' : ''" @click="systemPeriod='month'; refreshSystem()">📅 Месяц</button>
+  </div>
+
+  <!-- Layout: контент слева + стата справа -->
+  <div class="system-layout">
+    <div class="system-main">
+
   <!-- ============= ВКЛАДКА 1: CRM | ДОСТУПЫ ============= -->
   <div x-show="systemSection === 'access'">
     <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
       <div class="crm-card access">
         <!-- Шапка с фото-индикатором + supplier -->
         <div class="crm-card-head">
-          <div>
-            <span x-show="lk.scan_count > 0" class="crm-photos">📷 <b x-text="lk.scan_count"></b> фото документов</span>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <span style="font-size: 11px; color: var(--text-dim);" x-text="lk.created_at ? new Date(lk.created_at * 1000).toLocaleString('ru-RU') : '—'"></span>
             <span x-show="!lk.scan_count" style="color: var(--text-dim); font-size: 11px;">📷 Документов нет</span>
           </div>
-          <div>
-            <a x-show="lk.tg_access_link" :href="lk.tg_access_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 Открыть в TG</a>
+          <div style="display: flex; gap: 6px;">
+            <button x-show="lk.owner_work_chat_id" class="btn" @click="systemOpenClientChat(lk)" style="padding: 4px 12px; font-size: 11px;">💬 Чат с клиентом</button>
+            <a x-show="lk.tg_access_link" :href="lk.tg_access_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 TG</a>
           </div>
+        </div>
+        <!-- Фото документов (thumbs) -->
+        <div x-show="lk.scan_count > 0" class="crm-photos-grid">
+          <template x-for="(fid, idx) in (lk.scan_file_ids || [])" :key="idx">
+            <img class="crm-photo-thumb"
+                 :src="'/api/system/lk/' + lk.droplk_id + '/photo/' + idx"
+                 @click="systemPhotoModal = {url: '/api/system/lk/' + lk.droplk_id + '/photo/' + idx, title: lk.fio}"
+                 alt="doc" loading="lazy"
+                 onerror="this.style.display='none'">
+          </template>
         </div>
         <!-- Анкета как в TG -->
         <div class="crm-anketa">
@@ -4576,8 +4631,71 @@
     <div x-show="(systemPasswordsInbox?.length || 0) === 0" class="jarvis-panel" style="padding: 30px; text-align: center; color: var(--text-dim);">
       ⏳ Карточки появятся когда ЛК пойдут в работу (после login_received стадии)
     </div>
-  </div>
+    </div><!-- /password tab -->
+    </div><!-- /system-main -->
+
+    <!-- ============= СТАТИСТИКА СПРАВА ============= -->
+    <aside class="system-stats-side">
+      <div class="jarvis-panel" style="padding: 14px; margin-bottom: 12px;">
+        <div class="panel-title">⚡ Активные ЛК</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--hud-primary); text-align: center; margin: 6px 0;" x-text="systemStats?.active?.total || 0"></div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-top: 8px;">по стадиям:</div>
+        <template x-for="(cnt, stg) in (systemStats?.active?.by_stage || {})" :key="stg">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0;">
+            <span class="sys-stage-badge" :class="'stage-' + stg" style="font-size: 9px;" x-text="systemStageLabel(stg)"></span>
+            <b x-text="cnt"></b>
+          </div>
+        </template>
+      </div>
+
+      <div class="jarvis-panel" style="padding: 14px; margin-bottom: 12px;">
+        <div class="panel-title">📅 Сегодня перевязано</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--hud-emerald); text-align: center; margin: 6px 0;" x-text="systemStats?.done?.today?.total || 0"></div>
+        <template x-for="(cnt, bank) in (systemStats?.done?.today?.by_bank || {})" :key="bank">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04);">
+            <span x-text="bank"></span>
+            <b x-text="cnt"></b>
+          </div>
+        </template>
+        <div x-show="!Object.keys(systemStats?.done?.today?.by_bank || {}).length" style="font-size: 11px; color: var(--text-dim); text-align: center; padding: 10px 0;">пока пусто</div>
+      </div>
+
+      <div class="jarvis-panel" style="padding: 14px; margin-bottom: 12px;">
+        <div class="panel-title">📅 За неделю</div>
+        <div style="font-size: 22px; font-weight: 700; color: var(--hud-primary); text-align: center; margin: 6px 0;" x-text="systemStats?.done?.week?.total || 0"></div>
+        <template x-for="(cnt, bank) in (systemStats?.done?.week?.by_bank || {})" :key="bank">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0;">
+            <span x-text="bank"></span>
+            <b x-text="cnt"></b>
+          </div>
+        </template>
+      </div>
+
+      <div class="jarvis-panel" style="padding: 14px;">
+        <div class="panel-title">📅 За месяц</div>
+        <div style="font-size: 22px; font-weight: 700; color: var(--hud-amber); text-align: center; margin: 6px 0;" x-text="systemStats?.done?.month?.total || 0"></div>
+        <template x-for="(cnt, bank) in (systemStats?.done?.month?.by_bank || {})" :key="bank">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0;">
+            <span x-text="bank"></span>
+            <b x-text="cnt"></b>
+          </div>
+        </template>
+      </div>
+    </aside>
+  </div><!-- /system-layout -->
 </section>
+
+<!-- ============= MODAL: фото паспорта ============= -->
+<div x-show="systemPhotoModal" @keydown.escape.window="systemPhotoModal = null"
+     class="modal-overlay" @click="systemPhotoModal = null">
+  <div @click.stop style="max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; align-items: center; gap: 10px;">
+    <img :src="systemPhotoModal?.url" style="max-width: 90vw; max-height: 80vh; border-radius: 8px;">
+    <div style="display: flex; gap: 10px;">
+      <button class="btn" @click="systemPhotoModal = null">Закрыть</button>
+      <a :href="systemPhotoModal?.url" download class="btn">⬇️ Скачать</a>
+    </div>
+  </div>
+</div>
 
 
 <!-- ===== БУХГАЛТЕРИЯ ===== -->
@@ -5302,6 +5420,9 @@ function jarvis() {
     systemFillData: {},  // droplk_id -> {new_login, new_password, ...}
     systemPasswordsInbox: [],  // CRM | Пароли — inbox
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
+    systemPeriod: 'all',  // all | day | week | month
+    systemStats: { active: {total:0, by_stage:{}}, done: { today:{total:0,by_bank:{}}, week:{total:0,by_bank:{}}, month:{total:0,by_bank:{}} } },
+    systemPhotoModal: null,  // {url, title}
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -8340,10 +8461,17 @@ function jarvis() {
       if (this.systemLoading) return;
       this.systemLoading = true;
       try {
-        const [pendingRes, pwdInboxRes] = await Promise.all([
-          fetch('/api/system/pending_lk', { credentials: 'include' }),
+        const periodQ = this.systemPeriod && this.systemPeriod !== 'all'
+          ? '?period=' + this.systemPeriod
+          : '';
+        const [pendingRes, pwdInboxRes, statsRes] = await Promise.all([
+          fetch('/api/system/pending_lk' + periodQ, { credentials: 'include' }),
           fetch('/api/system/passwords_inbox', { credentials: 'include' }),
+          fetch('/api/system/stats', { credentials: 'include' }),
         ]);
+        if (statsRes.ok) {
+          this.systemStats = await statsRes.json();
+        }
         if (pendingRes.ok) {
           const j = await pendingRes.json();
           this.systemPendingLks = j.items || [];
@@ -8416,6 +8544,19 @@ function jarvis() {
         };
       }
       this.systemFillOpen[droplk_id] = !this.systemFillOpen[droplk_id];
+    },
+    async systemOpenClientChat(lk) {
+      const cid = lk.owner_work_chat_id;
+      if (!cid) {
+        this._toastQueue.push({ kind: 'warn', text: '⚠️ Нет work_chat у этого ЛК' });
+        return;
+      }
+      // Переключаемся на Поддержку
+      this.goToView('support');
+      // Открываем чат с клиентом
+      await this.$nextTick();
+      try { await this.openSupportChat(cid); }
+      catch (e) { console.warn('open chat', e); }
     },
     systemPwdEditDirty(id) {
       const ed = this.systemPwdEdit[id];

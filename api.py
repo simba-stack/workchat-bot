@@ -911,7 +911,10 @@ async def api_manager_session_disconnect(request: Request, _: None = Depends(_au
 # ============== SYSTEM DEPARTMENT (SMS / ДОСТУПЫ / ПАРОЛИ) ==============
 
 @app.get("/api/system/pending_lk")
-async def api_system_pending_lk(_: None = Depends(_auth)):
+async def api_system_pending_lk(
+    period: Optional[str] = None,  # 'day' | 'week' | 'month' | None
+    _: None = Depends(_auth),
+):
     """Список ЛК-карточек в активном SMS-флоу: ждут код входа, перевязки или
     в процессе. Источник — crm_drop_lks из storage (CRM-бот ведёт sms_stage)."""
     storage.reload_sync()
@@ -960,6 +963,13 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
             f"https://t.me/c/{str(pass_chat_id)[4:]}/{pass_msg_id}"
             if pass_msg_id else ""
         )
+        # Резолв work_chat владельца (для перехода в чат)
+        work_chat_id = 0
+        try:
+            owner = storage.get_crm_owner(drop.get("owner_id", "")) if drop.get("owner_id") else {}
+            work_chat_id = (owner or {}).get("work_chat_id") or 0
+        except Exception:
+            pass
         out.append({
             "droplk_id": lkid,
             "drop_id": lk.get("drop_id"),
@@ -969,8 +979,10 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
             "residence": drop.get("residence") or "",
             "owner_id": drop.get("owner_id") or "",
             "owner_username": drop.get("owner_username") or "",
+            "owner_work_chat_id": work_chat_id,
             "supplier": supplier,
             "scan_count": len(drop.get("scan_file_ids") or []),
+            "scan_file_ids": list(drop.get("scan_file_ids") or [])[:6],  # max 6 фото в API
             "value": lk.get("value") or "",
             "price": lk.get("price") or "",
             "new_login": lk.get("new_login") or "",
@@ -992,8 +1004,17 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
             "ded_login": lk.get("ded_login") or "",
             "created_at": lk.get("created_at") or 0,
         })
-    # Сначала по стадии (пустые первыми), потом по времени создания
-    out.sort(key=lambda x: (x.get("_stage_order", 50), -(x.get("created_at") or 0)))
+    # Фильтр по периоду (если задан)
+    if period:
+        import time as _t
+        now = _t.time()
+        thresholds = {"day": 86400, "week": 86400*7, "month": 86400*31}
+        sec = thresholds.get(period)
+        if sec:
+            cutoff = now - sec
+            out = [x for x in out if (x.get("created_at") or 0) >= cutoff]
+    # Сортировка: по дате создания desc (самые свежие сверху).
+    out.sort(key=lambda x: -(x.get("created_at") or 0))
     return {"ok": True, "items": out, "lks": out, "count": len(out)}
 
 
@@ -1064,6 +1085,102 @@ async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends
     except Exception:
         pass
     return {"ok": True, "droplk_id": droplk_id, "updated": list(fields.keys())}
+
+
+@app.get("/api/system/lk/{droplk_id}/photo/{idx}")
+async def api_system_lk_photo(droplk_id: str, idx: int, _: None = Depends(_auth)):
+    """Прокси для фото документов из Telegram. Скачивает через CRM_BOT_TOKEN."""
+    from fastapi.responses import Response, StreamingResponse
+    import httpx
+    storage.reload_sync()
+    lk = storage.get_crm_drop_lk(droplk_id) if hasattr(storage, "get_crm_drop_lk") else None
+    if not lk:
+        raise HTTPException(404, "lk not found")
+    drop = storage.get_crm_drop(lk.get("drop_id")) if hasattr(storage, "get_crm_drop") else None
+    if not drop:
+        raise HTTPException(404, "drop not found")
+    file_ids = drop.get("scan_file_ids") or []
+    if idx >= len(file_ids):
+        raise HTTPException(404, "photo idx out of range")
+    file_id = file_ids[idx]
+    tok = os.getenv("CRM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or ""
+    if not tok:
+        raise HTTPException(500, "bot token not set")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r1 = await cli.get(
+                f"https://api.telegram.org/bot{tok}/getFile",
+                params={"file_id": file_id},
+            )
+            if r1.status_code != 200:
+                raise HTTPException(404, "tg getFile failed")
+            j = r1.json()
+            if not j.get("ok"):
+                raise HTTPException(404, "tg file not found")
+            file_path = j["result"]["file_path"]
+            r2 = await cli.get(
+                f"https://api.telegram.org/file/bot{tok}/{file_path}"
+            )
+            if r2.status_code != 200:
+                raise HTTPException(404, "tg file download failed")
+            # Content-Type
+            ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else "jpg"
+            ct_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+            ct = ct_map.get(ext, "application/octet-stream")
+            return Response(
+                content=r2.content, media_type=ct,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"photo fetch error: {e}")
+
+
+@app.get("/api/system/stats")
+async def api_system_stats(_: None = Depends(_auth)):
+    """Статистика перевязов System: сегодня/неделя/месяц + по банкам."""
+    import time as _t
+    storage.reload_sync()
+    lks_raw = (storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}) or {}
+    now = _t.time()
+    day_cut = now - 86400
+    week_cut = now - 86400 * 7
+    month_cut = now - 86400 * 31
+
+    def init_bucket():
+        return {"total": 0, "by_bank": {}}
+
+    daily_done = init_bucket()
+    weekly_done = init_bucket()
+    monthly_done = init_bucket()
+    active_count = 0
+    by_stage = {}
+
+    for lkid, lk in lks_raw.items():
+        stage = lk.get("sms_stage") or ""
+        bank = lk.get("bank") or "—"
+        created = lk.get("created_at") or 0
+        updated = lk.get("updated_at") or created or 0
+        # Активные (не done)
+        if stage != "done":
+            active_count += 1
+            by_stage[stage or "empty"] = by_stage.get(stage or "empty", 0) + 1
+        # Завершённые — по дате updated
+        if stage == "done":
+            for cut, b in ((day_cut, daily_done), (week_cut, weekly_done), (month_cut, monthly_done)):
+                if updated >= cut:
+                    b["total"] += 1
+                    b["by_bank"][bank] = b["by_bank"].get(bank, 0) + 1
+    return {
+        "ok": True,
+        "active": {"total": active_count, "by_stage": by_stage},
+        "done": {
+            "today": daily_done,
+            "week": weekly_done,
+            "month": monthly_done,
+        },
+    }
 
 
 @app.get("/api/system/passwords_inbox")
