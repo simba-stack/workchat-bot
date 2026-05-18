@@ -1501,8 +1501,23 @@ class UserbotService:
                 "не понимаю", "сколько", "когда", "куда", "что дальше",
                 "застр", "ошибк", "не приходит", "не вижу",
                 "привет", "здравств", "есть кто",
+                # Короткие подтверждения / возражения — клиент продолжает диалог
+                "да", "нет", "ок", "хорошо", "норм", "согласен", "согласна",
+                "подходит", "идет", "идёт", "договорились", "понятно",
+                "понял", "ясно", "good", "ok", "yes", "no",
+                # Возражения по цене / условиям — AI обязательно ОТВЕЧАЕТ
+                "цена", "цене", "дорого", "дешев", "торг", "скид",
+                "метод", "оплат", "выплат", "перевод", "карт", "юсдт", "usdt",
+                "гарант", "континентал", "continental",
+                # Любая короткая реплика < 4 слов — снимаем silence
             )
-            looks_like_help = any(m in text_lc for m in HELP_MARKERS)
+            # Дополнительный матч: короткие сообщения (1-3 слова) считаем как
+            # "клиент пытается продолжить разговор" → снимаем silence.
+            word_count = len(text_lc.split())
+            looks_like_help = (
+                any(m in text_lc for m in HELP_MARKERS)
+                or word_count <= 3  # короткое сообщение почти всегда требует ответа
+            )
             if not looks_like_help:
                 logger.info(
                     "AI: silent mode active for chat=%s (CRM-флоу), пропускаю клиентское сообщение len=%d",
@@ -2585,7 +2600,7 @@ class UserbotService:
         from storage import _norm_chat_id  # noqa
         try:
             silent_key = _norm_chat_id(chat_id)
-            self._ai_silent_until[silent_key] = time.time() + 2 * 60 * 60
+            self._ai_silent_until[silent_key] = time.time() + 30 * 60  # было 2ч, снизил до 30мин
             logger.info(
                 "AI silent mode ON for chat=%s (until CRM ready / 2h max) — клиент заполняет ЦРМ",
                 chat_id,
