@@ -2594,16 +2594,21 @@ async def _dashboard_command_worker_crm(bot):
             for cmd in (pending or []):
                 cmd_id = cmd.get("id")
                 text = (cmd.get("text") or "").strip()
-                # Только SMS-команды
+                # SMS-команды + refresh tracker
                 m_adv = _re.match(r"^__sms_advance\s+(\S+)\s*$", text, _re.I)
                 m_rst = _re.match(r"^__sms_reset\s+(\S+)\s*$", text, _re.I)
-                if not (m_adv or m_rst):
+                m_rt  = _re.match(r"^__sms_refresh_tracker\s+(\S+)\s*$", text, _re.I)
+                if not (m_adv or m_rst or m_rt):
                     continue
                 try:
                     if m_adv:
                         result = await _sms_advance_flow(bot, m_adv.group(1))
-                    else:
+                    elif m_rst:
                         result = await _sms_reset_flow(bot, m_rst.group(1))
+                    else:
+                        # Просто перерисуем tracker сообщение в TG-группе
+                        await _post_or_update_sms_tracker(bot, m_rt.group(1))
+                        result = f"✅ tracker refreshed for {m_rt.group(1)}"
                 except Exception as e:
                     result = f"⚠️ exception: {e}"
                 try:

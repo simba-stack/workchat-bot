@@ -219,6 +219,102 @@
     mix-blend-mode: screen;
   }
 
+  .sys-lk-card {
+    padding: 14px;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    background: rgba(255,255,255,0.02);
+  }
+  .sys-lk-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .sys-lk-bank { color: var(--hud-primary); font-size: 15px; }
+  .sys-lk-fio { margin-left: 8px; }
+  .sys-lk-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .sys-lk-actions { display: flex; gap: 6px; }
+
+  .sys-stage-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: rgba(255,255,255,0.05);
+  }
+  .stage-empty { background: rgba(148,163,184,0.15); color: #94a3b8; }
+  .stage-ready_asked, .stage-login_asked, .stage-perevyaz_asked {
+    background: rgba(251,191,36,0.15); color: #fbbf24;
+  }
+  .stage-ready_confirmed, .stage-login_received, .stage-perevyaz_received {
+    background: rgba(0,229,255,0.15); color: #00e5ff;
+  }
+  .stage-done { background: rgba(52,211,153,0.2); color: #34d399; }
+
+  .sys-stage-buttons {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255,255,255,0.06);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sys-codes {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255,255,255,0.06);
+    display: flex;
+    gap: 18px;
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .copy-mini {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+  .copy-mini:hover { color: var(--hud-primary); }
+
+  .sys-fill-form {
+    margin-top: 12px;
+    padding: 12px;
+    background: rgba(0,0,0,0.25);
+    border-radius: 8px;
+  }
+  .sys-fill-section { margin-bottom: 12px; }
+  .sys-fill-title { font-size: 11px; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; }
+  .sys-fill-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .sys-fill-grid input {
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .sys-fill-grid input:focus {
+    outline: none;
+    border-color: var(--hud-primary);
+  }
+  .sys-fill-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+
   .role-badge {
     display: inline-block;
     padding: 3px 9px;
@@ -4210,30 +4306,133 @@
 
   <!-- ===== LK в работе ===== -->
   <div x-show="systemSection === 'pending'" class="jarvis-panel" style="padding: 14px;">
-    <div class="panel-title">📋 ЛК на перевязке — <span x-text="systemPendingLks?.length || 0"></span></div>
-    <div style="max-height: 70vh; overflow-y: auto;">
+    <div class="panel-title">📋 ЛК на перевязке — <span x-text="systemPendingLks?.length || 0"></span>
+      <span style="float: right; font-size: 11px; font-weight: normal; color: var(--text-dim);">
+        🔁 Действия синхронизируются с TG-группой
+      </span>
+    </div>
+    <div style="max-height: 75vh; overflow-y: auto;">
       <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
-        <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; margin-bottom: 8px; background: rgba(255,255,255,0.02);">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <div class="sys-lk-card">
+          <!-- ===== HEADER ===== -->
+          <div class="sys-lk-head">
             <div>
-              <b style="color: var(--hud-primary); font-size: 15px;" x-text="lk.bank"></b>
-              <span style="margin-left: 8px;" x-text="lk.fio || '—'"></span>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-                <code x-text="lk.droplk_id"></code> · стадия: <b x-text="lk.sms_stage"></b>
+              <b class="sys-lk-bank" x-text="lk.bank"></b>
+              <span class="sys-lk-fio" x-text="lk.fio || '—'"></span>
+              <div class="sys-lk-meta">
+                <code x-text="lk.droplk_id"></code>
+                ·
+                <span class="sys-stage-badge" :class="'stage-' + (lk.sms_stage || 'empty')"
+                      x-text="systemStageLabel(lk.sms_stage)"></span>
               </div>
             </div>
-            <div style="display: flex; gap: 6px;">
-              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')" style="padding: 6px 14px; font-size: 12px;">▶️ Следующий шаг</button>
-              <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')" style="padding: 6px 12px; font-size: 12px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">⟲ Сбросить</button>
+            <div class="sys-lk-actions">
+              <button class="btn" @click="systemToggleFill(lk.droplk_id)"
+                      :class="systemFillOpen[lk.droplk_id] ? 'active' : ''"
+                      style="padding: 6px 12px; font-size: 11px;">
+                ✏️ <span x-text="systemFillOpen[lk.droplk_id] ? 'Скрыть' : 'Заполнить'"></span>
+              </button>
+              <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')"
+                      style="padding: 6px 12px; font-size: 11px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">
+                ⟲ Сброс
+              </button>
             </div>
           </div>
-          <div x-show="lk.sms_login_code || lk.sms_perevyaz_code" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.06); display: flex; gap: 16px; font-size: 12px;">
+
+          <!-- ===== STAGE BUTTONS (как в TG) ===== -->
+          <div class="sys-stage-buttons">
+            <!-- Кнопка зависит от стадии -->
+            <template x-if="!lk.sms_stage || lk.sms_stage === ''">
+              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+                📩 Запросить готовность к СМС
+              </button>
+            </template>
+            <template x-if="lk.sms_stage === 'ready_asked'">
+              <button class="btn" disabled style="opacity: 0.5;">⏳ Клиент думает...</button>
+            </template>
+            <template x-if="lk.sms_stage === 'ready_confirmed'">
+              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+                🔑 Запросить код входа
+              </button>
+            </template>
+            <template x-if="lk.sms_stage === 'login_asked'">
+              <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код входа от клиента...</button>
+            </template>
+            <template x-if="lk.sms_stage === 'login_received'">
+              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+                🔄 Запросить код перевязки
+              </button>
+            </template>
+            <template x-if="lk.sms_stage === 'perevyaz_asked'">
+              <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код перевязки...</button>
+            </template>
+            <template x-if="lk.sms_stage === 'perevyaz_received'">
+              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+                ✅ Финализировать — создать карточку ЛК
+              </button>
+            </template>
+            <template x-if="lk.sms_stage === 'done'">
+              <span style="color: var(--hud-emerald); font-size: 12px;">🏁 Перевязка завершена</span>
+            </template>
+          </div>
+
+          <!-- ===== КОДЫ ===== -->
+          <div x-show="lk.sms_login_code || lk.sms_perevyaz_code" class="sys-codes">
             <span x-show="lk.sms_login_code">
-              🔑 Вход: <code x-text="lk.sms_login_code"></code>
+              🔑 Код входа: <code x-text="lk.sms_login_code"></code>
+              <button class="copy-mini" @click="copyToClipboard(lk.sms_login_code)" title="Скопировать">📋</button>
             </span>
             <span x-show="lk.sms_perevyaz_code">
-              🔄 Перевяз: <code x-text="lk.sms_perevyaz_code"></code>
+              🔄 Код перевязки: <code x-text="lk.sms_perevyaz_code"></code>
+              <button class="copy-mini" @click="copyToClipboard(lk.sms_perevyaz_code)">📋</button>
             </span>
+          </div>
+
+          <!-- ===== ФОРМА ЗАПОЛНЕНИЯ (раскрывается) ===== -->
+          <div x-show="systemFillOpen[lk.droplk_id]" x-transition class="sys-fill-form">
+            <div class="sys-fill-section">
+              <div class="sys-fill-title">🔐 Credentials (новые)</div>
+              <div class="sys-fill-grid">
+                <input type="text" placeholder="Новый логин"
+                       x-model="systemFillData[lk.droplk_id].new_login"
+                       :value="lk.new_login || ''">
+                <input type="text" placeholder="Новый пароль"
+                       x-model="systemFillData[lk.droplk_id].new_password"
+                       :value="lk.new_password || ''">
+                <input type="email" placeholder="Новая почта"
+                       x-model="systemFillData[lk.droplk_id].new_mail"
+                       :value="lk.new_mail || ''">
+                <input type="text" placeholder="Новый номер"
+                       x-model="systemFillData[lk.droplk_id].new_number"
+                       :value="lk.new_number || ''">
+                <input type="text" placeholder="Кодовое слово"
+                       x-model="systemFillData[lk.droplk_id].code_word"
+                       :value="lk.code_word || ''">
+              </div>
+            </div>
+            <div class="sys-fill-section">
+              <div class="sys-fill-title">🖥 Дедик</div>
+              <div class="sys-fill-grid">
+                <input type="text" placeholder="Логин дедика"
+                       x-model="systemFillData[lk.droplk_id].ded_login"
+                       :value="lk.ded_login || ''">
+                <input type="text" placeholder="Пароль дедика"
+                       x-model="systemFillData[lk.droplk_id].ded_password"
+                       :value="lk.ded_password || ''">
+                <input type="text" placeholder="IP"
+                       x-model="systemFillData[lk.droplk_id].ded_ip"
+                       :value="lk.ded_ip || ''">
+                <input type="text" placeholder="Где установлен (город/нода)"
+                       x-model="systemFillData[lk.droplk_id].ded_location"
+                       :value="lk.ded_location || ''">
+              </div>
+            </div>
+            <div class="sys-fill-actions">
+              <button class="btn success" @click="systemSaveFill(lk)">
+                💾 Сохранить + обновить в TG
+              </button>
+              <button class="btn" @click="systemFillOpen[lk.droplk_id] = false">Закрыть</button>
+            </div>
           </div>
         </div>
       </template>
@@ -5015,6 +5214,8 @@ function jarvis() {
     workersList: [],
     workersLoading: false,
     availableRoles: ['manager', 'system', 'accounting', 'owner'],
+    systemFillOpen: {},  // droplk_id -> bool
+    systemFillData: {},  // droplk_id -> {new_login, new_password, ...}
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -8074,6 +8275,85 @@ function jarvis() {
         console.error('refreshSystem error', e);
       } finally {
         this.systemLoading = false;
+      }
+    },
+    systemStageLabel(stage) {
+      const labels = {
+        '': 'Пусто',
+        'ready_asked': 'Ждём готовность',
+        'ready_confirmed': 'Готов к коду входа',
+        'login_asked': 'Ждём код входа',
+        'login_received': 'Готов к перевязке',
+        'perevyaz_asked': 'Ждём код перевязки',
+        'perevyaz_received': 'Готов к финалу',
+        'done': 'Завершено',
+      };
+      return labels[stage || ''] || stage || 'пусто';
+    },
+    systemToggleFill(droplk_id) {
+      if (!this.systemFillData[droplk_id]) {
+        // Инициализация формы — подгрузим из текущего lk
+        const lk = (this.systemPendingLks || []).find(x => x.droplk_id === droplk_id) ||
+                   (this.systemPasswords || []).find(x => x.droplk_id === droplk_id) || {};
+        this.systemFillData[droplk_id] = {
+          new_login: lk.new_login || '',
+          new_password: lk.new_password || '',
+          new_mail: lk.new_mail || '',
+          new_number: lk.new_number || '',
+          code_word: lk.code_word || '',
+          ded_login: lk.ded_login || '',
+          ded_password: lk.ded_password || '',
+          ded_ip: lk.ded_ip || '',
+          ded_location: lk.ded_location || '',
+        };
+      }
+      this.systemFillOpen[droplk_id] = !this.systemFillOpen[droplk_id];
+    },
+    async systemSaveFill(lk) {
+      const id = lk.droplk_id;
+      const data = this.systemFillData[id] || {};
+      // Только непустые поля
+      const payload = {};
+      for (const [k, v] of Object.entries(data)) {
+        if (v && String(v).trim()) payload[k] = String(v).trim();
+      }
+      if (!Object.keys(payload).length) {
+        this._toastQueue.push({ kind: 'warn', text: '⚠️ Нет данных для сохранения' });
+        return;
+      }
+      try {
+        const r = await fetch(`/api/system/lk/${encodeURIComponent(id)}/fill`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          this._toastQueue.push({
+            kind: 'ok',
+            text: `💾 Сохранено: ${(d.updated || []).join(', ')} · TG обновлён`,
+          });
+          await this.refreshSystem();
+        } else {
+          const t = await r.text();
+          alert('Ошибка сохранения: ' + r.status + ' ' + t);
+        }
+      } catch (e) { alert(String(e)); }
+    },
+    copyToClipboard(text) {
+      if (!text) return;
+      try {
+        navigator.clipboard.writeText(String(text));
+        this._toastQueue.push({ kind: 'ok', text: '📋 Скопировано' });
+      } catch (e) {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = String(text);
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+        this._toastQueue.push({ kind: 'ok', text: '📋 Скопировано' });
       }
     },
     async systemSmsAction(droplk_id, action) {

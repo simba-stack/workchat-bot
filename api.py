@@ -945,6 +945,66 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
     return {"ok": True, "items": out, "lks": out}
 
 
+@app.get("/api/system/lk/{droplk_id}/full")
+async def api_system_lk_full(droplk_id: str, _: None = Depends(_auth)):
+    """Полная инфа о ЛК для System control panel: drop + lk + owner + history."""
+    storage.reload_sync()
+    lk = storage.get_crm_drop_lk(droplk_id) if hasattr(storage, "get_crm_drop_lk") else None
+    if not lk:
+        raise HTTPException(404, "lk not found")
+    drop = storage.get_crm_drop(lk.get("drop_id")) if hasattr(storage, "get_crm_drop") else None
+    owner = storage.get_crm_owner(drop.get("owner_id") if drop else "") if hasattr(storage, "get_crm_owner") else None
+    return {
+        "ok": True,
+        "lk": lk,
+        "drop": drop or {},
+        "owner": owner or {},
+    }
+
+
+@app.post("/api/system/lk/{droplk_id}/fill")
+async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends(_auth)):
+    """Заполнение credentials/дедика для ЛК. Принимает любые поля:
+    new_login, new_password, new_mail, new_number, code_word,
+    ded_login, ded_password, ded_ip, ded_location, sms_code (вручную).
+    Сохраняет в CRM и эмитит system-lk-updated SSE."""
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "json object required")
+    allowed = {
+        "new_login", "new_password", "new_mail", "new_number", "code_word",
+        "ded_login", "ded_password", "ded_ip", "ded_location",
+        "sms_login_code", "sms_perevyaz_code",
+        "value", "price",
+        "notes",
+    }
+    fields = {k: v for k, v in data.items() if k in allowed and v is not None}
+    if not fields:
+        raise HTTPException(400, "no valid fields")
+    storage.reload_sync()
+    lk = storage.get_crm_drop_lk(droplk_id) if hasattr(storage, "get_crm_drop_lk") else None
+    if not lk:
+        raise HTTPException(404, "lk not found")
+    if hasattr(storage, "update_crm_drop_lk"):
+        await storage.update_crm_drop_lk(droplk_id, **fields)
+    # Шлём CRM-боту команду обновить tracker сообщение в TG-группе
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__sms_refresh_tracker {droplk_id}",
+            source="dashboard-system-fill",
+        )
+    except Exception:
+        pass
+    try:
+        event_bus.emit_event("system-lk-updated", {
+            "droplk_id": droplk_id,
+            "fields": list(fields.keys()),
+        })
+    except Exception:
+        pass
+    return {"ok": True, "droplk_id": droplk_id, "updated": list(fields.keys())}
+
+
 @app.post("/api/system/lk/{droplk_id}/sms_action")
 async def api_system_sms_action(droplk_id: str, request: Request, _: None = Depends(_auth)):
     """Триггерит SMS-stage переход через очередь команд CRM-боту.
