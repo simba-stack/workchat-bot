@@ -1281,7 +1281,7 @@ async def cb_banklk(call: CallbackQuery, state: FSMContext):
     banks = sorted(pricing.keys())
     if not banks:
         # Дефолтный список
-        banks = ["АЛЬФА", "ОЗОН", "РАЙФ", "ТОЧКА", "УРАЛСИБ", "ВТБ", "ЛОКО", "БКС", "ДЕЛО", "УБРИР"]
+        banks = ["АЛЬФА", "ОЗОН", "РАЙФ", "ТОЧКА", "ПСБ", "УРАЛСИБ", "ВТБ", "ЛОКО", "БКС", "ДЕЛО", "УБРИР"]
     kb_rows = []
     row = []
     for i, b in enumerate(banks, 1):
@@ -3437,7 +3437,7 @@ async def cb_admincrm(call: CallbackQuery, state: FSMContext):
             return
         # Просим значение
         prompts = {
-            "bank":   "Пришли название банка (например: <code>Альфа</code>, <code>Сбер</code>, <code>Озон</code>).",
+            "bank":   "Пришли название банка (например: <code>Альфа</code>, <code>Сбер</code>, <code>Озон</code>, <code>ПСБ</code>).",
             "status": "Пришли статус: <code>accepted</code> / <code>done</code> / <code>pending</code> / <code>draft</code>.",
             "method": "Пришли метод оплаты: <code>GUARANTOR_AFTER_WORK</code> / <code>USDT_TRC20</code> / <code>GUARANTOR_BEFORE</code>.",
         }
