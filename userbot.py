@@ -611,6 +611,43 @@ class UserbotService:
             except Exception as e:
                 logger.warning("ChatAction handler error: %s", e)
 
+        @self.client.on(events.NewMessage(outgoing=True))
+        async def _on_outgoing_for_support_cache(event):
+            """Outgoing от PRIDE ASSISTANT — кэшируем для дашборда поддержки.
+            Это нужно потому что _on_new_message слушает только incoming."""
+            try:
+                if not event or not event.message or not event.message.text:
+                    return
+                chat_id = event.chat_id
+                chat_info = storage.get_chat_info(chat_id)
+                if not chat_info:
+                    return
+                from storage import _norm_chat_id as _nrm
+                cache = storage.state.setdefault("support_msg_cache", {})
+                key = str(_nrm(chat_id))
+                arr = cache.setdefault(key, [])
+                msg_entry = {
+                    "id": event.message.id,
+                    "ts": time.time(),
+                    "role": "assistant",
+                    "author": "PRIDE ASSISTANT",
+                    "sender_id": event.message.sender_id,
+                    "text": event.message.text[:4000],
+                }
+                # Дедуп: если уже есть с таким id — пропускаем
+                if not any(m.get("id") == msg_entry["id"] for m in arr[-10:]):
+                    arr.append(msg_entry)
+                    if len(arr) > 200:
+                        del arr[: len(arr) - 200]
+                    try:
+                        _e("support-message", {
+                            "chat_id": chat_id, "msg": msg_entry,
+                        }, character="chat", severity="info")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("outgoing-support-cache fail: %s", e)
+
         @self.client.on(events.NewMessage(incoming=True))
         async def _on_new_message(event):
             try:
@@ -7530,6 +7567,36 @@ class UserbotService:
             reply_text = m.group(3).strip()
             if not reply_text:
                 return "⚠️ пустой текст"
+
+            async def _cache_outgoing(real_msg_id, sender_id_local, author_label, via):
+                """Сразу пишем outgoing в кэш + emit SSE — incoming-handler outgoing не ловит."""
+                try:
+                    from storage import _norm_chat_id as _nrm
+                    cache = storage.state.setdefault("support_msg_cache", {})
+                    key = str(_nrm(chat_id))
+                    arr = cache.setdefault(key, [])
+                    msg_entry = {
+                        "id": int(real_msg_id) if real_msg_id else int(time.time() * 1000),
+                        "ts": time.time(),
+                        "role": "worker",
+                        "author": author_label,
+                        "sender_id": int(sender_id_local or 0),
+                        "text": reply_text[:4000],
+                        "via": via,
+                    }
+                    arr.append(msg_entry)
+                    if len(arr) > 200:
+                        del arr[: len(arr) - 200]
+                    await storage._save_unlocked()
+                    _e("support-message", {
+                        "chat_id": chat_id,
+                        "msg": msg_entry,
+                    }, character="chat", severity="info")
+                    return msg_entry
+                except Exception as e:
+                    logger.warning("cache outgoing failed: %s", e)
+                    return None
+
             # Используем сессию менеджера если она есть, иначе PRIDE ASSISTANT.
             sent_via = "pride_assistant"
             try:
@@ -7546,18 +7613,34 @@ class UserbotService:
                             )
                             await mgr_cli.connect()
                             if await mgr_cli.is_user_authorized():
-                                await mgr_cli.send_message(
+                                sent = await mgr_cli.send_message(
                                     chat_id, reply_text, parse_mode="html",
                                     link_preview=False,
                                 )
+                                # Запоминаем sender_id и first_name для красивой подписи
+                                mgr_me = None
+                                try:
+                                    mgr_me = await mgr_cli.get_me()
+                                except Exception:
+                                    pass
+                                mgr_sid = (mgr_me.id if mgr_me else manager_uid)
+                                mgr_name = (
+                                    (getattr(mgr_me, "first_name", None) or "")
+                                    + (" " + getattr(mgr_me, "last_name", "") if mgr_me and getattr(mgr_me, "last_name", None) else "")
+                                ).strip() if mgr_me else "Менеджер"
                                 try:
                                     await mgr_cli.disconnect()
                                 except Exception:
                                     pass
                                 sent_via = f"manager_{manager_uid}"
+                                # КРИТИЧНО: сразу пишем в кэш — incoming handler outgoing не ловит
+                                await _cache_outgoing(
+                                    getattr(sent, "id", None),
+                                    mgr_sid, mgr_name or "Менеджер", sent_via,
+                                )
                                 logger.info(
-                                    "[helpdesk] manager_session=%s sent reply to chat=%s",
-                                    manager_uid, chat_id,
+                                    "[helpdesk] manager_session=%s sent reply to chat=%s msg_id=%s",
+                                    manager_uid, chat_id, getattr(sent, "id", "?"),
                                 )
                                 _e("support-manager-reply", {
                                     "chat_id": chat_id, "manager_uid": manager_uid,
@@ -7580,12 +7663,18 @@ class UserbotService:
                         )
                 # Fallback: через основной userbot (PRIDE ASSISTANT)
                 target = await self._resolve_chat_target(chat_id)
-                await self.client.send_message(
+                sent_pa = await self.client.send_message(
                     target, reply_text, parse_mode="html", link_preview=False,
                 )
+                pa_sid = (self._me.id if self._me else 0)
+                # КРИТИЧНО: outgoing от PRIDE ASSISTANT тоже не ловится incoming handler'ом
+                await _cache_outgoing(
+                    getattr(sent_pa, "id", None),
+                    pa_sid, "PRIDE ASSISTANT", "pride_assistant",
+                )
                 logger.info(
-                    "[helpdesk] PRIDE ASSISTANT (fallback) replied to chat=%s for manager=%s",
-                    chat_id, manager_uid,
+                    "[helpdesk] PRIDE ASSISTANT (fallback) replied to chat=%s for manager=%s msg_id=%s",
+                    chat_id, manager_uid, getattr(sent_pa, "id", "?"),
                 )
                 _e("support-manager-reply", {
                     "chat_id": chat_id, "manager_uid": manager_uid,
