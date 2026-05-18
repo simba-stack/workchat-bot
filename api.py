@@ -922,10 +922,21 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
         storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
     ) or {}
     out = []
+    # Сортировка стадий: пустые (новые анкеты) первыми, потом активные, done в конце
+    stage_order = {
+        "": 0,
+        "ready_asked": 1,
+        "ready_confirmed": 2,
+        "login_asked": 3,
+        "login_received": 4,
+        "perevyaz_asked": 5,
+        "perevyaz_received": 6,
+        "done": 99,
+    }
     for lkid, lk in lks_raw.items():
         stage = (lk.get("sms_stage") or "").strip()
-        # Активные стадии SMS-флоу
-        if stage in ("", "done"):
+        # Пропускаем только завершённые (done). Пустые = новые анкеты — показываем!
+        if stage == "done":
             continue
         drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
         out.append({
@@ -934,15 +945,30 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
             "bank": lk.get("bank") or "",
             "fio": drop.get("fio") or "",
             "owner_id": drop.get("owner_id") or "",
+            "owner_username": drop.get("owner_username") or "",
+            "supplier": drop.get("supplier") or "",
+            "value": lk.get("value") or "",
+            "price": lk.get("price") or "",
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "",
+            "ded_password": lk.get("ded_password") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
+            "_stage_order": stage_order.get(stage, 50),
             "sms_login_code": lk.get("sms_login_code") or "",
             "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
             "value": lk.get("value") or "",
             "ded_login": lk.get("ded_login") or "",
             "created_at": lk.get("created_at") or 0,
         })
-    out.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
-    return {"ok": True, "items": out, "lks": out}
+    # Сначала по стадии (пустые первыми), потом по времени создания
+    out.sort(key=lambda x: (x.get("_stage_order", 50), -(x.get("created_at") or 0)))
+    return {"ok": True, "items": out, "lks": out, "count": len(out)}
 
 
 @app.get("/api/system/lk/{droplk_id}/full")
