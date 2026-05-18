@@ -1002,6 +1002,13 @@ class UserbotService:
                 # -1003998507288, а inbox даёт "3998507288" → === не совпадёт.
                 try:
                     norm_cid = str(_nrm(chat_id))
+                    logger.info(
+                        "[support_sse] EMIT support-message norm_cid=%s raw=%s "
+                        "msg_id=%s role=%s text=%r",
+                        norm_cid, chat_id, msg_entry.get("id"),
+                        msg_entry.get("role"),
+                        (msg_entry.get("text") or "")[:60],
+                    )
                     _e("support-message", {
                         "chat_id": norm_cid,
                         "raw_chat_id": chat_id,
@@ -1012,8 +1019,8 @@ class UserbotService:
                         "client_id": client_id_x,
                         "role": author_role,
                     }, character="chat", severity="info")
-                except Exception:
-                    pass
+                except Exception as e_sse:
+                    logger.warning("[support_sse] emit failed: %s", e_sse)
         except Exception as e:
             logger.warning("support_msg_cache update fail: %s", e)
 
