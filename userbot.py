@@ -1046,19 +1046,29 @@ class UserbotService:
                 )
                 if triggered:
                     sup = chat_info.get("support") or {}
-                    if sup.get("status") not in ("operator_requested", "in_progress"):
+                    if sup.get("status") not in (
+                        "operator_requested", "in_progress", "awaiting_department",
+                    ):
+                        # Ставим status=awaiting_department — ждём выбор клиента
                         await storage.set_support_state(
-                            chat_id, status="operator_requested",
-                            department="managers", opened_at=time.time(),
+                            chat_id, status="awaiting_department",
+                            department="", opened_at=time.time(),
                             assigned_to=0,
                             trigger_text=(event.message.text or "")[:160],
                         )
-                        # Уведомление клиенту
+                        # Уведомление клиенту с выбором подразделения
                         try:
                             target = await self._resolve_chat_target(chat_id)
                             sent_notice = await self.client.send_message(
                                 target,
-                                "📞 <b>Подключаю оператора, ожидайте.</b>",
+                                "📞 <b>На какое подразделение вас перевести?</b>\n\n"
+                                "Ответьте цифрой или словом:\n\n"
+                                "<b>1</b> — 👤 <b>Менеджер</b>\n"
+                                "<i>общие вопросы, цены, условия сделки</i>\n\n"
+                                "<b>2</b> — ⚙️ <b>System</b>\n"
+                                "<i>перевязка и установка ЛК на железо</i>\n\n"
+                                "<b>3</b> — 💰 <b>Бухгалтерия</b>\n"
+                                "<i>выплаты, предоплаты, финансовые вопросы</i>",
                                 parse_mode="html",
                             )
                             # Кэшируем outgoing-уведомление чтобы появилось в дашборде
@@ -1328,13 +1338,97 @@ class UserbotService:
         except Exception as e:
             logger.warning("auto-detect deal_id failed: %s", e)
 
+        # 📞 AWAITING DEPARTMENT: клиент должен выбрать 1/2/3 подразделение
+        try:
+            sup_aw = (chat_info or {}).get("support") or {}
+            if sup_aw.get("status") == "awaiting_department":
+                low_a = (event.message.text or "").lower().strip()
+                if event.message.sender_id == (chat_info or {}).get("client_id"):
+                    chosen_dept = None
+                    chosen_label = None
+                    if low_a in ("1", "1️⃣", "один") or re.search(r"\bменеджер", low_a):
+                        chosen_dept = "managers"
+                        chosen_label = "👤 Менеджеры"
+                    elif (low_a in ("2", "2️⃣", "два")
+                          or re.search(r"\b(system|систем|перевяз|установ|желез|sus|сус)", low_a)):
+                        chosen_dept = "system"
+                        chosen_label = "⚙️ System"
+                    elif (low_a in ("3", "3️⃣", "три")
+                          or re.search(r"\b(бухгалт|выплат|предоплат|финанс|деньг)", low_a)):
+                        chosen_dept = "accounting"
+                        chosen_label = "💰 Бухгалтерия"
+                    if chosen_dept:
+                        await storage.set_support_state(
+                            chat_id,
+                            status="operator_requested",
+                            department=chosen_dept,
+                            assigned_to=0,
+                        )
+                        # Подтверждение клиенту
+                        try:
+                            target = await self._resolve_chat_target(chat_id)
+                            confirm_text = (
+                                f"✅ Запрос отправлен в <b>{chosen_label}</b>.\n"
+                                f"Оператор подключится в ближайшее время."
+                            )
+                            sent_c = await self.client.send_message(
+                                target, confirm_text, parse_mode="html",
+                            )
+                            from storage import _norm_chat_id as _nrm
+                            cache_dict = storage.state.setdefault("support_msg_cache", {})
+                            arr_c = cache_dict.setdefault(str(_nrm(chat_id)), [])
+                            mc = {
+                                "id": getattr(sent_c, "id", int(time.time()*1000)),
+                                "ts": time.time(),
+                                "role": "assistant",
+                                "author": "PRIDE ASSISTANT",
+                                "sender_id": (self._me.id if self._me else 0),
+                                "text": f"✅ Запрос отправлен в {chosen_label}.",
+                            }
+                            arr_c.append(mc)
+                            if len(arr_c) > 200:
+                                del arr_c[: len(arr_c) - 200]
+                            await storage._save_unlocked()
+                            _e("support-message", {
+                                "chat_id": str(_nrm(chat_id)),
+                                "raw_chat_id": chat_id,
+                                "msg": mc,
+                            }, character="chat", severity="info")
+                            _e("support-operator-requested", {
+                                "chat_id": chat_id,
+                                "department": chosen_dept,
+                                "client_username": (chat_info or {}).get("client_username") or "",
+                                "client_name": (chat_info or {}).get("client_name") or "",
+                            }, character="chat", severity="warning")
+                        except Exception as ec:
+                            logger.warning("dept confirm send fail: %s", ec)
+                        logger.info(
+                            "[helpdesk] dept chosen=%s by client in chat=%s",
+                            chosen_dept, chat_id,
+                        )
+                        return
+                    # Если клиент написал что-то невалидное — повторим prompt одно сообщение
+                    try:
+                        target = await self._resolve_chat_target(chat_id)
+                        await self.client.send_message(
+                            target,
+                            "⚠️ Не понял выбор. Напишите <b>1</b>, <b>2</b> или <b>3</b>:\n"
+                            "1 — Менеджер · 2 — System · 3 — Бухгалтерия",
+                            parse_mode="html",
+                        )
+                    except Exception:
+                        pass
+                    return
+        except Exception as e:
+            logger.warning("dept-choice handler error: %s", e)
+
         # 📞 HARD SILENCE: если чат в support-режиме (клиент уже звал
         # оператора или менеджер взял чат) — AI ВСЕГДА молчит, без исключений.
         # Не реагирует ни на "привет", ни на "?", ни на что вообще.
         # Снимается только когда менеджер закрывает чат (status=closed).
         try:
             sup_state = (chat_info or {}).get("support") or {}
-            if sup_state.get("status") in ("operator_requested", "in_progress"):
+            if sup_state.get("status") in ("operator_requested", "in_progress", "awaiting_department"):
                 logger.info(
                     "AI: HARD SILENCE for chat=%s — support active (status=%s)",
                     chat_id, sup_state.get("status"),
@@ -7839,6 +7933,46 @@ class UserbotService:
             except Exception as e:
                 logger.warning("__support_take_notify %s fail: %s", cid, e)
                 return f"⚠️ take-notice failed: {e}"
+
+        # ===== HELPDESK: уведомление клиента при передаче чата =====
+        m = re.match(r"^__support_transfer_notify\s+(-?\d+)\s+(\w+)\|\|\|(.+)$", text, re.I | re.DOTALL)
+        if m:
+            cid = int(m.group(1))
+            new_dept = m.group(2).strip()
+            dept_label = m.group(3).strip()
+            try:
+                target = await self._resolve_chat_target(cid)
+                notice = (
+                    f"↪️ <b>Ваш запрос передан в {dept_label}.</b>\n"
+                    f"Специалист подключится в ближайшее время."
+                )
+                sent_t = await self.client.send_message(
+                    target, notice, parse_mode="html", link_preview=False,
+                )
+                from storage import _norm_chat_id as _nrm
+                cache_dict = storage.state.setdefault("support_msg_cache", {})
+                arr_t = cache_dict.setdefault(str(_nrm(cid)), [])
+                msg_t = {
+                    "id": getattr(sent_t, "id", int(time.time()*1000)),
+                    "ts": time.time(),
+                    "role": "assistant",
+                    "author": "PRIDE ASSISTANT",
+                    "sender_id": (self._me.id if self._me else 0),
+                    "text": f"↪️ Запрос передан в {dept_label}.",
+                }
+                arr_t.append(msg_t)
+                if len(arr_t) > 200:
+                    del arr_t[: len(arr_t) - 200]
+                await storage._save_unlocked()
+                _e("support-message", {
+                    "chat_id": str(_nrm(cid)),
+                    "raw_chat_id": cid,
+                    "msg": msg_t,
+                }, character="chat", severity="info")
+                return f"✅ transfer-notify {cid} → {new_dept}"
+            except Exception as e:
+                logger.warning("__support_transfer_notify %s fail: %s", cid, e)
+                return f"⚠️ transfer-notify failed: {e}"
 
         # ===== HELPDESK: после закрытия — прощальное сообщение клиенту =====
         m = re.match(r"^__support_after_close\s+(-?\d+)\s*$", text, re.I)

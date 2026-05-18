@@ -3899,6 +3899,30 @@
   }
   .support-input button:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  .support-dept-tabs {
+    display: flex;
+    gap: 6px;
+    margin-right: auto;
+    padding: 4px 0;
+  }
+  .dept-tab {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--text-dim);
+    padding: 6px 11px;
+    border-radius: 16px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .dept-tab:hover { background: rgba(0,229,255,0.08); color: var(--text); }
+  .dept-tab.active {
+    background: rgba(0,229,255,0.2);
+    border-color: rgba(0,229,255,0.4);
+    color: var(--hud-primary);
+    font-weight: 600;
+  }
+
   .support-quick-bar {
     padding: 6px 12px;
     border-top: 1px solid rgba(255,255,255,0.05);
@@ -3978,6 +4002,16 @@
         </button>
       </div>
       <div class="support-filter">
+<div class="support-dept-tabs">
+          <button class="dept-tab" :class="supportDept === 'all' ? 'active' : ''"
+                  @click="supportDept='all'; refreshSupportInbox()">📋 Все</button>
+          <button class="dept-tab" :class="supportDept === 'managers' ? 'active' : ''"
+                  @click="supportDept='managers'; refreshSupportInbox()">👤 Менеджер</button>
+          <button class="dept-tab" :class="supportDept === 'system' ? 'active' : ''"
+                  @click="supportDept='system'; refreshSupportInbox()">⚙️ System</button>
+          <button class="dept-tab" :class="supportDept === 'accounting' ? 'active' : ''"
+                  @click="supportDept='accounting'; refreshSupportInbox()">💰 Бухг.</button>
+        </div>
         <button :class="supportFilter === 'all' ? 'active' : ''"
                 @click="supportFilter='all'; refreshSupportInbox()">Все</button>
         <button :class="supportFilter === 'requested' ? 'active' : ''"
@@ -4899,6 +4933,7 @@ function jarvis() {
     supportInbox: [],
     supportInboxLoading: false,
     supportFilter: 'all',  // all | requested | in_progress | mine
+    supportDept: 'all',  // all | managers | system | accounting
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -7569,13 +7604,19 @@ function jarvis() {
     async refreshSupportInbox() {
       this.supportInboxLoading = true;
       try {
-        let url = '/api/support/inbox';
-        if (this.supportFilter === 'requested') url += '?status=operator_requested';
-        else if (this.supportFilter === 'in_progress') url += '?status=in_progress';
+        const params = new URLSearchParams();
+        if (this.supportFilter === 'requested') params.set('status', 'operator_requested');
+        else if (this.supportFilter === 'in_progress') params.set('status', 'in_progress');
+        if (this.supportDept && this.supportDept !== 'all') {
+          params.set('department', this.supportDept);
+        }
+        const url = '/api/support/inbox' + (params.toString() ? '?' + params.toString() : '');
         const r = await fetch(url, { credentials: 'include' });
         if (r.ok) {
           const d = await r.json();
           let chats = d.chats || [];
+          // Также показываем awaiting_department в инбоксе как ожидающие
+          // (status фильтр на бэке уже учитывает department)
           if (this.supportFilter === 'mine') {
             const myUid = Number(this.state?.stats?.tg_user_id || 0);
             chats = chats.filter(c =>

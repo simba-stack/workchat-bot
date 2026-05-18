@@ -387,10 +387,11 @@ async def api_support_inbox(
     if status:
         chats = storage.list_support_inbox(status=status, department=department)
     else:
-        # All active
+        # All active: awaiting_department + operator_requested + in_progress
+        ch0 = storage.list_support_inbox(status="awaiting_department", department=department)
         ch1 = storage.list_support_inbox(status="operator_requested", department=department)
         ch2 = storage.list_support_inbox(status="in_progress", department=department)
-        chats = ch1 + ch2
+        chats = ch0 + ch1 + ch2
     return {"ok": True, "chats": chats}
 
 
@@ -496,7 +497,7 @@ async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_a
 
 @app.post("/api/support/chat/{chat_id}/transfer")
 async def api_support_transfer(chat_id: int, request: Request, _: None = Depends(_auth)):
-    """Передать чат в другое подразделение."""
+    """Передать чат в другое подразделение + уведомить клиента."""
     manager_uid = _try_session_auth(request) or 0
     data = await request.json()
     dept = data.get("department") or ""
@@ -505,13 +506,27 @@ async def api_support_transfer(chat_id: int, request: Request, _: None = Depends
     ok = await storage.support_transfer(chat_id, dept, from_manager=manager_uid)
     if not ok:
         raise HTTPException(404, "chat not found")
+    # Уведомление клиенту через userbot
+    dept_label = {
+        "managers": "👤 Менеджеры",
+        "system": "⚙️ System (перевязка/установка ЛК)",
+        "accounting": "💰 Бухгалтерия (выплаты/финансы)",
+    }.get(dept, dept)
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__support_transfer_notify {chat_id} {dept}|||{dept_label}",
+            source="dashboard-support-transfer",
+        )
+    except Exception:
+        pass
     try:
         event_bus.emit_event("support-chat-transferred", {
-            "chat_id": chat_id, "department": dept, "from": manager_uid,
+            "chat_id": chat_id, "department": dept,
+            "department_label": dept_label, "from": manager_uid,
         })
     except Exception:
         pass
-    return {"ok": True, "chat_id": chat_id, "department": dept}
+    return {"ok": True, "chat_id": chat_id, "department": dept, "department_label": dept_label}
 
 
 @app.post("/api/support/chat/{chat_id}/close")
