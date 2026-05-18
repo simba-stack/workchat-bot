@@ -1049,9 +1049,12 @@ class UserbotService:
                 # из длинных рассуждений клиента.
                 operator_re = re.compile(
                     r"\b(оператор\w*|менеджер\w*|"
-                    r"(?:живой\s+|реальн\w+\s+)?человек\w*|"
-                    r"админ\w*|owner|саппорт\w*|support|"
-                    r"живого|с\s+человеком|к\s+человеку)\b",
+                    r"саппорт\w*|support|"
+                    r"живой\s+человек\w*|реальн\w+\s+человек\w*|"
+                    r"живого\s+человек\w*|"
+                    r"с\s+человеком|к\s+человеку|"
+                    r"позови\s+\w+|позвать\s+\w+|"
+                    r"ассистент[,.\s]+позови|ассистент[,.\s]+позвать)\b",
                     re.IGNORECASE,
                 )
                 triggered = (
@@ -2157,9 +2160,22 @@ class UserbotService:
         # ВАЖНО: prompt подразделения здесь НЕ показываем.
         # Меню 1/2/3 появляется ТОЛЬКО при срабатывании триггера
         # ("оператор/менеджер/Ассистент позови") — обрабатывается выше.
+        # Markdown → HTML: Claude иногда шлёт **bold** и *italic* — Telethon с
+        # parse_mode=html их не парсит и они показываются как текст.
+        # Конвертируем безопасно: ` → <code>, ** → <b>, * → <i>.
         reply_with_hint = reply + hint
         try:
-            for chunk in _split_text(reply_with_hint, 3900):
+            converted = reply_with_hint
+            # Сначала ` `code` ` (чтобы не задеть * внутри)
+            converted = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", converted)
+            # **bold** (двойные)
+            converted = re.sub(r"\*\*([^\*\n]+?)\*\*", r"<b>\1</b>", converted)
+            # *italic* (одиночные) — только если не часть HTML тега
+            converted = re.sub(r"(?<![<>\w])\*([^\*\n]+?)\*(?![<>\w])", r"<i>\1</i>", converted)
+            # Оставшиеся одиночные ** убираем (если есть)
+            converted = converted.replace("**", "")
+            reply_to_send = converted
+            for chunk in _split_text(reply_to_send, 3900):
                 await self.client.send_message(
                     chat_id, chunk, parse_mode="html", link_preview=False,
                 )
