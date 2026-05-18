@@ -7575,19 +7575,48 @@ function jarvis() {
         const newMsgs = d.messages || [];
         // Защита: если чат успел поменяться пока fetch шёл
         if (!this.supportCurrentChat || this.supportCurrentChat.chat_id !== cid) return;
-        // Diff: сравниваем по длине и id последнего сообщения
+
+        // MERGE BY ID (не replace!) — иначе SSE-сообщения добавленные локально
+        // пропадают когда polling вернётся со старее кэшем (race condition).
         const oldArr = this.supportMessages || [];
-        const oldLen = oldArr.length;
-        const newLen = newMsgs.length;
-        const oldLastId = oldLen ? oldArr[oldLen - 1].id : 0;
-        const newLastId = newLen ? newMsgs[newLen - 1].id : 0;
-        const changed = (oldLen !== newLen) || (oldLastId !== newLastId);
+        const byId = new Map();
+        // Сначала старые (наши локальные) — может быть pending/optimistic
+        for (const m of oldArr) {
+          if (m && m.id !== undefined) byId.set(m.id, m);
+        }
+        // Потом серверные — перезаписываем по id (если пришла свежая версия)
+        for (const m of newMsgs) {
+          if (m && m.id !== undefined) byId.set(m.id, m);
+        }
+        // Удаляем optimistic (id < 0) если есть реальное сообщение с тем же текстом
+        for (const [id, m] of [...byId.entries()]) {
+          if (id < 0 && m.pending) {
+            for (const real of byId.values()) {
+              if (real !== m && !real.pending && real.text === m.text
+                  && Math.abs((real.ts || 0) - (m.ts || 0)) < 10) {
+                byId.delete(id);
+                break;
+              }
+            }
+          }
+        }
+        // Сортируем по ts (потом по id)
+        const merged = [...byId.values()].sort((a, b) => {
+          const ta = a.ts || 0, tb = b.ts || 0;
+          if (ta !== tb) return ta - tb;
+          return (a.id || 0) - (b.id || 0);
+        });
+
+        // Diff: меняем ТОЛЬКО если массивы реально разные
+        const oldLastId = oldArr.length ? oldArr[oldArr.length - 1].id : null;
+        const newLastId = merged.length ? merged[merged.length - 1].id : null;
+        const changed = (oldArr.length !== merged.length) || (oldLastId !== newLastId);
         if (changed) {
           const box = this.$refs.supportMsgs;
           const wasAtBottom = box
             ? (box.scrollHeight - box.scrollTop - box.clientHeight) < 80
             : true;
-          this.supportMessages = newMsgs;
+          this.supportMessages = merged;
           this.$nextTick(() => {
             if (box && wasAtBottom) box.scrollTop = box.scrollHeight;
           });
