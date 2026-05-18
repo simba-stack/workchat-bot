@@ -1356,6 +1356,68 @@ async def handle_lk_value(message: Message, state: FSMContext):
     _emit_crm_event("lk.added", {
         "droplk_id": droplk_id, "drop_id": drop_id, "bank": bank,
     })
+
+    # ─── Если drop УЖЕ принят (status=accepted) — значит это ДОПОЛНИТЕЛЬНЫЙ
+    # банк к существующей анкете. Делаем:
+    #  1) Reply на исходную анкету в ДОСТУПАХ (вместо повторного полного поста)
+    #  2) Автопост шаблона в ПАРОЛИ для нового ЛК
+    try:
+        if drop.get("status") == "accepted":
+            bot = message.bot
+            # 1) Reply на admin_msg_id в ДОСТУПАХ
+            try:
+                admin_chat = await get_admin_chat_resolved(bot)
+                admin_msg_id = drop.get("admin_msg_id")
+                if admin_chat and admin_msg_id:
+                    new_lk = crm_storage.get_crm_drop_lk(droplk_id) or {}
+                    fio = drop.get("fio") or "—"
+                    notify_text = (
+                        f"🏦 <b>Добавлен новый банк: {bank}</b>\n"
+                        f"ФИО: <b>{fio}</b>\n"
+                        f"<code>{droplk_id}</code>"
+                    )
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="🔕 Закрыть",
+                            callback_data=f"closenewbank:{droplk_id}",
+                        ),
+                    ]])
+                    await bot.send_message(
+                        admin_chat, notify_text,
+                        reply_to_message_id=admin_msg_id,
+                        reply_markup=kb,
+                    )
+            except Exception as e:
+                logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
+            # 2) Автопост шаблона в ПАРОЛИ
+            try:
+                pwd_chat = await get_password_chat_resolved(bot)
+                new_lk = crm_storage.get_crm_drop_lk(droplk_id)
+                if pwd_chat and new_lk:
+                    text_p = _render_password_text(drop, new_lk)
+                    msg_p = await bot.send_message(
+                        pwd_chat, text_p,
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(
+                                text="✏️ Заполнить",
+                                callback_data=f"filldrop:{droplk_id}",
+                            ),
+                        ]]),
+                    )
+                    pwd_str = str(pwd_chat).replace("-100", "").lstrip("-")
+                    link_p = f"https://t.me/c/{pwd_str}/{msg_p.message_id}"
+                    await crm_storage.update_crm_drop_lk(
+                        droplk_id,
+                        msgid_pass=msg_p.message_id, link_pass=link_p,
+                    )
+                    logger.info(
+                        "[new-bank] password template posted for %s (msg=%s)",
+                        droplk_id, msg_p.message_id,
+                    )
+            except Exception as e:
+                logger.warning("new-bank password post fail: %s", e)
+    except Exception as e:
+        logger.warning("new-bank handler outer fail: %s", e)
     # Кросс-нотификация
     if message.chat.type == "private":
         owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
@@ -1877,6 +1939,21 @@ async def _fill_ask_step(message, state, prompt_text: str, next_state):
 # ════════════════════════════════════════════════════════════════
 # ЭТАП 5 — Заполнение admin'ом в password-чате (FSM 5 шагов)
 # ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("closenewbank:"))
+async def cb_close_new_bank(call: CallbackQuery):
+    """Закрытие уведомления о новом банке (удаление reply-сообщения)."""
+    try:
+        await call.message.delete()
+        await call.answer("🔕 Закрыто")
+    except Exception as e:
+        logger.warning("close-new-bank delete fail: %s", e)
+        try:
+            await call.message.edit_text("🔕 Закрыто")
+        except Exception:
+            pass
+        await call.answer()
+
 
 @router.callback_query(F.data.startswith("filldrop:"))
 async def cb_filldrop(call: CallbackQuery, state: FSMContext):

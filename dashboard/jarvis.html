@@ -463,6 +463,59 @@
   .role-accounting { background: rgba(52,211,153,0.2); color: #34d399; }
   .role-operationist { background: rgba(244,114,182,0.2); color: #f472b6; }
 
+  .worker-profile-widget {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 0 10px;
+  }
+  .worker-profile-card {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 4px 12px 4px 4px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .worker-profile-card:hover {
+    background: rgba(0,229,255,0.1);
+    border-color: rgba(0,229,255,0.3);
+  }
+  .worker-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--hud-primary), #8b5cf6);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+  }
+  .worker-info { display: flex; flex-direction: column; gap: 1px; }
+  .worker-name { font-size: 12px; font-weight: 600; }
+  .worker-role { font-size: 9px; text-transform: uppercase; opacity: 0.7; letter-spacing: 0.5px; }
+  .worker-logout {
+    background: rgba(251,113,133,0.1);
+    border: 1px solid rgba(251,113,133,0.2);
+    color: var(--hud-rose);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .worker-logout:hover { background: rgba(251,113,133,0.25); }
+
   .modal-overlay {
     position: fixed;
     inset: 0;
@@ -2650,6 +2703,21 @@
   </button>
   <button class="view-tab" :class="currentView === 'accounting' ? 'active' : ''" @click="goToView('accounting')">📒 Бухгалтерия</button>
   <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
+
+  <!-- Виджет профиля работника справа -->
+  <div class="worker-profile-widget" x-show="dashMe">
+    <div class="worker-profile-card" @click="goToView('settings'); settingsActiveSection = 'profile';">
+      <div class="worker-avatar" x-text="(dashMe?.first_name || dashMe?.username || '?')[0]?.toUpperCase()"></div>
+      <div class="worker-info">
+        <div class="worker-name" x-text="dashMe?.first_name || dashMe?.username || 'Работник'"></div>
+        <div class="worker-role" :class="'role-' + (dashMe?.role || 'manager')">
+          <span x-text="dashMe?.role || 'manager'"></span>
+          <span x-show="dashMe?.tg_session_connected" title="TG подключён" style="color: var(--hud-emerald);">·🟢</span>
+        </div>
+      </div>
+    </div>
+    <a class="worker-logout" href="/logout" title="Выйти">🚪</a>
+  </div>
   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim); align-self: center;" x-text="'view: ' + currentView"></span>
 </nav>
 
@@ -4167,6 +4235,39 @@
     font-weight: 600;
   }
 
+  .support-sender-toggle {
+    display: flex;
+    gap: 4px;
+    padding: 4px 12px;
+    background: rgba(0,0,0,0.15);
+    border-top: 1px solid rgba(255,255,255,0.04);
+    align-items: center;
+  }
+  .sender-btn {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: var(--text-dim);
+    padding: 4px 11px;
+    border-radius: 12px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .sender-btn:hover { color: var(--text); }
+  .sender-btn.active {
+    background: rgba(0,229,255,0.18);
+    border-color: rgba(0,229,255,0.4);
+    color: var(--hud-primary);
+    font-weight: 600;
+  }
+  .sender-btn.link-btn {
+    background: rgba(251,113,133,0.12);
+    border-color: rgba(251,113,133,0.3);
+    color: var(--hud-rose);
+    margin-left: auto;
+  }
+  .sender-btn.link-btn:hover { background: rgba(251,113,133,0.2); }
+
   .support-quick-bar {
     padding: 6px 12px;
     border-top: 1px solid rgba(255,255,255,0.05);
@@ -4345,10 +4446,31 @@
           </template>
         </div>
       </div>
+      <!-- Sender toggle: от кого писать -->
+      <div class="support-sender-toggle">
+        <button class="sender-btn" :class="supportSendAs === 'me' ? 'active' : ''"
+                @click="supportSendAs = 'me'">
+          <span x-show="dashMe?.tg_session_connected">
+            👤 От себя · <span x-text="dashMe?.username ? '@' + dashMe.username : (dashMe?.first_name || 'мой TG')"></span>
+          </span>
+          <span x-show="!dashMe?.tg_session_connected" style="color: var(--text-dim);">
+            🔒 Мой TG не подключен
+          </span>
+        </button>
+        <button class="sender-btn" :class="supportSendAs === 'assistant' ? 'active' : ''"
+                @click="supportSendAs = 'assistant'">
+          🤖 От PRIDE ASSISTANT
+        </button>
+        <button x-show="!dashMe?.tg_session_connected"
+                class="sender-btn link-btn"
+                @click="goToView('settings'); settingsActiveSection = 'profile';">
+          🔗 Привязать акк
+        </button>
+      </div>
       <!-- Reply input -->
       <div class="support-input">
         <textarea x-model="supportReplyText"
-                  placeholder="Ваш ответ клиенту..."
+                  :placeholder="supportSendAs === 'assistant' ? 'Сообщение от PRIDE ASSISTANT...' : (dashMe?.tg_session_connected ? 'Ваш ответ от @' + (dashMe?.username || 'me') : 'Ваш ответ (через PRIDE ASSISTANT, тк акк не подключен)...')"
                   @keydown.enter.prevent.exact="supportSendReply()"
                   rows="2"></textarea>
         <button @click="supportSendReply()" :disabled="!supportReplyText?.trim() || supportSending">
@@ -5487,6 +5609,7 @@ function jarvis() {
     supportCloseModal: false,
     supportCloseNote: '',
     supportShowEmoji: false,
+    supportSendAs: 'me',  // 'me' = от моего акка / 'assistant' = от PRIDE ASSISTANT
     supportTemplates: {},
     supportEmojiSet: ['😊', '👍', '👋', '🙏', '💰', '💵', '📋', '✅', '❌',
                        '⏳', '🔥', '💎', '🤝', '📞', '💬', '🔄', '🎯', '⚡',
@@ -8380,12 +8503,15 @@ function jarvis() {
       const sentText = text;
       this.supportReplyText = '';
       try {
+        // Если акк не подключен — всегда as_assistant
+        const asAssistant = (this.supportSendAs === 'assistant')
+                            || !this.dashMe?.tg_session_connected;
         const r = await fetch(
           `/api/support/chat/${this.supportCurrentChat.chat_id}/reply`,
           {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: sentText }),
+            body: JSON.stringify({ text: sentText, as_assistant: asAssistant }),
           },
         );
         if (!r.ok) {

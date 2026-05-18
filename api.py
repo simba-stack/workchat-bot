@@ -640,23 +640,30 @@ async def api_support_take(chat_id: int, request: Request, _: None = Depends(_au
 
 @app.post("/api/support/chat/{chat_id}/reply")
 async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_auth)):
-    """Отправка ответа менеджера в work_chat клиента (через userbot)."""
+    """Отправка ответа менеджера в work_chat клиента.
+    Body: { text: str, as_assistant: bool (default false) }
+      as_assistant=True → шлём через PRIDE ASSISTANT
+      as_assistant=False (default) → шлём через сессию менеджера (если подключена),
+        иначе fallback на PRIDE ASSISTANT.
+    """
     manager_uid = _try_session_auth(request) or 0
     data = await request.json()
     text = (data.get("text") or "").strip()
+    as_assistant = bool(data.get("as_assistant", False))
     if not text:
         raise HTTPException(400, "text required")
     if len(text) > 4000:
         raise HTTPException(400, "text too long (max 4000)")
-    # Очередь команда userbot'у
+    # Используем спец-команду если as_assistant=True
+    cmd_prefix = "__support_reply_assistant" if as_assistant else "__support_reply"
     try:
         await storage.enqueue_dashboard_command(
-            f"__support_reply {chat_id} {manager_uid} {text}",
+            f"{cmd_prefix} {chat_id} {manager_uid} {text}",
             source="dashboard-support-reply",
         )
     except Exception as e:
         raise HTTPException(500, str(e))
-    return {"ok": True, "chat_id": chat_id, "queued": True}
+    return {"ok": True, "chat_id": chat_id, "queued": True, "as_assistant": as_assistant}
 
 
 @app.post("/api/support/chat/{chat_id}/transfer")

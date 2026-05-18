@@ -7784,6 +7784,50 @@ class UserbotService:
                 logger.warning("__notify_status %s %s failed: %s", cid, new_status, e)
                 return f"⚠️ #{cid} {new_status}: notify exception {e!r}"
 
+        # ===== HELPDESK: форсированный ответ через PRIDE ASSISTANT =====
+        # (когда менеджер выбрал toggle "от Ассистента")
+        m = re.match(r"^__support_reply_assistant\s+(-?\d+)\s+(\d+)\s+(.+)$", text, re.I | re.DOTALL)
+        if m:
+            chat_id = int(m.group(1))
+            manager_uid = int(m.group(2))
+            reply_text = m.group(3).strip()
+            if not reply_text:
+                return "⚠️ пустой текст"
+            try:
+                target = await self._resolve_chat_target(chat_id)
+                sent_pa = await self.client.send_message(
+                    target, reply_text, parse_mode="html", link_preview=False,
+                )
+                pa_sid = (self._me.id if self._me else 0)
+                try:
+                    from storage import _norm_chat_id as _nrm
+                    cache = storage.state.setdefault("support_msg_cache", {})
+                    arr = cache.setdefault(str(_nrm(chat_id)), [])
+                    msg_entry = {
+                        "id": getattr(sent_pa, "id", int(time.time()*1000)),
+                        "ts": time.time(),
+                        "role": "assistant",
+                        "author": "PRIDE ASSISTANT",
+                        "sender_id": pa_sid,
+                        "text": reply_text[:4000],
+                        "via": "pride_assistant_forced",
+                    }
+                    arr.append(msg_entry)
+                    if len(arr) > 200:
+                        del arr[: len(arr) - 200]
+                    await storage._save_unlocked()
+                    _e("support-message", {
+                        "chat_id": str(_nrm(chat_id)),
+                        "raw_chat_id": chat_id,
+                        "msg": msg_entry,
+                    }, character="chat", severity="info")
+                except Exception as ec:
+                    logger.warning("cache assistant reply fail: %s", ec)
+                return f"✅ отправлено как PRIDE ASSISTANT в чат {chat_id}"
+            except Exception as e:
+                logger.warning("assistant reply fail: %s", e)
+                return f"⚠️ send failed: {e}"
+
         # ===== HELPDESK: отправка ответа менеджера в work_chat клиента =====
         # Команда вида: __support_reply <chat_id> <manager_uid> <текст>
         m = re.match(r"^__support_reply\s+(-?\d+)\s+(\d+)\s+(.+)$", text, re.I | re.DOTALL)
