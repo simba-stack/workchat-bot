@@ -8683,31 +8683,37 @@ function jarvis() {
         if (pwdInboxRes.ok) {
           const j = await pwdInboxRes.json();
           this.systemPasswordsInbox = j.items || [];
-          // Инициализация systemPwdEdit для каждого нового ЛК
+          // Инициализация или ОБНОВЛЕНИЕ systemPwdEdit при refresh:
+          // если редактирование было пустым — берём из storage (свежее),
+          // если юзер уже что-то ввёл — не затираем его правки.
           for (const lk of this.systemPasswordsInbox) {
+            const FIELDS = ['new_login', 'new_password', 'new_mail', 'new_number',
+                            'code_word', 'ded_login', 'ded_password', 'ded_ip', 'ded_location'];
             if (!this.systemPwdEdit[lk.droplk_id]) {
-              this.systemPwdEdit[lk.droplk_id] = {
-                new_login: lk.new_login || '',
-                new_password: lk.new_password || '',
-                new_mail: lk.new_mail || '',
-                new_number: lk.new_number || '',
-                code_word: lk.code_word || '',
-                ded_login: lk.ded_login || 'Administrator',
-                ded_password: lk.ded_password || '',
-                ded_ip: lk.ded_ip || '',
-                ded_location: lk.ded_location || '',
-                _baseline: {
-                  new_login: lk.new_login || '',
-                  new_password: lk.new_password || '',
-                  new_mail: lk.new_mail || '',
-                  new_number: lk.new_number || '',
-                  code_word: lk.code_word || '',
-                  ded_login: lk.ded_login || 'Administrator',
-                  ded_password: lk.ded_password || '',
-                  ded_ip: lk.ded_ip || '',
-                  ded_location: lk.ded_location || '',
-                },
-              };
+              // Первый раз — инициализируем
+              const fresh = { _baseline: {} };
+              for (const f of FIELDS) {
+                const v = (f === 'ded_login') ? (lk[f] || 'Administrator') : (lk[f] || '');
+                fresh[f] = v;
+                fresh._baseline[f] = v;
+              }
+              this.systemPwdEdit[lk.droplk_id] = fresh;
+            } else {
+              // Refresh — обновляем _baseline (что в storage сейчас) и
+              // если конкретное поле в edit совпадало с прошлым baseline
+              // (юзер его не трогал) — синкаем со свежим значением storage
+              const ed = this.systemPwdEdit[lk.droplk_id];
+              const baseline = ed._baseline || {};
+              const newBaseline = {};
+              for (const f of FIELDS) {
+                const fresh = (f === 'ded_login') ? (lk[f] || 'Administrator') : (lk[f] || '');
+                newBaseline[f] = fresh;
+                // Если юзер не редактировал это поле — синкаем
+                if ((ed[f] || '') === (baseline[f] || '') && fresh !== ed[f]) {
+                  ed[f] = fresh;
+                }
+              }
+              ed._baseline = newBaseline;
             }
           }
         }

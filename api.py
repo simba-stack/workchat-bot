@@ -1033,7 +1033,8 @@ async def api_system_pending_lk(
             "new_number": lk.get("new_number") or "",
             "code_word": lk.get("code_word") or "",
             "ded_login": lk.get("ded_login") or "",
-            "ded_password": lk.get("ded_password") or "",
+            "ded_password": lk.get("ded_pass") or lk.get("ded_password") or "",
+            "ded_pass": lk.get("ded_pass") or lk.get("ded_password") or "",
             "ded_ip": lk.get("ded_ip") or "",
             "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
@@ -1088,12 +1089,16 @@ async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends
         raise HTTPException(400, "json object required")
     allowed = {
         "new_login", "new_password", "new_mail", "new_number", "code_word",
-        "ded_login", "ded_password", "ded_ip", "ded_location",
+        "ded_login", "ded_password", "ded_pass", "ded_ip", "ded_location",
         "sms_login_code", "sms_perevyaz_code",
         "value", "price",
         "notes",
     }
     fields = {k: v for k, v in data.items() if k in allowed and v is not None}
+    # КРИТИЧНО: в storage поле называется 'ded_pass' (не 'ded_password').
+    # Если дашборд прислал 'ded_password' — мапим в 'ded_pass'.
+    if "ded_password" in fields:
+        fields["ded_pass"] = fields.pop("ded_password")
     if not fields:
         raise HTTPException(400, "no valid fields")
     storage.reload_sync()
@@ -1241,16 +1246,21 @@ async def api_system_installed_lks(
         stage = (lk.get("sms_stage") or "").strip()
         if stage != "done":
             continue
-        # Заполнены credentials
+        # Заполнены credentials (хотя бы один из ключевых полей — пароль или логин)
         creds_ok = bool(
-            (lk.get("new_login") or "").strip()
-            and (lk.get("new_password") or "").strip()
+            (lk.get("new_password") or "").strip()
+            or (lk.get("new_login") or "").strip()
+            or (lk.get("new_mail") or "").strip()
+            or (lk.get("new_number") or "").strip()
         )
-        # Установлен дедик
+        # Дедик (хотя бы IP или пароль есть). В storage поле = ded_pass!
         dedik_ok = bool(
             (lk.get("ded_ip") or "").strip()
-            and (lk.get("ded_password") or "").strip()
+            or (lk.get("ded_pass") or "").strip()
+            or (lk.get("ded_password") or "").strip()
         )
+        # Попадает в Установленные ЛК если: stage=done И хоть какие-то credentials
+        # И хоть какие-то данные дедика. Подробные условия можно усилить позже.
         if not (creds_ok and dedik_ok):
             continue
         drop = drops_raw.get(lk.get("drop_id"), {}) or {}
@@ -1273,7 +1283,8 @@ async def api_system_installed_lks(
             "new_number": lk.get("new_number") or "",
             "code_word": lk.get("code_word") or "",
             "ded_login": lk.get("ded_login") or "Administrator",
-            "ded_password": lk.get("ded_password") or "",
+            "ded_password": lk.get("ded_pass") or lk.get("ded_password") or "",
+            "ded_pass": lk.get("ded_pass") or lk.get("ded_password") or "",
             "ded_ip": lk.get("ded_ip") or "",
             "ded_location": lk.get("ded_location") or "",
             "value": lk.get("value") or "",
@@ -1327,7 +1338,7 @@ async def api_system_passwords_inbox(_: None = Depends(_auth)):
         )
         filled_dedik = bool(
             (lk.get("ded_ip") or "").strip() and
-            (lk.get("ded_password") or "").strip()
+            ((lk.get("ded_pass") or "").strip() or (lk.get("ded_password") or "").strip())
         )
         pass_chat_id = -1003788743917
         pass_msg_id = lk.get("msgid_pass") or 0
@@ -1366,7 +1377,8 @@ async def api_system_passwords_inbox(_: None = Depends(_auth)):
             "new_number": lk.get("new_number") or "",
             "code_word": lk.get("code_word") or "",
             "ded_login": lk.get("ded_login") or "Administrator",
-            "ded_password": lk.get("ded_password") or "",
+            "ded_password": lk.get("ded_pass") or lk.get("ded_password") or "",
+            "ded_pass": lk.get("ded_pass") or lk.get("ded_password") or "",
             "ded_ip": lk.get("ded_ip") or "",
             "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
