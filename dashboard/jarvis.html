@@ -219,6 +219,107 @@
     mix-blend-mode: screen;
   }
 
+  .crm-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .crm-card.access { border-left: 3px solid var(--hud-primary); }
+  .crm-card.password { border-left: 3px solid #8b5cf6; }
+  .crm-card.password.filled { border-left-color: var(--hud-emerald); opacity: 0.85; }
+  .crm-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .crm-photos {
+    color: var(--hud-primary);
+    font-size: 12px;
+    background: rgba(0,229,255,0.1);
+    padding: 4px 10px;
+    border-radius: 12px;
+  }
+  .crm-anketa {
+    background: rgba(0,0,0,0.25);
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .anketa-row { margin: 2px 0; }
+  .anketa-row b { color: var(--text-dim); font-weight: 500; }
+  .anketa-divider {
+    border-top: 1px dashed rgba(255,255,255,0.1);
+    margin: 8px 0;
+  }
+  .crm-stage-row {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .crm-stage-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .crm-fields {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .crm-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,0,0,0.2);
+    padding: 6px 10px;
+    border-radius: 6px;
+  }
+  .crm-field label {
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 100px;
+    font-weight: 600;
+  }
+  .crm-field input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    outline: none;
+  }
+  .crm-field input::placeholder { color: var(--text-dim); opacity: 0.6; }
+  .crm-fields-section { margin-top: 12px; }
+  .crm-fields-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .crm-pwd-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .support-tab-badge {
+    display: inline-block;
+    background: var(--hud-rose);
+    color: white;
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    margin-left: 5px;
+    font-weight: 700;
+  }
+
   .sys-lk-card {
     padding: 14px;
     border: 1px solid rgba(255,255,255,0.06);
@@ -4289,62 +4390,66 @@
   </div>
 </div>
 
-<!-- ===== SYSTEM (СМС / ДОСТУПЫ / ПАРОЛИ) ===== -->
+<!-- ===== SYSTEM v3 — CRM Доступы + CRM Пароли (копия TG-групп) ===== -->
 <section x-show="currentView === 'system'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center;">
     <h2 style="margin: 0; font-size: 22px; font-weight: 700;">⚙️ System</h2>
-    <span style="font-size: 13px; color: var(--text-dim);">— перевязки, СМС-коды, пароли и дедики</span>
+    <span style="font-size: 13px; color: var(--text-dim);">— анкеты + перевязки + заполнение credentials</span>
+    <span style="font-size: 11px; color: var(--hud-primary); padding: 3px 9px; background: rgba(0,229,255,0.1); border-radius: 10px;">🔁 синхронизация с TG</span>
     <button class="btn" @click="refreshSystem()" :disabled="systemLoading" style="margin-left: auto;">↻ Обновить</button>
   </div>
 
-  <!-- Sub-tabs -->
+  <!-- Sub-tabs: 2 -->
   <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06);">
-    <button class="view-tab" :class="systemSection === 'pending' ? 'active' : ''" @click="systemSection='pending'">📋 ЛК в работе</button>
-    <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📩 ДОСТУПЫ (коды)</button>
-    <button class="view-tab" :class="systemSection === 'passwords' ? 'active' : ''" @click="systemSection='passwords'">🔐 ПАРОЛИ / Дедики</button>
+    <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📥 CRM | Доступы <span x-show="systemPendingLks?.length" class="support-tab-badge" x-text="systemPendingLks?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
   </div>
 
-  <!-- ===== LK в работе ===== -->
-  <div x-show="systemSection === 'pending'" class="jarvis-panel" style="padding: 14px;">
-    <div class="panel-title">📋 ЛК на перевязке — <span x-text="systemPendingLks?.length || 0"></span>
-      <span style="float: right; font-size: 11px; font-weight: normal; color: var(--text-dim);">
-        🔁 Действия синхронизируются с TG-группой
-      </span>
-    </div>
-    <div style="max-height: 75vh; overflow-y: auto;">
-      <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
-        <div class="sys-lk-card">
-          <!-- ===== HEADER ===== -->
-          <div class="sys-lk-head">
-            <div>
-              <b class="sys-lk-bank" x-text="lk.bank"></b>
-              <span class="sys-lk-fio" x-text="lk.fio || '—'"></span>
-              <div class="sys-lk-meta">
-                <code x-text="lk.droplk_id"></code>
-                ·
-                <span class="sys-stage-badge" :class="'stage-' + (lk.sms_stage || 'empty')"
-                      x-text="systemStageLabel(lk.sms_stage)"></span>
-              </div>
-            </div>
-            <div class="sys-lk-actions">
-              <button class="btn" @click="systemToggleFill(lk.droplk_id)"
-                      :class="systemFillOpen[lk.droplk_id] ? 'active' : ''"
-                      style="padding: 6px 12px; font-size: 11px;">
-                ✏️ <span x-text="systemFillOpen[lk.droplk_id] ? 'Скрыть' : 'Заполнить'"></span>
-              </button>
-              <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')"
-                      style="padding: 6px 12px; font-size: 11px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">
-                ⟲ Сброс
-              </button>
-            </div>
+  <!-- ============= ВКЛАДКА 1: CRM | ДОСТУПЫ ============= -->
+  <div x-show="systemSection === 'access'">
+    <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
+      <div class="crm-card access">
+        <!-- Шапка с фото-индикатором + supplier -->
+        <div class="crm-card-head">
+          <div>
+            <span x-show="lk.scan_count > 0" class="crm-photos">📷 <b x-text="lk.scan_count"></b> фото документов</span>
+            <span x-show="!lk.scan_count" style="color: var(--text-dim); font-size: 11px;">📷 Документов нет</span>
           </div>
+          <div>
+            <a x-show="lk.tg_access_link" :href="lk.tg_access_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 Открыть в TG</a>
+          </div>
+        </div>
+        <!-- Анкета как в TG -->
+        <div class="crm-anketa">
+          <div class="anketa-row"><b>ПОСТАВЩИК:</b> <span x-text="lk.supplier ? '@' + lk.supplier : '—'"></span></div>
+          <div class="anketa-row"><b>ФИО:</b> <span x-text="lk.fio"></span></div>
+          <div x-show="lk.social" class="anketa-row"><b>Соц. сеть:</b> <span x-text="lk.social"></span></div>
+          <div x-show="lk.residence" class="anketa-row"><b>Место жительства:</b> <span x-text="lk.residence"></span></div>
+          <div class="anketa-divider"></div>
+          <div class="anketa-row"><b>Банк:</b> <span x-text="lk.bank"></span></div>
+          <div x-show="lk.value || lk.price" class="anketa-row"><b>Цена:</b> <span x-text="(lk.value || lk.price || 0) + ' USDT'"></span></div>
+          <div class="anketa-divider"></div>
+          <div class="anketa-row">
+            <b>📩 SMS-коды:</b>
+          </div>
+          <div class="anketa-row" style="margin-left: 12px;">
+            <span x-text="'СМС [' + lk.bank + ']: ' + ((lk.sms_login_code || lk.sms_perevyaz_code) ? '' : 'нет кодов')"></span>
+            <span x-show="lk.sms_login_code" style="margin-left: 6px;">🔑 <code x-text="lk.sms_login_code"></code>
+              <button class="copy-mini" @click="copyToClipboard(lk.sms_login_code)">📋</button>
+            </span>
+            <span x-show="lk.sms_perevyaz_code" style="margin-left: 6px;">🔄 <code x-text="lk.sms_perevyaz_code"></code>
+              <button class="copy-mini" @click="copyToClipboard(lk.sms_perevyaz_code)">📋</button>
+            </span>
+          </div>
+        </div>
 
-          <!-- ===== STAGE BUTTONS (как в TG) ===== -->
-          <div class="sys-stage-buttons">
-            <!-- Кнопка зависит от стадии -->
+        <!-- Stage + контекстная кнопка как inline-кнопка TG -->
+        <div class="crm-stage-row">
+          <span class="sys-stage-badge" :class="'stage-' + (lk.sms_stage || 'empty')" x-text="systemStageLabel(lk.sms_stage)"></span>
+          <div class="crm-stage-actions">
             <template x-if="!lk.sms_stage || lk.sms_stage === ''">
               <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
-                📩 Запросить готовность к СМС
+                📩 [<span x-text="lk.bank"></span>] Готовность к СМС
               </button>
             </template>
             <template x-if="lk.sms_stage === 'ready_asked'">
@@ -4352,15 +4457,15 @@
             </template>
             <template x-if="lk.sms_stage === 'ready_confirmed'">
               <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
-                🔑 Запросить код входа
+                🔑 [<span x-text="lk.bank"></span>] Запросить код входа
               </button>
             </template>
             <template x-if="lk.sms_stage === 'login_asked'">
-              <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код входа от клиента...</button>
+              <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код входа...</button>
             </template>
             <template x-if="lk.sms_stage === 'login_received'">
               <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
-                🔄 Запросить код перевязки
+                🔄 [<span x-text="lk.bank"></span>] Запросить код перевязки
               </button>
             </template>
             <template x-if="lk.sms_stage === 'perevyaz_asked'">
@@ -4368,133 +4473,112 @@
             </template>
             <template x-if="lk.sms_stage === 'perevyaz_received'">
               <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
-                ✅ Финализировать — создать карточку ЛК
+                ✅ [<span x-text="lk.bank"></span>] Финализировать
               </button>
             </template>
             <template x-if="lk.sms_stage === 'done'">
-              <span style="color: var(--hud-emerald); font-size: 12px;">🏁 Перевязка завершена</span>
+              <span style="color: var(--hud-emerald); font-size: 12px;">🏁 Завершено</span>
             </template>
-          </div>
-
-          <!-- ===== КОДЫ ===== -->
-          <div x-show="lk.sms_login_code || lk.sms_perevyaz_code" class="sys-codes">
-            <span x-show="lk.sms_login_code">
-              🔑 Код входа: <code x-text="lk.sms_login_code"></code>
-              <button class="copy-mini" @click="copyToClipboard(lk.sms_login_code)" title="Скопировать">📋</button>
-            </span>
-            <span x-show="lk.sms_perevyaz_code">
-              🔄 Код перевязки: <code x-text="lk.sms_perevyaz_code"></code>
-              <button class="copy-mini" @click="copyToClipboard(lk.sms_perevyaz_code)">📋</button>
-            </span>
-          </div>
-
-          <!-- ===== ФОРМА ЗАПОЛНЕНИЯ (раскрывается) ===== -->
-          <div x-show="systemFillOpen[lk.droplk_id]" x-transition class="sys-fill-form">
-            <div class="sys-fill-section">
-              <div class="sys-fill-title">🔐 Credentials (новые)</div>
-              <div class="sys-fill-grid">
-                <input type="text" placeholder="Новый логин"
-                       x-model="systemFillData[lk.droplk_id].new_login"
-                       :value="lk.new_login || ''">
-                <input type="text" placeholder="Новый пароль"
-                       x-model="systemFillData[lk.droplk_id].new_password"
-                       :value="lk.new_password || ''">
-                <input type="email" placeholder="Новая почта"
-                       x-model="systemFillData[lk.droplk_id].new_mail"
-                       :value="lk.new_mail || ''">
-                <input type="text" placeholder="Новый номер"
-                       x-model="systemFillData[lk.droplk_id].new_number"
-                       :value="lk.new_number || ''">
-                <input type="text" placeholder="Кодовое слово"
-                       x-model="systemFillData[lk.droplk_id].code_word"
-                       :value="lk.code_word || ''">
-              </div>
-            </div>
-            <div class="sys-fill-section">
-              <div class="sys-fill-title">🖥 Дедик</div>
-              <div class="sys-fill-grid">
-                <input type="text" placeholder="Логин дедика"
-                       x-model="systemFillData[lk.droplk_id].ded_login"
-                       :value="lk.ded_login || ''">
-                <input type="text" placeholder="Пароль дедика"
-                       x-model="systemFillData[lk.droplk_id].ded_password"
-                       :value="lk.ded_password || ''">
-                <input type="text" placeholder="IP"
-                       x-model="systemFillData[lk.droplk_id].ded_ip"
-                       :value="lk.ded_ip || ''">
-                <input type="text" placeholder="Где установлен (город/нода)"
-                       x-model="systemFillData[lk.droplk_id].ded_location"
-                       :value="lk.ded_location || ''">
-              </div>
-            </div>
-            <div class="sys-fill-actions">
-              <button class="btn success" @click="systemSaveFill(lk)">
-                💾 Сохранить + обновить в TG
-              </button>
-              <button class="btn" @click="systemFillOpen[lk.droplk_id] = false">Закрыть</button>
-            </div>
+            <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')"
+                    style="padding: 6px 12px; font-size: 11px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">
+              ⟲ Сброс
+            </button>
           </div>
         </div>
-      </template>
-      <div x-show="(systemPendingLks?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
-        ✅ Пусто — все ЛК отработаны или в простом статусе
       </div>
+    </template>
+    <div x-show="(systemPendingLks?.length || 0) === 0" class="jarvis-panel" style="padding: 30px; text-align: center; color: var(--text-dim);">
+      ✅ Все анкеты обработаны или новых ещё нет
     </div>
   </div>
 
-  <!-- ===== ДОСТУПЫ (коды) ===== -->
-  <div x-show="systemSection === 'access'" class="jarvis-panel" style="padding: 14px;">
-    <div class="panel-title">📩 ДОСТУПЫ — последние СМС-коды от клиентов</div>
-    <div style="max-height: 70vh; overflow-y: auto;">
-      <template x-for="(c, i) in systemAccessCodes" :key="i">
-        <div style="padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 12px; align-items: center;">
-          <div style="font-size: 11px; color: var(--text-dim); min-width: 100px;" x-text="c.ts ? fmtTime(c.ts * 1000) : '—'"></div>
-          <div style="flex: 1;">
-            <b x-text="c.bank"></b>
-            <span style="margin-left: 6px;" x-text="c.fio"></span>
-            <span style="margin-left: 8px; font-size: 10px; padding: 1px 6px; border-radius: 6px; background: rgba(0,229,255,0.1); color: var(--hud-primary);" x-text="c.kind === 'perevyaz' ? 'перевязка' : 'вход'"></span>
+  <!-- ============= ВКЛАДКА 2: CRM | ПАРОЛИ ============= -->
+  <div x-show="systemSection === 'password'">
+    <template x-for="lk in systemPasswordsInbox" :key="lk.droplk_id">
+      <div class="crm-card password" :class="lk.filled ? 'filled' : ''">
+        <div class="crm-card-head">
+          <div>
+            <span style="font-size: 15px;">🔐 ЛК <b style="color: var(--hud-primary);" x-text="lk.bank"></b> · <span x-text="lk.fio"></span></span>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">
+              поставщик: <code x-text="lk.supplier ? '@' + lk.supplier : '—'"></code>
+              · <code x-text="lk.droplk_id"></code>
+            </div>
           </div>
-          <code style="font-size: 16px; font-weight: 700; color: var(--hud-emerald); letter-spacing: 2px;" x-text="c.code"></code>
+          <div>
+            <a x-show="lk.tg_pass_link" :href="lk.tg_pass_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 Открыть в TG</a>
+            <span x-show="lk.filled" class="role-badge role-accounting" style="margin-left: 6px;">✅ Заполнено</span>
+          </div>
         </div>
-      </template>
-      <div x-show="(systemAccessCodes?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
-        Пока нет полученных кодов
-      </div>
-    </div>
-  </div>
 
-  <!-- ===== ПАРОЛИ / Дедики ===== -->
-  <div x-show="systemSection === 'passwords'" class="jarvis-panel" style="padding: 14px;">
-    <div class="panel-title">🔐 ПАРОЛИ — новые credentials и дедики</div>
-    <div style="max-height: 70vh; overflow-y: auto;">
-      <template x-for="p in systemPasswords" :key="p.droplk_id">
-        <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; margin-bottom: 8px; background: rgba(255,255,255,0.02);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <b style="color: var(--hud-primary);" x-text="p.bank"></b>
-              <span style="margin-left: 8px;" x-text="p.fio"></span>
-              <code style="margin-left: 8px; color: var(--text-dim); font-size: 11px;" x-text="p.droplk_id"></code>
-            </div>
+        <!-- Поля как в TG -->
+        <div class="crm-fields">
+          <div class="crm-field">
+            <label>Новый логин:</label>
+            <input type="text" x-model="systemPwdEdit[lk.droplk_id].new_login" :placeholder="lk.new_login || '—'">
+            <button class="copy-mini" @click="copyToClipboard(lk.new_login)" :disabled="!lk.new_login">📋</button>
           </div>
-          <div style="margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; font-size: 12px;">
-            <div x-show="p.new_login">🆔 Логин: <code x-text="p.new_login"></code></div>
-            <div x-show="p.new_password">🔑 Пароль: <code x-text="p.new_password"></code></div>
-            <div x-show="p.new_mail">📧 Почта: <code x-text="p.new_mail"></code></div>
-            <div x-show="p.new_number">📱 Телефон: <code x-text="p.new_number"></code></div>
-            <div x-show="p.code_word">🔐 Код.слово: <code x-text="p.code_word"></code></div>
-            <div x-show="p.ded_login" style="grid-column: 1 / -1; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.06); color: var(--text-dim);">
-              🖥 Дедик: <code x-text="p.ded_login"></code> /
-              <code x-text="p.ded_password"></code> @ <code x-text="p.ded_ip"></code>
+          <div class="crm-field">
+            <label>Новый пароль:</label>
+            <input type="text" x-model="systemPwdEdit[lk.droplk_id].new_password" :placeholder="lk.new_password || '—'">
+            <button class="copy-mini" @click="copyToClipboard(lk.new_password)" :disabled="!lk.new_password">📋</button>
+          </div>
+          <div class="crm-field">
+            <label>Новая почта:</label>
+            <input type="text" x-model="systemPwdEdit[lk.droplk_id].new_mail" :placeholder="lk.new_mail || '—'">
+            <button class="copy-mini" @click="copyToClipboard(lk.new_mail)" :disabled="!lk.new_mail">📋</button>
+          </div>
+          <div class="crm-field">
+            <label>Новый номер:</label>
+            <input type="text" x-model="systemPwdEdit[lk.droplk_id].new_number" :placeholder="lk.new_number || '—'">
+            <button class="copy-mini" @click="copyToClipboard(lk.new_number)" :disabled="!lk.new_number">📋</button>
+          </div>
+          <div class="crm-field">
+            <label>Кодовое слово:</label>
+            <input type="text" x-model="systemPwdEdit[lk.droplk_id].code_word" :placeholder="lk.code_word || '—'">
+            <button class="copy-mini" @click="copyToClipboard(lk.code_word)" :disabled="!lk.code_word">📋</button>
+          </div>
+        </div>
+
+        <div class="crm-fields-section">
+          <div class="crm-fields-title">🖥 Дедик</div>
+          <div class="crm-fields">
+            <div class="crm-field">
+              <label>Где установлен:</label>
+              <input type="text" x-model="systemPwdEdit[lk.droplk_id].ded_location" :placeholder="lk.ded_location || '—'">
+            </div>
+            <div class="crm-field">
+              <label>IP:</label>
+              <input type="text" x-model="systemPwdEdit[lk.droplk_id].ded_ip" :placeholder="lk.ded_ip || '—'">
+              <button class="copy-mini" @click="copyToClipboard(lk.ded_ip)" :disabled="!lk.ded_ip">📋</button>
+            </div>
+            <div class="crm-field">
+              <label>Логин:</label>
+              <input type="text" x-model="systemPwdEdit[lk.droplk_id].ded_login" :placeholder="lk.ded_login || 'Administrator'">
+              <button class="copy-mini" @click="copyToClipboard(lk.ded_login)" :disabled="!lk.ded_login">📋</button>
+            </div>
+            <div class="crm-field">
+              <label>Пароль:</label>
+              <input type="text" x-model="systemPwdEdit[lk.droplk_id].ded_password" :placeholder="lk.ded_password || '—'">
+              <button class="copy-mini" @click="copyToClipboard(lk.ded_password)" :disabled="!lk.ded_password">📋</button>
             </div>
           </div>
         </div>
-      </template>
-      <div x-show="(systemPasswords?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 30px;">
-        Пока нет заполненных credentials
+
+        <div class="crm-pwd-actions">
+          <button class="btn success" @click="systemSavePassword(lk)"
+                  :disabled="!systemPwdEditDirty(lk.droplk_id)">
+            💾 Сохранить + обновить в TG
+          </button>
+          <button class="btn" @click="systemResetPwdEdit(lk)" style="font-size: 11px;">⟲ Откатить</button>
+        </div>
       </div>
+    </template>
+    <div x-show="(systemPasswordsInbox?.length || 0) === 0" class="jarvis-panel" style="padding: 30px; text-align: center; color: var(--text-dim);">
+      ⏳ Карточки появятся когда ЛК пойдут в работу (после login_received стадии)
     </div>
   </div>
 </section>
+
 
 <!-- ===== БУХГАЛТЕРИЯ ===== -->
 <section x-show="currentView === 'accounting'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
@@ -5216,6 +5300,8 @@ function jarvis() {
     availableRoles: ['manager', 'system', 'accounting', 'owner'],
     systemFillOpen: {},  // droplk_id -> bool
     systemFillData: {},  // droplk_id -> {new_login, new_password, ...}
+    systemPasswordsInbox: [],  // CRM | Пароли — inbox
+    systemPwdEdit: {},  // droplk_id -> editable copy of fields
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -5234,7 +5320,7 @@ function jarvis() {
     _supportMsgsLoading: false,
 
     // === System (Phase 3) — SMS / ДОСТУПЫ / ПАРОЛИ ===
-    systemSection: 'pending',  // pending | access | passwords
+    systemSection: 'access',  // access | password
     systemPendingLks: [],
     systemAccessCodes: [],
     systemPasswords: [],
@@ -8254,22 +8340,44 @@ function jarvis() {
       if (this.systemLoading) return;
       this.systemLoading = true;
       try {
-        const [pendingRes, accessRes, pwdRes] = await Promise.all([
+        const [pendingRes, pwdInboxRes] = await Promise.all([
           fetch('/api/system/pending_lk', { credentials: 'include' }),
-          fetch('/api/system/access_codes', { credentials: 'include' }),
-          fetch('/api/system/passwords', { credentials: 'include' }),
+          fetch('/api/system/passwords_inbox', { credentials: 'include' }),
         ]);
         if (pendingRes.ok) {
           const j = await pendingRes.json();
           this.systemPendingLks = j.items || [];
         }
-        if (accessRes.ok) {
-          const j = await accessRes.json();
-          this.systemAccessCodes = j.items || [];
-        }
-        if (pwdRes.ok) {
-          const j = await pwdRes.json();
-          this.systemPasswords = j.items || [];
+        if (pwdInboxRes.ok) {
+          const j = await pwdInboxRes.json();
+          this.systemPasswordsInbox = j.items || [];
+          // Инициализация systemPwdEdit для каждого нового ЛК
+          for (const lk of this.systemPasswordsInbox) {
+            if (!this.systemPwdEdit[lk.droplk_id]) {
+              this.systemPwdEdit[lk.droplk_id] = {
+                new_login: lk.new_login || '',
+                new_password: lk.new_password || '',
+                new_mail: lk.new_mail || '',
+                new_number: lk.new_number || '',
+                code_word: lk.code_word || '',
+                ded_login: lk.ded_login || 'Administrator',
+                ded_password: lk.ded_password || '',
+                ded_ip: lk.ded_ip || '',
+                ded_location: lk.ded_location || '',
+                _baseline: {
+                  new_login: lk.new_login || '',
+                  new_password: lk.new_password || '',
+                  new_mail: lk.new_mail || '',
+                  new_number: lk.new_number || '',
+                  code_word: lk.code_word || '',
+                  ded_login: lk.ded_login || 'Administrator',
+                  ded_password: lk.ded_password || '',
+                  ded_ip: lk.ded_ip || '',
+                  ded_location: lk.ded_location || '',
+                },
+              };
+            }
+          }
         }
       } catch (e) {
         console.error('refreshSystem error', e);
@@ -8308,6 +8416,55 @@ function jarvis() {
         };
       }
       this.systemFillOpen[droplk_id] = !this.systemFillOpen[droplk_id];
+    },
+    systemPwdEditDirty(id) {
+      const ed = this.systemPwdEdit[id];
+      if (!ed || !ed._baseline) return false;
+      const keys = ['new_login','new_password','new_mail','new_number','code_word',
+                    'ded_login','ded_password','ded_ip','ded_location'];
+      return keys.some(k => (ed[k] || '') !== (ed._baseline[k] || ''));
+    },
+    systemResetPwdEdit(lk) {
+      const ed = this.systemPwdEdit[lk.droplk_id];
+      if (!ed || !ed._baseline) return;
+      for (const k of Object.keys(ed._baseline)) ed[k] = ed._baseline[k];
+    },
+    async systemSavePassword(lk) {
+      const id = lk.droplk_id;
+      const ed = this.systemPwdEdit[id] || {};
+      const payload = {};
+      const keys = ['new_login','new_password','new_mail','new_number','code_word',
+                    'ded_login','ded_password','ded_ip','ded_location'];
+      for (const k of keys) {
+        const v = (ed[k] || '').trim();
+        if (v && v !== (ed._baseline?.[k] || '')) payload[k] = v;
+      }
+      if (!Object.keys(payload).length) {
+        this._toastQueue.push({ kind: 'warn', text: '⚠️ Нет изменений' });
+        return;
+      }
+      try {
+        const r = await fetch(`/api/system/lk/${encodeURIComponent(id)}/fill`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          this._toastQueue.push({
+            kind: 'ok',
+            text: `💾 Сохранено: ${(d.updated || []).join(', ')} · TG обновлён`,
+          });
+          // Обновим baseline в локальном edit
+          if (ed._baseline) {
+            for (const k of Object.keys(payload)) ed._baseline[k] = payload[k];
+          }
+          await this.refreshSystem();
+        } else {
+          const t = await r.text();
+          alert('Ошибка: ' + r.status + ' ' + t);
+        }
+      } catch (e) { alert(String(e)); }
     },
     async systemSaveFill(lk) {
       const id = lk.droplk_id;

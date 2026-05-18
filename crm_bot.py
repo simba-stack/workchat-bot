@@ -2598,17 +2598,41 @@ async def _dashboard_command_worker_crm(bot):
                 m_adv = _re.match(r"^__sms_advance\s+(\S+)\s*$", text, _re.I)
                 m_rst = _re.match(r"^__sms_reset\s+(\S+)\s*$", text, _re.I)
                 m_rt  = _re.match(r"^__sms_refresh_tracker\s+(\S+)\s*$", text, _re.I)
-                if not (m_adv or m_rst or m_rt):
+                m_pwd = _re.match(r"^__refresh_password_post\s+(\S+)\s*$", text, _re.I)
+                if not (m_adv or m_rst or m_rt or m_pwd):
                     continue
                 try:
                     if m_adv:
                         result = await _sms_advance_flow(bot, m_adv.group(1))
                     elif m_rst:
                         result = await _sms_reset_flow(bot, m_rst.group(1))
-                    else:
-                        # Просто перерисуем tracker сообщение в TG-группе
+                    elif m_rt:
+                        # Перерисуем tracker сообщение в TG-группе ДОСТУПЫ
                         await _post_or_update_sms_tracker(bot, m_rt.group(1))
                         result = f"✅ tracker refreshed for {m_rt.group(1)}"
+                    else:
+                        # Перерисуем PASSWORD сообщение в TG-группе ПАРОЛИ
+                        droplk_id = m_pwd.group(1)
+                        lk = crm_storage.get_crm_drop_lk(droplk_id)
+                        if not lk:
+                            result = f"⚠️ lk {droplk_id} not found"
+                        else:
+                            drop = crm_storage.get_crm_drop(lk.get("drop_id"))
+                            pwd_chat = get_password_chat_id()
+                            if pwd_chat and lk.get("msgid_pass") and drop:
+                                try:
+                                    await bot.edit_message_text(
+                                        _render_password_text(drop, lk),
+                                        chat_id=pwd_chat,
+                                        message_id=lk["msgid_pass"],
+                                        reply_markup=_password_filled_keyboard(droplk_id),
+                                        disable_web_page_preview=True,
+                                    )
+                                    result = f"✅ password post refreshed for {droplk_id}"
+                                except Exception as e:
+                                    result = f"⚠️ password edit failed: {e}"
+                            else:
+                                result = f"⚠️ password post not found for {droplk_id}"
                 except Exception as e:
                     result = f"⚠️ exception: {e}"
                 try:

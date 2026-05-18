@@ -939,14 +939,38 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
         if stage == "done":
             continue
         drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
+        # Резолв supplier: из drop.supplier / owner_id → owner.username
+        supplier = (drop.get("supplier") or "").lstrip("@")
+        if not supplier and drop.get("owner_id"):
+            try:
+                owner = storage.get_crm_owner(drop["owner_id"]) or {}
+                supplier = (owner.get("username") or "").lstrip("@")
+            except Exception:
+                pass
+        # TG-ссылки: ДОСТУПЫ = -1003852131311, ПАРОЛИ = -1003788743917
+        access_chat_id = -1003852131311
+        pass_chat_id = -1003788743917
+        sms_msg_id = lk.get("sms_tracker_msg_id") or 0
+        pass_msg_id = lk.get("msgid_pass") or 0
+        tg_access_link = (
+            f"https://t.me/c/{str(access_chat_id)[4:]}/{sms_msg_id}"
+            if sms_msg_id else ""
+        )
+        tg_pass_link = (
+            f"https://t.me/c/{str(pass_chat_id)[4:]}/{pass_msg_id}"
+            if pass_msg_id else ""
+        )
         out.append({
             "droplk_id": lkid,
             "drop_id": lk.get("drop_id"),
             "bank": lk.get("bank") or "",
-            "fio": drop.get("fio") or "",
+            "fio": drop.get("fio") or "—",
+            "social": drop.get("social") or "",
+            "residence": drop.get("residence") or "",
             "owner_id": drop.get("owner_id") or "",
             "owner_username": drop.get("owner_username") or "",
-            "supplier": drop.get("supplier") or "",
+            "supplier": supplier,
+            "scan_count": len(drop.get("scan_file_ids") or []),
             "value": lk.get("value") or "",
             "price": lk.get("price") or "",
             "new_login": lk.get("new_login") or "",
@@ -960,6 +984,8 @@ async def api_system_pending_lk(_: None = Depends(_auth)):
             "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
             "_stage_order": stage_order.get(stage, 50),
+            "tg_access_link": tg_access_link,
+            "tg_pass_link": tg_pass_link,
             "sms_login_code": lk.get("sms_login_code") or "",
             "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
             "value": lk.get("value") or "",
@@ -1013,10 +1039,19 @@ async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends
         raise HTTPException(404, "lk not found")
     if hasattr(storage, "update_crm_drop_lk"):
         await storage.update_crm_drop_lk(droplk_id, **fields)
-    # Шлём CRM-боту команду обновить tracker сообщение в TG-группе
+    # Шлём CRM-боту команды обновить ОБЕ TG-группы: ДОСТУПЫ (sms-tracker)
+    # и ПАРОЛИ (password-post). Чтобы при заполнении из дашборда оба
+    # сообщения в TG обновились синхронно.
     try:
         await storage.enqueue_dashboard_command(
             f"__sms_refresh_tracker {droplk_id}",
+            source="dashboard-system-fill",
+        )
+    except Exception:
+        pass
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__refresh_password_post {droplk_id}",
             source="dashboard-system-fill",
         )
     except Exception:
@@ -1029,6 +1064,78 @@ async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends
     except Exception:
         pass
     return {"ok": True, "droplk_id": droplk_id, "updated": list(fields.keys())}
+
+
+@app.get("/api/system/passwords_inbox")
+async def api_system_passwords_inbox(_: None = Depends(_auth)):
+    """Inbox для CRM | Password — все ЛК которые в работе (perevyaz_received,
+    done или активны) и требуют заполнения credentials/дедика.
+    Возвращает карточки как в TG-группе ПАРОЛИ."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}
+    ) or {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        # Карточка для ПАРОЛЕЙ создаётся только когда ЛК уже в активной работе
+        # (perevyaz_received или done) — то есть готов к заполнению или уже заполнен.
+        # Можно показывать и ранее — но фильтруем для соответствия TG.
+        if stage not in ("perevyaz_received", "done", "login_received",
+                          "perevyaz_asked"):
+            continue
+        drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
+        supplier = (drop.get("supplier") or "").lstrip("@")
+        if not supplier and drop.get("owner_id"):
+            try:
+                owner = storage.get_crm_owner(drop["owner_id"]) or {}
+                supplier = (owner.get("username") or "").lstrip("@")
+            except Exception:
+                pass
+        # Считаем заполнено ли всё
+        filled_creds = bool(
+            (lk.get("new_login") or "").strip() and
+            (lk.get("new_password") or "").strip()
+        )
+        filled_dedik = bool(
+            (lk.get("ded_ip") or "").strip() and
+            (lk.get("ded_password") or "").strip()
+        )
+        pass_chat_id = -1003788743917
+        pass_msg_id = lk.get("msgid_pass") or 0
+        tg_pass_link = (
+            f"https://t.me/c/{str(pass_chat_id)[4:]}/{pass_msg_id}"
+            if pass_msg_id else ""
+        )
+        out.append({
+            "droplk_id": lkid,
+            "drop_id": lk.get("drop_id"),
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "—",
+            "supplier": supplier,
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "Administrator",
+            "ded_password": lk.get("ded_password") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "ded_location": lk.get("ded_location") or "",
+            "sms_stage": stage,
+            "filled_creds": filled_creds,
+            "filled_dedik": filled_dedik,
+            "filled": filled_creds and filled_dedik,
+            "tg_pass_link": tg_pass_link,
+            "updated_at": lk.get("updated_at") or 0,
+            "created_at": lk.get("created_at") or 0,
+        })
+    # Заполненные в конец, заполняемые первыми
+    out.sort(key=lambda x: (x.get("filled"), -(x.get("created_at") or 0)))
+    return {"ok": True, "items": out, "count": len(out)}
 
 
 @app.post("/api/system/lk/{droplk_id}/sms_action")
