@@ -898,19 +898,27 @@ class UserbotService:
             return
         chat_info = storage.get_chat_info(chat_id)
 
-        # 📞 HELPDESK TRIGGER: клиент пишет «позвать оператора», «нужен менеджер» —
+        # 📞 HELPDESK TRIGGER: клиент пишет про оператора / менеджера / человека —
         # переводим чат в inbox менеджера + замолкаем AI.
         try:
             if (chat_info and event.message and event.message.text
                     and event.message.sender_id == chat_info.get("client_id")):
                 low_text = event.message.text.lower().strip()
-                operator_triggers = (
-                    "позвать оператор", "позови оператор", "оператора",
-                    "нужен менеджер", "позвать менеджер", "хочу с человеком",
-                    "позови человека", "нужен живой человек",
-                    "оператор!", "оператор?",
+                # Гибкий regex: слово «оператор/менеджер/человек/админ/owner»
+                # в любой словоформе. Лимит 200 символов чтобы не триггерить
+                # из длинных рассуждений клиента.
+                operator_re = re.compile(
+                    r"\b(оператор\w*|менеджер\w*|"
+                    r"(?:живой\s+|реальн\w+\s+)?человек\w*|"
+                    r"админ\w*|owner|саппорт\w*|support|"
+                    r"живого|с\s+человеком|к\s+человеку)\b",
+                    re.IGNORECASE,
                 )
-                if any(t in low_text for t in operator_triggers) and len(low_text) < 80:
+                triggered = (
+                    len(low_text) <= 200
+                    and bool(operator_re.search(low_text))
+                )
+                if triggered:
                     sup = chat_info.get("support") or {}
                     if sup.get("status") not in ("operator_requested", "in_progress"):
                         await storage.set_support_state(
@@ -974,16 +982,25 @@ class UserbotService:
                         ).strip() or "Сотрудник"
                     except Exception:
                         author_name = "Сотрудник"
-                arr.append({
+                msg_entry = {
                     "id": event.message.id,
                     "ts": time.time(),
                     "role": author_role,
                     "author": author_name,
                     "sender_id": sender_id_x,
                     "text": event.message.text[:4000],
-                })
-                if len(arr) > 100:
-                    del arr[: len(arr) - 100]
+                }
+                arr.append(msg_entry)
+                if len(arr) > 200:
+                    del arr[: len(arr) - 200]
+                # SSE event — UI открытого чата подхватит без polling
+                try:
+                    _e("support-message", {
+                        "chat_id": chat_id,
+                        "msg": msg_entry,
+                    }, character="chat", severity="info")
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("support_msg_cache update fail: %s", e)
 
@@ -7566,8 +7583,71 @@ class UserbotService:
                 logger.warning("support reply send fail: %s", e)
                 return f"⚠️ send failed: {e}"
 
+        # ===== HELPDESK: подгрузка истории сообщений из Telethon в кэш =====
+        m = re.match(r"^__support_fetch_messages\s+(-?\d+)(?:\s+(\d+))?\s*$", text, re.I)
+        if m:
+            cid = int(m.group(1))
+            lim = min(int(m.group(2) or 100), 200)
+            try:
+                target = await self._resolve_chat_target(cid)
+                chat_info = storage.get_chat_info(cid) or {}
+                client_id_x = chat_info.get("client_id") or 0
+                msgs_out = []
+                async for msg in self.client.iter_messages(target, limit=lim):
+                    if not msg or not msg.text:
+                        continue
+                    sender_id_x = msg.sender_id or 0
+                    if self._me and sender_id_x == self._me.id:
+                        role, author = "assistant", "PRIDE ASSISTANT"
+                    elif sender_id_x == client_id_x:
+                        role = "client"
+                        author = chat_info.get("client_name") or "Клиент"
+                    else:
+                        role = "worker"
+                        try:
+                            s = await msg.get_sender()
+                            first = getattr(s, "first_name", None) or ""
+                            last = getattr(s, "last_name", None) or ""
+                            author = (first + (" " + last if last else "")).strip() or "Сотрудник"
+                        except Exception:
+                            author = "Сотрудник"
+                    msgs_out.append({
+                        "id": msg.id,
+                        "ts": msg.date.timestamp() if msg.date else time.time(),
+                        "role": role,
+                        "author": author,
+                        "sender_id": sender_id_x,
+                        "text": (msg.text or "")[:4000],
+                    })
+                msgs_out.reverse()
+                from storage import _norm_chat_id as _nrm
+                cache = storage.state.setdefault("support_msg_cache", {})
+                cache[str(_nrm(cid))] = msgs_out
+                await storage._save_unlocked()
+                _e("support-msgs-loaded", {
+                    "chat_id": cid, "count": len(msgs_out),
+                }, character="chat", severity="info")
+                return f"✅ history loaded: {len(msgs_out)} msgs for {cid}"
+            except Exception as e:
+                logger.warning("support_fetch_messages %s fail: %s", cid, e)
+                return f"⚠️ fetch failed: {e}"
+
+        # ===== HELPDESK: после закрытия — снимаем silent + (опц.) благодарим =====
+        m = re.match(r"^__support_after_close\s+(-?\d+)\s*$", text, re.I)
+        if m:
+            cid = int(m.group(1))
+            try:
+                from storage import _norm_chat_id as _nrm
+                self._ai_silent_until.pop(_nrm(cid), None)
+                _e("support-chat-closed-side", {
+                    "chat_id": cid, "ai": "resumed",
+                }, character="chat", severity="info")
+                return f"✅ chat {cid} closed, AI silence cleared"
+            except Exception as e:
+                logger.warning("support_after_close %s fail: %s", cid, e)
+                return f"⚠️ {e}"
+
         # ===== INTERNAL: handle БЛОК_БЕЗ_ОТРАБОТКИ side-effects (от api.py) =====
-        # Отменяет сделку (если deal_id), уведомляет клиента, кидает reply работнику.
         m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)
         if m:
             cid = m.group(1).lower()
@@ -7586,3 +7666,4 @@ class UserbotService:
                 return f"⚠️ #{cid}: block_no_work exception {e!r}"
 
         return f"⚠️ unknown command: {text[:60]}"
+

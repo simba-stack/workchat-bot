@@ -491,42 +491,61 @@ async def api_support_transfer(chat_id: int, request: Request, _: None = Depends
 
 @app.post("/api/support/chat/{chat_id}/close")
 async def api_support_close(chat_id: int, request: Request, _: None = Depends(_auth)):
-    """Закрыть чат + опциональная оценка от клиента (rating 1-5)."""
+    """Закрыть саппорт-сессию + теги (купил_РС/отказался/молчит/передал_дальше)."""
     data = await request.json() if request.headers.get("content-type") == "application/json" else {}
     rating = int(data.get("rating") or 0)
+    note = (data.get("note") or "").strip()
+    tag = (data.get("tag") or "").strip()
     if rating < 0 or rating > 5:
         raise HTTPException(400, "rating must be 0-5")
     ok = await storage.support_close(chat_id, rating=rating)
     if not ok:
         raise HTTPException(404, "chat not found")
-    # AI подключается обратно (просто чистим silent_until косвенно через release)
-    await storage.support_release(chat_id)
-    try:
-        event_bus.emit_event("support-chat-closed", {
-            "chat_id": chat_id, "rating": rating,
-        })
-    except Exception:
-        pass
-    return {"ok": True, "chat_id": chat_id, "rating": rating}
-
-
-@app.get("/api/support/chat/{chat_id}/messages")
-async def api_support_messages(chat_id: int, limit: int = 50, _: None = Depends(_auth)):
-    """Возвращает последние N сообщений из work_chat (через userbot)."""
-    if limit > 200:
-        limit = 200
+    if tag or note:
+        await storage.set_support_state(chat_id, close_tag=tag, close_note=note)
+    # Asynchronous: snять AI silence через userbot
     try:
         await storage.enqueue_dashboard_command(
-            f"__support_fetch_messages {chat_id} {limit}",
-            source="dashboard-support-msgs",
+            f"__support_after_close {chat_id}",
+            source="dashboard-support-close",
         )
     except Exception:
         pass
-    # Возвращаем из storage что есть (заполняется userbot'ом отдельно).
-    # Для MVP — отдаём пустой список + событие; UI пинает SSE и обновляет когда придёт.
+    try:
+        event_bus.emit_event("support-chat-closed", {
+            "chat_id": chat_id, "rating": rating, "tag": tag,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "chat_id": chat_id, "rating": rating, "tag": tag}
+
+
+@app.get("/api/support/chat/{chat_id}/messages")
+async def api_support_messages(
+    chat_id: int, limit: int = 50, refresh: int = 0,
+    _: None = Depends(_auth),
+):
+    """Сообщения work_chat. refresh=1 — принудительно дёрнуть userbot за историей."""
+    if limit > 200:
+        limit = 200
     cache = storage.state.setdefault("support_msg_cache", {})
-    msgs = cache.get(str(chat_id), [])
-    return {"ok": True, "chat_id": chat_id, "messages": msgs[-limit:]}
+    from storage import _norm_chat_id as _nrm
+    key = str(_nrm(chat_id))
+    msgs = cache.get(key, [])
+    need_fetch = refresh == 1 or len(msgs) < 5
+    if need_fetch:
+        try:
+            await storage.enqueue_dashboard_command(
+                f"__support_fetch_messages {chat_id} {limit}",
+                source="dashboard-support-msgs",
+            )
+        except Exception:
+            pass
+    return {
+        "ok": True, "chat_id": chat_id,
+        "messages": msgs[-limit:],
+        "fetching": need_fetch,
+    }
 
 
 # ============== MANAGER TG SESSIONS ==============

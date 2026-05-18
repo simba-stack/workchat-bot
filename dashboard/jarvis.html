@@ -3984,6 +3984,28 @@
         <button @click="supportTransferTo('accounting')" class="btn" style="padding: 4px 10px; font-size: 11px;">📒 Бухгалтерия</button>
         <button @click="supportShowTransfer = false" style="padding: 4px 10px; font-size: 11px; margin-left: auto;">✕</button>
       </div>
+      <!-- Close modal -->
+      <div x-show="supportCloseModal"
+           style="position: absolute; inset: 0; background: rgba(0,0,0,0.8); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px;">
+        <div class="jarvis-panel" style="max-width: 480px; padding: 22px; width: 100%;">
+          <h3 style="margin: 0 0 4px 0;">✅ Завершить сессию</h3>
+          <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
+            Выберите итог чата. AI снова возьмёт диалог.
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+            <button class="btn success" @click="supportConfirmClose('купил_РС')">💰 Купил РС</button>
+            <button class="btn" @click="supportConfirmClose('отказался')" style="background: rgba(251,113,133,0.15); color: var(--hud-rose);">❌ Отказался</button>
+            <button class="btn" @click="supportConfirmClose('молчит')">🤐 Молчит</button>
+            <button class="btn" @click="supportConfirmClose('передал_дальше')">↪️ Передан</button>
+          </div>
+          <textarea x-model="supportCloseNote" placeholder="Заметка (опционально)..."
+                    style="width: 100%; min-height: 60px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 8px; color: var(--text); font-size: 12px; resize: vertical;"></textarea>
+          <div style="display: flex; gap: 6px; margin-top: 12px;">
+            <button class="btn" @click="supportConfirmClose('')" style="flex:1;">✅ Закрыть без тега</button>
+            <button class="btn" @click="supportCloseModal = false">Отмена</button>
+          </div>
+        </div>
+      </div>
       <!-- Messages -->
       <div class="support-msgs" x-ref="supportMsgs">
         <template x-for="m in supportMessages" :key="m.id">
@@ -3994,7 +4016,7 @@
           </div>
         </template>
         <template x-if="!supportMessages?.length">
-          <div class="support-empty">Сообщений ещё нет</div>
+          <div class="support-empty">📂 Подгружаю историю из Telegram...</div>
         </template>
       </div>
       <!-- Reply input -->
@@ -4811,6 +4833,8 @@ function jarvis() {
     supportReplyText: '',
     supportSending: false,
     supportShowTransfer: false,
+    supportCloseModal: false,
+    supportCloseNote: '',
     _supportPollerStarted: false,
 
     // === System (Phase 3) — SMS / ДОСТУПЫ / ПАРОЛИ ===
@@ -5663,14 +5687,41 @@ function jarvis() {
         );
       }
       if (t === 'support-manager-reply' && p.chat_id) {
-        // Ответ менеджера отправлен — обновим UI если этот чат открыт
         if (this.supportCurrentChat?.chat_id === p.chat_id) {
           setTimeout(() => this.refreshSupportMessages(), 800);
         }
       }
-      // Любое сообщение в managed_chat где открыт support чат → обновить
+      // Live-сообщения в открытом чате — добавляем без полного refresh
+      if (t === 'support-message' && p.chat_id && p.msg) {
+        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+          // Дедуп по id
+          const exists = (this.supportMessages || []).some(m => m.id === p.msg.id);
+          if (!exists) {
+            this.supportMessages.push(p.msg);
+            this.$nextTick(() => {
+              const box = this.$refs.supportMsgs;
+              if (box) box.scrollTop = box.scrollHeight;
+            });
+          }
+        }
+      }
+      // История подгрузилась из Telethon → перетягиваем
+      if (t === 'support-msgs-loaded' && p.chat_id) {
+        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+          setTimeout(() => this.refreshSupportMessages(false), 200);
+        }
+      }
+      // Любое AI-сообщение в открытом чате
       if (t === 'ai-reply' && this.supportCurrentChat?.chat_id === p.chat_id) {
-        setTimeout(() => this.refreshSupportMessages(), 500);
+        setTimeout(() => this.refreshSupportMessages(false), 500);
+      }
+      // Чат закрыт где-то ещё → очистим UI
+      if (t === 'support-chat-closed' && p.chat_id) {
+        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+          this.supportCurrentChat = null;
+          this.supportMessages = [];
+        }
+        if (this.currentView === 'support') this.refreshSupportInbox();
       }
 
       // Discord events
@@ -7460,25 +7511,36 @@ function jarvis() {
           support: info.support,
         };
         this.supportCurrentLks = info.lk_cards || [];
-        await this.refreshSupportMessages();
+        // Принудительная подгрузка истории из Telethon (refresh=1)
+        await this.refreshSupportMessages(true);
+        // Через 1.5с — повторный poll: userbot успеет подгрузить
+        setTimeout(() => this.refreshSupportMessages(false), 1500);
+        setTimeout(() => this.refreshSupportMessages(false), 3500);
       } catch (e) {
         alert('Не удалось открыть чат: ' + e);
       }
     },
-    async refreshSupportMessages() {
+    async refreshSupportMessages(forceRefresh = false) {
       if (!this.supportCurrentChat) return;
       try {
-        const r = await fetch(
-          `/api/support/chat/${this.supportCurrentChat.chat_id}/messages?limit=100`,
-          { credentials: 'include' },
-        );
+        const cid = this.supportCurrentChat.chat_id;
+        const url = `/api/support/chat/${cid}/messages?limit=200${forceRefresh ? '&refresh=1' : ''}`;
+        const r = await fetch(url, { credentials: 'include' });
         if (r.ok) {
           const d = await r.json();
+          // Сохраняем pos прокрутки: если был внизу — после рефреша остаёмся внизу
+          const box = this.$refs.supportMsgs;
+          const wasAtBottom = box
+            ? (box.scrollHeight - box.scrollTop - box.clientHeight) < 60
+            : true;
           this.supportMessages = d.messages || [];
           this.$nextTick(() => {
-            const box = this.$refs.supportMsgs;
-            if (box) box.scrollTop = box.scrollHeight;
+            if (box && wasAtBottom) box.scrollTop = box.scrollHeight;
           });
+          // Если backend ещё качает историю — повторим
+          if (d.fetching) {
+            setTimeout(() => this.refreshSupportMessages(false), 1800);
+          }
         }
       } catch (e) { console.warn('msgs refresh', e); }
     },
@@ -7540,21 +7602,30 @@ function jarvis() {
     },
     async supportCloseChat() {
       if (!this.supportCurrentChat) return;
-      const rating = prompt('Оценка работы менеджера (1-5, или пусто для пропуска):', '');
-      const r_num = rating ? parseInt(rating, 10) : 0;
+      this.supportCloseModal = true;
+    },
+    async supportConfirmClose(tag) {
+      if (!this.supportCurrentChat) { this.supportCloseModal = false; return; }
+      const cid = this.supportCurrentChat.chat_id;
+      const note = (this.supportCloseNote || '').trim();
       try {
         const r = await fetch(
-          `/api/support/chat/${this.supportCurrentChat.chat_id}/close`,
+          `/api/support/chat/${cid}/close`,
           {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rating: r_num }),
+            body: JSON.stringify({ rating: 0, tag: tag || '', note }),
           },
         );
         if (r.ok) {
-          await this.refreshSupportInbox();
+          this.supportCloseModal = false;
+          this.supportCloseNote = '';
           this.supportCurrentChat = null;
           this.supportMessages = [];
+          await this.refreshSupportInbox();
+          this._toastQueue.push({ kind: 'ok', text: '✅ Чат завершён · AI включён' });
+        } else {
+          alert('Ошибка: ' + r.status);
         }
       } catch (e) { alert(String(e)); }
     },
@@ -8211,116 +8282,4 @@ function jarvis() {
     },
     closeDeleteModal() { this.deleteModal.open = false; },
     async applyDelete() {
-      const { card_id } = this.deleteModal;
-      try {
-        const r = await fetch(`/api/control/lk/${card_id}/delete`, {
-          method: 'POST',
-          credentials: 'include',
-        });
-        if (r.ok) {
-          this.playBeep(220);
-          await this.refreshCards();
-          await this.refresh();
-        }
-      } catch (e) {}
-      this.closeDeleteModal();
-    },
-
-    // ===== LK Card detail modal =====
-    async openDetailModal(c) {
-      this.detailModal = {
-        open: true, card_id: c.card_id, loading: true, saving: false,
-        flash: '', original: { ...c }, draft: { ...c },
-      };
-      this.playBeep(540);
-      try {
-        const r = await fetch(`/api/lk_card/${c.card_id}`, { credentials: 'include' });
-        if (r.ok) {
-          const full = await r.json();
-          this.detailModal.original = full;
-          this.detailModal.draft = {
-            bank: full.bank || '',
-            fio: full.fio || '',
-            price_usdt: full.price_usdt || 0,
-            payment_method: full.payment_method || '',
-            status: full.status || 'В_РАБОТЕ',
-            deal_id: full.deal_id || '',
-            usdt_address: full.usdt_address || '',
-            supplier: full.supplier || '',
-            client_username: full.client_username || '',
-            work_chat_id: full.work_chat_id || 0,
-            block_amount_rub: full.block_amount_rub || 0,
-            block_note: full.block_note || '',
-            brak_reason: full.brak_reason || '',
-          };
-        }
-      } catch (e) { console.warn('detail load failed', e); }
-      this.detailModal.loading = false;
-    },
-    closeDetailModal() { this.detailModal.open = false; this.detailModal.flash = ''; },
-
-    async saveDetailCard() {
-      const { card_id, draft, original } = this.detailModal;
-      if (!card_id) return;
-      this.detailModal.saving = true;
-      try {
-        // 1) Сохраняем редактируемые поля (всё кроме статуса)
-        const updates = {};
-        const editableKeys = [
-          'bank', 'fio', 'price_usdt', 'payment_method', 'deal_id',
-          'usdt_address', 'supplier', 'client_username', 'work_chat_id',
-          'block_amount_rub', 'block_note', 'brak_reason',
-        ];
-        for (const k of editableKeys) {
-          if (draft[k] !== undefined && draft[k] !== (original[k] || (typeof draft[k] === 'number' ? 0 : ''))) {
-            updates[k] = draft[k];
-          }
-        }
-        let anySaved = false;
-        if (Object.keys(updates).length > 0) {
-          const r = await fetch(`/api/control/lk/${card_id}/update`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updates),
-          });
-          if (r.ok) anySaved = true;
-        }
-
-        // 2) Если статус изменился — отдельный endpoint (триггерит side-effects)
-        const newStatus = draft.status || '';
-        if (newStatus && newStatus !== (original.status || '')) {
-          const r2 = await fetch(`/api/control/lk/${card_id}/status`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ new_status: newStatus }),
-          });
-          if (r2.ok) anySaved = true;
-        }
-
-        if (anySaved) {
-          this.playBeep(880);
-          this.detailModal.flash = '✓ СОХРАНЕНО · СИНХ С TG';
-          await this.refreshCards();
-          await this.refresh();
-          // обновим original чтобы повторное сохранение не слало те же поля
-          this.detailModal.original = { ...this.detailModal.original, ...draft };
-          setTimeout(() => { this.detailModal.flash = ''; }, 1600);
-        } else {
-          this.detailModal.flash = 'Без изменений';
-          setTimeout(() => { this.detailModal.flash = ''; }, 1200);
-        }
-      } catch (e) {
-        console.warn('save card failed', e);
-        this.detailModal.flash = '✗ ошибка';
-        setTimeout(() => { this.detailModal.flash = ''; }, 1600);
-      } finally {
-        this.detailModal.saving = false;
-      }
-    },
-  };
-}
-</script>
-</body>
-</html>
+      const { card_id
