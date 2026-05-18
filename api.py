@@ -309,6 +309,36 @@ def _try_session_auth(request: Request) -> Optional[int]:
     return uid
 
 
+def _resolve_user_role(uid: int) -> str:
+    """Определяет роль пользователя дашборда:
+      'owner' — видит всё; 'manager' — только department=managers;
+      'system' — только system; 'accounting' — только accounting.
+    Owner ID хардкожен (SIMBA). Остальное — через worker_sessions[uid].username
+    → storage.get_worker_role(username).role."""
+    # Owner — хардкод (SIMBA + ADMIN_ID)
+    OWNER_UIDS = {8151738775}
+    try:
+        if config.ADMIN_ID:
+            OWNER_UIDS.add(int(config.ADMIN_ID))
+    except Exception:
+        pass
+    if uid in OWNER_UIDS:
+        return "owner"
+    # Пытаемся через worker_sessions
+    try:
+        sess = storage.get_worker_session(uid) or {}
+        uname = (sess.get("username") or "").lstrip("@").lower().strip()
+        if uname:
+            r = storage.get_worker_role(uname) or {}
+            role = (r.get("role") or "").lower().strip()
+            if role in ("owner", "manager", "system", "accounting"):
+                return role
+    except Exception:
+        pass
+    # Дефолт — менеджер
+    return "manager"
+
+
 def _try_basic_auth(credentials: Optional[HTTPBasicCredentials]) -> bool:
     if not DASHBOARD_PASS:
         return False
@@ -382,17 +412,46 @@ async def api_support_inbox(
     request: Request = None,
     _: None = Depends(_auth),
 ):
-    """Inbox чатов для менеджеров. По умолчанию — все active (operator_requested + in_progress)."""
+    """Inbox чатов с role-based фильтром:
+      owner — всё (можно фильтровать через ?department=...);
+      manager — только chat.department='managers' + awaiting_department;
+      system  — только chat.department='system';
+      accounting — только chat.department='accounting'.
+    """
     storage.reload_sync()
+    # Определяем роль текущего пользователя
+    uid = _try_session_auth(request) if request else 0
+    role = _resolve_user_role(uid or 0)
+    # Если не owner — принудительно ставим department по роли
+    effective_dept = department
+    if role != "owner":
+        if role == "manager":
+            effective_dept = "managers"
+        elif role == "system":
+            effective_dept = "system"
+        elif role == "accounting":
+            effective_dept = "accounting"
+    # Фетчим
     if status:
-        chats = storage.list_support_inbox(status=status, department=department)
+        chats = storage.list_support_inbox(status=status, department=effective_dept)
     else:
-        # All active: awaiting_department + operator_requested + in_progress
-        ch0 = storage.list_support_inbox(status="awaiting_department", department=department)
-        ch1 = storage.list_support_inbox(status="operator_requested", department=department)
-        ch2 = storage.list_support_inbox(status="in_progress", department=department)
-        chats = ch0 + ch1 + ch2
-    return {"ok": True, "chats": chats}
+        # awaiting_department показываем только менеджерам и owner
+        # (системе/бухгалтерии незачем — клиент ещё не выбрал их).
+        chats_aw = []
+        if role in ("owner", "manager"):
+            chats_aw = storage.list_support_inbox(
+                status="awaiting_department",
+                department=None if role == "owner" else None,  # awaiting не имеет dept
+            )
+        ch1 = storage.list_support_inbox(status="operator_requested", department=effective_dept)
+        ch2 = storage.list_support_inbox(status="in_progress", department=effective_dept)
+        chats = chats_aw + ch1 + ch2
+    return {
+        "ok": True,
+        "chats": chats,
+        "viewer_role": role,
+        "viewer_uid": uid or 0,
+    }
 
 
 @app.get("/api/support/chat/{chat_id}/info")

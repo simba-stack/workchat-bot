@@ -4002,7 +4002,7 @@
         </button>
       </div>
       <div class="support-filter">
-<div class="support-dept-tabs">
+<div class="support-dept-tabs" x-show="supportViewerRole === 'owner'">
           <button class="dept-tab" :class="supportDept === 'all' ? 'active' : ''"
                   @click="supportDept='all'; refreshSupportInbox()">📋 Все</button>
           <button class="dept-tab" :class="supportDept === 'managers' ? 'active' : ''"
@@ -4012,6 +4012,9 @@
           <button class="dept-tab" :class="supportDept === 'accounting' ? 'active' : ''"
                   @click="supportDept='accounting'; refreshSupportInbox()">💰 Бухг.</button>
         </div>
+        <span x-show="supportViewerRole !== 'owner'" style="font-size: 11px; padding: 4px 10px; background: rgba(0,229,255,0.1); border-radius: 12px; color: var(--hud-primary); align-self: center;">
+          <span x-text="supportViewerRole === 'manager' ? '👤 Менеджер · видите только свои чаты' : (supportViewerRole === 'system' ? '⚙️ System · переданные вам чаты' : '💰 Бухгалтерия · переданные вам чаты')"></span>
+        </span>
         <button :class="supportFilter === 'all' ? 'active' : ''"
                 @click="supportFilter='all'; refreshSupportInbox()">Все</button>
         <button :class="supportFilter === 'requested' ? 'active' : ''"
@@ -4934,6 +4937,7 @@ function jarvis() {
     supportInboxLoading: false,
     supportFilter: 'all',  // all | requested | in_progress | mine
     supportDept: 'all',  // all | managers | system | accounting
+    supportViewerRole: 'manager',  // owner | manager | system | accounting
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -7614,6 +7618,8 @@ function jarvis() {
         const r = await fetch(url, { credentials: 'include' });
         if (r.ok) {
           const d = await r.json();
+          // Сохраняем role чтобы UI скрыл не-свои tabs
+          if (d.viewer_role) this.supportViewerRole = d.viewer_role;
           let chats = d.chats || [];
           // Также показываем awaiting_department в инбоксе как ожидающие
           // (status фильтр на бэке уже учитывает department)
