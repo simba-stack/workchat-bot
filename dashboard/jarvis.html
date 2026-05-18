@@ -4798,21 +4798,21 @@
               <span class="role-badge role-accounting">✅ Готов</span>
             </div>
           </div>
+          <!-- СТРОГО как в TG-группе ПАРОЛИ -->
           <div class="crm-fields">
-            <div class="crm-field"><label>Логин:</label><code x-text="lk.new_login"></code><button class="copy-mini" @click="copyToClipboard(lk.new_login)">📋</button></div>
-            <div class="crm-field"><label>Пароль:</label><code x-text="lk.new_password"></code><button class="copy-mini" @click="copyToClipboard(lk.new_password)">📋</button></div>
-            <div class="crm-field"><label>Почта:</label><code x-text="lk.new_mail || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_mail)" :disabled="!lk.new_mail">📋</button></div>
-            <div class="crm-field"><label>Телефон:</label><code x-text="lk.new_number || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_number)" :disabled="!lk.new_number">📋</button></div>
-            <div class="crm-field"><label>Код. слово:</label><code x-text="lk.code_word || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.code_word)" :disabled="!lk.code_word">📋</button></div>
-            <div class="crm-field"><label>Стоимость:</label><code x-text="(lk.value || '0') + ' USDT'"></code></div>
+            <div class="crm-field"><label>Новый логин:</label><code x-text="lk.new_login || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_login)" :disabled="!lk.new_login || lk.new_login === '—'">📋</button></div>
+            <div class="crm-field"><label>Новый пароль:</label><code x-text="lk.new_password || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_password)" :disabled="!lk.new_password">📋</button></div>
+            <div class="crm-field"><label>Новая почта:</label><code x-text="lk.new_mail || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_mail)" :disabled="!lk.new_mail">📋</button></div>
+            <div class="crm-field"><label>Новый номер:</label><code x-text="lk.new_number || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_number)" :disabled="!lk.new_number">📋</button></div>
+            <div class="crm-field" style="grid-column: 1 / -1;"><label>Кодовое слово:</label><code x-text="lk.code_word || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.code_word)" :disabled="!lk.code_word">📋</button></div>
           </div>
           <div class="crm-fields-section">
             <div class="crm-fields-title">🖥 Дедик</div>
             <div class="crm-fields">
-              <div class="crm-field"><label>Где:</label><code x-text="lk.ded_location || '—'"></code></div>
-              <div class="crm-field"><label>IP:</label><code x-text="lk.ded_ip || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_ip)">📋</button></div>
+              <div class="crm-field"><label>Где установлен:</label><code x-text="lk.ded_location || '—'"></code></div>
+              <div class="crm-field"><label>IP:</label><code x-text="lk.ded_ip || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_ip)" :disabled="!lk.ded_ip">📋</button></div>
               <div class="crm-field"><label>Логин:</label><code x-text="lk.ded_login || 'Administrator'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_login)">📋</button></div>
-              <div class="crm-field"><label>Пароль:</label><code x-text="lk.ded_password || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_password)">📋</button></div>
+              <div class="crm-field"><label>Пароль:</label><code x-text="(lk.ded_password || lk.ded_pass) || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_password || lk.ded_pass)" :disabled="!(lk.ded_password || lk.ded_pass)">📋</button></div>
             </div>
           </div>
         </div>
