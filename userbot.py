@@ -935,54 +935,6 @@ class UserbotService:
             return
         chat_info = storage.get_chat_info(chat_id)
 
-        # 📞 HELPDESK TRIGGER: клиент пишет про оператора / менеджера / человека —
-        # переводим чат в inbox менеджера + замолкаем AI.
-        try:
-            if (chat_info and event.message and event.message.text
-                    and event.message.sender_id == chat_info.get("client_id")):
-                low_text = event.message.text.lower().strip()
-                # Гибкий regex: слово «оператор/менеджер/человек/админ/owner»
-                # в любой словоформе. Лимит 200 символов чтобы не триггерить
-                # из длинных рассуждений клиента.
-                operator_re = re.compile(
-                    r"\b(оператор\w*|менеджер\w*|"
-                    r"(?:живой\s+|реальн\w+\s+)?человек\w*|"
-                    r"админ\w*|owner|саппорт\w*|support|"
-                    r"живого|с\s+человеком|к\s+человеку)\b",
-                    re.IGNORECASE,
-                )
-                triggered = (
-                    len(low_text) <= 200
-                    and bool(operator_re.search(low_text))
-                )
-                if triggered:
-                    sup = chat_info.get("support") or {}
-                    if sup.get("status") not in ("operator_requested", "in_progress"):
-                        # Просто переводим в support inbox — БЕЗ сообщения
-                        # в чат и БЕЗ тега менеджера. Менеджер увидит в
-                        # дашборде что клиент звал оператора.
-                        await storage.set_support_state(
-                            chat_id, status="operator_requested",
-                            department="managers", opened_at=time.time(),
-                            assigned_to=0,
-                            trigger_text=(event.message.text or "")[:160],
-                        )
-                        _e("support-operator-requested", {
-                            "chat_id": chat_id,
-                            "client_username": chat_info.get("client_username") or "",
-                            "client_name": chat_info.get("client_name") or "",
-                            "text": event.message.text[:120],
-                        }, character="chat", severity="warning")
-                        logger.info(
-                            "[helpdesk] operator requested in chat=%s by client=%s text=%r",
-                            chat_id, chat_info.get("client_id"),
-                            event.message.text[:80],
-                        )
-                    # AI молчит благодаря hard silence ниже (status check)
-                    return
-        except Exception as e:
-            logger.warning("helpdesk trigger handler error: %s", e)
-
         # Bump last-message timestamp в managed_chats (для сортировки inbox)
         try:
             if chat_info and event.message:
@@ -1037,6 +989,55 @@ class UserbotService:
                     pass
         except Exception as e:
             logger.warning("support_msg_cache update fail: %s", e)
+
+        # 📞 HELPDESK TRIGGER: клиент пишет про оператора / менеджера / человека —
+        # переводим чат в inbox менеджера + замолкаем AI.
+        try:
+            if (chat_info and event.message and event.message.text
+                    and event.message.sender_id == chat_info.get("client_id")):
+                low_text = event.message.text.lower().strip()
+                # Гибкий regex: слово «оператор/менеджер/человек/админ/owner»
+                # в любой словоформе. Лимит 200 символов чтобы не триггерить
+                # из длинных рассуждений клиента.
+                operator_re = re.compile(
+                    r"\b(оператор\w*|менеджер\w*|"
+                    r"(?:живой\s+|реальн\w+\s+)?человек\w*|"
+                    r"админ\w*|owner|саппорт\w*|support|"
+                    r"живого|с\s+человеком|к\s+человеку)\b",
+                    re.IGNORECASE,
+                )
+                triggered = (
+                    len(low_text) <= 200
+                    and bool(operator_re.search(low_text))
+                )
+                if triggered:
+                    sup = chat_info.get("support") or {}
+                    if sup.get("status") not in ("operator_requested", "in_progress"):
+                        # Просто переводим в support inbox — БЕЗ сообщения
+                        # в чат и БЕЗ тега менеджера. Менеджер увидит в
+                        # дашборде что клиент звал оператора.
+                        await storage.set_support_state(
+                            chat_id, status="operator_requested",
+                            department="managers", opened_at=time.time(),
+                            assigned_to=0,
+                            trigger_text=(event.message.text or "")[:160],
+                        )
+                        _e("support-operator-requested", {
+                            "chat_id": chat_id,
+                            "client_username": chat_info.get("client_username") or "",
+                            "client_name": chat_info.get("client_name") or "",
+                            "text": event.message.text[:120],
+                        }, character="chat", severity="warning")
+                        logger.info(
+                            "[helpdesk] operator requested in chat=%s by client=%s text=%r",
+                            chat_id, chat_info.get("client_id"),
+                            event.message.text[:80],
+                        )
+                    # AI молчит благодаря hard silence ниже (status check)
+                    return
+        except Exception as e:
+            logger.warning("helpdesk trigger handler error: %s", e)
+
 
         # 🔴 AUTO-TRIGGER: после перевязки CRM-бот пишет «✅ Перевязка ЛК ... успешно
         # выполнена» / «ЛК ... перевязан и в работе» + «Метод оплаты: уточняется
