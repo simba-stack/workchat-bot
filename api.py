@@ -420,19 +420,28 @@ async def healthz():
 
 @app.get("/api/me")
 async def api_me(request: Request, _: None = Depends(_auth)):
-    """Профиль текущего пользователя дашборда: uid, имя, роль, TG-сессия,
-    список разделов которые ему доступны."""
+    """Профиль текущего пользователя дашборда.
+    Источники:
+      - uid: из session cookie (Telegram OAuth widget)
+      - first_name/username/photo: storage.tg_user_info[uid] (заполняется при login)
+      - role: storage.worker_roles + hardcoded OWNER_UIDS
+      - tg_session_connected: storage.worker_sessions[uid] — отдельная Telethon-сессия
+        для отправки сообщений ОТ СВОЕГО ИМЕНИ (не обязательно, fallback на ASSISTANT).
+    """
     uid = _try_session_auth(request) or 0
     role = _resolve_user_role(uid or 0)
+    # Базовая инфа из TG login widget
+    tg_info = storage.get_tg_user_info(uid) if uid else {}
+    tg_info = tg_info or {}
+    # Telethon-сессия (опционально — для отправки от своего имени)
     sess = storage.get_worker_session(uid) if uid else None
     sess = sess or {}
-    # Доступные разделы
     can_see = {
         "support_all_depts": role == "owner",
         "support_managers": role in ("owner", "manager"),
         "support_system": role in ("owner", "system"),
         "support_accounting": role in ("owner", "accounting"),
-        "system_panel": role in ("owner", "system"),
+        "system_panel": role in ("owner", "system", "operationist"),
         "accounting_panel": role in ("owner", "accounting"),
         "admin_workers": role == "owner",
         "all_views": role == "owner",
@@ -441,9 +450,13 @@ async def api_me(request: Request, _: None = Depends(_auth)):
         "ok": True,
         "uid": uid,
         "role": role,
-        "username": sess.get("username") or "",
-        "first_name": sess.get("first_name") or "",
+        # Имя/username берём из TG OAuth, fallback на worker_session
+        "username": tg_info.get("username") or sess.get("username") or "",
+        "first_name": tg_info.get("first_name") or sess.get("first_name") or "",
+        "last_name": tg_info.get("last_name") or "",
+        "photo_url": tg_info.get("photo_url") or "",
         "phone": sess.get("phone") or "",
+        # Telethon-сессия для отправки от своего имени — ОТДЕЛЬНАЯ привязка
         "tg_session_connected": bool(sess.get("string_session")),
         "permissions": can_see,
     }

@@ -497,6 +497,13 @@
     font-weight: 700;
     font-size: 12px;
   }
+  .worker-avatar-img {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(0,229,255,0.2);
+  }
   .worker-info { display: flex; flex-direction: column; gap: 1px; }
   .worker-name { font-size: 12px; font-weight: 600; }
   .worker-role { font-size: 9px; text-transform: uppercase; opacity: 0.7; letter-spacing: 0.5px; }
@@ -2706,13 +2713,18 @@
 
   <!-- Виджет профиля работника справа -->
   <div class="worker-profile-widget" x-show="dashMe">
-    <div class="worker-profile-card" @click="goToView('settings'); settingsActiveSection = 'profile';">
-      <div class="worker-avatar" x-text="(dashMe?.first_name || dashMe?.username || '?')[0]?.toUpperCase()"></div>
+    <div class="worker-profile-card" @click="goToView('settings'); settingsActiveSection = 'profile';"
+         :title="'Авторизован через Telegram OAuth · клик для настроек'">
+      <img x-show="dashMe?.photo_url" :src="dashMe?.photo_url" class="worker-avatar-img" :alt="dashMe?.first_name">
+      <div x-show="!dashMe?.photo_url" class="worker-avatar" x-text="(dashMe?.first_name || dashMe?.username || '?')[0]?.toUpperCase()"></div>
       <div class="worker-info">
-        <div class="worker-name" x-text="dashMe?.first_name || dashMe?.username || 'Работник'"></div>
-        <div class="worker-role" :class="'role-' + (dashMe?.role || 'manager')">
-          <span x-text="dashMe?.role || 'manager'"></span>
-          <span x-show="dashMe?.tg_session_connected" title="TG подключён" style="color: var(--hud-emerald);">·🟢</span>
+        <div class="worker-name">
+          <span x-text="dashMe?.first_name || ('@' + dashMe?.username) || 'Работник'"></span>
+          <span x-show="dashMe?.username && dashMe?.first_name" style="color: var(--text-dim); font-weight: 400; font-size: 10px;" x-text="' · @' + dashMe?.username"></span>
+        </div>
+        <div class="worker-role">
+          <span class="role-badge" :class="'role-' + (dashMe?.role || 'manager')" style="font-size: 8px;" x-text="dashMe?.role || 'manager'"></span>
+          <span x-show="dashMe?.tg_session_connected" title="TG для отправки от своего имени подключён" style="color: var(--hud-emerald); font-size: 10px;">🟢 send-ready</span>
         </div>
       </div>
     </div>
@@ -4463,8 +4475,9 @@
         </button>
         <button x-show="!dashMe?.tg_session_connected"
                 class="sender-btn link-btn"
-                @click="goToView('settings'); settingsActiveSection = 'profile';">
-          🔗 Привязать акк
+                @click="goToView('settings'); settingsActiveSection = 'profile';"
+                title="Опционально: чтобы клиент видел сообщения от вашего акка а не от Ассистента">
+          🔗 Подключить мой TG (опционально)
         </button>
       </div>
       <!-- Reply input -->
@@ -5037,7 +5050,12 @@
 
       <!-- ===== TG SESSION CONNECT ===== -->
       <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 18px; margin-top: 8px;">
-        <h4 style="margin: 0 0 8px 0; font-size: 14px;">🔗 Подключение моего Telegram-аккаунта</h4>
+        <h4 style="margin: 0 0 8px 0; font-size: 14px;">🔗 Подключение моего Telegram-аккаунта <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">(опционально)</span></h4>
+        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 12px; padding: 10px; background: rgba(0,229,255,0.05); border-left: 3px solid var(--hud-primary); border-radius: 4px;">
+          ℹ️ <b>Зачем это нужно?</b> Вы уже авторизованы в дашборде через Telegram OAuth (login widget) — это просто <b>авторизация</b>.<br>
+          Подключение TG-сессии нужно <b>только если вы хотите чтобы клиенты в чатах Поддержки видели сообщения от ВАШЕГО Telegram-аккаунта</b> (не от @PrideAssistant).<br>
+          <span style="color: var(--hud-emerald);">Без этого всё работает</span> — просто ответы идут от PRIDE ASSISTANT.
+        </div>
         <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
           Когда вы отвечаете клиенту через Поддержку, сообщения уходят с <b>вашего личного TG-аккаунта</b>
           (клиент видит ваше имя и фото). Если не подключено — ответы идут от PRIDE ASSISTANT.
