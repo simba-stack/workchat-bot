@@ -4851,6 +4851,8 @@ function jarvis() {
     supportCloseModal: false,
     supportCloseNote: '',
     _supportPollerStarted: false,
+    _supportMsgsTimer: null,
+    _supportMsgsLoading: false,
 
     // === System (Phase 3) — SMS / ДОСТУПЫ / ПАРОЛИ ===
     systemSection: 'pending',  // pending | access | passwords
@@ -7521,54 +7523,107 @@ function jarvis() {
           support: info.support,
         };
         this.supportCurrentLks = info.lk_cards || [];
+        // Сразу принудительный fetch истории из Telethon
         await this.refreshSupportMessages(true);
-        setTimeout(() => this.refreshSupportMessages(false), 1500);
-        setTimeout(() => this.refreshSupportMessages(false), 3500);
+        // Запускаем постоянный poller (2с) — пока чат открыт
+        this._startSupportMsgsPolling();
       } catch (e) {
         alert('Не удалось открыть чат: ' + e);
       }
     },
+    _startSupportMsgsPolling() {
+      this._stopSupportMsgsPolling();
+      this._supportMsgsTimer = setInterval(() => {
+        if (!this.supportCurrentChat) {
+          this._stopSupportMsgsPolling();
+          return;
+        }
+        // Скрытый refresh — без перерисовки если ничего не изменилось
+        this.refreshSupportMessages(false);
+      }, 2000);
+    },
+    _stopSupportMsgsPolling() {
+      if (this._supportMsgsTimer) {
+        clearInterval(this._supportMsgsTimer);
+        this._supportMsgsTimer = null;
+      }
+    },
     async refreshSupportMessages(forceRefresh = false) {
       if (!this.supportCurrentChat) return;
+      if (this._supportMsgsLoading) return;  // anti-overlap
+      this._supportMsgsLoading = true;
       try {
         const cid = this.supportCurrentChat.chat_id;
         const url = `/api/support/chat/${cid}/messages?limit=200${forceRefresh ? '&refresh=1' : ''}`;
         const r = await fetch(url, { credentials: 'include' });
-        if (r.ok) {
-          const d = await r.json();
+        if (!r.ok) return;
+        const d = await r.json();
+        const newMsgs = d.messages || [];
+        // Защита: если чат успел поменяться пока fetch шёл
+        if (!this.supportCurrentChat || this.supportCurrentChat.chat_id !== cid) return;
+        // Diff: сравниваем по длине и id последнего сообщения
+        const oldArr = this.supportMessages || [];
+        const oldLen = oldArr.length;
+        const newLen = newMsgs.length;
+        const oldLastId = oldLen ? oldArr[oldLen - 1].id : 0;
+        const newLastId = newLen ? newMsgs[newLen - 1].id : 0;
+        const changed = (oldLen !== newLen) || (oldLastId !== newLastId);
+        if (changed) {
           const box = this.$refs.supportMsgs;
           const wasAtBottom = box
-            ? (box.scrollHeight - box.scrollTop - box.clientHeight) < 60
+            ? (box.scrollHeight - box.scrollTop - box.clientHeight) < 80
             : true;
-          this.supportMessages = d.messages || [];
+          this.supportMessages = newMsgs;
           this.$nextTick(() => {
             if (box && wasAtBottom) box.scrollTop = box.scrollHeight;
           });
-          if (d.fetching) {
-            setTimeout(() => this.refreshSupportMessages(false), 1800);
-          }
+        }
+        if (d.fetching) {
+          setTimeout(() => this.refreshSupportMessages(false), 1500);
         }
       } catch (e) { console.warn('msgs refresh', e); }
+      finally { this._supportMsgsLoading = false; }
     },
     async supportSendReply() {
       const text = (this.supportReplyText || '').trim();
       if (!text || !this.supportCurrentChat) return;
       this.supportSending = true;
+      // Optimistic UI: сразу показываем сообщение
+      const tempId = -Date.now();
+      const myUid = this.session?.uid || 0;
+      this.supportMessages.push({
+        id: tempId, ts: Date.now() / 1000,
+        role: 'worker', author: 'Вы',
+        sender_id: myUid, text, pending: true,
+      });
+      this.$nextTick(() => {
+        const box = this.$refs.supportMsgs;
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+      const sentText = text;
+      this.supportReplyText = '';
       try {
         const r = await fetch(
           `/api/support/chat/${this.supportCurrentChat.chat_id}/reply`,
           {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text: sentText }),
           },
         );
-        if (r.ok) {
-          this.supportReplyText = '';
-          setTimeout(() => this.refreshSupportMessages(), 1200);
-        } else { alert('Ошибка: ' + r.status); }
-      } catch (e) { alert(String(e)); }
-      finally { this.supportSending = false; }
+        if (!r.ok) {
+          // Откатываем optimistic
+          this.supportMessages = (this.supportMessages || []).filter(m => m.id !== tempId);
+          this.supportReplyText = sentText;
+          alert('Ошибка отправки: ' + r.status);
+        }
+        // Через 800мс refresh — реальное сообщение от сервера заменит temp
+        setTimeout(() => this.refreshSupportMessages(false), 800);
+      } catch (e) {
+        this.supportMessages = (this.supportMessages || []).filter(m => m.id !== tempId);
+        this.supportReplyText = sentText;
+        alert(String(e));
+      } finally { this.supportSending = false; }
     },
     async supportTakeChat() {
       if (!this.supportCurrentChat) return;
@@ -7624,6 +7679,7 @@ function jarvis() {
           },
         );
         if (r.ok) {
+          this._stopSupportMsgsPolling();
           this.supportCloseModal = false;
           this.supportCloseNote = '';
           this.supportCurrentChat = null;
