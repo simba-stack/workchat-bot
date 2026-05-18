@@ -1013,15 +1013,44 @@ class UserbotService:
                 if triggered:
                     sup = chat_info.get("support") or {}
                     if sup.get("status") not in ("operator_requested", "in_progress"):
-                        # Просто переводим в support inbox — БЕЗ сообщения
-                        # в чат и БЕЗ тега менеджера. Менеджер увидит в
-                        # дашборде что клиент звал оператора.
                         await storage.set_support_state(
                             chat_id, status="operator_requested",
                             department="managers", opened_at=time.time(),
                             assigned_to=0,
                             trigger_text=(event.message.text or "")[:160],
                         )
+                        # Уведомление клиенту
+                        try:
+                            target = await self._resolve_chat_target(chat_id)
+                            sent_notice = await self.client.send_message(
+                                target,
+                                "📞 <b>Подключаю оператора, ожидайте.</b>",
+                                parse_mode="html",
+                            )
+                            # Кэшируем outgoing-уведомление чтобы появилось в дашборде
+                            try:
+                                from storage import _norm_chat_id as _nrm
+                                cache_dict = storage.state.setdefault("support_msg_cache", {})
+                                arr_n = cache_dict.setdefault(str(_nrm(chat_id)), [])
+                                arr_n.append({
+                                    "id": getattr(sent_notice, "id", int(time.time()*1000)),
+                                    "ts": time.time(),
+                                    "role": "assistant",
+                                    "author": "PRIDE ASSISTANT",
+                                    "sender_id": (self._me.id if self._me else 0),
+                                    "text": "📞 Подключаю оператора, ожидайте.",
+                                })
+                                if len(arr_n) > 200:
+                                    del arr_n[: len(arr_n) - 200]
+                                await storage._save_unlocked()
+                                _e("support-message", {
+                                    "chat_id": chat_id,
+                                    "msg": arr_n[-1],
+                                }, character="chat", severity="info")
+                            except Exception as ec:
+                                logger.warning("cache trigger notice fail: %s", ec)
+                        except Exception as e:
+                            logger.warning("trigger notice send fail: %s", e)
                         _e("support-operator-requested", {
                             "chat_id": chat_id,
                             "client_username": chat_info.get("client_username") or "",
@@ -1033,7 +1062,6 @@ class UserbotService:
                             chat_id, chat_info.get("client_id"),
                             event.message.text[:80],
                         )
-                    # AI молчит благодаря hard silence ниже (status check)
                     return
         except Exception as e:
             logger.warning("helpdesk trigger handler error: %s", e)
@@ -7734,6 +7762,45 @@ class UserbotService:
             except Exception as e:
                 logger.warning("support_fetch_messages %s fail: %s", cid, e)
                 return f"⚠️ fetch failed: {e}"
+
+        # ===== HELPDESK: уведомление клиента когда менеджер взял чат =====
+        m = re.match(r"^__support_take_notify\s+(-?\d+)\s+(\d+)\s*(.*)$", text, re.I)
+        if m:
+            cid = int(m.group(1))
+            mgr_uid = int(m.group(2))
+            mgr_label = (m.group(3) or "").strip() or f"менеджер #{mgr_uid}"
+            try:
+                target = await self._resolve_chat_target(cid)
+                notice = f"✅ <b>{mgr_label}</b> присоединился к чату.\nОн ответит вам в ближайшее время."
+                sent_n = await self.client.send_message(
+                    target, notice, parse_mode="html", link_preview=False,
+                )
+                # Кэш для дашборда
+                try:
+                    from storage import _norm_chat_id as _nrm
+                    cache_dict = storage.state.setdefault("support_msg_cache", {})
+                    arr_n = cache_dict.setdefault(str(_nrm(cid)), [])
+                    msg_n = {
+                        "id": getattr(sent_n, "id", int(time.time()*1000)),
+                        "ts": time.time(),
+                        "role": "assistant",
+                        "author": "PRIDE ASSISTANT",
+                        "sender_id": (self._me.id if self._me else 0),
+                        "text": f"✅ {mgr_label} присоединился к чату.",
+                    }
+                    arr_n.append(msg_n)
+                    if len(arr_n) > 200:
+                        del arr_n[: len(arr_n) - 200]
+                    await storage._save_unlocked()
+                    _e("support-message", {
+                        "chat_id": cid, "msg": msg_n,
+                    }, character="chat", severity="info")
+                except Exception as ec:
+                    logger.warning("cache take-notice fail: %s", ec)
+                return f"✅ take-notice отправлен в чат {cid}"
+            except Exception as e:
+                logger.warning("__support_take_notify %s fail: %s", cid, e)
+                return f"⚠️ take-notice failed: {e}"
 
         # ===== HELPDESK: после закрытия — снимаем silent + (опц.) благодарим =====
         m = re.match(r"^__support_after_close\s+(-?\d+)\s*$", text, re.I)

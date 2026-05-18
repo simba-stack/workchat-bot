@@ -430,7 +430,7 @@ async def api_support_chat_info(chat_id: int, _: None = Depends(_auth)):
 
 @app.post("/api/support/chat/{chat_id}/take")
 async def api_support_take(chat_id: int, request: Request, _: None = Depends(_auth)):
-    """Менеджер берёт чат на себя."""
+    """Менеджер берёт чат на себя — клиенту шлём 'X присоединился к чату'."""
     manager_uid = _try_session_auth(request) or 0
     if not manager_uid:
         raise HTTPException(401, "auth required")
@@ -439,13 +439,38 @@ async def api_support_take(chat_id: int, request: Request, _: None = Depends(_au
     ok = await storage.support_take(chat_id, manager_uid=manager_uid, department=dept)
     if not ok:
         raise HTTPException(404, "chat not found")
+    # Получаем имя менеджера: из worker_sessions (если он логинился TG-сессией)
+    # или из @username admin-сессии. По умолчанию — "Оператор".
+    mgr_label = "Оператор"
+    try:
+        sess = storage.get_worker_session(manager_uid) or {}
+        phone = (sess.get("phone") or "").strip()
+        first = (sess.get("first_name") or "").strip()
+        nick = (sess.get("username") or "").lstrip("@").strip()
+        if first:
+            mgr_label = first + (f" (@{nick})" if nick else "")
+        elif nick:
+            mgr_label = f"@{nick}"
+        elif phone:
+            mgr_label = f"Оператор"
+    except Exception:
+        pass
+    # Уведомление в чат клиента — через userbot dashboard_commands
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__support_take_notify {chat_id} {manager_uid} {mgr_label}",
+            source="dashboard-support-take",
+        )
+    except Exception:
+        pass
     try:
         event_bus.emit_event("support-chat-taken", {
             "chat_id": chat_id, "manager_uid": manager_uid, "department": dept,
+            "manager_label": mgr_label,
         })
     except Exception:
         pass
-    return {"ok": True, "chat_id": chat_id, "manager_uid": manager_uid}
+    return {"ok": True, "chat_id": chat_id, "manager_uid": manager_uid, "manager_label": mgr_label}
 
 
 @app.post("/api/support/chat/{chat_id}/reply")
