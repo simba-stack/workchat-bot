@@ -762,6 +762,28 @@ class Storage:
             transferred_from=int(from_manager),
         )
 
+    async def bump_ai_reply_count(self, chat_id):
+        """Инкрементирует счётчик AI-ответов в чате — для логики первого/второго ответа."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            info["ai_reply_count"] = int(info.get("ai_reply_count") or 0) + 1
+            await self._save_unlocked()
+            return True
+
+    async def reset_ai_reply_count(self, chat_id):
+        """Сбрасывает счётчик. Используется после close/reset диалога."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is None:
+                return False
+            info["ai_reply_count"] = 0
+            await self._save_unlocked()
+            return True
+
     async def bump_last_message_ts(self, chat_id, ts: Optional[float] = None):
         """Обновляет timestamp последнего сообщения в чате (для сортировки inbox)."""
         key = _norm_chat_id(chat_id)

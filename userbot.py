@@ -938,6 +938,20 @@ class UserbotService:
             return
         chat_info = storage.get_chat_info(chat_id)
 
+        # 🔴 WELCOME FALLBACK: если managed_chat есть, клиент пишет,
+        # но welcome_sent=False — значит ChatAction event пропустили
+        # (бот был в downtime / race). Шлём welcome ОДИН раз сейчас.
+        try:
+            if (chat_info and not chat_info.get("welcome_sent")
+                    and event.message and event.message.sender_id == chat_info.get("client_id")):
+                client_id_w = chat_info.get("client_id") or 0
+                if client_id_w:
+                    asyncio.create_task(
+                        self._send_welcome(chat_id, client_id_w, source="firstmsg-fallback")
+                    )
+        except Exception as e:
+            logger.warning("welcome-fallback err: %s", e)
+
         # Bump last-message timestamp в managed_chats (для сортировки inbox)
         try:
             if chat_info and event.message:
@@ -2108,10 +2122,64 @@ class UserbotService:
             }, severity="error")
             return
 
+        # 🔴 ПОСТ-ПРОЦЕССИНГ: добавляем hint про оператора + ev. prompt подразделения.
+        # 1-й ответ AI клиенту → hint "если что напишите Ассистент"
+        # 2-й ответ → prompt подразделения (с цифрами 1/2/3)
+        # 3+ → стандартный hint "напишите Ассистент позови оператора"
         try:
-            for chunk in _split_text(reply, 3900):
-                await self.client.send_message(chat_id, chunk)
+            ai_count = int(chat_info.get("ai_reply_count") or 0) if chat_info else 0
+        except Exception:
+            ai_count = 0
+        hint = ""
+        # Не дублируем если AI уже сам написал слово "оператор"/"Ассистент позови"
+        reply_low = (reply or "").lower()
+        already_has_hint = (
+            ("ассистент позови" in reply_low)
+            or ("позови оператор" in reply_low)
+            or ("позвать оператор" in reply_low)
+            or ("на какое подразделение" in reply_low)
+            or ("выберите подразделение" in reply_low)
+        )
+        if not already_has_hint:
+            if ai_count == 0:
+                hint = (
+                    "\n\n<i>💬 Если я вам понадоблюсь — просто напишите "
+                    "«Ассистент» и дальше свой вопрос.</i>"
+                )
+            elif ai_count == 1:
+                hint = (
+                    "\n\n📞 <b>На какое подразделение вас перевести?</b>\n"
+                    "Ответьте цифрой или словом:\n"
+                    "<b>1</b> — 👤 <b>Менеджер</b> · <i>общие вопросы, цены, условия</i>\n"
+                    "<b>2</b> — ⚙️ <b>System</b> · <i>перевязка и установка ЛК на железо</i>\n"
+                    "<b>3</b> — 💰 <b>Бухгалтерия</b> · <i>выплаты, предоплаты, финансы</i>"
+                )
+            else:
+                hint = (
+                    "\n\n<i>💬 Если нужен живой оператор — напишите "
+                    "«Ассистент позови оператора».</i>"
+                )
+        # При prompt подразделения (ai_count==1) переводим чат в awaiting_department
+        try:
+            if ai_count == 1 and not already_has_hint:
+                await storage.set_support_state(
+                    chat_id, status="awaiting_department",
+                    department="", opened_at=time.time(),
+                )
+        except Exception:
+            pass
+        reply_with_hint = reply + hint
+        try:
+            for chunk in _split_text(reply_with_hint, 3900):
+                await self.client.send_message(
+                    chat_id, chunk, parse_mode="html", link_preview=False,
+                )
                 await asyncio.sleep(0.3)
+            # Инкрементируем счётчик AI-ответов в чате
+            try:
+                await storage.bump_ai_reply_count(chat_id)
+            except Exception:
+                pass
         except Exception as e:
             logger.warning("AI: send failed chat=%s: %s", chat_id, e)
             await storage.bump_ai_stats(errors=1)
@@ -7980,7 +8048,20 @@ class UserbotService:
             cid = int(m.group(1))
             try:
                 from storage import _norm_chat_id as _nrm
-                self._ai_silent_until.pop(_nrm(cid), None)
+                norm_cid = _nrm(cid)
+                # МОМЕНТАЛЬНОЕ возвращение AI:
+                # 1) Снимаем silent
+                # 2) Сбрасываем _last_worker_ts чтобы idle прошёл сразу
+                # 3) _last_client_msg_ts оставляем (нужен для логики)
+                self._ai_silent_until.pop(norm_cid, None)
+                self._last_worker_ts.pop(norm_cid, None)
+                if hasattr(self, "_last_worker_msg_ts"):
+                    self._last_worker_msg_ts.pop(norm_cid, None)
+                # Сбрасываем счётчик AI-ответов — следующий ответ снова hint про оператора
+                try:
+                    await storage.reset_ai_reply_count(cid)
+                except Exception:
+                    pass
                 # Прощальное сообщение клиенту
                 farewell = (
                     "👋 <b>Оператор покинул чат.</b>\n\n"
