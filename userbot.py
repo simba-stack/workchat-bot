@@ -1137,8 +1137,19 @@ class UserbotService:
         try:
             if chat_info and event.message and event.message.text:
                 txt_low = event.message.text.lower()
-                if ("перевязка лк" in txt_low and "успешно выполнена" in txt_low) or \
-                   ("перевязан и в работе" in txt_low and "уточняется у клиента" in txt_low):
+                # Расширенный матч: любое из этих сочетаний триггерит auto-ask
+                perevyaz_match = (
+                    ("перевязка лк" in txt_low and "успешно выполнена" in txt_low)
+                    or ("перевязан и в работе" in txt_low and "уточняется у клиента" in txt_low)
+                    or ("перевязка" in txt_low and "успешно" in txt_low)
+                    or ("карточка" in txt_low and "перевязан" in txt_low)
+                )
+                if perevyaz_match:
+                    logger.info(
+                        "AI: detected CRM perevyaz-success in chat=%s text=%r — "
+                        "auto-asking payment method",
+                        chat_id, txt_low[:100],
+                    )
                     await self._auto_ask_payment_method_after_perevyaz(event, chat_id, chat_info)
         except Exception as e:
             logger.warning("auto-ask payment method handler error: %s", e)
@@ -1439,21 +1450,45 @@ class UserbotService:
         except Exception as e:
             logger.warning("dept-choice handler error: %s", e)
 
-        # 📞 HARD SILENCE: если чат в support-режиме (клиент уже звал
-        # оператора или менеджер взял чат) — AI ВСЕГДА молчит, без исключений.
-        # Не реагирует ни на "привет", ни на "?", ни на что вообще.
-        # Снимается только когда менеджер закрывает чат (status=closed).
+        # 📞 HARD SILENCE: если чат в support-режиме — AI молчит, НО с TTL:
+        #   awaiting_department: 15 мин (если клиент не выбрал 1/2/3)
+        #   operator_requested:  30 мин (если менеджер не нажал 'Взять')
+        #   in_progress:         4 ч  (если без активности)
+        # После TTL: auto-close + AI снова отвечает.
         try:
             sup_state = (chat_info or {}).get("support") or {}
-            if sup_state.get("status") in ("operator_requested", "in_progress", "awaiting_department"):
-                logger.info(
-                    "AI: HARD SILENCE for chat=%s — support active (status=%s)",
-                    chat_id, sup_state.get("status"),
-                )
-                self._last_client_msg_ts[chat_key] = time.time()
-                return
-        except Exception:
-            pass
+            sup_status = sup_state.get("status") or ""
+            if sup_status in ("operator_requested", "in_progress", "awaiting_department"):
+                opened_at = float(sup_state.get("opened_at") or 0)
+                age_min = (time.time() - opened_at) / 60 if opened_at else 9999
+                ttl_min = {
+                    "awaiting_department": 15,
+                    "operator_requested": 30,
+                    "in_progress": 240,
+                }.get(sup_status, 60)
+                if age_min > ttl_min:
+                    logger.warning(
+                        "AI: support TTL expired chat=%s status=%s age=%.0fmin (TTL=%dmin) — auto-resetting",
+                        chat_id, sup_status, age_min, ttl_min,
+                    )
+                    try:
+                        await storage.set_support_state(
+                            chat_id, status="closed",
+                            closed_at=time.time(),
+                            auto_closed_reason=f"ttl_expired_{sup_status}",
+                        )
+                    except Exception:
+                        pass
+                    # НЕ молчим — пускаем дальше к AI
+                else:
+                    logger.info(
+                        "AI: HARD SILENCE chat=%s status=%s age=%.0fmin/ttl=%dmin",
+                        chat_id, sup_status, age_min, ttl_min,
+                    )
+                    self._last_client_msg_ts[chat_key] = time.time()
+                    return
+        except Exception as e:
+            logger.warning("HARD SILENCE TTL check err chat=%s: %s", chat_id, e)
 
         # SILENT MODE: после add_partner_to_crm AI молчит 30 минут пока
         # клиент заполняет анкету в @PrideCONTROLE_bot. Снимается явным
