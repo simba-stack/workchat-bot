@@ -260,6 +260,7 @@
   .crm-card.access { border-left: 3px solid var(--hud-primary); }
   .crm-card.password { border-left: 3px solid #8b5cf6; }
   .crm-card.password.filled { border-left-color: var(--hud-emerald); opacity: 0.85; }
+  .crm-card.installed { border-left: 3px solid var(--hud-emerald); background: rgba(52,211,153,0.03); }
   .crm-card-head {
     display: flex;
     justify-content: space-between;
@@ -460,6 +461,7 @@
   .role-manager { background: rgba(0,229,255,0.15); color: #00e5ff; }
   .role-system { background: rgba(139,92,246,0.2); color: #8b5cf6; }
   .role-accounting { background: rgba(52,211,153,0.2); color: #34d399; }
+  .role-operationist { background: rgba(244,114,182,0.2); color: #f472b6; }
 
   .modal-overlay {
     position: fixed;
@@ -4434,6 +4436,7 @@
   <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06);">
     <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📥 CRM | Доступы <span x-show="systemPendingLks?.length" class="support-tab-badge" x-text="systemPendingLks?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'installed' ? 'active' : ''" @click="systemSection='installed'">✅ Установленные ЛК <span x-show="systemInstalledLks?.length" class="support-tab-badge" x-text="systemInstalledLks?.length"></span></button>
   </div>
 
   <!-- Период фильтр -->
@@ -4458,6 +4461,16 @@
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <span style="font-size: 11px; color: var(--text-dim);" x-text="lk.created_at ? new Date(lk.created_at * 1000).toLocaleString('ru-RU') : '—'"></span>
             <span x-show="!lk.scan_count" style="color: var(--text-dim); font-size: 11px;">📷 Документов нет</span>
+            <span x-show="(lk.existing_done_banks || []).length"
+                  class="role-badge role-accounting" style="font-size: 9px;"
+                  :title="'Уже перевязано: ' + (lk.existing_done_banks || []).join(', ')">
+              ✅ <span x-text="(lk.existing_done_banks || []).join(', ')"></span> уже перевязан
+            </span>
+            <span x-show="(lk.existing_in_work_banks || []).length"
+                  class="role-badge role-system" style="font-size: 9px;"
+                  :title="'В работе: ' + (lk.existing_in_work_banks || []).join(', ')">
+              ⚙️ <span x-text="(lk.existing_in_work_banks || []).join(', ')"></span> в работе
+            </span>
           </div>
           <div style="display: flex; gap: 6px;">
             <button x-show="lk.owner_work_chat_id" class="btn" @click="systemOpenClientChat(lk)" style="padding: 4px 12px; font-size: 11px;">💬 Чат с клиентом</button>
@@ -4632,6 +4645,47 @@
       ⏳ Карточки появятся когда ЛК пойдут в работу (после login_received стадии)
     </div>
     </div><!-- /password tab -->
+
+    <!-- ============= ВКЛАДКА 3: УСТАНОВЛЕННЫЕ ЛК ============= -->
+    <div x-show="systemSection === 'installed'">
+      <template x-for="lk in systemInstalledLks" :key="lk.droplk_id">
+        <div class="crm-card installed">
+          <div class="crm-card-head">
+            <div>
+              <span style="font-size: 15px;">✅ ЛК <b style="color: var(--hud-emerald);" x-text="lk.bank"></b> · <span x-text="lk.fio"></span></span>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">
+                поставщик: <code x-text="lk.supplier ? '@' + lk.supplier : '—'"></code>
+                · <code x-text="lk.droplk_id"></code>
+                · установлен: <span x-text="lk.installed_at ? new Date(lk.installed_at * 1000).toLocaleString('ru-RU') : '—'"></span>
+              </div>
+            </div>
+            <div>
+              <span class="role-badge role-accounting">✅ Готов</span>
+            </div>
+          </div>
+          <div class="crm-fields">
+            <div class="crm-field"><label>Логин:</label><code x-text="lk.new_login"></code><button class="copy-mini" @click="copyToClipboard(lk.new_login)">📋</button></div>
+            <div class="crm-field"><label>Пароль:</label><code x-text="lk.new_password"></code><button class="copy-mini" @click="copyToClipboard(lk.new_password)">📋</button></div>
+            <div class="crm-field"><label>Почта:</label><code x-text="lk.new_mail || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_mail)" :disabled="!lk.new_mail">📋</button></div>
+            <div class="crm-field"><label>Телефон:</label><code x-text="lk.new_number || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.new_number)" :disabled="!lk.new_number">📋</button></div>
+            <div class="crm-field"><label>Код. слово:</label><code x-text="lk.code_word || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.code_word)" :disabled="!lk.code_word">📋</button></div>
+            <div class="crm-field"><label>Стоимость:</label><code x-text="(lk.value || '0') + ' USDT'"></code></div>
+          </div>
+          <div class="crm-fields-section">
+            <div class="crm-fields-title">🖥 Дедик</div>
+            <div class="crm-fields">
+              <div class="crm-field"><label>Где:</label><code x-text="lk.ded_location || '—'"></code></div>
+              <div class="crm-field"><label>IP:</label><code x-text="lk.ded_ip || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_ip)">📋</button></div>
+              <div class="crm-field"><label>Логин:</label><code x-text="lk.ded_login || 'Administrator'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_login)">📋</button></div>
+              <div class="crm-field"><label>Пароль:</label><code x-text="lk.ded_password || '—'"></code><button class="copy-mini" @click="copyToClipboard(lk.ded_password)">📋</button></div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div x-show="(systemInstalledLks?.length || 0) === 0" class="jarvis-panel" style="padding: 30px; text-align: center; color: var(--text-dim);">
+        🚀 Сюда попадут ЛК после перевязки и заполнения пароли+дедик
+      </div>
+    </div>
     </div><!-- /system-main -->
 
     <!-- ============= СТАТИСТИКА СПРАВА ============= -->
@@ -5419,6 +5473,7 @@ function jarvis() {
     systemFillOpen: {},  // droplk_id -> bool
     systemFillData: {},  // droplk_id -> {new_login, new_password, ...}
     systemPasswordsInbox: [],  // CRM | Пароли — inbox
+    systemInstalledLks: [],  // УСТАНОВЛЕННЫЕ ЛК (done + creds + dedik)
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
     systemPeriod: 'all',  // all | day | week | month
     systemStats: { active: {total:0, by_stage:{}}, done: { today:{total:0,by_bank:{}}, week:{total:0,by_bank:{}}, month:{total:0,by_bank:{}} } },
@@ -8464,11 +8519,16 @@ function jarvis() {
         const periodQ = this.systemPeriod && this.systemPeriod !== 'all'
           ? '?period=' + this.systemPeriod
           : '';
-        const [pendingRes, pwdInboxRes, statsRes] = await Promise.all([
+        const [pendingRes, pwdInboxRes, statsRes, instRes] = await Promise.all([
           fetch('/api/system/pending_lk' + periodQ, { credentials: 'include' }),
           fetch('/api/system/passwords_inbox', { credentials: 'include' }),
           fetch('/api/system/stats', { credentials: 'include' }),
+          fetch('/api/system/installed_lks' + periodQ, { credentials: 'include' }),
         ]);
+        if (instRes.ok) {
+          const j = await instRes.json();
+          this.systemInstalledLks = j.items || [];
+        }
         if (statsRes.ok) {
           this.systemStats = await statsRes.json();
         }

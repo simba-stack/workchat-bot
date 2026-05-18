@@ -344,7 +344,7 @@ def _resolve_user_role(uid: int) -> str:
         if uname:
             r = storage.get_worker_role(uname) or {}
             role = (r.get("role") or "").lower().strip()
-            if role in ("owner", "manager", "system", "accounting"):
+            if role in ("owner", "manager", "system", "accounting", "operationist"):
                 return role
     except Exception:
         pass
@@ -477,7 +477,7 @@ async def api_admin_workers(request: Request, _: None = Depends(_auth)):
             "session_connected": key in uname_to_uid,
         })
     out.sort(key=lambda x: x["username"].lower())
-    return {"ok": True, "workers": out, "available_roles": ["manager", "system", "accounting", "owner"]}
+    return {"ok": True, "workers": out, "available_roles": ["manager", "system", "accounting", "operationist", "owner"]}
 
 
 @app.post("/api/admin/workers/{username}/role")
@@ -488,7 +488,7 @@ async def api_admin_set_role(username: str, request: Request, _: None = Depends(
         raise HTTPException(403, "owner only")
     data = await request.json()
     new_role = (data.get("role") or "").strip().lower()
-    if new_role not in ("manager", "system", "accounting", "owner"):
+    if new_role not in ("manager", "system", "accounting", "operationist", "owner"):
         raise HTTPException(400, "invalid role")
     is_admin = bool(data.get("is_admin", True))
     uname_clean = username.lstrip("@").strip()
@@ -533,6 +533,9 @@ async def api_support_inbox(
             effective_dept = "system"
         elif role == "accounting":
             effective_dept = "accounting"
+        elif role == "operationist":
+            # Операционист видит system-чаты (как сус) — для финализации
+            effective_dept = "system"
     # Фетчим
     if status:
         chats = storage.list_support_inbox(status=status, department=effective_dept)
@@ -970,11 +973,30 @@ async def api_system_pending_lk(
             work_chat_id = (owner or {}).get("work_chat_id") or 0
         except Exception:
             pass
+        # Сосед-банки этого drop'а уже с готовым статусом
+        existing_done = []
+        existing_in_work = []
+        try:
+            for other_lkid, other_lk in lks_raw.items():
+                if other_lkid == lkid:
+                    continue
+                if other_lk.get("drop_id") != lk.get("drop_id"):
+                    continue
+                other_stage = (other_lk.get("sms_stage") or "").strip()
+                other_bank = other_lk.get("bank") or "—"
+                if other_stage == "done":
+                    existing_done.append(other_bank)
+                elif other_stage and other_stage != "done":
+                    existing_in_work.append(other_bank)
+        except Exception:
+            pass
         out.append({
             "droplk_id": lkid,
             "drop_id": lk.get("drop_id"),
             "bank": lk.get("bank") or "",
             "fio": drop.get("fio") or "—",
+            "existing_done_banks": existing_done,
+            "existing_in_work_banks": existing_in_work,
             "social": drop.get("social") or "",
             "residence": drop.get("residence") or "",
             "owner_id": drop.get("owner_id") or "",
@@ -1183,6 +1205,72 @@ async def api_system_stats(_: None = Depends(_auth)):
     }
 
 
+@app.get("/api/system/installed_lks")
+async def api_system_installed_lks(
+    period: Optional[str] = None,
+    _: None = Depends(_auth),
+):
+    """УСПЕШНО УСТАНОВЛЕННЫЕ ЛК: stage=done + заполнены credentials + дедик.
+    Карточка идёт сюда когда оба действия выполнены."""
+    import time as _t
+    storage.reload_sync()
+    lks_raw = (storage.list_crm_drop_lks() if hasattr(storage, "list_crm_drop_lks") else {}) or {}
+    drops_raw = (storage.list_crm_drops() if hasattr(storage, "list_crm_drops") else {}) or {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        if stage != "done":
+            continue
+        # Заполнены credentials
+        creds_ok = bool(
+            (lk.get("new_login") or "").strip()
+            and (lk.get("new_password") or "").strip()
+        )
+        # Установлен дедик
+        dedik_ok = bool(
+            (lk.get("ded_ip") or "").strip()
+            and (lk.get("ded_password") or "").strip()
+        )
+        if not (creds_ok and dedik_ok):
+            continue
+        drop = drops_raw.get(lk.get("drop_id"), {}) or {}
+        supplier = (drop.get("supplier") or "").lstrip("@")
+        if not supplier and drop.get("owner_id"):
+            try:
+                owner = storage.get_crm_owner(drop["owner_id"]) or {}
+                supplier = (owner.get("username") or "").lstrip("@")
+            except Exception:
+                pass
+        out.append({
+            "droplk_id": lkid,
+            "drop_id": lk.get("drop_id"),
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "—",
+            "supplier": supplier,
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "Administrator",
+            "ded_password": lk.get("ded_password") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "ded_location": lk.get("ded_location") or "",
+            "value": lk.get("value") or "",
+            "installed_at": lk.get("updated_at") or lk.get("created_at") or 0,
+            "created_at": lk.get("created_at") or 0,
+        })
+    if period:
+        now = _t.time()
+        thresholds = {"day": 86400, "week": 86400*7, "month": 86400*31}
+        sec = thresholds.get(period)
+        if sec:
+            cutoff = now - sec
+            out = [x for x in out if (x.get("installed_at") or 0) >= cutoff]
+    out.sort(key=lambda x: -(x.get("installed_at") or 0))
+    return {"ok": True, "items": out, "count": len(out)}
+
+
 @app.get("/api/system/passwords_inbox")
 async def api_system_passwords_inbox(_: None = Depends(_auth)):
     """Inbox для CRM | Password — все ЛК которые в работе (perevyaz_received,
@@ -1227,11 +1315,30 @@ async def api_system_passwords_inbox(_: None = Depends(_auth)):
             f"https://t.me/c/{str(pass_chat_id)[4:]}/{pass_msg_id}"
             if pass_msg_id else ""
         )
+        # Сосед-банки этого drop'а уже с готовым статусом
+        existing_done = []
+        existing_in_work = []
+        try:
+            for other_lkid, other_lk in lks_raw.items():
+                if other_lkid == lkid:
+                    continue
+                if other_lk.get("drop_id") != lk.get("drop_id"):
+                    continue
+                other_stage = (other_lk.get("sms_stage") or "").strip()
+                other_bank = other_lk.get("bank") or "—"
+                if other_stage == "done":
+                    existing_done.append(other_bank)
+                elif other_stage and other_stage != "done":
+                    existing_in_work.append(other_bank)
+        except Exception:
+            pass
         out.append({
             "droplk_id": lkid,
             "drop_id": lk.get("drop_id"),
             "bank": lk.get("bank") or "",
             "fio": drop.get("fio") or "—",
+            "existing_done_banks": existing_done,
+            "existing_in_work_banks": existing_in_work,
             "supplier": supplier,
             "new_login": lk.get("new_login") or "",
             "new_password": lk.get("new_password") or "",
