@@ -545,6 +545,52 @@ async def api_support_close(chat_id: int, request: Request, _: None = Depends(_a
     return {"ok": True, "chat_id": chat_id, "rating": rating, "tag": tag}
 
 
+@app.get("/api/support/templates")
+async def api_support_templates(_: None = Depends(_auth)):
+    """Quick reply шаблоны для оператора. Берёт из storage.support_templates
+    или возвращает дефолты + актуальный прайс."""
+    storage.reload_sync()
+    custom = (storage.state.get("support_templates") or {})
+    # Генерим прайс динамически
+    price_lines = []
+    try:
+        prices = storage.state.get("lk_prices") or {}
+        if prices:
+            for bank, p in sorted(prices.items(), key=lambda x: x[0]):
+                price_lines.append(f"• {bank}: {p}$")
+        else:
+            price_lines.append("Цены уточняются у менеджера.")
+    except Exception:
+        price_lines.append("Цены уточняются у менеджера.")
+    default_price = "💰 <b>Прайс на РС/ЛК:</b>\n\n" + "\n".join(price_lines)
+    defaults = {
+        "price": custom.get("price") or default_price,
+        "terms": custom.get("terms") or (
+            "📋 <b>Условия работы:</b>\n\n"
+            "✅ Работаем через гарант-сервис Continental или прямые USDT TRC20\n"
+            "✅ Полная анонимность сделки\n"
+            "✅ Поддержка 24/7\n"
+            "✅ Гарантия чистоты ЛК"
+        ),
+        "hold": custom.get("hold") or (
+            "⏳ <b>Холд (заморозка ЛК):</b>\n\n"
+            "Если ЛК нужен временно, мы можем заморозить его за вами:\n"
+            "• 50$/месяц\n"
+            "• Полная сохранность данных\n"
+            "• Возврат в любой момент"
+        ),
+        "deal_instructions": custom.get("deal_instructions") or (
+            "🔄 <b>Инструкция по сделке:</b>\n\n"
+            "1️⃣ Согласуем банк, цену и метод оплаты\n"
+            "2️⃣ Вы вносите средства (Continental или USDT TRC20)\n"
+            "3️⃣ Мы передаём вам данные ЛК + дедик\n"
+            "4️⃣ Перепривязка ЛК через СМС-код\n"
+            "5️⃣ Готово — ЛК ваш"
+        ),
+    }
+    return {"ok": True, "templates": defaults}
+
+
 @app.get("/api/support/chat/{chat_id}/messages")
 async def api_support_messages(
     chat_id: int, limit: int = 50, refresh: int = 0,

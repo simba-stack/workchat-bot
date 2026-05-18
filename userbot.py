@@ -7840,17 +7840,56 @@ class UserbotService:
                 logger.warning("__support_take_notify %s fail: %s", cid, e)
                 return f"⚠️ take-notice failed: {e}"
 
-        # ===== HELPDESK: после закрытия — снимаем silent + (опц.) благодарим =====
+        # ===== HELPDESK: после закрытия — прощальное сообщение клиенту =====
         m = re.match(r"^__support_after_close\s+(-?\d+)\s*$", text, re.I)
         if m:
             cid = int(m.group(1))
             try:
                 from storage import _norm_chat_id as _nrm
                 self._ai_silent_until.pop(_nrm(cid), None)
+                # Прощальное сообщение клиенту
+                farewell = (
+                    "👋 <b>Оператор покинул чат.</b>\n\n"
+                    "Желаем вам всего доброго!\n\n"
+                    "💬 <i>Если захотите снова связаться с оператором — просто "
+                    "напишите «Ассистент позови оператора».</i>"
+                )
+                try:
+                    target = await self._resolve_chat_target(cid)
+                    sent = await self.client.send_message(
+                        target, farewell, parse_mode="html", link_preview=False,
+                    )
+                    # Кэш + SSE
+                    try:
+                        cache_dict = storage.state.setdefault("support_msg_cache", {})
+                        arr_f = cache_dict.setdefault(str(_nrm(cid)), [])
+                        msg_f = {
+                            "id": getattr(sent, "id", int(time.time()*1000)),
+                            "ts": time.time(),
+                            "role": "assistant",
+                            "author": "PRIDE ASSISTANT",
+                            "sender_id": (self._me.id if self._me else 0),
+                            "text": "👋 Оператор покинул чат. Желаем вам всего доброго! "
+                                    "Если захотите снова связаться с оператором — "
+                                    "напишите «Ассистент позови оператора».",
+                        }
+                        arr_f.append(msg_f)
+                        if len(arr_f) > 200:
+                            del arr_f[: len(arr_f) - 200]
+                        await storage._save_unlocked()
+                        _e("support-message", {
+                            "chat_id": str(_nrm(cid)),
+                            "raw_chat_id": cid,
+                            "msg": msg_f,
+                        }, character="chat", severity="info")
+                    except Exception as ec:
+                        logger.warning("cache farewell fail: %s", ec)
+                except Exception as e:
+                    logger.warning("send farewell fail: %s", e)
                 _e("support-chat-closed-side", {
                     "chat_id": cid, "ai": "resumed",
                 }, character="chat", severity="info")
-                return f"✅ chat {cid} closed, AI silence cleared"
+                return f"✅ chat {cid} closed, farewell sent, AI silence cleared"
             except Exception as e:
                 logger.warning("support_after_close %s fail: %s", cid, e)
                 return f"⚠️ {e}"

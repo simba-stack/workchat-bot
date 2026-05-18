@@ -3898,6 +3898,47 @@
     border: none; cursor: pointer; font: inherit; font-weight: 700;
   }
   .support-input button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .support-quick-bar {
+    padding: 6px 12px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.02);
+  }
+  .support-quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .quick-btn {
+    background: rgba(0,229,255,0.08);
+    border: 1px solid rgba(0,229,255,0.18);
+    color: var(--text);
+    padding: 5px 11px;
+    border-radius: 14px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .quick-btn:hover { background: rgba(0,229,255,0.18); border-color: rgba(0,229,255,0.4); }
+  .quick-btn.emoji-toggle { background: rgba(251,191,36,0.1); border-color: rgba(251,191,36,0.2); }
+  .quick-btn.emoji-toggle.active { background: rgba(251,191,36,0.25); }
+  .emoji-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+  .emoji-btn {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .emoji-btn:hover { background: rgba(255,255,255,0.1); }
   .support-side {
     background: var(--bg-card);
     border: 1px solid rgba(255,255,255,0.06);
@@ -4006,6 +4047,22 @@
         <template x-if="!supportMessages?.length">
           <div class="support-empty">📂 Подгружаю историю из Telegram...</div>
         </template>
+      </div>
+      <!-- Quick replies + emoji bar -->
+      <div class="support-quick-bar">
+        <div class="support-quick-row">
+          <button class="quick-btn" @click="useTemplate('price')" title="Прайс">💰 Прайс</button>
+          <button class="quick-btn" @click="useTemplate('terms')" title="Условия">📋 Условия</button>
+          <button class="quick-btn" @click="useTemplate('hold')" title="Холд">⏳ Холд</button>
+          <button class="quick-btn" @click="useTemplate('deal_instructions')" title="Инструкция">🔄 Инструкция</button>
+          <button class="quick-btn emoji-toggle" @click="supportShowEmoji = !supportShowEmoji"
+                  :class="supportShowEmoji ? 'active' : ''">😊</button>
+        </div>
+        <div class="emoji-panel" x-show="supportShowEmoji" x-transition.opacity>
+          <template x-for="em in supportEmojiSet" :key="em">
+            <button class="emoji-btn" @click="addEmoji(em)" x-text="em"></button>
+          </template>
+        </div>
       </div>
       <!-- Reply input -->
       <div class="support-input">
@@ -4850,6 +4907,11 @@ function jarvis() {
     supportShowTransfer: false,
     supportCloseModal: false,
     supportCloseNote: '',
+    supportShowEmoji: false,
+    supportTemplates: {},
+    supportEmojiSet: ['😊', '👍', '👋', '🙏', '💰', '💵', '📋', '✅', '❌',
+                       '⏳', '🔥', '💎', '🤝', '📞', '💬', '🔄', '🎯', '⚡',
+                       '🚀', '👌', '🆗', '❗', '❓', '⚠️', '🎉', '🟢', '🔴', '🟡'],
     _supportPollerStarted: false,
     _supportMsgsTimer: null,
     _supportMsgsLoading: false,
@@ -7539,11 +7601,44 @@ function jarvis() {
         this.supportCurrentLks = info.lk_cards || [];
         // Сразу принудительный fetch истории из Telethon
         await this.refreshSupportMessages(true);
+        // Загружаем quick reply шаблоны (один раз)
+        if (!Object.keys(this.supportTemplates).length) {
+          this.loadSupportTemplates();
+        }
         // Запускаем постоянный poller (2с) — пока чат открыт
         this._startSupportMsgsPolling();
       } catch (e) {
         alert('Не удалось открыть чат: ' + e);
       }
+    },
+    async loadSupportTemplates() {
+      try {
+        const r = await fetch('/api/support/templates', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          this.supportTemplates = d.templates || {};
+        }
+      } catch (e) { console.warn('templates load', e); }
+    },
+    useTemplate(key) {
+      const tpl = this.supportTemplates[key];
+      if (!tpl) {
+        this._toastQueue.push({ kind: 'warn', text: '⚠️ Шаблон не загружен — обновите страницу' });
+        return;
+      }
+      // Убираем HTML-теги — TG примет HTML, но в инпуте показываем чистый текст.
+      // Менеджер сможет отредактировать перед отправкой.
+      const plain = tpl
+        .replace(/<\/?b>/g, '')
+        .replace(/<\/?i>/g, '')
+        .replace(/<\/?[^>]+>/g, '')
+        .replace(/\\n/g, '\n');
+      this.supportReplyText = (this.supportReplyText || '')
+        ? (this.supportReplyText + '\n\n' + plain).trim()
+        : plain;
+    },
+    addEmoji(em) {
+      this.supportReplyText = (this.supportReplyText || '') + em;
     },
     _startSupportMsgsPolling() {
       this._stopSupportMsgsPolling();
