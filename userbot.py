@@ -921,31 +921,28 @@ class UserbotService:
                 if triggered:
                     sup = chat_info.get("support") or {}
                     if sup.get("status") not in ("operator_requested", "in_progress"):
+                        # Просто переводим в support inbox — БЕЗ сообщения
+                        # в чат и БЕЗ тега менеджера. Менеджер увидит в
+                        # дашборде что клиент звал оператора.
                         await storage.set_support_state(
                             chat_id, status="operator_requested",
                             department="managers", opened_at=time.time(),
                             assigned_to=0,
+                            trigger_text=(event.message.text or "")[:160],
                         )
-                        from storage import _norm_chat_id as _norm
-                        self._ai_silent_until[_norm(chat_id)] = time.time() + 4 * 60 * 60
-                        try:
-                            target = await self._resolve_chat_target(chat_id)
-                            await self.client.send_message(
-                                target,
-                                "📞 <b>Зову оператора.</b>\n\n"
-                                "Менеджер свяжется с вами в течение нескольких минут. "
-                                "AI больше не отвечает в этом чате.",
-                                parse_mode="html",
-                            )
-                            _e("support-operator-requested", {
-                                "chat_id": chat_id,
-                                "client_username": chat_info.get("client_username") or "",
-                                "client_name": chat_info.get("client_name") or "",
-                                "text": event.message.text[:120],
-                            }, character="chat", severity="warning")
-                        except Exception as e:
-                            logger.warning("operator-request notify fail: %s", e)
-                        return
+                        _e("support-operator-requested", {
+                            "chat_id": chat_id,
+                            "client_username": chat_info.get("client_username") or "",
+                            "client_name": chat_info.get("client_name") or "",
+                            "text": event.message.text[:120],
+                        }, character="chat", severity="warning")
+                        logger.info(
+                            "[helpdesk] operator requested in chat=%s by client=%s text=%r",
+                            chat_id, chat_info.get("client_id"),
+                            event.message.text[:80],
+                        )
+                    # AI молчит благодаря hard silence ниже (status check)
+                    return
         except Exception as e:
             logger.warning("helpdesk trigger handler error: %s", e)
 
@@ -1229,6 +1226,22 @@ class UserbotService:
                 return
         except Exception as e:
             logger.warning("auto-detect deal_id failed: %s", e)
+
+        # 📞 HARD SILENCE: если чат в support-режиме (клиент уже звал
+        # оператора или менеджер взял чат) — AI ВСЕГДА молчит, без исключений.
+        # Не реагирует ни на "привет", ни на "?", ни на что вообще.
+        # Снимается только когда менеджер закрывает чат (status=closed).
+        try:
+            sup_state = (chat_info or {}).get("support") or {}
+            if sup_state.get("status") in ("operator_requested", "in_progress"):
+                logger.info(
+                    "AI: HARD SILENCE for chat=%s — support active (status=%s)",
+                    chat_id, sup_state.get("status"),
+                )
+                self._last_client_msg_ts[chat_key] = time.time()
+                return
+        except Exception:
+            pass
 
         # SILENT MODE: после add_partner_to_crm AI молчит 30 минут пока
         # клиент заполняет анкету в @PrideCONTROLE_bot. Снимается явным
