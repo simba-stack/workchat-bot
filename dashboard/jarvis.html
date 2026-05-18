@@ -5690,6 +5690,12 @@ function jarvis() {
         setTimeout(() => this.refresh(), 500);
       }
       // Helpdesk / Support events
+      // Bump inbox при любом новом сообщении в managed_chat
+      if (t === 'support-inbox-bump') {
+        if (this.currentView === 'support') {
+          this.refreshSupportInbox();
+        }
+      }
       if (t === 'support-operator-requested') {
         // Новая заявка в inbox — обновим список
         if (this.currentView === 'support') {

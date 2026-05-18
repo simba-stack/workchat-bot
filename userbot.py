@@ -943,8 +943,18 @@ class UserbotService:
             pass
 
         # Кешируем сообщение в support_msg_cache для дашборда (helpdesk).
-        # Храним последние 100 сообщений на чат.
+        # Храним последние 200 сообщений на чат.
         try:
+            if not chat_info:
+                logger.debug(
+                    "[support_cache] SKIP: chat_info is None for chat_id=%s "
+                    "(не managed_chat)", chat_id,
+                )
+            elif not (event.message and event.message.text):
+                logger.debug(
+                    "[support_cache] SKIP: no text in event for chat_id=%s",
+                    chat_id,
+                )
             if chat_info and event.message and event.message.text:
                 from storage import _norm_chat_id as _nrm
                 cache = storage.state.setdefault("support_msg_cache", {})
@@ -952,6 +962,11 @@ class UserbotService:
                 arr = cache.setdefault(key, [])
                 sender_id_x = event.message.sender_id
                 client_id_x = chat_info.get("client_id") or 0
+                logger.info(
+                    "[support_cache] WRITE chat=%s key=%s sender=%s client=%s text=%r",
+                    chat_id, key, sender_id_x, client_id_x,
+                    (event.message.text or "")[:60],
+                )
                 if self._me and sender_id_x == self._me.id:
                     author_role = "assistant"
                     author_name = "PRIDE ASSISTANT"
@@ -984,6 +999,12 @@ class UserbotService:
                     _e("support-message", {
                         "chat_id": chat_id,
                         "msg": msg_entry,
+                    }, character="chat", severity="info")
+                    # Также сигнал инбоксу что был апдейт сообщения
+                    _e("support-inbox-bump", {
+                        "chat_id": chat_id,
+                        "client_id": client_id_x,
+                        "role": author_role,
                     }, character="chat", severity="info")
                 except Exception:
                     pass
