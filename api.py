@@ -309,17 +309,30 @@ def _try_session_auth(request: Request) -> Optional[int]:
     return uid
 
 
+# Хардкоженные владельцы дашборда — полный доступ ко всему всегда
+OWNER_UIDS_HARDCODED = {
+    8151738775,   # SIMBA (главный)
+    397572312,    # TIMON
+}
+
+
 def _resolve_user_role(uid: int) -> str:
     """Определяет роль пользователя дашборда:
       'owner' — видит всё; 'manager' — только department=managers;
       'system' — только system; 'accounting' — только accounting.
-    Owner ID хардкожен (SIMBA). Остальное — через worker_sessions[uid].username
-    → storage.get_worker_role(username).role."""
-    # Owner — хардкод (SIMBA + ADMIN_ID)
-    OWNER_UIDS = {8151738775}
+    Owner: SIMBA + TIMON хардкод + ADMIN_ID env. Остальное — через
+    worker_sessions[uid].username → storage.get_worker_role(username).role."""
+    OWNER_UIDS = set(OWNER_UIDS_HARDCODED)
     try:
         if config.ADMIN_ID:
             OWNER_UIDS.add(int(config.ADMIN_ID))
+    except Exception:
+        pass
+    # Доп — из storage state.owner_uids (юзер может добавить через админку)
+    try:
+        for u in (storage.state.get("owner_uids") or []):
+            try: OWNER_UIDS.add(int(u))
+            except Exception: pass
     except Exception:
         pass
     if uid in OWNER_UIDS:
@@ -404,6 +417,95 @@ async def healthz():
 
 
 # ============== HELPDESK / SUPPORT ==============
+
+@app.get("/api/me")
+async def api_me(request: Request, _: None = Depends(_auth)):
+    """Профиль текущего пользователя дашборда: uid, имя, роль, TG-сессия,
+    список разделов которые ему доступны."""
+    uid = _try_session_auth(request) or 0
+    role = _resolve_user_role(uid or 0)
+    sess = storage.get_worker_session(uid) if uid else None
+    sess = sess or {}
+    # Доступные разделы
+    can_see = {
+        "support_all_depts": role == "owner",
+        "support_managers": role in ("owner", "manager"),
+        "support_system": role in ("owner", "system"),
+        "support_accounting": role in ("owner", "accounting"),
+        "system_panel": role in ("owner", "system"),
+        "accounting_panel": role in ("owner", "accounting"),
+        "admin_workers": role == "owner",
+        "all_views": role == "owner",
+    }
+    return {
+        "ok": True,
+        "uid": uid,
+        "role": role,
+        "username": sess.get("username") or "",
+        "first_name": sess.get("first_name") or "",
+        "phone": sess.get("phone") or "",
+        "tg_session_connected": bool(sess.get("string_session")),
+        "permissions": can_see,
+    }
+
+
+@app.get("/api/admin/workers")
+async def api_admin_workers(request: Request, _: None = Depends(_auth)):
+    """Список работников + их ролей (для админки). Только owner может видеть."""
+    uid = _try_session_auth(request) or 0
+    if _resolve_user_role(uid or 0) != "owner":
+        raise HTTPException(403, "owner only")
+    storage.reload_sync()
+    workers = list(storage.get_workers() or [])  # usernames
+    roles = storage.list_worker_roles() or {}
+    sessions = (storage.state.get("worker_sessions") or {})
+    # Сопоставим uid → username из worker_sessions
+    uname_to_uid = {}
+    for uid_str, s in sessions.items():
+        un = (s.get("username") or "").lstrip("@").lower()
+        if un:
+            uname_to_uid[un] = int(uid_str)
+    out = []
+    for uname in workers:
+        key = uname.lstrip("@").lower()
+        r = roles.get(key) or {}
+        out.append({
+            "username": uname.lstrip("@"),
+            "role": r.get("role") or "manager",
+            "is_admin": bool(r.get("is_admin")),
+            "uid": uname_to_uid.get(key, 0),
+            "session_connected": key in uname_to_uid,
+        })
+    out.sort(key=lambda x: x["username"].lower())
+    return {"ok": True, "workers": out, "available_roles": ["manager", "system", "accounting", "owner"]}
+
+
+@app.post("/api/admin/workers/{username}/role")
+async def api_admin_set_role(username: str, request: Request, _: None = Depends(_auth)):
+    """Установить роль работника. Только owner."""
+    uid = _try_session_auth(request) or 0
+    if _resolve_user_role(uid or 0) != "owner":
+        raise HTTPException(403, "owner only")
+    data = await request.json()
+    new_role = (data.get("role") or "").strip().lower()
+    if new_role not in ("manager", "system", "accounting", "owner"):
+        raise HTTPException(400, "invalid role")
+    is_admin = bool(data.get("is_admin", True))
+    uname_clean = username.lstrip("@").strip()
+    if not uname_clean:
+        raise HTTPException(400, "username required")
+    ok = await storage.set_worker_role(uname_clean, new_role, is_admin=is_admin)
+    if not ok:
+        raise HTTPException(500, "failed to set role")
+    try:
+        event_bus.emit_event("admin-role-changed", {
+            "username": uname_clean, "role": new_role, "is_admin": is_admin,
+            "by_uid": uid,
+        })
+    except Exception:
+        pass
+    return {"ok": True, "username": uname_clean, "role": new_role, "is_admin": is_admin}
+
 
 @app.get("/api/support/inbox")
 async def api_support_inbox(

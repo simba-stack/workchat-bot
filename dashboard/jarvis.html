@@ -219,6 +219,20 @@
     mix-blend-mode: screen;
   }
 
+  .role-badge {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .role-owner { background: rgba(251,191,36,0.2); color: #fbbf24; }
+  .role-manager { background: rgba(0,229,255,0.15); color: #00e5ff; }
+  .role-system { background: rgba(139,92,246,0.2); color: #8b5cf6; }
+  .role-accounting { background: rgba(52,211,153,0.2); color: #34d399; }
+
   .modal-overlay {
     position: fixed;
     inset: 0;
@@ -4367,7 +4381,7 @@
     </div>
 
     <!-- ====== РАБОТНИКИ & РОЛИ ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'workers'" :class="settingsActiveSection === 'workers' ? 'active' : ''">
+    <div class="settings-card" @click="settingsActiveSection = 'workers'; if (dashMe?.role === 'owner') loadWorkers();" :class="settingsActiveSection === 'workers' ? 'active' : ''">
       <div class="settings-card-icon">🎭</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Работники и роли</div>
@@ -4526,11 +4540,70 @@
 
     <!-- WORKERS -->
     <div x-show="settingsActiveSection === 'workers'" class="jarvis-panel" style="padding: 20px;">
-      <h3 style="margin: 0 0 16px 0;">🎭 Работники и роли</h3>
-      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
-        Список настраивается через <code>/admin → 👷 Работники</code> и <code>/admin → 🎭 Роли работников</code>.
+      <h3 style="margin: 0 0 6px 0;">🎭 Работники и роли</h3>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
+        Установите роль чтобы работник видел только свои чаты в Поддержке.
+        Owner видит ВСЁ. Менеджер — только свои чаты. System — переданные ему. Бухгалтерия — переданные.
       </div>
-      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_workers', '_blank')">📲 Открыть в боте</button>
+      <div x-show="!dashMe || dashMe?.role !== 'owner'" style="padding: 12px; background: rgba(251,113,133,0.1); border: 1px solid rgba(251,113,133,0.3); border-radius: 8px; color: var(--hud-rose); font-size: 12px;">
+        🔒 Только Owner может изменять роли.
+      </div>
+      <div x-show="dashMe?.role === 'owner'">
+        <div style="display: flex; gap: 10px; margin-bottom: 14px; align-items: center;">
+          <button class="btn" @click="loadWorkers()" :disabled="workersLoading">↻ Обновить</button>
+          <span style="font-size: 11px; color: var(--text-dim);">Всего: <b x-text="workersList.length"></b></span>
+        </div>
+        <div style="max-height: 60vh; overflow-y: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: rgba(255,255,255,0.05); position: sticky; top: 0;">
+                <th style="text-align: left; padding: 8px;">@Username</th>
+                <th style="text-align: left; padding: 8px;">UID</th>
+                <th style="text-align: left; padding: 8px;">Сессия</th>
+                <th style="text-align: left; padding: 8px;">Текущая роль</th>
+                <th style="text-align: left; padding: 8px;">Изменить на</th>
+                <th style="text-align: left; padding: 8px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="w in workersList" :key="w.username">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                  <td style="padding: 8px;"><code x-text="'@' + w.username"></code></td>
+                  <td style="padding: 8px; font-size: 11px; color: var(--text-dim);" x-text="w.uid || '—'"></td>
+                  <td style="padding: 8px;">
+                    <span x-show="w.session_connected" style="color: var(--hud-emerald);">🟢 TG</span>
+                    <span x-show="!w.session_connected" style="color: var(--text-dim);">—</span>
+                  </td>
+                  <td style="padding: 8px;">
+                    <span class="role-badge" :class="'role-' + w.role" x-text="w.role"></span>
+                  </td>
+                  <td style="padding: 8px;">
+                    <select x-model="w._newRole" style="padding: 4px 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text);">
+                      <template x-for="r in availableRoles" :key="r">
+                        <option :value="r" x-text="r"></option>
+                      </template>
+                    </select>
+                  </td>
+                  <td style="padding: 8px;">
+                    <button class="btn success" @click="saveWorkerRole(w)"
+                            :disabled="w._newRole === w.role"
+                            style="padding: 4px 12px; font-size: 11px;">💾</button>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="!workersList.length">
+                <td colspan="6" style="text-align: center; padding: 30px; color: var(--text-dim);">
+                  <span x-show="workersLoading">Загрузка...</span>
+                  <span x-show="!workersLoading">Список пуст. Добавьте работников через TG-бот /admin → 👷 Работники.</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top: 14px; font-size: 11px; color: var(--text-dim);">
+          💡 <b>SIMBA</b> и <b>TIMON</b> — хардкоженные владельцы. Их роль = owner всегда, не редактируется.
+        </div>
+      </div>
     </div>
 
     <!-- CHATS -->
@@ -4938,6 +5011,10 @@ function jarvis() {
     supportFilter: 'all',  // all | requested | in_progress | mine
     supportDept: 'all',  // all | managers | system | accounting
     supportViewerRole: 'manager',  // owner | manager | system | accounting
+    dashMe: null,  // {uid, role, username, first_name, permissions, tg_session_connected}
+    workersList: [],
+    workersLoading: false,
+    availableRoles: ['manager', 'system', 'accounting', 'owner'],
     supportCurrentChat: null,
     supportCurrentLks: [],
     supportMessages: [],
@@ -5945,6 +6022,13 @@ function jarvis() {
       if (view) this.goToView(view);
     },
     goToView(view) {
+      // Грузим профиль при первом переключении (если ещё не загружен)
+      if (!this.dashMe) this.loadMe();
+      // Когда заходим в Settings → workers — догружаем список
+      if (view === 'settings' && this.settingsActiveSection === 'workers'
+          && this.dashMe?.role === 'owner') {
+        this.loadWorkers();
+      }
       this.currentView = view;
       location.hash = '#' + view;
       if (view === 'crm') { this.refreshCrm(); }
@@ -6096,7 +6180,7 @@ function jarvis() {
     async refreshMe() {
       try {
         const r = await fetch('/api/me', { credentials: 'include' });
-        if (r.ok) this.me = await r.json();
+        if (r.ok) this.dashMe = await r.json();
       } catch (e) {}
     },
 
@@ -7657,6 +7741,51 @@ function jarvis() {
       } catch (e) {
         alert('Не удалось открыть чат: ' + e);
       }
+    },
+    async loadMe() {
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) {
+          this.dashMe = await r.json();
+          if (this.dashMe?.role) this.supportViewerRole = this.dashMe.role;
+        }
+      } catch (e) { console.warn('loadMe', e); }
+    },
+    async loadWorkers() {
+      if (this.workersLoading) return;
+      this.workersLoading = true;
+      try {
+        const r = await fetch('/api/admin/workers', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          this.workersList = (d.workers || []).map(w => ({
+            ...w, _newRole: w.role,
+          }));
+          if (d.available_roles) this.availableRoles = d.available_roles;
+        } else if (r.status === 403) {
+          this._toastQueue.push({ kind: 'warn', text: '🔒 Только Owner может видеть работников' });
+        }
+      } catch (e) {
+        console.warn('loadWorkers', e);
+        this._toastQueue.push({ kind: 'err', text: 'Ошибка загрузки работников' });
+      } finally { this.workersLoading = false; }
+    },
+    async saveWorkerRole(w) {
+      if (!w || w._newRole === w.role) return;
+      try {
+        const r = await fetch(`/api/admin/workers/${encodeURIComponent(w.username)}/role`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: w._newRole, is_admin: true }),
+        });
+        if (r.ok) {
+          w.role = w._newRole;
+          this._toastQueue.push({ kind: 'ok', text: `✅ ${w.username} → ${w._newRole}` });
+        } else {
+          const t = await r.text();
+          alert('Ошибка: ' + r.status + ' ' + t);
+        }
+      } catch (e) { alert(String(e)); }
     },
     async loadSupportTemplates() {
       try {
