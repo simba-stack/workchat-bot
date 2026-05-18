@@ -201,6 +201,29 @@ _FORBIDDEN_CLIENT_PATTERNS = [
     r"\bа\s+может\s+за\s+\d+",
     r"\bс\s+учёт(?:ом|ом)\s+долг\w*\s+(?:у\s+)?вас\s+выйдет\s+\d+",
     r"\bвыплата\s+составит\s+\d+\W{0,4}\$",
+    # 🔴 Запрет: AI НЕ СПРАШИВАЕТ цену у клиента — мы её НАЗЫВАЕМ из storage.lk_prices.
+    # Цена назначаем МЫ, не клиент решает «сколько вы хотите».
+    r"\bкакая\s+(?:сумма|цена)\s+выплат\w*",
+    r"\bна\s+какую\s+сумму\s+(?:рассчитыв|надеетес|претенду)",
+    r"\bкакую\s+сумму\s+(?:хотите|ждёте|ожидаете|расс?читыва|вы\s+хотите)",
+    r"\bкакую\s+сумму\s+вы\s+",
+    r"\bкакая\s+(?:у\s+(?:вас|тебя)\s+)?цена\b",
+    r"\bкакая\s+цена\s+у\s+(?:вас|тебя)",
+    r"\bсколько\s+(?:хотите|ждёте|ожидаете)\s+(?:за|получить)",
+    r"\bкакая\s+у\s+(?:вас|тебя)\s+цена",
+    r"\bкакую\s+(?:цену|сумму)\s+(?:хотите|ждёте|вы\s+ждёте)",
+    r"\bсколько\s+вы\s+(?:хотите|ждёте)\s+за\b",
+    # 🔴 ЗАПРЕТ: внутренние термины НЕ употребляем при общении с клиентом.
+    # «дроп», «дроп-счёт», «дропа» — это наш сленг, клиент не должен слышать.
+    # Только: «ваш счёт», «личный счёт», «ваш ЛК».
+    r"\bдроп\b",
+    r"\bдроп[- ]?счёт\w*",
+    r"\bдроп[- ]?счет\w*",
+    r"\bдроп\w*\s+(?:счёт|счет|акк|аккаунт)",
+    r"\bваш\s+дроп\b",
+    r"\bличный\s+дроп\b",
+    # 🔴 Не спрашиваем у клиента «это твой личный X» — мы не выясняем, мы продаём.
+    r"\bэто\s+(?:тво[йя]|ваш(?:а|е)?)\s+личн\w+\s+(?:втб|альфа|сбер|точк|озон|псб)",
 ]
 _FORBIDDEN_RX = [
     re.compile(p, re.IGNORECASE | re.MULTILINE)
@@ -8206,6 +8229,91 @@ class UserbotService:
             except Exception as e:
                 logger.warning("support_after_close %s fail: %s", cid, e)
                 return f"⚠️ {e}"
+
+        # ===== CRM-БОТ → публикация анкеты в Группу 1 ЛК после перевязки =====
+        # Команда ставится crm_bot._queue_anketa_post_via_userbot после
+        # успешной перевязки. Userbot публикует карточку ЛК в lk_group_id.
+        m = re.match(r"^__crm_post_anketa\s+([\w\-]+)\s*$", text, re.I)
+        if m:
+            drop_id = m.group(1)
+            try:
+                lk_gid = storage.get_lk_group_id()
+                if not lk_gid:
+                    logger.warning("__crm_post_anketa: lk_group_id не задан в storage")
+                    return f"⚠️ lk_group_id не настроен в storage"
+                drop = storage.get_crm_drop(drop_id) if hasattr(storage, "get_crm_drop") else None
+                if not drop:
+                    return f"⚠️ drop {drop_id} not found"
+                # Получаем список ЛК этого дропа
+                lks = storage.list_crm_drop_lks(drop_id=drop_id) if hasattr(storage, "list_crm_drop_lks") else {}
+                # Найдём lk_card_ids для этого drop'а
+                lk_card_ids = list(drop.get("lk_card_ids") or [])
+                if not lk_card_ids:
+                    # Fallback: ищем карточки по supplier+fio (создались только что)
+                    fio = drop.get("fio") or ""
+                    owner = storage.get_crm_owner(drop.get("owner_id", "")) or {}
+                    supplier = owner.get("username") or ""
+                    for c in (storage.list_lk_cards() or {}).values():
+                        if (c.get("supplier") or "").lstrip("@").lower() == supplier.lstrip("@").lower() \
+                                and (c.get("fio") or "") == fio:
+                            lk_card_ids.append(c.get("card_id") or c.get("id"))
+                if not lk_card_ids:
+                    logger.warning("__crm_post_anketa: нет lk_card для drop=%s", drop_id)
+                    return f"⚠️ no lk_card for drop {drop_id}"
+
+                target = await self._resolve_chat_target(lk_gid)
+                posted = 0
+                for cid in lk_card_ids:
+                    card = storage.get_lk_card(cid) if hasattr(storage, "get_lk_card") else None
+                    if not card:
+                        continue
+                    # Текст карточки для Группы 1 ЛК (анкета)
+                    bank = card.get("bank") or "—"
+                    fio = card.get("fio") or "—"
+                    supplier = (card.get("supplier") or "").lstrip("@")
+                    price = card.get("price_usdt") or 0
+                    method = card.get("payment_method") or "уточняется"
+                    status = card.get("status") or "В_РАБОТЕ"
+                    text_card = (
+                        f"📋 <b>Карточка #{cid}</b>\n"
+                        f"🏦 Банк: <b>{bank}</b>\n"
+                        f"👤 ФИО: <b>{fio}</b>\n"
+                        f"🤝 Поставщик: <code>@{supplier}</code>\n"
+                        f"💰 Цена: <b>{price}$</b>\n"
+                        f"💳 Метод оплаты: <b>{method}</b>\n"
+                        f"📊 Статус: <b>{status}</b>\n"
+                        f"<i>(карточка автоматически создана после перевязки)</i>"
+                    )
+                    try:
+                        msg = await self.client.send_message(
+                            target, text_card, parse_mode="html", link_preview=False,
+                        )
+                        # Сохраним msg_id для последующих edit'ов
+                        try:
+                            await storage.update_lk_card(
+                                cid, lk_group_msg_id=msg.id,
+                            )
+                        except Exception:
+                            pass
+                        posted += 1
+                        logger.info(
+                            "[crm_post_anketa] posted lk_card=%s drop=%s msg=%s",
+                            cid, drop_id, msg.id,
+                        )
+                        _e("lk-card-posted-to-group", {
+                            "card_id": cid, "drop_id": drop_id,
+                            "bank": bank, "fio": fio,
+                            "msg_id": msg.id,
+                        }, character="chat", severity="info")
+                    except Exception as e:
+                        logger.warning(
+                            "[crm_post_anketa] post failed for card=%s: %s",
+                            cid, e,
+                        )
+                return f"✅ posted {posted}/{len(lk_card_ids)} cards to lk_group for drop {drop_id}"
+            except Exception as e:
+                logger.exception("__crm_post_anketa failed for %s: %s", drop_id, e)
+                return f"⚠️ crm_post_anketa error: {e}"
 
         # ===== INTERNAL: handle БЛОК_БЕЗ_ОТРАБОТКИ side-effects (от api.py) =====
         m = re.match(r"^__handle_block_no_work\s+(lk\d+)\s*$", text, re.I)
