@@ -640,8 +640,11 @@ class UserbotService:
                     if len(arr) > 200:
                         del arr[: len(arr) - 200]
                     try:
+                        from storage import _norm_chat_id as _nrm
                         _e("support-message", {
-                            "chat_id": chat_id, "msg": msg_entry,
+                            "chat_id": str(_nrm(chat_id)),
+                            "raw_chat_id": chat_id,
+                            "msg": msg_entry,
                         }, character="chat", severity="info")
                     except Exception:
                         pass
@@ -994,15 +997,18 @@ class UserbotService:
                 arr.append(msg_entry)
                 if len(arr) > 200:
                     del arr[: len(arr) - 200]
-                # SSE event — UI открытого чата подхватит без polling
+                # SSE event — UI открытого чата подхватит без polling.
+                # chat_id передаём СТРОКОЙ нормализованной — иначе SSE даёт raw
+                # -1003998507288, а inbox даёт "3998507288" → === не совпадёт.
                 try:
+                    norm_cid = str(_nrm(chat_id))
                     _e("support-message", {
-                        "chat_id": chat_id,
+                        "chat_id": norm_cid,
+                        "raw_chat_id": chat_id,
                         "msg": msg_entry,
                     }, character="chat", severity="info")
-                    # Также сигнал инбоксу что был апдейт сообщения
                     _e("support-inbox-bump", {
-                        "chat_id": chat_id,
+                        "chat_id": norm_cid,
                         "client_id": client_id_x,
                         "role": author_role,
                     }, character="chat", severity="info")
@@ -1065,7 +1071,8 @@ class UserbotService:
                                     del arr_n[: len(arr_n) - 200]
                                 await storage._save_unlocked()
                                 _e("support-message", {
-                                    "chat_id": chat_id,
+                                    "chat_id": str(_nrm(chat_id)),
+                                    "raw_chat_id": chat_id,
                                     "msg": arr_n[-1],
                                 }, character="chat", severity="info")
                             except Exception as ec:
@@ -7639,7 +7646,8 @@ class UserbotService:
                         del arr[: len(arr) - 200]
                     await storage._save_unlocked()
                     _e("support-message", {
-                        "chat_id": chat_id,
+                        "chat_id": str(_nrm(chat_id)) if hasattr(__import__('storage'), '_norm_chat_id') else chat_id,
+                        "raw_chat_id": chat_id,
                         "msg": msg_entry,
                     }, character="chat", severity="info")
                     return msg_entry
@@ -7814,7 +7822,9 @@ class UserbotService:
                         del arr_n[: len(arr_n) - 200]
                     await storage._save_unlocked()
                     _e("support-message", {
-                        "chat_id": cid, "msg": msg_n,
+                        "chat_id": str(_nrm(cid)),
+                        "raw_chat_id": cid,
+                        "msg": msg_n,
                     }, character="chat", severity="info")
                 except Exception as ec:
                     logger.warning("cache take-notice fail: %s", ec)

@@ -5690,6 +5690,14 @@ function jarvis() {
         setTimeout(() => this.refresh(), 500);
       }
       // Helpdesk / Support events
+      // Helper: нормализуем chat_id (убираем '-' и префикс '100') для сравнения
+      const _normCid = (c) => {
+        if (c === null || c === undefined) return '';
+        let s = String(c).replace('-', '');
+        if (s.length >= 12 && s.startsWith('100')) s = s.slice(3);
+        return s;
+      };
+      const _ccid = () => _normCid(this.supportCurrentChat?.chat_id);
       // Bump inbox при любом новом сообщении в managed_chat
       if (t === 'support-inbox-bump') {
         if (this.currentView === 'support') {
@@ -5710,12 +5718,12 @@ function jarvis() {
         );
       }
       if (t === 'support-manager-reply' && p.chat_id) {
-        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+        if (_ccid() === _normCid(p.chat_id)) {
           setTimeout(() => this.refreshSupportMessages(false), 800);
         }
       }
       if (t === 'support-message' && p.chat_id && p.msg) {
-        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+        if (_ccid() === _normCid(p.chat_id)) {
           const exists = (this.supportMessages || []).some(m => m.id === p.msg.id);
           if (!exists) {
             this.supportMessages.push(p.msg);
@@ -5727,18 +5735,18 @@ function jarvis() {
         }
       }
       if (t === 'support-msgs-loaded' && p.chat_id) {
-        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+        if (_ccid() === _normCid(p.chat_id)) {
           setTimeout(() => this.refreshSupportMessages(false), 200);
         }
       }
       if (t === 'support-chat-closed' && p.chat_id) {
-        if (this.supportCurrentChat?.chat_id === p.chat_id) {
+        if (_ccid() === _normCid(p.chat_id)) {
           this.supportCurrentChat = null;
           this.supportMessages = [];
         }
         if (this.currentView === 'support') this.refreshSupportInbox();
       }
-      if (t === 'ai-reply' && this.supportCurrentChat?.chat_id === p.chat_id) {
+      if (t === 'ai-reply' && _ccid() === _normCid(p.chat_id)) {
         setTimeout(() => this.refreshSupportMessages(false), 500);
       }
 
