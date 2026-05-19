@@ -22,17 +22,21 @@ name: Deploy Guacamole to Railway
 # =============================================================================
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "guacamole/**"
-      - ".github/workflows/deploy-guacamole.yml"
+  # AUTO-DEPLOY запускается ТОЛЬКО вручную через workflow_dispatch.
+  # Чтобы включить auto-deploy при push в main:
+  #   1) Добавь secret RAILWAY_TOKEN в Settings → Secrets and variables → Actions
+  #   2) Раскомментируй блок push: ниже
   workflow_dispatch:
     inputs:
       service:
         description: "Railway service name (override RAILWAY_GUAC_SERVICE)"
         required: false
         default: ""
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "guacamole/**"
+  #     - ".github/workflows/deploy-guacamole.yml"
 
 jobs:
   deploy:
@@ -42,7 +46,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check required secrets
         run: |
@@ -57,7 +61,7 @@ jobs:
           fi
 
       - name: Setup Node.js (нужен для Railway CLI)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 

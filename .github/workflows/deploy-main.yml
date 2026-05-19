@@ -28,7 +28,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Verify RAILWAY_TOKEN
         run: |
@@ -36,7 +36,7 @@ jobs:
             echo "::error::RAILWAY_TOKEN missing"; exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
 
