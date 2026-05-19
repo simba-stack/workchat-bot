@@ -174,11 +174,21 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """Простой liveness check — НЕ зависит от Guacamole/Tomcat (они стартуют ~30-60s).
+    Railway healthcheck бьёт сюда; Tomcat-ready check вынесен в /health/full."""
+    return {"status": "ok"}
+
+
+@app.get("/health/full")
+async def health_full():
+    """Глубокий health: проверяет что Guacamole REST API отвечает."""
     try:
         await guac._ensure_token()
         return {"status": "ok", "data_source": guac._data_source}
     except HTTPException as e:
         return JSONResponse(status_code=503, content={"status": "error", "detail": e.detail})
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "error", "detail": str(e)})
 
 
 @app.post("/create_session")
