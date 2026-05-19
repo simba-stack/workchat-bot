@@ -2698,25 +2698,61 @@ async def api_op_dedik_rdp(card_id: str, me: dict = Depends(_get_me)):
 
 @app.get("/api/operational/guacamole_session")
 async def api_op_guacamole_session(card_id: str = "", me: dict = Depends(_get_me)):
-    """Если в env задан GUACAMOLE_URL — возвращает URL для inline iframe.
+    """Если в env задан GUACAMOLE_URL — создаёт RDP-сессию через прокси
+    (guacamole/proxy.py) и возвращает URL для inline iframe.
     Иначе клиент использует fallback на .rdp файл."""
+    if me.get("role") not in ("owner", "manager", "operationist", "system"):
+        raise HTTPException(status_code=403, detail="forbidden")
+
     import os as _os
     base = (_os.getenv("GUACAMOLE_URL") or "").strip().rstrip("/")
     if not base:
         return {"url": None}
+
     creds = _resolve_dedik_creds_for_card(card_id)
     if not creds.get("ip"):
         return {"url": None, "error": "no_dedik"}
-    # Простейший формат: <base>?ip=...&user=...&password=...
-    # Реальная интеграция с Guacamole REST API — см. docs Guacamole 1.5+.
-    # Если у тебя свой proxy — здесь можно подставить токен.
-    from urllib.parse import urlencode
-    qs = urlencode({
-        "ip": creds["ip"],
-        "user": creds.get("login") or "Administrator",
-        "password": creds.get("password") or "",
-    })
-    return {"url": f"{base}?{qs}"}
+
+    secret = (_os.getenv("PRIDE_GUAC_SECRET") or "").strip()
+    if not secret:
+        # Прокси без секрета работать не будет — без auth могут ходить
+        # все кто угодно. Возвращаем fallback на .rdp.
+        return {
+            "url": None,
+            "error": "PRIDE_GUAC_SECRET not set in main service",
+        }
+
+    # POST к нашему Guacamole-прокси (см. guacamole/proxy.py в репо)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{base}/api/proxy/create_session",
+                json={
+                    "ip": creds["ip"],
+                    "user": creds.get("login") or "Administrator",
+                    "password": creds.get("password") or "",
+                    "width": 1920,
+                    "height": 1080,
+                },
+                headers={"X-Pride-Secret": secret},
+            )
+        if r.status_code != 200:
+            logger.warning("guac proxy failed: %s %s", r.status_code, r.text[:200])
+            return {
+                "url": None,
+                "error": f"guac proxy {r.status_code}: {r.text[:120]}",
+            }
+        data = r.json()
+        rel = data.get("url") or ""
+        if not rel:
+            return {"url": None, "error": "guac proxy returned empty url"}
+        # rel это "/guacamole/#/client/...&token=..." — добавляем base
+        full = base + rel
+        return {"url": full, "identifier": data.get("identifier")}
+    except Exception as e:
+        logger.exception("guac proxy call failed: %s", e)
+        return {"url": None, "error": str(e)}
 
 
 @app.get("/api/operational/dedik_creds/{card_id}")
