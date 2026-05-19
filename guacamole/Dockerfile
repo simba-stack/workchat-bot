@@ -1,17 +1,16 @@
 # =============================================================================
 # Apache Guacamole для PRIDE J.A.R.V.I.S. (Railway)
 # Base: flcontainers/guacamole 1.6.0 (Alpine 3.21 + supervisord-managed
-#       Tomcat/guacd/postgres). ENTRYPOINT базы = /startup.sh.
-#
-# Мы оборачиваем его в /opt/wrapper.sh который:
-#   1) запускает nginx (slot port 8080 наружу)
-#   2) запускает Python FastAPI proxy на :9000
-#   3) exec /startup.sh — передаёт управление штатному supervisord
+#       Tomcat/guacd/postgres).
 #
 # Архитектура:
-#   nginx :8080 (public)  → /api/proxy/*  → Python :9000 (auth shim)
-#                         → /*            → Tomcat :8081 (Guacamole UI + WS)
-#   guacd :4822 (internal) ← Tomcat → RDP target
+#   nginx       :9090 (public, Railway target)
+#                 ├─ /api/proxy/*  → Python  :9000
+#                 └─ /*            → Tomcat  :8080 (guacamole webapp на /guacamole/)
+#   guacd       :4822 (internal)  ← Tomcat → RDP target
+#
+# ВАЖНО: Tomcat ОСТАЁТСЯ на 8080 (default) — НЕ трогаем server.xml.
+#         nginx на 9090 чтобы не конфликтовать.
 # =============================================================================
 FROM flcontainers/guacamole:1.6.0
 
@@ -31,19 +30,24 @@ RUN /opt/proxy-venv/bin/pip install --no-cache-dir -r /opt/proxy-venv/req.txt
 COPY proxy.py /opt/proxy.py
 COPY nginx-site.conf /etc/nginx/http.d/default.conf
 
-# Tomcat → 8081 (освобождаем 8080 для nginx-фронта)
-RUN sed -i 's/port="8080"/port="8081"/' /opt/tomcat/conf/server.xml
+# flcontainers кладёт guacamole-{ver}.war как webapps/ROOT.war (доступ "/").
+# Мы дополнительно копируем его как webapps/guacamole.war — Tomcat
+# auto-deploy-нет его на "/guacamole/". Это гарантирует что REST API будет
+# доступен и на "/api/tokens", и на "/guacamole/api/tokens".
+RUN if [ -f /opt/tomcat/webapps/ROOT.war ]; then \
+        cp /opt/tomcat/webapps/ROOT.war /opt/tomcat/webapps/guacamole.war; \
+    fi
 
-# nginx runtime каталоги
+# nginx runtime каталоги (Alpine)
 RUN mkdir -p /var/lib/nginx/tmp /run/nginx /var/log/nginx \
     && chown -R nginx:nginx /var/lib/nginx /run/nginx /var/log/nginx 2>/dev/null || true
 
-# Пишем wrapper inline (heredoc — гарантирует LF, никаких CRLF от Windows git)
+# Wrapper inline (heredoc — гарантирует LF endings)
 RUN cat > /opt/wrapper.sh <<'SHEOF' && chmod +x /opt/wrapper.sh
 #!/bin/sh
 set -u
 
-echo "[wrapper] starting nginx (daemon)..."
+echo "[wrapper] starting nginx (daemon, :9090)..."
 nginx || echo "[wrapper] nginx failed to start"
 
 echo "[wrapper] launching Python FastAPI proxy on :9000 in restart-loop..."
@@ -57,9 +61,9 @@ echo "[wrapper] launching Python FastAPI proxy on :9000 in restart-loop..."
     done
 ) &
 
-echo "[wrapper] handing off to base /startup.sh..."
+echo "[wrapper] handing off to base /startup.sh (Tomcat/guacd/postgres)..."
 exec /startup.sh "$@"
 SHEOF
 
-EXPOSE 8080
+EXPOSE 9090
 ENTRYPOINT ["/opt/wrapper.sh"]

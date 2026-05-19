@@ -30,7 +30,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format="[proxy] %(asctime)s %(message)s")
 log = logging.getLogger("proxy")
 
-GUAC_URL_INTERNAL = "http://127.0.0.1:8081/guacamole"
+GUAC_URL_INTERNAL = "http://127.0.0.1:8080/guacamole"
 GUAC_ADMIN_USER = os.getenv("GUAC_ADMIN_USER", "guacadmin")
 GUAC_ADMIN_PASS = os.getenv("GUAC_ADMIN_PASS", "guacadmin")
 # Источник кто может запрашивать создание сессии (общий секрет).
