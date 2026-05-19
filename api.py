@@ -408,6 +408,25 @@ def _auth(
     _check_auth(request, credentials)
 
 
+def _get_me(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+) -> dict:
+    """Возвращает текущего пользователя как dict: {tg_id, username, role}.
+    Используется в endpoints, которым нужна роль для проверки прав."""
+    _check_auth(request, credentials)
+    uid = _try_session_auth(request) or 0
+    role = _resolve_user_role(uid or 0)
+    tg_info = storage.get_tg_user_info(uid) if uid else {}
+    tg_info = tg_info or {}
+    return {
+        "tg_id": uid,
+        "username": tg_info.get("username") or "",
+        "first_name": tg_info.get("first_name") or "",
+        "role": role,
+    }
+
+
 # === Static & health ===
 
 @app.get("/healthz")
@@ -2266,6 +2285,490 @@ async def api_lk_cards(
         result.append(_slim_card(cid, c))
     result.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
     return {"cards": result[:limit], "total": len(result)}
+
+
+# ============================================================================
+# Разделы ЛК (май 2026): 4 sub-tabs для дашборда
+# ============================================================================
+
+def _filter_lk_cards(predicate):
+    storage.reload_sync()
+    cards = storage.list_lk_cards() or {}
+    out = []
+    for cid, c in cards.items():
+        if not c:
+            continue
+        try:
+            if predicate(c):
+                out.append(_slim_card(cid, c))
+        except Exception:
+            continue
+    out.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return out
+
+
+@app.get("/api/lk/all")
+async def api_lk_all(_: None = Depends(_auth)):
+    out = _filter_lk_cards(lambda c: True)
+    return {"cards": out, "total": len(out)}
+
+
+@app.get("/api/lk/to_top_up")
+async def api_lk_to_top_up(_: None = Depends(_auth)):
+    def pred(c):
+        m = (c.get("payment_method") or "").upper()
+        s = (c.get("status") or "В_РАБОТЕ").upper()
+        return m in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER") and s in ("В_РАБОТЕ", "ОТРАБОТАН")
+    out = _filter_lk_cards(pred)
+    return {"cards": out, "total": len(out)}
+
+
+@app.get("/api/lk/to_pay")
+async def api_lk_to_pay(_: None = Depends(_auth)):
+    def pred(c):
+        m = (c.get("payment_method") or "").upper()
+        s = (c.get("status") or "В_РАБОТЕ").upper()
+        return m == "USDT_TRC20" and s == "ОТРАБОТАН"
+    out = _filter_lk_cards(pred)
+    return {"cards": out, "total": len(out)}
+
+
+@app.get("/api/lk/to_release")
+async def api_lk_to_release(_: None = Depends(_auth)):
+    def pred(c):
+        m = (c.get("payment_method") or "").upper()
+        s = (c.get("status") or "В_РАБОТЕ").upper()
+        return m == "GUARANTOR_AFTER_WORK" and s in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ")
+    out = _filter_lk_cards(pred)
+    return {"cards": out, "total": len(out)}
+
+
+@app.get("/api/lk/summary")
+async def api_lk_summary(_: None = Depends(_auth)):
+    storage.reload_sync()
+    cards = storage.list_lk_cards() or {}
+    cats = {
+        "all": {"count": 0, "sum": 0.0},
+        "to_top_up": {"count": 0, "sum": 0.0},
+        "to_pay": {"count": 0, "sum": 0.0},
+        "to_release": {"count": 0, "sum": 0.0},
+    }
+    for c in cards.values():
+        if not c: continue
+        m = (c.get("payment_method") or "").upper()
+        s = (c.get("status") or "В_РАБОТЕ").upper()
+        price = float(c.get("price_usdt") or 0)
+        cats["all"]["count"] += 1; cats["all"]["sum"] += price
+        if m in ("GUARANTOR_BEFORE","GUARANTOR_AFTER") and s in ("В_РАБОТЕ","ОТРАБОТАН"):
+            cats["to_top_up"]["count"] += 1; cats["to_top_up"]["sum"] += price
+        if m == "USDT_TRC20" and s == "ОТРАБОТАН":
+            cats["to_pay"]["count"] += 1; cats["to_pay"]["sum"] += price
+        if m == "GUARANTOR_AFTER_WORK" and s in ("ОТРАБОТАН","ПОПОЛНИТЬ_И_ОТПУСТИТЬ"):
+            cats["to_release"]["count"] += 1; cats["to_release"]["sum"] += price
+    return cats
+
+
+# ============================================================================
+# OPERATIONAL (Операционная — список ЛК в работе + фикс заявок)
+# ============================================================================
+
+@app.get("/api/operational/lk_in_work")
+async def api_op_lk_in_work(_: None = Depends(_auth)):
+    storage.reload_sync()
+    rows = storage.list_lk_in_work()
+    singles = [r for r in rows if not r.get("is_combo")]
+    combos = [r for r in rows if r.get("is_combo")]
+    grouped = {}
+    for r in combos:
+        key = (r.get("fio"), r.get("supplier"))
+        grouped.setdefault(key, []).append(r)
+    return {
+        "singles": singles,
+        "combos": [
+            {"fio": k[0], "supplier": k[1], "size": len(items), "items": items}
+            for k, items in grouped.items()
+        ],
+    }
+
+
+class ExchangeRequestPayload(BaseModel):
+    bank_in: str
+    fio_in: str
+    lk_card_id_in: Optional[str] = ""
+    amount_in: float
+    outs: list
+    partner_pct: float = 0
+    exchange_rate: float = 0
+    commission_usdt: float = 0
+
+
+@app.post("/api/operational/exchange_request")
+async def api_op_create_exchange_request(
+    payload: ExchangeRequestPayload,
+    me: dict = Depends(_get_me),
+):
+    if me.get("role") not in ("owner", "manager", "operationist"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    storage.reload_sync()
+    rate = float(payload.exchange_rate or 0)
+    if rate <= 0:
+        raise HTTPException(status_code=400, detail="exchange_rate required")
+    total_in_rub = float(payload.amount_in or 0)
+    total_out_rub = sum(float(o.get("amount_out") or 0) for o in (payload.outs or []))
+    in_usdt = total_in_rub / rate
+    out_usdt = total_out_rub / rate
+    partner_pct = float(payload.partner_pct or 0)
+    commission = float(payload.commission_usdt or 0)
+    raw_margin = in_usdt - out_usdt - commission
+    partner_share = raw_margin * partner_pct / 100.0
+    margin_usdt = raw_margin - partner_share
+
+    involved_lk = []
+    if payload.lk_card_id_in:
+        involved_lk.append(payload.lk_card_id_in)
+    for o in (payload.outs or []):
+        cid = o.get("lk_card_id")
+        if cid:
+            involved_lk.append(cid)
+
+    req_id = await storage.add_exchange_request(
+        bank_in=payload.bank_in,
+        fio_in=payload.fio_in,
+        lk_card_id_in=payload.lk_card_id_in or "",
+        amount_in=payload.amount_in,
+        outs=payload.outs,
+        partner_pct=partner_pct,
+        exchange_rate=rate,
+        commission_usdt=commission,
+        margin_usdt=margin_usdt,
+        total_in_rub=total_in_rub,
+        total_out_rub=total_out_rub,
+        status="ЗАФИКСИРОВАНА",
+        created_by=me.get("username") or str(me.get("tg_id")) or "operationist",
+        involved_lk_cards=involved_lk,
+    )
+
+    notified_chats = set()
+    for cid in involved_lk:
+        try:
+            await storage.update_lk_card(cid, status="ОТРАБОТАН")
+        except Exception:
+            pass
+        # Уведомить клиента в work_chat — что ЛК ОТРАБОТАН и идёт расчёт.
+        try:
+            card = storage.get_lk_card(cid) if hasattr(storage, "get_lk_card") else None
+            if card:
+                wc = int(card.get("work_chat_id") or 0)
+                if wc and wc not in notified_chats:
+                    method = (card.get("payment_method") or "").upper()
+                    if method == "USDT_TRC20":
+                        action = "💸 USDT TRC20 будет переведён в ближайшее время"
+                    elif method == "GUARANTOR_AFTER_WORK":
+                        action = "💼 Пополним сделку в Конте и отпустим вам"
+                    elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER"):
+                        action = "💼 Сделка в Конте будет пополнена"
+                    else:
+                        action = "💰 Оплата произведена согласно методу"
+                    bank = (card.get("bank") or "—").upper()
+                    fio = card.get("fio") or "—"
+                    notify_text = (
+                        f"✅ <b>ЛК ОТРАБОТАН</b>\n\n"
+                        f"🏦 <b>{bank}</b> / {fio}\n"
+                        f"{action}.\n\n"
+                        f"<i>Спасибо за работу!</i>"
+                    )
+                    await storage.enqueue_dashboard_command(
+                        f"__notify_client_otrabotan {wc} {cid}"
+                    )
+                    notified_chats.add(wc)
+        except Exception as e:
+            logger.warning("notify ОТРАБОТАН for card=%s failed: %s", cid, e)
+
+    try:
+        await storage.add_accounting_entry(
+            category="kassa",
+            amount_usdt=in_usdt - partner_share,
+            amount_rub=total_in_rub,
+            note=f"Exchange request {req_id}",
+            created_by=me.get("username") or "",
+            ref_id=req_id,
+        )
+    except Exception:
+        pass
+
+    # Эмитнуть event для дашборда
+    try:
+        from event_bus import emit_event
+        emit_event("exchange-request-created", {
+            "req_id": req_id,
+            "margin_usdt": margin_usdt,
+            "involved_lk": involved_lk,
+        }, character="lk", severity="success")
+    except Exception:
+        pass
+
+    return {"req_id": req_id, "margin_usdt": margin_usdt, "involved_lk_cards": involved_lk}
+
+
+@app.get("/api/operational/exchange_requests")
+async def api_op_list_exchange_requests(
+    status: Optional[str] = None, _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    reqs = storage.list_exchange_requests(status=status)
+    out = [{**r, "req_id": rid} for rid, r in reqs.items()]
+    out.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return {"requests": out, "total": len(out)}
+
+
+@app.get("/api/operational/search_lk")
+async def api_op_search_lk(q: str = "", _: None = Depends(_auth)):
+    if not q or len(q) < 2:
+        return {"results": []}
+    storage.reload_sync()
+    qlow = q.lower().strip()
+    out = []
+    for cid, c in (storage.list_lk_cards() or {}).items():
+        if not c: continue
+        if (c.get("status") or "В_РАБОТЕ") not in ("В_РАБОТЕ","ОТРАБОТАН","ПОПОЛНИТЬ_И_ОТПУСТИТЬ"): continue
+        if qlow in (c.get("fio") or "").lower():
+            out.append({
+                "card_id": cid,
+                "bank": (c.get("bank") or "").upper(),
+                "fio": c.get("fio") or "",
+                "supplier": (c.get("supplier") or "").lstrip("@"),
+                "status": c.get("status") or "",
+            })
+            if len(out) >= 20:
+                break
+    return {"results": out}
+
+
+def _resolve_dedik_creds_for_card(card_id: str) -> dict:
+    """Возвращает {ip, login, password, location} для дедика, привязанного
+    к этой lk_card. Ищем через crm_drop_lks по bank+fio через drop'\''ы owner'а."""
+    card = storage.get_lk_card(card_id) if hasattr(storage, "get_lk_card") else None
+    if not card:
+        return {}
+    bank = (card.get("bank") or "").upper()
+    fio = (card.get("fio") or "").strip().lower()
+    supplier = (card.get("supplier") or "").lstrip("@").lower()
+    # 1) если в карточке уже сохранён droplk_id — используем напрямую
+    droplk_id = card.get("droplk_id") or ""
+    drop_lks = storage.state.get("crm_drop_lks") or {}
+    drops = storage.state.get("crm_drops") or {}
+    if droplk_id and droplk_id in drop_lks:
+        lk = drop_lks[droplk_id]
+        return {
+            "ip": lk.get("ded_ip") or "",
+            "login": lk.get("ded_login") or "Administrator",
+            "password": lk.get("ded_pass") or "",
+            "location": lk.get("ded_location") or "",
+        }
+    # 2) Иначе ищем по bank + fio (через drop_id → fio в drops)
+    for lkid, lk in drop_lks.items():
+        if (lk.get("bank") or "").upper() != bank:
+            continue
+        drop = drops.get(lk.get("drop_id") or "")
+        if not drop:
+            continue
+        d_fio = (drop.get("fio") or "").strip().lower()
+        if d_fio and d_fio == fio:
+            return {
+                "ip": lk.get("ded_ip") or "",
+                "login": lk.get("ded_login") or "Administrator",
+                "password": lk.get("ded_pass") or "",
+                "location": lk.get("ded_location") or "",
+            }
+    return {}
+
+
+@app.get("/api/operational/dedik_rdp/{card_id}")
+async def api_op_dedik_rdp(card_id: str, me: dict = Depends(_get_me)):
+    """Генерирует .rdp файл для нативного RDP-клиента Windows.
+    Клиент кликает кнопку «Зайти на дедик» → скачивается .rdp →
+    Windows автоматически открывает mstsc.exe с pre-filled креденшелами."""
+    if me.get("role") not in ("owner", "manager", "operationist", "system"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    storage.reload_sync()
+    creds = _resolve_dedik_creds_for_card(card_id)
+    if not creds.get("ip"):
+        raise HTTPException(
+            status_code=404,
+            detail="дедик IP не найден для этой ЛК — проверь crm_passwords/CRM",
+        )
+    ip = creds["ip"].strip()
+    login = (creds.get("login") or "Administrator").strip()
+    # .rdp файл — это plain text с CRLF переносами в правильном формате
+    rdp_lines = [
+        "full address:s:" + ip,
+        "username:s:" + login,
+        "screen mode id:i:2",          # full screen
+        "use multimon:i:0",
+        "desktopwidth:i:1920",
+        "desktopheight:i:1080",
+        "session bpp:i:32",
+        "compression:i:1",
+        "keyboardhook:i:2",
+        "audiocapturemode:i:0",
+        "videoplaybackmode:i:1",
+        "connection type:i:7",
+        "networkautodetect:i:1",
+        "bandwidthautodetect:i:1",
+        "displayconnectionbar:i:1",
+        "enableworkspacereconnect:i:0",
+        "disable wallpaper:i:0",
+        "allow font smoothing:i:0",
+        "allow desktop composition:i:0",
+        "disable full window drag:i:1",
+        "disable menu anims:i:1",
+        "disable themes:i:0",
+        "disable cursor setting:i:0",
+        "bitmapcachepersistenable:i:1",
+        "audiomode:i:0",
+        "redirectprinters:i:0",
+        "redirectcomports:i:0",
+        "redirectsmartcards:i:1",
+        "redirectclipboard:i:1",
+        "redirectposdevices:i:0",
+        "autoreconnection enabled:i:1",
+        "authentication level:i:2",
+        "prompt for credentials:i:0",
+        "negotiate security layer:i:1",
+        "remoteapplicationmode:i:0",
+        "alternate shell:s:",
+        "shell working directory:s:",
+        "gatewayhostname:s:",
+        "gatewayusagemethod:i:4",
+        "gatewaycredentialssource:i:4",
+        "gatewayprofileusagemethod:i:0",
+        "promptcredentialonce:i:0",
+        "gatewaybrokeringtype:i:0",
+        "use redirection server name:i:0",
+        "rdgiskdcproxy:i:0",
+        "kdcproxyname:s:",
+    ]
+    body = "\r\n".join(rdp_lines) + "\r\n"
+    safe_name = "".join(ch for ch in (card_id + "_" + ip.replace(".", "_")) if ch.isalnum() or ch in "_-") + ".rdp"
+    from fastapi.responses import Response
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{safe_name}\"",
+        "X-Dedik-Login": login,
+    }
+    # Пароль в RDP-файле НЕ сохраняется (Windows не примет без CryptProtectData).
+    # Возвращаем его отдельным header'ом, чтобы UI смог показать "ввести пароль: ..."
+    if creds.get("password"):
+        # Не пихаем пароль в .rdp — Windows требует local CryptProtectData,
+        # которого у нас в Linux нет. UI должен показать пароль рядом для
+        # копирования.
+        headers["X-Dedik-Password"] = creds["password"]
+    headers["Access-Control-Expose-Headers"] = "X-Dedik-Login, X-Dedik-Password"
+    return Response(
+        content=body,
+        media_type="application/x-rdp",
+        headers=headers,
+    )
+
+
+@app.get("/api/operational/dedik_creds/{card_id}")
+async def api_op_dedik_creds(card_id: str, me: dict = Depends(_get_me)):
+    """Возвращает дед-креды для отображения рядом с .rdp кнопкой (пароль
+    нельзя записать в .rdp на стороне сервера — нужен Windows CryptProtectData)."""
+    if me.get("role") not in ("owner", "manager", "operationist", "system"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    storage.reload_sync()
+    creds = _resolve_dedik_creds_for_card(card_id)
+    if not creds.get("ip"):
+        return {"found": False}
+    return {
+        "found": True,
+        "ip": creds.get("ip"),
+        "login": creds.get("login"),
+        "password": creds.get("password"),
+        "location": creds.get("location"),
+    }
+
+
+# ============================================================================
+# ACCOUNTING v2 (Бухгалтерия: касса/зарплаты/реклама/симки/поставщики)
+# ============================================================================
+
+ACCOUNTING_CATEGORIES = ("kassa", "suppliers", "salaries", "ads", "sims")
+ACCOUNTING_CATEGORY_ROLE = {
+    "kassa": "manager",
+    "suppliers": "manager",
+    "salaries": "accounting",
+    "ads": "accounting",
+    "sims": "manager",
+}
+ROLE_RANK = {
+    "owner": 100, "manager": 80, "accounting": 60,
+    "operationist": 40, "system": 30, "guest": 0,
+}
+
+
+def _has_role(me_role: str, required: str) -> bool:
+    return ROLE_RANK.get(me_role or "guest", 0) >= ROLE_RANK.get(required, 0)
+
+
+@app.get("/api/accounting/entries")
+async def api_acc_list(
+    category: Optional[str] = None, days: int = 30, _: None = Depends(_auth),
+):
+    storage.reload_sync()
+    date_from = time.time() - max(1, days) * 86400
+    entries = storage.list_accounting_entries(category=category, date_from=date_from)
+    return {"entries": entries, "total": len(entries)}
+
+
+class AccountingEntryPayload(BaseModel):
+    category: str
+    amount_usdt: float = 0
+    amount_rub: float = 0
+    note: str = ""
+
+
+@app.post("/api/accounting/entry")
+async def api_acc_add(
+    payload: AccountingEntryPayload,
+    me: dict = Depends(_get_me),
+):
+    cat = (payload.category or "").lower()
+    if cat not in ACCOUNTING_CATEGORIES:
+        raise HTTPException(status_code=400, detail="invalid category")
+    required = ACCOUNTING_CATEGORY_ROLE.get(cat, "manager")
+    if not _has_role(me.get("role") or "", required):
+        raise HTTPException(status_code=403, detail="insufficient role")
+    entry_id = await storage.add_accounting_entry(
+        category=cat,
+        amount_usdt=payload.amount_usdt,
+        amount_rub=payload.amount_rub,
+        note=payload.note or "",
+        created_by=me.get("username") or str(me.get("tg_id")) or "",
+    )
+    return {"entry_id": entry_id}
+
+
+@app.delete("/api/accounting/entry/{entry_id}")
+async def api_acc_delete(entry_id: str, me: dict = Depends(_get_me)):
+    if not _has_role(me.get("role") or "", "manager"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    ok = await storage.delete_accounting_entry(entry_id)
+    return {"ok": ok}
+
+
+@app.get("/api/accounting/summary")
+async def api_acc_summary(period: str = "month", _: None = Depends(_auth)):
+    storage.reload_sync()
+    if period == "day":
+        date_from = time.time() - 86400
+    elif period == "week":
+        date_from = time.time() - 7 * 86400
+    elif period == "all":
+        date_from = None
+    else:
+        date_from = time.time() - 30 * 86400
+    return storage.accounting_summary(date_from=date_from)
 
 
 @app.get("/api/applications")

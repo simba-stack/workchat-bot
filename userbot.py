@@ -2534,31 +2534,60 @@ class UserbotService:
             chat_id, method_full, addr[:10] + "..." if addr else "",
         )
 
-        # Если перевязка УЖЕ была (есть pending_perevyaz) — создаём карточку
-        # сейчас, не ждём ещё одного триггера.
+        # СЦЕНАРИЙ A: карточка для этого work_chat УЖЕ существует
+        # (создалась автоматически после перевязки с дефолтным методом).
+        # Тогда просто обновляем её payment_method и перепостим в TG.
         created_card_id = None
+        updated_existing = False
         try:
-            pending = await storage.pop_pending_perevyaz(chat_id)
-            if pending and (pending.get("bank") or pending.get("fio")):
-                fresh = storage.get_chat_info(chat_id) or {}
-                # Эмитируем «фейковый» event для _create_lk_card_from_perevyaz:
-                # ему нужен только event.chat_id. Используем простой shim.
-                class _Shim:
-                    def __init__(self, cid):
-                        self.chat_id = cid
-                        self.message = type("M", (), {"id": None, "text": ""})()
-                shim = _Shim(chat_id)
-                await self._create_lk_card_from_perevyaz(
-                    shim, fresh,
-                    lk_text=pending.get("bank", ""),
-                    fio_text=pending.get("fio", ""),
-                )
-                logger.info(
-                    "set_payment_method: card created from pending perevyaz for chat=%s",
-                    chat_id,
-                )
+            for cid, c in (storage.list_lk_cards() or {}).items():
+                if not c:
+                    continue
+                wc_card = int(c.get("work_chat_id") or 0)
+                if wc_card and abs(wc_card) == abs(int(chat_id)):
+                    if (c.get("status") or "В_РАБОТЕ") in ("В_РАБОТЕ", "ОЖИДАНИЕ", ""):
+                        await storage.update_lk_card(
+                            cid,
+                            payment_method=method_full,
+                            usdt_address=addr,
+                            _allow_payment_method_change=True,
+                        )
+                        try:
+                            await self._refresh_lk_card_post(cid)
+                        except Exception:
+                            pass
+                        updated_existing = True
+                        created_card_id = cid
+                        logger.info(
+                            "set_payment_method: existing lk_card %s updated method=%s",
+                            cid, method_full,
+                        )
+                        break
         except Exception as e:
-            logger.warning("set_payment_method: pending card creation failed: %s", e)
+            logger.warning("set_payment_method: update existing failed: %s", e)
+
+        # СЦЕНАРИЙ B: карточки нет, но перевязка УЖЕ была (pending_perevyaz).
+        if not updated_existing:
+            try:
+                pending = await storage.pop_pending_perevyaz(chat_id)
+                if pending and (pending.get("bank") or pending.get("fio")):
+                    fresh = storage.get_chat_info(chat_id) or {}
+                    class _Shim:
+                        def __init__(self, cid):
+                            self.chat_id = cid
+                            self.message = type("M", (), {"id": None, "text": ""})()
+                    shim = _Shim(chat_id)
+                    await self._create_lk_card_from_perevyaz(
+                        shim, fresh,
+                        lk_text=pending.get("bank", ""),
+                        fio_text=pending.get("fio", ""),
+                    )
+                    logger.info(
+                        "set_payment_method: card created from pending perevyaz for chat=%s",
+                        chat_id,
+                    )
+            except Exception as e:
+                logger.warning("set_payment_method: pending card creation failed: %s", e)
 
         return {
             "status": "ok",
@@ -3087,9 +3116,35 @@ class UserbotService:
                 return
             await self._handle_bank_details(event, bank_arg)
             return
+        # --- НОВЫЕ КОМАНДЫ ЛК (май 2026): 3 команды для движений средств ---
+        # 1) "что пополнить" — сделки в конте ДО/ПОСЛЕ перевязки, ещё не пополненные
+        if re.search(
+            r"^\s*(?:/?что\s+пополн(?:ить|и|ь)|/?пополн(?:ить|ения|ение))\b"
+            r"(?!\s+и\s+отпуст)",
+            text, re.I,
+        ):
+            await self._handle_lk_cmd_to_topup(event)
+            return
+        # 2) "что оплатить" — карточки в статусе ОТРАБОТАН с USDT_TRC20
+        if re.search(
+            r"^\s*(?:/?что\s+оплат(?:ить|и|ь)|/?оплат(?:ить|ы|а))\b"
+            r"(?!\s+и\s+отпуст)",
+            text, re.I,
+        ):
+            await self._handle_lk_cmd_to_pay(event)
+            return
+        # 3) "что пополнить и отпустить" — карточки ОТРАБОТАН/ПОПОЛНИТЬ_И_ОТПУСТИТЬ с GUARANTOR_AFTER_WORK
+        if re.search(
+            r"^\s*(?:/?что\s+(?:пополн|оплат)\w*\s+и\s+отпуст|"
+            r"/?(?:пополн|оплат)\w*\s+и\s+отпуст\w*|"
+            r"/?отпуст\w*)\b",
+            text, re.I,
+        ):
+            await self._handle_lk_cmd_to_release(event)
+            return
+
         if re.search(
             r"^\s*(?:/?сводка|/?действия|/?список\s*действий|"
-            r"что\s+оплат(?:ить|и|ь)|что\s+отпуст(?:ить|и|ь)|"
             r"дневн(?:ой|ая)\s+(?:отч[её]т|свод)|"
             r"кому\s+оплат)\b",
             text, re.I,
@@ -5828,19 +5883,33 @@ class UserbotService:
         deal_id = (deal or {}).get("deal_id") or ""
         usdt_addr = chat_info.get("usdt_address") or ""
 
-        # Минимум для создания карточки: bank + method.
-        # Если есть только bank — спрашиваем у клиента только метод.
+        # Минимум для создания карточки: bank.
+        # ВАЖНО (логика май 2026, ред. v2): карточка создаётся СРАЗУ с
+        # дефолтным методом, чтобы попасть в Отдел ЛК/Группу 1 без задержки.
+        # Но AI ОБЯЗАН затем уточнить метод у клиента (это один из случаев
+        # когда AI может тегать клиента + слать несколько сообщений + ставить
+        # напоминалки). Когда клиент пришлёт ответ — _tool_set_payment_method
+        # ОБНОВИТ существующую карточку (а не создаст дубль).
         if not bank:
             logger.warning(
                 "perevyaz: bank не определён (lk_text=%r, deal=%s) — пропускаем",
                 lk_text, bool(deal),
             )
             return None
+        method_was_default = False
         if not method:
-            await self._request_lk_data_from_client(
-                event, chat_info, deal, bank=bank, fio=fio,
+            method = "GUARANTOR_AFTER_WORK"
+            method_was_default = True
+            try:
+                await storage.set_chat_payment_info(
+                    wc, method=method, usdt_address="",
+                )
+            except Exception as e:
+                logger.warning("perevyaz: set_chat_payment_info(default) failed: %s", e)
+            logger.info(
+                "perevyaz: auto-default method=GUARANTOR_AFTER_WORK для chat=%s "
+                "— карточка создаётся, AI продолжит уточнять у клиента", wc,
             )
-            return None
 
         # Воронка: РС сдан (анкета ЛК создана = клиент реально отдал счёт)
         try:
@@ -5879,6 +5948,22 @@ class UserbotService:
             "LK card created from perevyaz: %s for chat=%s bank=%s fio=%s method=%s",
             card_id, wc, bank, fio, method,
         )
+
+        # Если метод поставили по дефолту — AI ВСЁ РАВНО уточняет у клиента.
+        # _request_lk_data_from_client тегает клиента + ставит reminder loop.
+        # Когда клиент ответит, set_payment_method обновит payment_method
+        # этой же карточки (без создания дубля — он идемпотентный).
+        if method_was_default:
+            try:
+                await self._request_lk_data_from_client(
+                    event, chat_info, deal, bank=bank, fio=fio,
+                )
+                logger.info(
+                    "perevyaz: method-clarification reminder scheduled for chat=%s card=%s",
+                    wc, card_id,
+                )
+            except Exception as e:
+                logger.warning("perevyaz: method-clarification scheduling failed: %s", e)
         _e("lk-created", {
             "card_id": card_id, "bank": bank, "fio": fio,
             "method": method, "source": "perevyaz",
@@ -6463,7 +6548,13 @@ class UserbotService:
             "Тимона и от админа (двойное подтверждение).\n"
             "\n"
             "<b>📋 Сводка действий</b>\n"
-            "<code>сводка</code> / <code>действия</code> / <code>что оплатить</code>\n"
+            "<code>сводка</code> / <code>действия</code> / <code>дневной отчёт</code>\n"
+            "\n"
+            "<b>💸 Команды по движениям средств</b>\n"
+            "<code>что пополнить</code> — сделки в конте ДО/ПОСЛЕ перевязки, "
+            "ждущие пополнения\n"
+            "<code>что оплатить</code> — USDT TRC20 после отработки (очередь выплат)\n"
+            "<code>что пополнить и отпустить</code> — гарант после отработки\n"
             "\n"
             "<b>🔍 Детали по банку</b>\n"
             "<code>детали ОЗОН</code> / <code>раскрой Альфа</code> / "
@@ -6628,6 +6719,123 @@ class UserbotService:
                 await asyncio.sleep(0.2)
         except Exception as e:
             logger.warning("bank_details reply failed: %s", e)
+
+    async def _handle_lk_cmd_to_topup(self, event):
+        """🟡 Что пополнить — карточки/сделки с методами «сделка в конте ДО или
+        ПОСЛЕ перевязки», ещё не пополненные."""
+        try:
+            cards = storage.list_lk_cards() or {}
+        except Exception as e:
+            await event.reply(f"⚠️ storage error: {e}")
+            return
+        rows = []
+        for cid, c in cards.items():
+            if not c:
+                continue
+            method = (c.get("payment_method") or "").upper()
+            status = (c.get("status") or "В_РАБОТЕ").upper()
+            if method not in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER"):
+                continue
+            if status not in ("В_РАБОТЕ", "ОТРАБОТАН"):
+                continue
+            bank = (c.get("bank") or "—").upper()
+            fio = c.get("fio") or "—"
+            deal_id = (c.get("deal_id") or "").strip() or "—"
+            price = c.get("price_usdt") or 0
+            method_label_short = (
+                "ДО перевязки" if method == "GUARANTOR_BEFORE"
+                else "ПОСЛЕ перевязки"
+            )
+            rows.append(
+                f"• <b>{bank}</b> / {fio} / сделка <code>#{deal_id}</code> / "
+                f"{price}$ <i>({method_label_short})</i>"
+            )
+        if not rows:
+            await event.reply(
+                "🟡 <b>ЧТО ПОПОЛНИТЬ</b>\n\nНет сделок ожидающих пополнения.",
+                parse_mode="html",
+            )
+            return
+        head = f"🟡 <b>ЧТО ПОПОЛНИТЬ</b> ({len(rows)} шт.)\n\n"
+        await event.reply(head + "\n".join(rows), parse_mode="html")
+
+    async def _handle_lk_cmd_to_pay(self, event):
+        """🟢 Что оплатить — карточки в статусе ОТРАБОТАН с методом USDT_TRC20.
+        Очередь выплат партнёру в крипте."""
+        try:
+            cards = storage.list_lk_cards() or {}
+        except Exception as e:
+            await event.reply(f"⚠️ storage error: {e}")
+            return
+        rows = []
+        for cid, c in cards.items():
+            if not c:
+                continue
+            method = (c.get("payment_method") or "").upper()
+            status = (c.get("status") or "В_РАБОТЕ").upper()
+            if method != "USDT_TRC20":
+                continue
+            if status != "ОТРАБОТАН":
+                continue
+            bank = (c.get("bank") or "—").upper()
+            fio = c.get("fio") or "—"
+            supplier = (c.get("supplier") or "").lstrip("@")
+            usdt_addr = (c.get("usdt_address") or "").strip()
+            price = c.get("price_usdt") or 0
+            addr_line = (
+                f"<code>{usdt_addr}</code>" if usdt_addr else "⚠️ нет адреса"
+            )
+            rows.append(
+                f"• <b>{bank}</b> / {fio} / @{supplier} / "
+                f"<b>{price}$</b> → {addr_line}"
+            )
+        if not rows:
+            await event.reply(
+                "🟢 <b>ЧТО ОПЛАТИТЬ</b>\n\nНет карточек ожидающих оплаты USDT.",
+                parse_mode="html",
+            )
+            return
+        head = f"🟢 <b>ЧТО ОПЛАТИТЬ</b> (USDT TRC20, {len(rows)} шт.)\n\n"
+        await event.reply(head + "\n".join(rows), parse_mode="html")
+
+    async def _handle_lk_cmd_to_release(self, event):
+        """🔵 Что пополнить и отпустить — карточки ОТРАБОТАН / ПОПОЛНИТЬ_И_ОТПУСТИТЬ
+        с GUARANTOR_AFTER_WORK (гарант после отработки)."""
+        try:
+            cards = storage.list_lk_cards() or {}
+        except Exception as e:
+            await event.reply(f"⚠️ storage error: {e}")
+            return
+        rows = []
+        for cid, c in cards.items():
+            if not c:
+                continue
+            method = (c.get("payment_method") or "").upper()
+            status = (c.get("status") or "В_РАБОТЕ").upper()
+            if method != "GUARANTOR_AFTER_WORK":
+                continue
+            if status not in ("ОТРАБОТАН", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ"):
+                continue
+            bank = (c.get("bank") or "—").upper()
+            fio = c.get("fio") or "—"
+            supplier = (c.get("supplier") or "").lstrip("@")
+            deal_id = (c.get("deal_id") or "").strip() or "—"
+            price = c.get("price_usdt") or 0
+            rows.append(
+                f"• <b>{bank}</b> / {fio} / @{supplier} / "
+                f"сделка <code>#{deal_id}</code> / <b>{price}$</b>"
+            )
+        if not rows:
+            await event.reply(
+                "🔵 <b>ЧТО ПОПОЛНИТЬ И ОТПУСТИТЬ</b>\n\nНет сделок в очереди.",
+                parse_mode="html",
+            )
+            return
+        head = (
+            f"🔵 <b>ЧТО ПОПОЛНИТЬ И ОТПУСТИТЬ</b> "
+            f"(гарант после отработки, {len(rows)} шт.)\n\n"
+        )
+        await event.reply(head + "\n".join(rows), parse_mode="html")
 
     async def _handle_daily_summary(self, event):
         """Команда «сводка/действия/что оплатить» в Группе 2.
@@ -8229,6 +8437,40 @@ class UserbotService:
             except Exception as e:
                 logger.warning("support_after_close %s fail: %s", cid, e)
                 return f"⚠️ {e}"
+
+        # ===== ОТРАБОТАН → уведомить клиента в work_chat (от exchange_request) =====
+        m = re.match(r"^__notify_client_otrabotan\s+(-?\d+)\s+(lk\d+)\s*$", text, re.I)
+        if m:
+            wc = int(m.group(1))
+            cid = m.group(2).lower()
+            try:
+                card = storage.get_lk_card(cid) if hasattr(storage, "get_lk_card") else None
+                if not card:
+                    return f"⚠️ lk_card {cid} не найден"
+                method = (card.get("payment_method") or "").upper()
+                if method == "USDT_TRC20":
+                    action = "💸 USDT TRC20 будет переведён в ближайшее время"
+                elif method == "GUARANTOR_AFTER_WORK":
+                    action = "💼 Пополним сделку в Конте и отпустим"
+                elif method in ("GUARANTOR_BEFORE", "GUARANTOR_AFTER"):
+                    action = "💼 Сделка в Конте будет пополнена"
+                else:
+                    action = "💰 Оплата произведена согласно методу"
+                bank = (card.get("bank") or "—").upper()
+                fio = card.get("fio") or "—"
+                notify_text = (
+                    f"✅ <b>ЛК ОТРАБОТАН</b>\n\n"
+                    f"🏦 <b>{bank}</b> / {fio}\n"
+                    f"{action}.\n\n"
+                    f"<i>Спасибо за работу!</i>"
+                )
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(target, notify_text, parse_mode="html", link_preview=False)
+                _e("client-notified-otrabotan", {"chat_id": wc, "card_id": cid, "method": method}, character="lk", severity="info")
+                return f"✅ notified chat={wc} card={cid}"
+            except Exception as e:
+                logger.warning("notify_client_otrabotan %s %s: %s", wc, cid, e)
+                return f"⚠️ notify failed: {e}"
 
         # ===== CRM-БОТ → публикация анкеты в Группу 1 ЛК после перевязки =====
         # Команда ставится crm_bot._queue_anketa_post_via_userbot после

@@ -2709,6 +2709,14 @@
     <span x-show="(systemPendingLks?.length || 0) > 0" class="support-tab-badge" x-text="systemPendingLks?.length || 0"></span>
   </button>
   <button class="view-tab" :class="currentView === 'accounting' ? 'active' : ''" @click="goToView('accounting')">📒 Бухгалтерия</button>
+  <button class="view-tab"
+          x-show="['owner','manager','operationist'].includes(dashMe?.role)"
+          :class="currentView === 'operational' ? 'active' : ''"
+          @click="goToView('operational')">🛠 Операционная
+    <span x-show="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.length || 0) > 0"
+          class="support-tab-badge"
+          x-text="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.reduce((a,c)=>a+c.size,0) || 0)"></span>
+  </button>
   <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
 
   <!-- Виджет профиля работника справа -->
@@ -3104,43 +3112,238 @@
     </div>
 
     <!-- ===== LK DEPT: LK Pipeline ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'lk'">
+    <!-- ===== LK DEPT (May 2026 redesign): 4 sub-sections ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'lk'" x-init="refreshLkAll()">
       <div class="panel-title">
-        LK Pipeline (по статусам)
-        <span class="badge-mini" x-text="(state.stats.lk_cards_total || 0) + ' total'"></span>
+        Отдел ЛК
+        <span class="badge-mini" x-text="(lkSummary.all.count || 0) + ' карточек'"></span>
+        <button class="chip-btn" style="margin-left:auto;" @click="refreshLkAll()">⟳ Обновить</button>
       </div>
-      <div style="padding: 12px;">
-        <template x-for="[status, count] in Object.entries(state.stats.lk_cards_by_status || {})" :key="status">
-          <div style="margin-bottom: 8px;">
+
+      <!-- Sub-tabs -->
+      <div style="display:flex; gap:4px; padding:8px 12px; flex-wrap:wrap; border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <button class="view-tab" :class="lkSubTab === 'all' ? 'active' : ''" @click="setLkSubTab('all')">
+          📋 Карточки ЛК <span class="badge-mini" x-text="lkSummary.all.count"></span>
+        </button>
+        <button class="view-tab" :class="lkSubTab === 'to_top_up' ? 'active' : ''" @click="setLkSubTab('to_top_up')">
+          🟡 Что пополнить <span class="badge-mini" x-text="lkSummary.to_top_up.count"></span>
+        </button>
+        <button class="view-tab" :class="lkSubTab === 'to_pay' ? 'active' : ''" @click="setLkSubTab('to_pay')">
+          🟢 Что оплатить <span class="badge-mini" x-text="lkSummary.to_pay.count"></span>
+        </button>
+        <button class="view-tab" :class="lkSubTab === 'to_release' ? 'active' : ''" @click="setLkSubTab('to_release')">
+          🔵 Пополнить и отпустить <span class="badge-mini" x-text="lkSummary.to_release.count"></span>
+        </button>
+      </div>
+
+      <!-- TAB CONTENT -->
+      <div style="padding: 10px 14px; max-height: 540px; overflow-y: auto;">
+
+        <!-- ALL -->
+        <template x-if="lkSubTab === 'all'">
+          <div>
+            <template x-if="(lkSections.all || []).length === 0">
+              <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Карточек ЛК нет</div>
+            </template>
+            <template x-for="c in lkSections.all" :key="c.card_id">
+              <div class="metric" style="padding: 8px 10px; margin-bottom: 4px;">
+                <div class="flex items-center gap-2 text-xs">
+                  <span style="font-weight:700; color: var(--hud-primary);" x-text="'#' + c.card_id"></span>
+                  <span style="font-weight:700;" x-text="(c.bank || '—').toUpperCase()"></span>
+                  <span x-text="c.fio || '—'"></span>
+                  <span style="margin-left:auto; font-weight:700;" :class="(c.price_usdt || 0) > 0 ? 'text-emerald-400' : ''" x-text="fmtUsd(c.price_usdt || 0)"></span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-dim);">
+                  <span x-text="'@' + (c.supplier || '—')"></span> · 
+                  <span x-text="lkMethodLabel(c.payment_method)"></span> · 
+                  <span x-text="lkStatusBadge(c.status)"></span>
+                  <template x-if="c.deal_id"><span> · сделка #<span x-text="c.deal_id"></span></span></template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- TO_TOP_UP -->
+        <template x-if="lkSubTab === 'to_top_up'">
+          <div>
+            <div class="text-xs" style="color: var(--text-dim); margin-bottom: 8px;">Сделки в Конте (ДО или ПОСЛЕ перевязки), ждущие пополнения от нашей стороны.</div>
+            <template x-if="(lkSections.to_top_up || []).length === 0">
+              <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Очередь пуста.</div>
+            </template>
+            <template x-for="c in lkSections.to_top_up" :key="c.card_id">
+              <div class="metric" style="padding: 10px; margin-bottom: 4px; border-left: 3px solid var(--hud-amber);">
+                <div class="flex items-center gap-2 text-xs">
+                  <span style="font-weight:700;" x-text="(c.bank || '—').toUpperCase()"></span>
+                  <span x-text="c.fio || '—'"></span>
+                  <span style="margin-left:auto; font-weight:700; color: var(--hud-amber);" x-text="fmtUsd(c.price_usdt || 0)"></span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-dim);">
+                  Сделка <span style="font-family:monospace;" x-text="'#' + (c.deal_id || '—')"></span> · 
+                  <span x-text="lkMethodLabel(c.payment_method)"></span> · @<span x-text="c.supplier || '—'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- TO_PAY -->
+        <template x-if="lkSubTab === 'to_pay'">
+          <div>
+            <div class="text-xs" style="color: var(--text-dim); margin-bottom: 8px;">Карточки в статусе ОТРАБОТАН с методом USDT_TRC20 — очередь крипто-выплат партнёрам.</div>
+            <template x-if="(lkSections.to_pay || []).length === 0">
+              <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Очередь пуста.</div>
+            </template>
+            <template x-for="c in lkSections.to_pay" :key="c.card_id">
+              <div class="metric" style="padding: 10px; margin-bottom: 4px; border-left: 3px solid var(--hud-emerald);">
+                <div class="flex items-center gap-2 text-xs">
+                  <span style="font-weight:700;" x-text="(c.bank || '—').toUpperCase()"></span>
+                  <span x-text="c.fio || '—'"></span>
+                  <span style="margin-left:auto; font-weight:700; color: var(--hud-emerald);" x-text="fmtUsd(c.price_usdt || 0)"></span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-dim); font-family: monospace; word-break: break-all;">
+                  → <span x-text="c.usdt_address || '⚠️ адрес не задан'"></span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-dim);">
+                  @<span x-text="c.supplier || '—'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- TO_RELEASE -->
+        <template x-if="lkSubTab === 'to_release'">
+          <div>
+            <div class="text-xs" style="color: var(--text-dim); margin-bottom: 8px;">Карточки в статусе ОТРАБОТАН / ПОПОЛНИТЬ_И_ОТПУСТИТЬ с методом GUARANTOR_AFTER_WORK — нужно пополнить сделку в Конте и отпустить клиенту.</div>
+            <template x-if="(lkSections.to_release || []).length === 0">
+              <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Очередь пуста.</div>
+            </template>
+            <template x-for="c in lkSections.to_release" :key="c.card_id">
+              <div class="metric" style="padding: 10px; margin-bottom: 4px; border-left: 3px solid var(--hud-primary);">
+                <div class="flex items-center gap-2 text-xs">
+                  <span style="font-weight:700;" x-text="(c.bank || '—').toUpperCase()"></span>
+                  <span x-text="c.fio || '—'"></span>
+                  <span style="margin-left:auto; font-weight:700; color: var(--hud-primary);" x-text="fmtUsd(c.price_usdt || 0)"></span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-dim);">
+                  Сделка <span style="font-family:monospace;" x-text="'#' + (c.deal_id || '—')"></span> · @<span x-text="c.supplier || '—'"></span> · 
+                  <span x-text="lkStatusBadge(c.status)"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+      </div>
+    </div>
+
+    <!-- ===== OPERATIONAL DEPT (May 2026): ЛК в работе + фикс заявок ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'operational'" x-init="$watch('currentView', v => { if (v === 'operational') refreshOpAll(); else stopOpTimer(); })">
+      <div class="panel-title">
+        Операционная — ЛК в работе
+        <span class="badge-mini"
+              x-text="((opLkInWork.singles?.length || 0) + (opLkInWork.combos?.reduce((a,c)=>a+c.size,0) || 0)) + ' активных'"></span>
+        <button class="chip-btn" style="margin-left:auto;" @click="refreshOpAll()">⟳ Обновить</button>
+        <button class="chip-btn" style="margin-left:6px; background: var(--hud-primary); color: #000;"
+                @click="openExchangeModal()">➕ Новая заявка на обмен</button>
+      </div>
+
+      <!-- Одиночки: банки колонками -->
+      <div style="padding: 12px 14px;">
+        <div style="color: var(--text-dim); font-size: 11px; margin-bottom: 8px;">
+          🟢 ОДИНОЧКИ (отдельные ЛК)
+        </div>
+        <template x-if="(opLkInWork.singles || []).length === 0">
+          <div class="text-center py-3 text-xs" style="color: var(--text-dim)">Одиночек в работе нет</div>
+        </template>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px;">
+          <template x-for="lk in (opLkInWork.singles || [])" :key="lk.card_id">
+            <div class="metric" style="padding: 10px; border-left: 3px solid var(--hud-primary);">
+              <div class="flex items-center gap-2 text-xs">
+                <span style="font-weight:700;" x-text="(lk.bank || '—').toUpperCase()"></span>
+                <span x-text="lk.fio || '—'"></span>
+                <span style="margin-left:auto; font-weight:700; color: var(--hud-primary);" x-text="'$' + (lk.price_usdt || 0)"></span>
+              </div>
+              <div class="text-xs mt-1" style="color: var(--text-dim);">
+                @<span x-text="lk.supplier || '—'"></span> · 
+                <span x-text="lkMethodLabel(lk.payment_method)"></span>
+              </div>
+              <div class="text-xs mt-1" style="color: var(--hud-amber);">
+                ⏱ <span x-text="formatLkTimer(lk.perevyaz_ts)"></span> с перевязки
+              </div>
+              <div class="mt-2 flex gap-2">
+                <button class="chip-btn" style="background: var(--hud-primary); color:#000;" @click="openDedik(lk.card_id)">🖥 Зайти на дедик</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Связки: 2+ ЛК с одной анкеты -->
+      <div style="padding: 12px 14px; border-top: 1px solid rgba(255,255,255,0.06);">
+        <div style="color: var(--text-dim); font-size: 11px; margin-bottom: 8px;">
+          🔗 СВЯЗКИ (2+ ЛК с одной анкеты)
+        </div>
+        <template x-if="(opLkInWork.combos || []).length === 0">
+          <div class="text-center py-3 text-xs" style="color: var(--text-dim)">Связок в работе нет</div>
+        </template>
+        <template x-for="combo in (opLkInWork.combos || [])" :key="combo.fio + ':' + combo.supplier">
+          <div style="margin-bottom: 12px; padding: 10px; background: rgba(var(--primary-rgb), 0.05); border-radius: 6px; border-left: 3px solid var(--hud-amber);">
+            <div class="text-xs" style="margin-bottom: 6px;">
+              <b x-text="combo.fio"></b> / @<span x-text="combo.supplier"></span>
+              <span style="margin-left: auto; color: var(--text-dim);" x-text="combo.size + ' ЛК'"></span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;">
+              <template x-for="lk in combo.items" :key="lk.card_id">
+                <div class="metric" style="padding: 8px;">
+                  <div class="flex items-center gap-2 text-xs">
+                    <span style="font-weight:700;" x-text="(lk.bank || '—').toUpperCase()"></span>
+                    <span style="margin-left:auto;" x-text="'$' + (lk.price_usdt || 0)"></span>
+                  </div>
+                  <div class="text-xs mt-1" style="color: var(--hud-amber);">
+                    ⏱ <span x-text="formatLkTimer(lk.perevyaz_ts)"></span>
+                  </div>
+                  <button class="chip-btn mt-2" style="background: var(--hud-primary); color:#000; width:100%;"
+                          @click="openDedik(lk.card_id)">🖥 Дедик</button>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== OPERATIONAL: Список зафиксированных заявок ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'operational'">
+      <div class="panel-title">
+        Зафиксированные заявки на обмен
+        <span class="badge-mini" x-text="(opExchangeRequests?.length || 0) + ' шт.'"></span>
+      </div>
+      <div style="padding: 8px 14px; max-height: 420px; overflow-y: auto;">
+        <template x-if="(opExchangeRequests || []).length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Заявок ещё нет</div>
+        </template>
+        <template x-for="req in opExchangeRequests" :key="req.req_id">
+          <div class="metric" style="padding: 10px; margin-bottom: 4px;">
             <div class="flex items-center gap-2 text-xs">
-              <span x-text="status.replace(/_/g, ' ')"></span>
-              <span style="color: var(--text-dim); margin-left: auto;" x-text="count + ' карточек'"></span>
+              <span style="font-weight:700; color: var(--hud-primary);" x-text="'#' + req.req_id"></span>
+              <span x-text="(req.bank_in || '—').toUpperCase() + ' → ' + (req.outs || []).map(o => (o.bank || '—').toUpperCase()).join(' / ')"></span>
+              <span style="margin-left:auto; font-weight:700;" :class="(req.margin_usdt || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'"
+                    x-text="(req.margin_usdt || 0).toFixed(2) + '$'"></span>
             </div>
-            <div style="height: 6px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 3px; overflow: hidden;">
-              <div :style="'height: 100%; width: ' + (Math.min(100, count * 100 / Math.max(1, state.stats.lk_cards_total || 1))) + '%; background: ' + (status === 'В_РАБОТЕ' ? 'var(--hud-primary)' : (status === 'БЛОК' || status === 'БРАК' ? 'var(--hud-rose)' : (status === 'ОТРАБОТАН' ? 'var(--hud-amber)' : 'var(--hud-emerald)'))) + '; box-shadow: 0 0 6px currentColor;'"></div>
+            <div class="text-xs mt-1" style="color: var(--text-dim);">
+              ВХОД <b x-text="(req.amount_in || 0).toLocaleString() + ' ₽'"></b> (<span x-text="req.fio_in"></span>) · 
+              ВЫХОД <b x-text="(req.total_out_rub || 0).toLocaleString() + ' ₽'"></b> · 
+              курс <span x-text="req.exchange_rate"></span> · 
+              <span x-text="new Date((req.created_at || 0) * 1000).toLocaleString('ru-RU')"></span>
             </div>
           </div>
         </template>
       </div>
     </div>
 
-    <!-- ===== LK DEPT: by Bank ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'lk'">
-      <div class="panel-title">
-        ЛК по банкам
-        <span class="badge-mini">РАСПРЕДЕЛЕНИЕ</span>
-      </div>
-      <div style="padding: 8px 14px; max-height: 240px; overflow-y: auto;">
-        <template x-for="[bank, count] in Object.entries(banksFromCards()).sort((a,b) => b[1] - a[1])" :key="bank">
-          <div class="flex items-center gap-2 text-xs" style="padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
-            <span style="font-weight: 700;" x-text="bank"></span>
-            <span style="color: var(--text-dim); margin-left: auto;" x-text="count + ' карточек'"></span>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- ===== FIN DEPT: Recent Applications ===== -->
+        <!-- ===== FIN DEPT: Recent Applications ===== -->
     <div class="jarvis-panel" x-show="currentView === 'fin'">
       <div class="panel-title">
         Recent Applications V2
@@ -4888,11 +5091,66 @@
 
 
 <!-- ===== БУХГАЛТЕРИЯ ===== -->
-<section x-show="currentView === 'accounting'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+<section x-show="currentView === 'accounting'" x-init="$watch('currentView', v => { if (v === 'accounting') refreshAcc2(); })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
     <h2 style="margin: 0; font-size: 22px; font-weight: 700;">📒 Бухгалтерия</h2>
-    <span style="font-size: 13px; color: var(--text-dim);">— все выплаты + заметки</span>
-    <button class="btn" @click="refreshAccounting()" :disabled="accountingLoading" style="margin-left: auto;">↻ Обновить</button>
+    <span style="font-size: 13px; color: var(--text-dim);">— касса / расходы / маржа</span>
+    <select x-model="acc2Period" @change="refreshAcc2()" style="margin-left: 12px; padding: 4px 8px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      <option value="day">за день</option>
+      <option value="week">за неделю</option>
+      <option value="month">за месяц</option>
+      <option value="all">за всё время</option>
+    </select>
+    <button class="btn" @click="refreshAcc2(); refreshAccounting()" :disabled="accountingLoading" style="margin-left: auto;">↻ Обновить</button>
+  </div>
+
+  <!-- 5 КАТЕГОРИЙ + МАРЖА -->
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 16px;">
+    <template x-for="cat in ['kassa','suppliers','salaries','ads','sims']" :key="cat">
+      <div class="jarvis-panel" style="padding: 14px; border-left: 3px solid;" :style="'border-left-color: ' + acc2CategoryColor(cat)">
+        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;" x-text="acc2CategoryLabel(cat)"></div>
+        <div style="font-size: 22px; font-weight: 700;" :style="'color: ' + acc2CategoryColor(cat)"
+             x-text="(acc2Summary.categories_usdt[cat] || 0).toFixed(2) + '$'"></div>
+        <div style="font-size: 10px; color: var(--text-dim);" x-show="(acc2Summary.categories_rub[cat] || 0) > 0"
+             x-text="(acc2Summary.categories_rub[cat] || 0).toLocaleString() + ' ₽'"></div>
+        <button class="chip-btn" style="margin-top: 8px; width: 100%;"
+                x-show="acc2CanAdd(cat)"
+                @click="openAcc2AddModal(cat)">+ Добавить</button>
+        <button class="chip-btn" style="margin-top: 8px; width: 100%; opacity: 0.5; cursor: not-allowed;"
+                x-show="!acc2CanAdd(cat)"
+                disabled>🔒 нет прав</button>
+      </div>
+    </template>
+    <div class="jarvis-panel" style="padding: 14px; border-left: 3px solid var(--hud-primary); background: rgba(var(--primary-rgb), 0.05);">
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">📊 МАРЖА за период</div>
+      <div style="font-size: 26px; font-weight: 800;"
+           :style="'color: ' + ((acc2Summary.margin_usdt || 0) >= 0 ? 'var(--hud-emerald)' : 'var(--hud-rose)')"
+           x-text="(acc2Summary.margin_usdt || 0).toFixed(2) + '$'"></div>
+      <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+        касса − (поставщики + зп + реклама + симки)
+      </div>
+    </div>
+  </div>
+
+  <!-- Список записей -->
+  <div class="jarvis-panel" style="padding: 14px; margin-bottom: 16px;">
+    <div class="panel-title" style="margin-bottom: 8px;">Журнал записей <span class="badge-mini" x-text="acc2Entries.length + ' шт.'"></span></div>
+    <div style="max-height: 320px; overflow-y: auto;">
+      <template x-if="acc2Entries.length === 0">
+        <div style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 12px;">Записей за период нет</div>
+      </template>
+      <template x-for="e in acc2Entries" :key="e.entry_id">
+        <div style="padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 8px; align-items: center; font-size: 12px;">
+          <span style="min-width: 130px;" :style="'color: ' + acc2CategoryColor(e.category)" x-text="acc2CategoryLabel(e.category)"></span>
+          <span style="font-weight: 700;" x-text="(e.amount_usdt || 0).toFixed(2) + '$'"></span>
+          <span style="color: var(--text-dim);" x-show="e.amount_rub > 0" x-text="'(' + (e.amount_rub || 0).toLocaleString() + ' ₽)'"></span>
+          <span style="color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="e.note || '—'"></span>
+          <span style="color: var(--text-dim); font-size: 10px;" x-text="new Date((e.ts || 0) * 1000).toLocaleDateString('ru-RU')"></span>
+          <span style="color: var(--text-dim); font-size: 10px;" x-text="'@' + (e.created_by || '—')"></span>
+          <button class="chip-btn" style="padding: 2px 6px; opacity: 0.6;" @click="deleteAcc2Entry(e.entry_id)" title="Удалить">✕</button>
+        </div>
+      </template>
+    </div>
   </div>
 
   <!-- Stats -->
@@ -5720,6 +5978,37 @@ function jarvis() {
     notesPreview: [],
     notesCategory: '',
     // Выплаты
+    // ACCOUNTING v2 (May 2026): 5 categories + period selector
+    acc2Period: 'month',  // day | week | month | all
+    acc2Summary: { categories_usdt: {kassa:0,suppliers:0,salaries:0,ads:0,sims:0}, categories_rub: {kassa:0,suppliers:0,salaries:0,ads:0,sims:0}, margin_usdt: 0 },
+    acc2Entries: [],
+    acc2ShowAddModal: false,
+    acc2AddForm: { category: 'salaries', amount_usdt: 0, amount_rub: 0, note: '' },
+    // OPERATIONAL (May 2026): ЛК в работе + фикс заявок
+    opLkInWork: { singles: [], combos: [] },
+    opExchangeRequests: [],
+    opNowTs: Math.floor(Date.now() / 1000),
+    opTimerInterval: null,
+    showExchangeModal: false,
+    showDedikModal: false,
+    dedikModalData: null,  // {card_id, ip, login, password, location}
+    exchangeForm: {
+      bank_in: '',
+      fio_in: '',
+      lk_card_id_in: '',
+      amount_in: 0,
+      outs: [],
+      partner_pct: 0,
+      exchange_rate: 0,
+      commission_usdt: 0,
+      _margin_preview: null,
+    },
+    fioSearchIn: '',
+    fioSearchResultsIn: [],
+    // LK 4-section view (May 2026)
+    lkSubTab: 'all',  // all | to_top_up | to_pay | to_release
+    lkSections: { all: [], to_top_up: [], to_pay: [], to_release: [] },
+    lkSummary: { all: { count: 0, sum: 0 }, to_top_up: { count: 0, sum: 0 }, to_pay: { count: 0, sum: 0 }, to_release: { count: 0, sum: 0 } },
     payouts: { release: [], fund_release: [], usdt: [] },
     payoutDraftHash: {},   // card_id → input value
     payoutDraftDealId: {}, // payout_id → input value
@@ -6033,6 +6322,305 @@ function jarvis() {
         const r = await fetch('/api/lk_cards?limit=100', { credentials: 'include' });
         if (r.ok) this.cards = (await r.json()).cards || [];
       } catch (e) {}
+    },
+    async loadLkSection(name) {
+      const ep = { all: '/api/lk/all', to_top_up: '/api/lk/to_top_up', to_pay: '/api/lk/to_pay', to_release: '/api/lk/to_release' }[name];
+      if (!ep) return;
+      try {
+        const r = await fetch(ep, { credentials: 'include' });
+        if (r.ok) this.lkSections[name] = (await r.json()).cards || [];
+      } catch (e) { console.error('loadLkSection', name, e); }
+    },
+    async loadLkSummary() {
+      try {
+        const r = await fetch('/api/lk/summary', { credentials: 'include' });
+        if (r.ok) this.lkSummary = await r.json();
+      } catch (e) {}
+    },
+    // ===== ACCOUNTING v2 =====
+    async refreshAcc2() {
+      await Promise.all([this.loadAcc2Summary(), this.loadAcc2Entries()]);
+    },
+    async loadAcc2Summary() {
+      try {
+        const r = await fetch('/api/accounting/summary?period=' + this.acc2Period, { credentials: 'include' });
+        if (r.ok) this.acc2Summary = await r.json();
+      } catch (e) {}
+    },
+    async loadAcc2Entries() {
+      const days = this.acc2Period === 'day' ? 1 : (this.acc2Period === 'week' ? 7 : (this.acc2Period === 'all' ? 3650 : 30));
+      try {
+        const r = await fetch('/api/accounting/entries?days=' + days, { credentials: 'include' });
+        if (r.ok) this.acc2Entries = (await r.json()).entries || [];
+      } catch (e) {}
+    },
+    acc2CategoryLabel(c) {
+      return ({ kassa: '💰 Касса', suppliers: '🏦 Поставщикам', salaries: '👥 Зарплаты', ads: '📢 Реклама', sims: '📱 Симки' })[c] || c;
+    },
+    acc2CategoryColor(c) {
+      return ({ kassa: 'var(--hud-emerald)', suppliers: 'var(--hud-primary)', salaries: 'var(--hud-amber)', ads: 'var(--hud-rose)', sims: 'var(--text-dim)' })[c] || '#fff';
+    },
+    acc2CanAdd(c) {
+      const r = this.dashMe?.role || 'guest';
+      const rank = { owner: 100, manager: 80, accounting: 60, operationist: 40, system: 30, guest: 0 };
+      const need = { kassa: 80, suppliers: 80, salaries: 60, ads: 60, sims: 80 }[c] || 100;
+      return (rank[r] || 0) >= need;
+    },
+    openAcc2AddModal(cat) {
+      this.acc2AddForm = { category: cat || 'salaries', amount_usdt: 0, amount_rub: 0, note: '' };
+      this.acc2ShowAddModal = true;
+    },
+    async submitAcc2Entry() {
+      if (!this.acc2AddForm.category) return;
+      if (!this.acc2AddForm.amount_usdt && !this.acc2AddForm.amount_rub) {
+        alert('Укажите сумму (USDT или ₽)'); return;
+      }
+      try {
+        const r = await fetch('/api/accounting/entry', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.acc2AddForm),
+        });
+        if (!r.ok) {
+          alert('Ошибка: ' + await r.text()); return;
+        }
+        this.acc2ShowAddModal = false;
+        await this.refreshAcc2();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      }
+    },
+    async deleteAcc2Entry(entry_id) {
+      if (!confirm('Удалить запись?')) return;
+      try {
+        const r = await fetch('/api/accounting/entry/' + entry_id, { method: 'DELETE', credentials: 'include' });
+        if (r.ok) await this.refreshAcc2();
+      } catch (e) {}
+    },
+    // ===== OPERATIONAL =====
+    async refreshOpAll() {
+      await Promise.all([this.refreshOpLkInWork(), this.refreshOpRequests()]);
+      this.startOpTimer();
+    },
+    async refreshOpLkInWork() {
+      try {
+        const r = await fetch('/api/operational/lk_in_work', { credentials: 'include' });
+        if (r.ok) this.opLkInWork = await r.json();
+      } catch (e) { console.error('opLkInWork', e); }
+    },
+    async refreshOpRequests() {
+      try {
+        const r = await fetch('/api/operational/exchange_requests', { credentials: 'include' });
+        if (r.ok) this.opExchangeRequests = (await r.json()).requests || [];
+      } catch (e) {}
+    },
+    startOpTimer() {
+      if (this.opTimerInterval) return;
+      this.opTimerInterval = setInterval(() => {
+        this.opNowTs = Math.floor(Date.now() / 1000);
+      }, 60000);
+    },
+    stopOpTimer() {
+      if (this.opTimerInterval) {
+        clearInterval(this.opTimerInterval);
+        this.opTimerInterval = null;
+      }
+    },
+    formatLkTimer(perevyaz_ts) {
+      if (!perevyaz_ts) return '—';
+      const diff = Math.max(0, this.opNowTs - Math.floor(perevyaz_ts));
+      const d = Math.floor(diff / 86400);
+      const h = Math.floor((diff % 86400) / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      return `${d}д ${h}ч ${m}м`;
+    },
+    async openDedik(card_id) {
+      try {
+        const r = await fetch('/api/operational/dedik_creds/' + card_id, { credentials: 'include' });
+        if (!r.ok) {
+          alert('Не удалось получить креды дедика (' + r.status + ')');
+          return;
+        }
+        const data = await r.json();
+        if (!data.found) {
+          alert('Дедик для этого ЛК не привязан в crm_passwords. Сначала заполни ded_ip/ded_login/ded_pass в System → ПАРОЛИ.');
+          return;
+        }
+        this.dedikModalData = { card_id, ...data };
+        this.showDedikModal = true;
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      }
+    },
+    downloadRdp(card_id) {
+      // Просто открываем endpoint — браузер скачает .rdp файл
+      window.location.href = '/api/operational/dedik_rdp/' + card_id;
+    },
+    copyToClipboard(text) {
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        this.toast && this.toast('Скопировано');
+      });
+    },
+    // ===== ФИКС ЗАЯВОК =====
+    openExchangeModal() {
+      this.exchangeForm = {
+        bank_in: '',
+        fio_in: '',
+        lk_card_id_in: '',
+        amount_in: 0,
+        outs: [{ bank: '', fio: '', lk_card_id: '', amount_out: 0, jur_jur_receivers: [] }],
+        partner_pct: 0,
+        exchange_rate: 0,
+        commission_usdt: 0,
+        _margin_preview: null,
+      };
+      this.fioSearchIn = '';
+      this.fioSearchResultsIn = [];
+      this.showExchangeModal = true;
+    },
+    closeExchangeModal() {
+      this.showExchangeModal = false;
+    },
+    addExchangeOut() {
+      this.exchangeForm.outs.push({ bank: '', fio: '', lk_card_id: '', amount_out: 0, jur_jur_receivers: [] });
+    },
+    removeExchangeOut(idx) {
+      this.exchangeForm.outs.splice(idx, 1);
+      if (this.exchangeForm.outs.length === 0) this.addExchangeOut();
+    },
+    addJurJur(outIdx) {
+      this.exchangeForm.outs[outIdx].jur_jur_receivers.push({ bank: '', fio: '' });
+    },
+    removeJurJur(outIdx, jjIdx) {
+      this.exchangeForm.outs[outIdx].jur_jur_receivers.splice(jjIdx, 1);
+    },
+    async searchLkFio(query, target) {
+      // target: 'in' | { outIdx, jjIdx? }
+      if (!query || query.length < 2) {
+        if (target === 'in') this.fioSearchResultsIn = [];
+        return;
+      }
+      try {
+        const r = await fetch('/api/operational/search_lk?q=' + encodeURIComponent(query), { credentials: 'include' });
+        if (!r.ok) return;
+        const results = (await r.json()).results || [];
+        if (target === 'in') this.fioSearchResultsIn = results;
+      } catch (e) {}
+    },
+    pickLkIn(item) {
+      this.exchangeForm.bank_in = item.bank;
+      this.exchangeForm.fio_in = item.fio;
+      this.exchangeForm.lk_card_id_in = item.card_id;
+      this.fioSearchIn = item.fio + ' (' + item.bank + ')';
+      this.fioSearchResultsIn = [];
+    },
+    calcMargin() {
+      const rate = parseFloat(this.exchangeForm.exchange_rate) || 0;
+      const inRub = parseFloat(this.exchangeForm.amount_in) || 0;
+      if (rate <= 0) { this.exchangeForm._margin_preview = null; return; }
+      let outRub = 0;
+      for (const o of this.exchangeForm.outs) {
+        outRub += parseFloat(o.amount_out) || 0;
+      }
+      const inUsdt = inRub / rate;
+      const outUsdt = outRub / rate;
+      const commission = parseFloat(this.exchangeForm.commission_usdt) || 0;
+      const raw = inUsdt - outUsdt - commission;
+      const pctPartner = parseFloat(this.exchangeForm.partner_pct) || 0;
+      const partnerShare = raw * pctPartner / 100;
+      this.exchangeForm._margin_preview = {
+        in_usdt: inUsdt,
+        out_usdt: outUsdt,
+        commission_usdt: commission,
+        partner_share_usdt: partnerShare,
+        margin_usdt: raw - partnerShare,
+      };
+    },
+    async submitExchangeRequest() {
+      this.calcMargin();
+      if (!this.exchangeForm.bank_in || !this.exchangeForm.fio_in) {
+        alert('Заполните банк ВХОДА и ФИО'); return;
+      }
+      if (!this.exchangeForm.amount_in || this.exchangeForm.amount_in <= 0) {
+        alert('Укажите сумму ВХОДА'); return;
+      }
+      if (!this.exchangeForm.exchange_rate || this.exchangeForm.exchange_rate <= 0) {
+        alert('Укажите курс вывода'); return;
+      }
+      if (!this.exchangeForm.outs.length || !this.exchangeForm.outs[0].bank) {
+        alert('Добавьте минимум один ВЫХОД'); return;
+      }
+      const payload = {
+        bank_in: this.exchangeForm.bank_in,
+        fio_in: this.exchangeForm.fio_in,
+        lk_card_id_in: this.exchangeForm.lk_card_id_in || '',
+        amount_in: parseFloat(this.exchangeForm.amount_in) || 0,
+        outs: this.exchangeForm.outs.map(o => ({
+          bank: o.bank,
+          fio: o.fio,
+          lk_card_id: o.lk_card_id || '',
+          amount_out: parseFloat(o.amount_out) || 0,
+          jur_jur_receivers: o.jur_jur_receivers || [],
+        })),
+        partner_pct: parseFloat(this.exchangeForm.partner_pct) || 0,
+        exchange_rate: parseFloat(this.exchangeForm.exchange_rate) || 0,
+        commission_usdt: parseFloat(this.exchangeForm.commission_usdt) || 0,
+      };
+      try {
+        const r = await fetch('/api/operational/exchange_request', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          alert('Ошибка: ' + txt);
+          return;
+        }
+        const result = await r.json();
+        alert('Заявка зафиксирована #' + result.req_id + '\nМаржа: ' + (result.margin_usdt || 0).toFixed(2) + '$');
+        this.closeExchangeModal();
+        await this.refreshOpAll();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      }
+    },
+
+    async refreshLkAll() {
+      await Promise.all([
+        this.loadLkSummary(),
+        this.loadLkSection('all'),
+        this.loadLkSection('to_top_up'),
+        this.loadLkSection('to_pay'),
+        this.loadLkSection('to_release'),
+      ]);
+    },
+    setLkSubTab(name) {
+      this.lkSubTab = name;
+      if (name && this.lkSections[name] && this.lkSections[name].length === 0) {
+        this.loadLkSection(name);
+      }
+    },
+    lkMethodLabel(m) {
+      return ({
+        USDT_TRC20: 'USDT TRC20 после отработки',
+        GUARANTOR_BEFORE: 'Сделка в конте (ДО перевязки)',
+        GUARANTOR_AFTER: 'Сделка в конте (после перевязки)',
+        GUARANTOR_AFTER_WORK: 'Сделка в конте (после отработки)',
+      })[(m || '').toUpperCase()] || (m || '—');
+    },
+    lkStatusBadge(s) {
+      const map = {
+        'В_РАБОТЕ': '🟢 В работе',
+        'ОТРАБОТАН': '✅ Отработан',
+        'ПОПОЛНИТЬ_И_ОТПУСТИТЬ': '🔵 Пополнить и отпустить',
+        'БРАК': '❌ Брак',
+        'БЛОК': '🚫 Блок',
+        'ЗАВЕРШЁН': '🏁 Завершён',
+      };
+      return map[(s || '').toUpperCase()] || (s || '—');
     },
     async refreshManagers() {
       try {
@@ -6648,6 +7236,16 @@ function jarvis() {
       if (view === 'accounting') {
         this.refreshAccounting();
         this._startAccountingPoller();
+        this.refreshAcc2();
+      }
+      if (view === 'operational') {
+        this.refreshOpAll();
+      } else {
+        // Останавливаем таймер если ушли с Операционной
+        if (this.opTimerInterval) this.stopOpTimer();
+      }
+      if (view === 'lk') {
+        this.refreshLkAll();
       }
       if (view === 'settings') {
         this.tgSessionStatus();
@@ -9557,5 +10155,215 @@ function jarvis() {
   };
 }
 </script>
+<!-- ===== ACCOUNTING v2: Add entry modal ===== -->
+<div x-show="acc2ShowAddModal" x-cloak
+     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;"
+     @click.self="acc2ShowAddModal=false">
+  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 420px; width: 90%;">
+    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">➕ Новая запись в Бухгалтерию</h3>
+    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Категория</div>
+    <select x-model="acc2AddForm.category" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; margin-bottom: 8px;">
+      <option value="kassa">💰 Касса (приход)</option>
+      <option value="suppliers">🏦 Поставщикам (выплата)</option>
+      <option value="salaries">👥 Зарплаты</option>
+      <option value="ads">📢 Реклама</option>
+      <option value="sims">📱 Симки</option>
+    </select>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Сумма USDT</div>
+        <input type="number" step="0.01" x-model.number="acc2AddForm.amount_usdt"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Сумма ₽ (опционально)</div>
+        <input type="number" step="1" x-model.number="acc2AddForm.amount_rub"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+    </div>
+    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Примечание</div>
+    <input type="text" x-model="acc2AddForm.note" placeholder="за что / кому / когда…"
+           style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; margin-bottom: 12px;">
+    <div style="display: flex; gap: 8px;">
+      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitAcc2Entry()">✅ Сохранить</button>
+      <button class="chip-btn" @click="acc2ShowAddModal=false">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== OPERATIONAL: Дедик модалка ===== -->
+<div x-show="showDedikModal" x-cloak
+     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;"
+     @click.self="showDedikModal=false">
+  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 500px; width: 90%;">
+    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">🖥 Зайти на дедик</h3>
+    <template x-if="dedikModalData">
+      <div>
+        <div style="margin-bottom: 8px;">
+          <div style="font-size: 11px; color: var(--text-dim);">IP-адрес:</div>
+          <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
+            <span x-text="dedikModalData.ip"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.ip)">📋</button>
+          </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <div style="font-size: 11px; color: var(--text-dim);">Логин:</div>
+          <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
+            <span x-text="dedikModalData.login"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.login)">📋</button>
+          </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <div style="font-size: 11px; color: var(--text-dim);">Пароль:</div>
+          <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
+            <span x-text="dedikModalData.password || '—'"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.password)">📋</button>
+          </div>
+        </div>
+        <div x-show="dedikModalData.location" style="margin-bottom: 12px; font-size: 11px; color: var(--text-dim);">
+          📍 <span x-text="dedikModalData.location"></span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-dim); padding: 8px; background: rgba(255, 200, 0, 0.1); border-radius: 4px; margin-bottom: 12px;">
+          ⚠ Пароль НЕ сохраняется в .rdp-файле — Windows требует CryptProtectData.
+          После нажатия «Скачать .rdp» mstsc откроет окно — введите/вставьте пароль вручную.
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="chip-btn" style="background: var(--hud-primary); color: #000; flex: 1;"
+                  @click="downloadRdp(dedikModalData.card_id)">⬇ Скачать .rdp</button>
+          <button class="chip-btn" @click="showDedikModal=false">Закрыть</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ===== OPERATIONAL: Фикс заявка модалка ===== -->
+<div x-show="showExchangeModal" x-cloak
+     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;overflow:auto;padding:20px;"
+     @click.self="closeExchangeModal()">
+  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;">
+    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">➕ Новая заявка на обмен</h3>
+
+    <!-- BANK ВХОДА -->
+    <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 10px;">
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">БАНК ВХОДА</div>
+      <select x-model="exchangeForm.bank_in" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+        <option value="">— выберите банк —</option>
+        <option value="АЛЬФА">АЛЬФА</option>
+        <option value="ВТБ">ВТБ</option>
+      </select>
+      <div style="margin-top: 6px;">
+        <input type="text" x-model="fioSearchIn" @input="searchLkFio($event.target.value, 'in')"
+               placeholder="ФИО (поиск по ЛК)…"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+        <div x-show="(fioSearchResultsIn || []).length > 0"
+             style="background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; max-height: 160px; overflow-y: auto; margin-top: 4px;">
+          <template x-for="r in fioSearchResultsIn" :key="r.card_id">
+            <div style="padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05);"
+                 @click="pickLkIn(r)" class="hover:bg-white/10">
+              <span style="font-weight:700;" x-text="r.bank"></span> · <span x-text="r.fio"></span>
+              <span style="font-size:10px; color: var(--text-dim); margin-left: 4px;" x-text="'@' + r.supplier"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+      <input type="number" x-model.number="exchangeForm.amount_in" placeholder="Сумма входа (₽)"
+             style="width: 100%; margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+    </div>
+
+    <!-- ВЫХОДЫ -->
+    <div style="margin-bottom: 10px;">
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center;">
+        ВЫХОДЫ (можно несколько)
+        <button class="chip-btn" style="margin-left:auto;" @click="addExchangeOut()">+ ещё выход</button>
+      </div>
+      <template x-for="(out, idx) in exchangeForm.outs" :key="idx">
+        <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 6px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+            <span style="font-size: 11px; color: var(--text-dim);">Выход #<span x-text="idx+1"></span></span>
+            <button x-show="exchangeForm.outs.length > 1" class="chip-btn" style="margin-left:auto;" @click="removeExchangeOut(idx)">✕</button>
+          </div>
+          <select x-model="out.bank" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+            <option value="">— банк ВЫХОДА —</option>
+            <option value="ОЗОН">ОЗОН</option>
+            <option value="РАЙФ">РАЙФ</option>
+            <option value="ТОЧКА">ТОЧКА</option>
+            <option value="УРАЛ">УРАЛ</option>
+            <option value="ПСБ">ПСБ</option>
+          </select>
+          <input type="text" x-model="out.fio" placeholder="ФИО"
+                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <input type="number" x-model.number="out.amount_out" placeholder="Сумма ВЫХОДА (₽)"
+                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <!-- юр-юр получатели -->
+          <div style="margin-top: 8px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 10px; color: var(--text-dim); display: flex; align-items: center;">
+              Юр-юр получатели с этого ЛК
+              <button class="chip-btn" style="margin-left:auto;" @click="addJurJur(idx)">+ ещё</button>
+            </div>
+            <template x-for="(jj, jjIdx) in out.jur_jur_receivers" :key="jjIdx">
+              <div style="display: flex; gap: 4px; margin-top: 4px;">
+                <select x-model="jj.bank" style="flex: 1; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+                  <option value="">— банк —</option>
+                  <option value="ОЗОН">ОЗОН</option>
+                  <option value="РАЙФ">РАЙФ</option>
+                  <option value="ТОЧКА">ТОЧКА</option>
+                  <option value="УРАЛ">УРАЛ</option>
+                  <option value="ПСБ">ПСБ</option>
+                  <option value="АЛЬФА">АЛЬФА</option>
+                  <option value="ВТБ">ВТБ</option>
+                </select>
+                <input type="text" x-model="jj.fio" placeholder="ФИО получателя"
+                       style="flex: 2; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+                <button class="chip-btn" style="padding: 2px 6px;" @click="removeJurJur(idx, jjIdx)">✕</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Курс / комиссия / % партнёра -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px;">
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">% партнёру</div>
+        <input type="number" step="0.1" x-model.number="exchangeForm.partner_pct"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">Курс вывода ₽/USDT</div>
+        <input type="number" step="0.01" x-model.number="exchangeForm.exchange_rate"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
+        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+    </div>
+
+    <!-- Маржа preview -->
+    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
+      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
+      <template x-if="exchangeForm._margin_preview">
+        <div style="font-size: 12px;">
+          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
+          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
+          Комиссия: <span x-text="exchangeForm._margin_preview.commission_usdt.toFixed(2)"></span>$ ·
+          Партнёру: <span x-text="exchangeForm._margin_preview.partner_share_usdt.toFixed(2)"></span>$
+          <br>
+          <b style="color: var(--hud-emerald); font-size: 16px;">МАРЖА: <span x-text="exchangeForm._margin_preview.margin_usdt.toFixed(2)"></span>$</b>
+        </div>
+      </template>
+    </div>
+
+    <div style="display: flex; gap: 8px;">
+      <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
+      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitExchangeRequest()">✅ Зафиксировать заявку</button>
+      <button class="chip-btn" @click="closeExchangeModal()">Отмена</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

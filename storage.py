@@ -2782,6 +2782,206 @@ class Storage:
     async def clear_crm_fsm(self, tg_user_id):
         await self.set_crm_fsm(tg_user_id, action=None)
 
+    # =====================================================================
+    # OPERATIONAL / EXCHANGE REQUESTS (фикс заявок на обмен)
+    # =====================================================================
+    def list_exchange_requests(self, status: Optional[str] = None) -> dict:
+        reqs = self.state.get("exchange_requests") or {}
+        if status:
+            return {k: v for k, v in reqs.items() if (v.get("status") or "") == status}
+        return reqs
+
+    def get_exchange_request(self, req_id: str) -> Optional[dict]:
+        return (self.state.get("exchange_requests") or {}).get(req_id)
+
+    async def add_exchange_request(self, **fields) -> str:
+        """Создаёт новую фикс заявку.
+        Поля: bank_in, fio_in, lk_card_id_in, amount_in,
+              outs: [ { bank, fio, lk_card_id, jur_jur_receivers: [ {bank, fio} ], amount_out } ],
+              partner_pct, exchange_rate, commission_usdt,
+              margin_usdt (calculated), status, created_by.
+        """
+        async with _lock:
+            seq = int(self.state.get("exchange_requests_seq", 0)) + 1
+            req_id = f"ex{seq:04d}"
+            self.state["exchange_requests_seq"] = seq
+            reqs = self.state.setdefault("exchange_requests", {})
+            base = {
+                "req_id": req_id,
+                "bank_in": (fields.get("bank_in") or "").upper(),
+                "fio_in": fields.get("fio_in") or "",
+                "lk_card_id_in": fields.get("lk_card_id_in") or "",
+                "amount_in": float(fields.get("amount_in") or 0),
+                "outs": list(fields.get("outs") or []),
+                "partner_pct": float(fields.get("partner_pct") or 0),
+                "exchange_rate": float(fields.get("exchange_rate") or 0),
+                "commission_usdt": float(fields.get("commission_usdt") or 0),
+                "margin_usdt": float(fields.get("margin_usdt") or 0),
+                "total_in_rub": float(fields.get("total_in_rub") or 0),
+                "total_out_rub": float(fields.get("total_out_rub") or 0),
+                "status": fields.get("status") or "ЗАФИКСИРОВАНА",
+                "created_by": fields.get("created_by") or "operationist",
+                "created_at": time.time(),
+                "involved_lk_cards": list(fields.get("involved_lk_cards") or []),
+            }
+            reqs[req_id] = base
+            await self._save_unlocked()
+            return req_id
+
+    async def update_exchange_request(self, req_id: str, **fields) -> bool:
+        async with _lock:
+            req = (self.state.setdefault("exchange_requests", {})).get(req_id)
+            if not req:
+                return False
+            for k, v in fields.items():
+                req[k] = v
+            req["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    def list_lk_in_work(self) -> list:
+        """ЛК, переданные в Операционную (status В_РАБОТЕ + перевязано).
+        Каждая запись содержит lk_card_id, bank, fio, supplier, perevyaz_ts,
+        is_combo (флаг связки = 2+ ЛК с одной анкеты)."""
+        cards = self.state.get("lk_cards") or {}
+        result = []
+        # Группировка для определения combo (одна анкета = одинаковый fio+supplier)
+        groups = {}
+        for cid, c in cards.items():
+            if not c:
+                continue
+            if (c.get("status") or "В_РАБОТЕ") != "В_РАБОТЕ":
+                continue
+            key = (
+                (c.get("fio") or "").strip().lower(),
+                (c.get("supplier") or "").lstrip("@").lower(),
+            )
+            groups.setdefault(key, []).append((cid, c))
+        for key, lst in groups.items():
+            is_combo = len(lst) > 1
+            for cid, c in lst:
+                result.append({
+                    "card_id": cid,
+                    "bank": (c.get("bank") or "").upper(),
+                    "fio": c.get("fio") or "",
+                    "supplier": (c.get("supplier") or "").lstrip("@"),
+                    "perevyaz_ts": c.get("created_at") or 0,
+                    "deal_id": c.get("deal_id") or "",
+                    "payment_method": c.get("payment_method") or "",
+                    "price_usdt": c.get("price_usdt") or 0,
+                    "is_combo": is_combo,
+                    "combo_size": len(lst),
+                })
+        return result
+
+    # =====================================================================
+    # ACCOUNTING ENTRIES (Бухгалтерия v2: касса/зарплаты/реклама/симки/поставщики)
+    # =====================================================================
+    def list_accounting_entries(
+        self,
+        category: Optional[str] = None,
+        date_from: Optional[float] = None,
+        date_to: Optional[float] = None,
+    ) -> list:
+        """Возвращает список бухгалтерских записей.
+
+        Категории: 'kassa', 'suppliers', 'salaries', 'ads', 'sims'.
+        Маржа считается отдельно (kassa - sum(suppliers,salaries,ads,sims))."""
+        entries = self.state.get("accounting_entries") or []
+        out = []
+        for e in entries:
+            if category and (e.get("category") or "") != category:
+                continue
+            ts = float(e.get("ts") or 0)
+            if date_from is not None and ts < date_from:
+                continue
+            if date_to is not None and ts > date_to:
+                continue
+            out.append(e)
+        out.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+        return out
+
+    async def add_accounting_entry(
+        self,
+        category: str,
+        amount_usdt: float,
+        amount_rub: float = 0.0,
+        note: str = "",
+        created_by: str = "",
+        ref_id: str = "",
+    ) -> str:
+        """Добавляет запись в Бухгалтерию.
+        category: 'kassa' | 'suppliers' | 'salaries' | 'ads' | 'sims'.
+        Возвращает entry_id."""
+        async with _lock:
+            seq = int(self.state.get("accounting_entries_seq", 0)) + 1
+            entry_id = f"ac{seq:05d}"
+            self.state["accounting_entries_seq"] = seq
+            entries = self.state.setdefault("accounting_entries", [])
+            entry = {
+                "entry_id": entry_id,
+                "category": category,
+                "amount_usdt": float(amount_usdt or 0),
+                "amount_rub": float(amount_rub or 0),
+                "note": note or "",
+                "created_by": created_by or "",
+                "ref_id": ref_id or "",
+                "ts": time.time(),
+            }
+            entries.append(entry)
+            await self._save_unlocked()
+            return entry_id
+
+    async def delete_accounting_entry(self, entry_id: str) -> bool:
+        async with _lock:
+            entries = self.state.get("accounting_entries") or []
+            n0 = len(entries)
+            entries[:] = [e for e in entries if (e.get("entry_id") or "") != entry_id]
+            if len(entries) != n0:
+                self.state["accounting_entries"] = entries
+                await self._save_unlocked()
+                return True
+            return False
+
+    def accounting_summary(
+        self,
+        date_from: Optional[float] = None,
+        date_to: Optional[float] = None,
+    ) -> dict:
+        """Сводка по категориям + общая маржа за период.
+        Маржа = касса − (suppliers + salaries + ads + sims)."""
+        cats = {
+            "kassa": 0.0,
+            "suppliers": 0.0,
+            "salaries": 0.0,
+            "ads": 0.0,
+            "sims": 0.0,
+        }
+        cats_rub = dict(cats)
+        for e in (self.state.get("accounting_entries") or []):
+            ts = float(e.get("ts") or 0)
+            if date_from is not None and ts < date_from:
+                continue
+            if date_to is not None and ts > date_to:
+                continue
+            cat = e.get("category") or ""
+            if cat in cats:
+                cats[cat] += float(e.get("amount_usdt") or 0)
+                cats_rub[cat] += float(e.get("amount_rub") or 0)
+        margin_usdt = (
+            cats["kassa"]
+            - cats["suppliers"]
+            - cats["salaries"]
+            - cats["ads"]
+            - cats["sims"]
+        )
+        return {
+            "categories_usdt": cats,
+            "categories_rub": cats_rub,
+            "margin_usdt": margin_usdt,
+            "period": {"from": date_from, "to": date_to},
+        }
+
 
 # ============================================================
 # AES-256-CBC шифрование StringSession для worker_sessions.

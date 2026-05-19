@@ -2988,7 +2988,13 @@ def _emit_crm_event(event_type: str, payload: dict, severity: str = "info") -> N
 
 async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = None) -> Optional[str]:
     """Создаёт ОДНУ карточку lk_card для конкретного ЛК (вызывается только
-    после успешной перевязки этого ЛК). Возвращает card_id или None."""
+    после успешной перевязки этого ЛК). Возвращает card_id или None.
+
+    Май 2026 (новая логика): метод оплаты ставится автоматически —
+    либо из сохранённых client_preferences (если клиент уже работал с нами),
+    либо дефолт GUARANTOR_AFTER_WORK (= гарант после отработки). Карточка
+    публикуется в TG-группу ЛК сразу же — без ожидания client confirm.
+    """
     if not lk:
         return None
     if owner is None:
@@ -2996,13 +3002,24 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
     pricing = crm_storage.state.get("pricing") or {}
     bank = (lk.get("bank") or "").upper()
     price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
+    # Авто-выбор метода: сначала смотрим client_preferences по @username
+    # поставщика; если пусто — дефолт GUARANTOR_AFTER_WORK.
+    supplier_uname = (owner.get("username") or "").lstrip("@").strip()
+    default_method = "GUARANTOR_AFTER_WORK"
+    try:
+        prefs = (crm_storage.state.get("client_preferences") or {}).get(supplier_uname.lower()) or {}
+        saved_method = (prefs.get("payment_method") or "").upper()
+        if saved_method:
+            default_method = saved_method
+    except Exception:
+        pass
     try:
         card_id = await crm_storage.add_lk_card(
             bank=bank,
             fio=drop.get("fio") or "",
             supplier=owner.get("username") or "",
             price_usdt=price,
-            payment_method="",  # ассистент впишет после уточнения у клиента
+            payment_method=default_method,
             status="В_РАБОТЕ",
             work_chat_id=owner.get("work_chat_id") or 0,
             client_username=owner.get("username") or "",
