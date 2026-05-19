@@ -2396,10 +2396,12 @@ class ExchangeRequestPayload(BaseModel):
     fio_in: str
     lk_card_id_in: Optional[str] = ""
     amount_in: float
-    outs: list
+    lk_in_price_usdt: float = 0
+    lk_in_status: Optional[str] = "ОТРАБОТАН"
+    outs: list  # [{bank, fio, lk_card_id, amount_out, lk_out_price_usdt, status_after, jur_jur_receivers: [{bank, fio, lk_card_id, lk_price_usdt, status_after}]}]
     partner_pct: float = 0
     exchange_rate: float = 0
-    commission_usdt: float = 0
+    commission_usdt: float = 0   # % комиссии откупа
 
 
 @app.post("/api/operational/exchange_request")
@@ -2415,21 +2417,35 @@ async def api_op_create_exchange_request(
         raise HTTPException(status_code=400, detail="exchange_rate required")
     total_in_rub = float(payload.amount_in or 0)
     total_out_rub = sum(float(o.get("amount_out") or 0) for o in (payload.outs or []))
-    in_usdt = total_in_rub / rate
-    out_usdt = total_out_rub / rate
     partner_pct = float(payload.partner_pct or 0)
-    commission = float(payload.commission_usdt or 0)
-    raw_margin = in_usdt - out_usdt - commission
-    partner_share = raw_margin * partner_pct / 100.0
-    margin_usdt = raw_margin - partner_share
+    comm_pct = float(payload.commission_usdt or 0)  # % комиссии откупа
 
-    involved_lk = []
+    # Новая формула (май 2026 v2):
+    # 1) Выплата партнёру в USDT = (вход - вход*pct_partner/100) / rate
+    partner_payout_usdt = (total_in_rub - total_in_rub * partner_pct / 100.0) / rate
+    # 2) Что получили мы (USDT) = сумма выходов / rate * (1 - comm_pct/100)
+    we_received_usdt = (total_out_rub / rate) * (1.0 - comm_pct / 100.0)
+    # 3) Стоимость ЛК (вход + все выходы + юр-юр)
+    lk_prices = float(payload.lk_in_price_usdt or 0)
+    for o in (payload.outs or []):
+        lk_prices += float(o.get("lk_out_price_usdt") or 0)
+        for jj in (o.get("jur_jur_receivers") or []):
+            lk_prices += float(jj.get("lk_price_usdt") or 0)
+    # 4) Маржа = мы_получили − выплата_партнёру − стоимость_ЛК
+    margin_usdt = we_received_usdt - partner_payout_usdt - lk_prices
+
+    # Собираем ЛК и их target-статусы
+    involved_lk = []  # [(card_id, status_after)]
     if payload.lk_card_id_in:
-        involved_lk.append(payload.lk_card_id_in)
+        involved_lk.append((payload.lk_card_id_in, payload.lk_in_status or "ОТРАБОТАН"))
     for o in (payload.outs or []):
         cid = o.get("lk_card_id")
         if cid:
-            involved_lk.append(cid)
+            involved_lk.append((cid, o.get("status_after") or "ОТРАБОТАН"))
+        for jj in (o.get("jur_jur_receivers") or []):
+            jj_cid = jj.get("lk_card_id")
+            if jj_cid:
+                involved_lk.append((jj_cid, jj.get("status_after") or "ОТРАБОТАН"))
 
     req_id = await storage.add_exchange_request(
         bank_in=payload.bank_in,
@@ -2439,22 +2455,24 @@ async def api_op_create_exchange_request(
         outs=payload.outs,
         partner_pct=partner_pct,
         exchange_rate=rate,
-        commission_usdt=commission,
+        commission_usdt=comm_pct,
         margin_usdt=margin_usdt,
         total_in_rub=total_in_rub,
         total_out_rub=total_out_rub,
         status="ЗАФИКСИРОВАНА",
         created_by=me.get("username") or str(me.get("tg_id")) or "operationist",
-        involved_lk_cards=involved_lk,
+        involved_lk_cards=[cid for cid, _ in involved_lk],
     )
 
     notified_chats = set()
-    for cid in involved_lk:
+    for cid, status_after in involved_lk:
         try:
-            await storage.update_lk_card(cid, status="ОТРАБОТАН")
+            await storage.update_lk_card(cid, status=status_after)
         except Exception:
             pass
-        # Уведомить клиента в work_chat — что ЛК ОТРАБОТАН и идёт расчёт.
+        # Уведомляем клиента ТОЛЬКО если ЛК стал ОТРАБОТАН (для В_РАБОТЕ — не дёргаем).
+        if status_after != "ОТРАБОТАН":
+            continue
         try:
             card = storage.get_lk_card(cid) if hasattr(storage, "get_lk_card") else None
             if card:
@@ -2487,9 +2505,9 @@ async def api_op_create_exchange_request(
     try:
         await storage.add_accounting_entry(
             category="kassa",
-            amount_usdt=in_usdt - partner_share,
+            amount_usdt=we_received_usdt - partner_payout_usdt,
             amount_rub=total_in_rub,
-            note=f"Exchange request {req_id}",
+            note=f"Exchange request {req_id} (маржа: {margin_usdt:.2f}$)",
             created_by=me.get("username") or "",
             ref_id=req_id,
         )
@@ -2507,7 +2525,14 @@ async def api_op_create_exchange_request(
     except Exception:
         pass
 
-    return {"req_id": req_id, "margin_usdt": margin_usdt, "involved_lk_cards": involved_lk}
+    return {
+        "req_id": req_id,
+        "margin_usdt": margin_usdt,
+        "partner_payout_usdt": partner_payout_usdt,
+        "we_received_usdt": we_received_usdt,
+        "lk_prices_usdt": lk_prices,
+        "involved_lk_cards": [cid for cid, _ in involved_lk],
+    }
 
 
 @app.get("/api/operational/exchange_requests")
@@ -2538,6 +2563,7 @@ async def api_op_search_lk(q: str = "", _: None = Depends(_auth)):
                 "fio": c.get("fio") or "",
                 "supplier": (c.get("supplier") or "").lstrip("@"),
                 "status": c.get("status") or "",
+                "price_usdt": float(c.get("price_usdt") or 0),
             })
             if len(out) >= 20:
                 break
@@ -2668,6 +2694,29 @@ async def api_op_dedik_rdp(card_id: str, me: dict = Depends(_get_me)):
         media_type="application/x-rdp",
         headers=headers,
     )
+
+
+@app.get("/api/operational/guacamole_session")
+async def api_op_guacamole_session(card_id: str = "", me: dict = Depends(_get_me)):
+    """Если в env задан GUACAMOLE_URL — возвращает URL для inline iframe.
+    Иначе клиент использует fallback на .rdp файл."""
+    import os as _os
+    base = (_os.getenv("GUACAMOLE_URL") or "").strip().rstrip("/")
+    if not base:
+        return {"url": None}
+    creds = _resolve_dedik_creds_for_card(card_id)
+    if not creds.get("ip"):
+        return {"url": None, "error": "no_dedik"}
+    # Простейший формат: <base>?ip=...&user=...&password=...
+    # Реальная интеграция с Guacamole REST API — см. docs Guacamole 1.5+.
+    # Если у тебя свой proxy — здесь можно подставить токен.
+    from urllib.parse import urlencode
+    qs = urlencode({
+        "ip": creds["ip"],
+        "user": creds.get("login") or "Administrator",
+        "password": creds.get("password") or "",
+    })
+    return {"url": f"{base}?{qs}"}
 
 
 @app.get("/api/operational/dedik_creds/{card_id}")

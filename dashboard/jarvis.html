@@ -6138,6 +6138,12 @@ function jarvis() {
     },
 
     async init() {
+      // GLOBAL FULL SYNC каждые 4 секунды (май 2026)
+      try {
+        if (this._globalSyncInterval) clearInterval(this._globalSyncInterval);
+        this._globalSyncInterval = setInterval(() => { this._globalSync(); }, 4000);
+      } catch (e) {}
+
       this.initBackgrounds();
       this.bootStatus = 'FETCHING STATE';
       await this.refresh();
@@ -6337,6 +6343,24 @@ function jarvis() {
         if (r.ok) this.lkSummary = await r.json();
       } catch (e) {}
     },
+    _globalSync() {
+      // Лёгкий periodic refresh — только активного view, чтобы не дёргать сервер впустую.
+      const v = this.currentView;
+      try {
+        if (v === 'operational') {
+          this.refreshOpLkInWork(); this.refreshOpRequests();
+        } else if (v === 'accounting') {
+          this.loadAcc2Summary(); this.loadAcc2Entries();
+        } else if (v === 'lk') {
+          this.loadLkSummary(); this.loadLkSection(this.lkSubTab || 'all');
+        } else if (v === 'support') {
+          if (typeof this.refreshSupportInbox === 'function') this.refreshSupportInbox();
+        } else if (v === 'system') {
+          if (typeof this.refreshSystem === 'function') this.refreshSystem();
+        }
+      } catch (e) {}
+    },
+
     // ===== ACCOUNTING v2 =====
     async refreshAcc2() {
       await Promise.all([this.loadAcc2Summary(), this.loadAcc2Entries()]);
@@ -6446,7 +6470,20 @@ function jarvis() {
           alert('Дедик для этого ЛК не привязан в crm_passwords. Сначала заполни ded_ip/ded_login/ded_pass в System → ПАРОЛИ.');
           return;
         }
-        this.dedikModalData = { card_id, ...data };
+        // Проверим есть ли GUACAMOLE_URL — тогда отрисуем inline iframe
+        try {
+          const gr = await fetch('/api/operational/guacamole_session?card_id=' + card_id, { credentials: 'include' });
+          if (gr.ok) {
+            const gd = await gr.json();
+            if (gd.url) {
+              this.dedikModalData = { card_id, ...data, guacamole_url: gd.url };
+              this.showDedikModal = true;
+              return;
+            }
+          }
+        } catch (e) {}
+        // fallback на download
+        this.dedikModalData = { card_id, ...data, guacamole_url: null };
         this.showDedikModal = true;
       } catch (e) {
         alert('Ошибка: ' + e.message);
@@ -6469,10 +6506,12 @@ function jarvis() {
         fio_in: '',
         lk_card_id_in: '',
         amount_in: 0,
-        outs: [{ bank: '', fio: '', lk_card_id: '', amount_out: 0, jur_jur_receivers: [] }],
+        lk_in_price_usdt: 0,
+        lk_in_status: 'ОТРАБОТАН',  // статус который поставим ЛК ВХОДА после фикса
+        outs: [{ bank: '', fio: '', lk_card_id: '', amount_out: 0, lk_out_price_usdt: 0, status_after: 'ОТРАБОТАН', _search: '', _results: [], jur_jur_receivers: [] }],
         partner_pct: 0,
         exchange_rate: 0,
-        commission_usdt: 0,
+        commission_usdt: 0,  // комиссия откупа в %
         _margin_preview: null,
       };
       this.fioSearchIn = '';
@@ -6483,22 +6522,33 @@ function jarvis() {
       this.showExchangeModal = false;
     },
     addExchangeOut() {
-      this.exchangeForm.outs.push({ bank: '', fio: '', lk_card_id: '', amount_out: 0, jur_jur_receivers: [] });
+      this.exchangeForm.outs.push({
+        bank: '', fio: '', lk_card_id: '', amount_out: 0,
+        lk_out_price_usdt: 0, status_after: 'ОТРАБОТАН',
+        _search: '', _results: [], jur_jur_receivers: [],
+      });
     },
     removeExchangeOut(idx) {
       this.exchangeForm.outs.splice(idx, 1);
       if (this.exchangeForm.outs.length === 0) this.addExchangeOut();
     },
     addJurJur(outIdx) {
-      this.exchangeForm.outs[outIdx].jur_jur_receivers.push({ bank: '', fio: '' });
+      this.exchangeForm.outs[outIdx].jur_jur_receivers.push({
+        bank: '', fio: '', lk_card_id: '', lk_price_usdt: 0,
+        status_after: 'ОТРАБОТАН', _search: '', _results: [],
+      });
     },
     removeJurJur(outIdx, jjIdx) {
       this.exchangeForm.outs[outIdx].jur_jur_receivers.splice(jjIdx, 1);
     },
     async searchLkFio(query, target) {
-      // target: 'in' | { outIdx, jjIdx? }
+      // target: 'in' | { outIdx } | { outIdx, jjIdx }
       if (!query || query.length < 2) {
         if (target === 'in') this.fioSearchResultsIn = [];
+        else if (target && typeof target === 'object' && 'outIdx' in target) {
+          if ('jjIdx' in target) this.exchangeForm.outs[target.outIdx].jur_jur_receivers[target.jjIdx]._results = [];
+          else this.exchangeForm.outs[target.outIdx]._results = [];
+        }
         return;
       }
       try {
@@ -6506,6 +6556,14 @@ function jarvis() {
         if (!r.ok) return;
         const results = (await r.json()).results || [];
         if (target === 'in') this.fioSearchResultsIn = results;
+        else if (target && typeof target === 'object' && 'outIdx' in target) {
+          if ('jjIdx' in target) {
+            const jj = this.exchangeForm.outs[target.outIdx].jur_jur_receivers[target.jjIdx];
+            jj._results = results;
+          } else {
+            this.exchangeForm.outs[target.outIdx]._results = results;
+          }
+        }
       } catch (e) {}
     },
     pickLkIn(item) {
@@ -6514,27 +6572,69 @@ function jarvis() {
       this.exchangeForm.lk_card_id_in = item.card_id;
       this.fioSearchIn = item.fio + ' (' + item.bank + ')';
       this.fioSearchResultsIn = [];
+      // Автоподстановка цены ЛК (если ещё не введена)
+      if (item.price_usdt && !this.exchangeForm.lk_in_price_usdt) {
+        this.exchangeForm.lk_in_price_usdt = item.price_usdt;
+      }
     },
+    pickLkOut(outIdx, item) {
+      const o = this.exchangeForm.outs[outIdx];
+      o.bank = item.bank;
+      o.fio = item.fio;
+      o.lk_card_id = item.card_id;
+      o._search = item.fio + ' (' + item.bank + ')';
+      o._results = [];
+      // Автоподстановка цены этого ЛК
+      if (item.price_usdt && !o.lk_out_price_usdt) {
+        o.lk_out_price_usdt = item.price_usdt;
+      }
+    },
+    pickJurJur(outIdx, jjIdx, item) {
+      const jj = this.exchangeForm.outs[outIdx].jur_jur_receivers[jjIdx];
+      jj.bank = item.bank;
+      jj.fio = item.fio;
+      jj.lk_card_id = item.card_id;
+      jj._search = item.fio + ' (' + item.bank + ')';
+      jj._results = [];
+      if (item.price_usdt && !jj.lk_price_usdt) {
+        jj.lk_price_usdt = item.price_usdt;
+      }
+    },
+    /* Новая формула маржи (май 2026 v2):
+       partner_payout_usdt = (amount_in - amount_in * partner_pct / 100) / rate
+       we_received_usdt    = sum(amount_out_i / rate) * (1 - commission_pct / 100)
+       sum_lk_prices_usdt  = price ВХОДА + price каждого ВЫХОДА + price каждого юр-юр
+       margin_usdt         = we_received_usdt - partner_payout_usdt - sum_lk_prices_usdt
+       commission_usdt — теперь это процент комиссии откупа (%), не абсолютная сумма. */
     calcMargin() {
       const rate = parseFloat(this.exchangeForm.exchange_rate) || 0;
       const inRub = parseFloat(this.exchangeForm.amount_in) || 0;
       if (rate <= 0) { this.exchangeForm._margin_preview = null; return; }
-      let outRub = 0;
+      const partnerPct = parseFloat(this.exchangeForm.partner_pct) || 0;
+      const commPct = parseFloat(this.exchangeForm.commission_usdt) || 0;
+      // 1) Выплата партнёру: (вход - вход*pct/100) / rate
+      const partnerPayoutUsdt = (inRub - inRub * partnerPct / 100) / rate;
+      // 2) Что получили мы: сумма выходов / rate * (1 - commPct/100)
+      let outRubTotal = 0;
+      for (const o of this.exchangeForm.outs) outRubTotal += parseFloat(o.amount_out) || 0;
+      const weReceivedUsdt = (outRubTotal / rate) * (1 - commPct / 100);
+      // 3) Стоимость ЛК (вход + выходы + юр-юр)
+      let lkPrices = parseFloat(this.exchangeForm.lk_in_price_usdt) || 0;
       for (const o of this.exchangeForm.outs) {
-        outRub += parseFloat(o.amount_out) || 0;
+        lkPrices += parseFloat(o.lk_out_price_usdt) || 0;
+        for (const jj of (o.jur_jur_receivers || [])) {
+          lkPrices += parseFloat(jj.lk_price_usdt) || 0;
+        }
       }
-      const inUsdt = inRub / rate;
-      const outUsdt = outRub / rate;
-      const commission = parseFloat(this.exchangeForm.commission_usdt) || 0;
-      const raw = inUsdt - outUsdt - commission;
-      const pctPartner = parseFloat(this.exchangeForm.partner_pct) || 0;
-      const partnerShare = raw * pctPartner / 100;
+      // 4) Маржа
+      const margin = weReceivedUsdt - partnerPayoutUsdt - lkPrices;
       this.exchangeForm._margin_preview = {
-        in_usdt: inUsdt,
-        out_usdt: outUsdt,
-        commission_usdt: commission,
-        partner_share_usdt: partnerShare,
-        margin_usdt: raw - partnerShare,
+        partner_payout_usdt: partnerPayoutUsdt,
+        we_received_usdt: weReceivedUsdt,
+        lk_prices_usdt: lkPrices,
+        margin_usdt: margin,
+        in_rub: inRub,
+        out_rub: outRubTotal,
       };
     },
     async submitExchangeRequest() {
@@ -6556,12 +6656,21 @@ function jarvis() {
         fio_in: this.exchangeForm.fio_in,
         lk_card_id_in: this.exchangeForm.lk_card_id_in || '',
         amount_in: parseFloat(this.exchangeForm.amount_in) || 0,
+        lk_in_price_usdt: parseFloat(this.exchangeForm.lk_in_price_usdt) || 0,
+        lk_in_status: this.exchangeForm.lk_in_status || 'ОТРАБОТАН',
         outs: this.exchangeForm.outs.map(o => ({
           bank: o.bank,
           fio: o.fio,
           lk_card_id: o.lk_card_id || '',
           amount_out: parseFloat(o.amount_out) || 0,
-          jur_jur_receivers: o.jur_jur_receivers || [],
+          lk_out_price_usdt: parseFloat(o.lk_out_price_usdt) || 0,
+          status_after: o.status_after || 'ОТРАБОТАН',
+          jur_jur_receivers: (o.jur_jur_receivers || []).map(jj => ({
+            bank: jj.bank, fio: jj.fio,
+            lk_card_id: jj.lk_card_id || '',
+            lk_price_usdt: parseFloat(jj.lk_price_usdt) || 0,
+            status_after: jj.status_after || 'ОТРАБОТАН',
+          })),
         })),
         partner_pct: parseFloat(this.exchangeForm.partner_pct) || 0,
         exchange_rate: parseFloat(this.exchangeForm.exchange_rate) || 0,
@@ -10193,11 +10302,18 @@ function jarvis() {
 
 <!-- ===== OPERATIONAL: Дедик модалка ===== -->
 <div x-show="showDedikModal" x-cloak
-     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;"
+     style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center;"
      @click.self="showDedikModal=false">
-  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 500px; width: 90%;">
-    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">🖥 Зайти на дедик</h3>
-    <template x-if="dedikModalData">
+  <div :style="dedikModalData?.guacamole_url ? 'background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 12px; max-width: 95vw; max-height: 95vh; width: 1280px; height: 800px; display: flex; flex-direction: column;' : 'background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 500px; width: 90%;'">
+    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+      <h3 style="margin: 0; color: var(--hud-primary); flex: 1;">🖥 Зайти на дедик</h3>
+      <button class="chip-btn" @click="showDedikModal=false">✕ Закрыть</button>
+    </div>
+    <template x-if="dedikModalData && dedikModalData.guacamole_url">
+      <iframe :src="dedikModalData.guacamole_url" allow="clipboard-read; clipboard-write"
+              style="flex: 1; width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; background: #000;"></iframe>
+    </template>
+    <template x-if="dedikModalData && !dedikModalData.guacamole_url">
       <div>
         <div style="margin-bottom: 8px;">
           <div style="font-size: 11px; color: var(--text-dim);">IP-адрес:</div>
@@ -10220,150 +10336,18 @@ function jarvis() {
             <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.password)">📋</button>
           </div>
         </div>
-        <div x-show="dedikModalData.location" style="margin-bottom: 12px; font-size: 11px; color: var(--text-dim);">
-          📍 <span x-text="dedikModalData.location"></span>
-        </div>
         <div style="font-size: 11px; color: var(--text-dim); padding: 8px; background: rgba(255, 200, 0, 0.1); border-radius: 4px; margin-bottom: 12px;">
-          ⚠ Пароль НЕ сохраняется в .rdp-файле — Windows требует CryptProtectData.
-          После нажатия «Скачать .rdp» mstsc откроет окно — введите/вставьте пароль вручную.
+          ⚠ Inline-RDP в окне работает только при включённом Apache Guacamole.<br>
+          Чтобы включить inline-окно, задай env <code>GUACAMOLE_URL=https://your-guac.example.com</code> в Railway.<br>
+          А пока — скачай .rdp файл, Windows откроет mstsc:
         </div>
         <div style="display: flex; gap: 8px;">
           <button class="chip-btn" style="background: var(--hud-primary); color: #000; flex: 1;"
                   @click="downloadRdp(dedikModalData.card_id)">⬇ Скачать .rdp</button>
-          <button class="chip-btn" @click="showDedikModal=false">Закрыть</button>
         </div>
       </div>
     </template>
   </div>
 </div>
-
-<!-- ===== OPERATIONAL: Фикс заявка модалка ===== -->
-<div x-show="showExchangeModal" x-cloak
-     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;overflow:auto;padding:20px;"
-     @click.self="closeExchangeModal()">
-  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;">
-    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">➕ Новая заявка на обмен</h3>
-
-    <!-- BANK ВХОДА -->
-    <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 10px;">
-      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">БАНК ВХОДА</div>
-      <select x-model="exchangeForm.bank_in" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-        <option value="">— выберите банк —</option>
-        <option value="АЛЬФА">АЛЬФА</option>
-        <option value="ВТБ">ВТБ</option>
-      </select>
-      <div style="margin-top: 6px;">
-        <input type="text" x-model="fioSearchIn" @input="searchLkFio($event.target.value, 'in')"
-               placeholder="ФИО (поиск по ЛК)…"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-        <div x-show="(fioSearchResultsIn || []).length > 0"
-             style="background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; max-height: 160px; overflow-y: auto; margin-top: 4px;">
-          <template x-for="r in fioSearchResultsIn" :key="r.card_id">
-            <div style="padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05);"
-                 @click="pickLkIn(r)" class="hover:bg-white/10">
-              <span style="font-weight:700;" x-text="r.bank"></span> · <span x-text="r.fio"></span>
-              <span style="font-size:10px; color: var(--text-dim); margin-left: 4px;" x-text="'@' + r.supplier"></span>
-            </div>
-          </template>
-        </div>
-      </div>
-      <input type="number" x-model.number="exchangeForm.amount_in" placeholder="Сумма входа (₽)"
-             style="width: 100%; margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-    </div>
-
-    <!-- ВЫХОДЫ -->
-    <div style="margin-bottom: 10px;">
-      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center;">
-        ВЫХОДЫ (можно несколько)
-        <button class="chip-btn" style="margin-left:auto;" @click="addExchangeOut()">+ ещё выход</button>
-      </div>
-      <template x-for="(out, idx) in exchangeForm.outs" :key="idx">
-        <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 6px;">
-          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-            <span style="font-size: 11px; color: var(--text-dim);">Выход #<span x-text="idx+1"></span></span>
-            <button x-show="exchangeForm.outs.length > 1" class="chip-btn" style="margin-left:auto;" @click="removeExchangeOut(idx)">✕</button>
-          </div>
-          <select x-model="out.bank" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-            <option value="">— банк ВЫХОДА —</option>
-            <option value="ОЗОН">ОЗОН</option>
-            <option value="РАЙФ">РАЙФ</option>
-            <option value="ТОЧКА">ТОЧКА</option>
-            <option value="УРАЛ">УРАЛ</option>
-            <option value="ПСБ">ПСБ</option>
-          </select>
-          <input type="text" x-model="out.fio" placeholder="ФИО"
-                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-          <input type="number" x-model.number="out.amount_out" placeholder="Сумма ВЫХОДА (₽)"
-                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-          <!-- юр-юр получатели -->
-          <div style="margin-top: 8px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,0.1);">
-            <div style="font-size: 10px; color: var(--text-dim); display: flex; align-items: center;">
-              Юр-юр получатели с этого ЛК
-              <button class="chip-btn" style="margin-left:auto;" @click="addJurJur(idx)">+ ещё</button>
-            </div>
-            <template x-for="(jj, jjIdx) in out.jur_jur_receivers" :key="jjIdx">
-              <div style="display: flex; gap: 4px; margin-top: 4px;">
-                <select x-model="jj.bank" style="flex: 1; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
-                  <option value="">— банк —</option>
-                  <option value="ОЗОН">ОЗОН</option>
-                  <option value="РАЙФ">РАЙФ</option>
-                  <option value="ТОЧКА">ТОЧКА</option>
-                  <option value="УРАЛ">УРАЛ</option>
-                  <option value="ПСБ">ПСБ</option>
-                  <option value="АЛЬФА">АЛЬФА</option>
-                  <option value="ВТБ">ВТБ</option>
-                </select>
-                <input type="text" x-model="jj.fio" placeholder="ФИО получателя"
-                       style="flex: 2; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
-                <button class="chip-btn" style="padding: 2px 6px;" @click="removeJurJur(idx, jjIdx)">✕</button>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-
-    <!-- Курс / комиссия / % партнёра -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px;">
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">% партнёру</div>
-        <input type="number" step="0.1" x-model.number="exchangeForm.partner_pct"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">Курс вывода ₽/USDT</div>
-        <input type="number" step="0.01" x-model.number="exchangeForm.exchange_rate"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
-        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-    </div>
-
-    <!-- Маржа preview -->
-    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
-      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
-      <template x-if="exchangeForm._margin_preview">
-        <div style="font-size: 12px;">
-          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
-          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
-          Комиссия: <span x-text="exchangeForm._margin_preview.commission_usdt.toFixed(2)"></span>$ ·
-          Партнёру: <span x-text="exchangeForm._margin_preview.partner_share_usdt.toFixed(2)"></span>$
-          <br>
-          <b style="color: var(--hud-emerald); font-size: 16px;">МАРЖА: <span x-text="exchangeForm._margin_preview.margin_usdt.toFixed(2)"></span>$</b>
-        </div>
-      </template>
-    </div>
-
-    <div style="display: flex; gap: 8px;">
-      <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
-      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitExchangeRequest()">✅ Зафиксировать заявку</button>
-      <button class="chip-btn" @click="closeExchangeModal()">Отмена</button>
-    </div>
-  </div>
-</div>
-
 </body>
 </html>
