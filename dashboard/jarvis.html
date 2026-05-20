@@ -6524,6 +6524,27 @@ function jarvis() {
           z: ++this.nextDedikZ,
         };
         this.openDediks = [...(this.openDediks || []), win];
+
+        // === Запрос clipboard permission для прозрачной синхронизации ===
+        // Guacamole 1.6 умеет auto-sync clipboard, но нужно чтобы browser
+        // дал нам разрешение clipboard-read. Триггерим запрос ОДИН раз;
+        // если user разрешил — Ctrl+C на ПК и Ctrl+V в RDP будут работать
+        // прозрачно без Ctrl+Alt+Shift панели.
+        if (!this._clipboardPermissionAsked && guacamole_url) {
+          this._clipboardPermissionAsked = true;
+          try {
+            // Просто триггерим permission prompt (без чтения значения)
+            if (navigator.clipboard && navigator.clipboard.readText) {
+              navigator.clipboard.readText().catch((err) => {
+                console.warn('[dedik] clipboard permission:', err.message || err);
+                // Show toast hint
+                if (this.toast) {
+                  this.toast('⚠ Разреши доступ к буферу обмена в правом верхнем углу адресной строки — иначе clipboard на дедике через Ctrl+Alt+Shift');
+                }
+              });
+            }
+          } catch (e) {}
+        }
       } catch (e) {
         alert('Ошибка: ' + e.message);
       }
