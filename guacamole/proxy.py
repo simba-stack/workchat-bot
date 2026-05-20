@@ -118,6 +118,16 @@ class _GuacClient:
                 "enable-drive": "false",
                 "enable-printing": "false",
                 "color-depth": "24",
+                # === Clipboard sync (PC <-> remote) ===
+                # Включаем двунаправленный обмен через clipboard.
+                # Guacamole default: clipboard ON, но явные параметры
+                # надёжнее. enable-clipboard-encoding=utf-8 — для русских
+                # символов и эмодзи.
+                "disable-copy": "false",
+                "disable-paste": "false",
+                "enable-clipboard-encoding": "utf-8",
+                # Audio in/out тоже включаем — иногда нужен звук RDP.
+                "disable-audio": "false",
             },
             "attributes": {
                 "max-connections": "1",
