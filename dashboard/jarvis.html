@@ -3273,7 +3273,7 @@
                 ⏱ <span x-text="formatLkTimer(lk.perevyaz_ts)"></span> с перевязки
               </div>
               <div class="mt-2 flex gap-2">
-                <button class="chip-btn" style="background: var(--hud-primary); color:#000;" @click="openDedik(lk.card_id)">🖥 Зайти на дедик</button>
+                <button class="chip-btn" style="background: var(--hud-primary); color:#000;" @click="openDedik(lk)">🖥 Зайти на дедик</button>
               </div>
             </div>
           </template>
@@ -3305,7 +3305,7 @@
                     ⏱ <span x-text="formatLkTimer(lk.perevyaz_ts)"></span>
                   </div>
                   <button class="chip-btn mt-2" style="background: var(--hud-primary); color:#000; width:100%;"
-                          @click="openDedik(lk.card_id)">🖥 Дедик</button>
+                          @click="openDedik(Object.assign({}, lk, {fio: combo.fio, supplier: combo.supplier}))">🖥 Дедик</button>
                 </div>
               </template>
             </div>
@@ -5991,7 +5991,13 @@ function jarvis() {
     opTimerInterval: null,
     showExchangeModal: false,
     showDedikModal: false,
-    dedikModalData: null,  // {card_id, ip, login, password, location}
+    dedikModalData: null,  // legacy (fallback модалка для случая когда нет GUACAMOLE_URL)
+    // ===== Multi-window дедики =====
+    // Каждый элемент: {id, card_id, title, ip, login, password, guacamole_url,
+    //                  x, y, w, h, minimized, z}  (x/y/w/h в % от viewport)
+    openDediks: [],
+    nextDedikZ: 1100,
+    dedikSnapMenuFor: null,  // id окна для которого открыт snap-popover
     exchangeForm: {
       bank_in: '',
       fio_in: '',
@@ -6458,7 +6464,23 @@ function jarvis() {
       const m = Math.floor((diff % 3600) / 60);
       return `${d}д ${h}ч ${m}м`;
     },
-    async openDedik(card_id) {
+    async openDedik(lkOrId) {
+      // Принимаем либо строку card_id, либо объект lk с {card_id, bank, fio, ...}
+      const card_id = (typeof lkOrId === 'string') ? lkOrId : (lkOrId && lkOrId.card_id);
+      if (!card_id) return;
+      const lkRef = (typeof lkOrId === 'object' && lkOrId) ? lkOrId : null;
+      const title = lkRef
+        ? `${(lkRef.bank || '—').toUpperCase()} · ${lkRef.fio || ''}`.trim()
+        : `Дедик #${card_id}`;
+
+      // Если этот дедик уже открыт — просто фокусим его (не убиваем!)
+      const existing = (this.openDediks || []).find(d => d.card_id === card_id);
+      if (existing) {
+        existing.minimized = false;
+        this.focusDedik(existing.id);
+        return;
+      }
+
       try {
         const r = await fetch('/api/operational/dedik_creds/' + card_id, { credentials: 'include' });
         if (!r.ok) {
@@ -6470,24 +6492,148 @@ function jarvis() {
           alert('Дедик для этого ЛК не привязан в crm_passwords. Сначала заполни ded_ip/ded_login/ded_pass в System → ПАРОЛИ.');
           return;
         }
-        // Проверим есть ли GUACAMOLE_URL — тогда отрисуем inline iframe
+
+        // Пробуем создать Guacamole-сессию
+        let guacamole_url = null;
         try {
           const gr = await fetch('/api/operational/guacamole_session?card_id=' + card_id, { credentials: 'include' });
           if (gr.ok) {
             const gd = await gr.json();
-            if (gd.url) {
-              this.dedikModalData = { card_id, ...data, guacamole_url: gd.url };
-              this.showDedikModal = true;
-              return;
-            }
+            if (gd.url) guacamole_url = gd.url;
           }
         } catch (e) {}
-        // fallback на download
-        this.dedikModalData = { card_id, ...data, guacamole_url: null };
-        this.showDedikModal = true;
+
+        // Каскадная позиция для новых окон (не накладываем друг на друга)
+        const idx = (this.openDediks || []).length;
+        const offset = (idx % 6) * 3;  // на 3% сдвиг по диагонали
+
+        const win = {
+          id: 'd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          card_id,
+          title,
+          ip: data.ip,
+          login: data.login,
+          password: data.password,
+          location: data.location,
+          guacamole_url,
+          x: 8 + offset,
+          y: 6 + offset,
+          w: 60,
+          h: 70,
+          minimized: false,
+          z: ++this.nextDedikZ,
+        };
+        this.openDediks = [...(this.openDediks || []), win];
       } catch (e) {
         alert('Ошибка: ' + e.message);
       }
+    },
+    closeDedik(id) {
+      this.openDediks = (this.openDediks || []).filter(d => d.id !== id);
+      if (this.dedikSnapMenuFor === id) this.dedikSnapMenuFor = null;
+    },
+    focusDedik(id) {
+      const win = (this.openDediks || []).find(d => d.id === id);
+      if (win) {
+        win.z = ++this.nextDedikZ;
+        win.minimized = false;
+      }
+    },
+    minimizeDedik(id) {
+      const win = (this.openDediks || []).find(d => d.id === id);
+      if (win) win.minimized = !win.minimized;
+      this.dedikSnapMenuFor = null;
+    },
+    snapDedik(id, slot) {
+      // slot: 'full' | 'left' | 'right' | 'top' | 'bottom' | 'tl' | 'tr' | 'bl' | 'br'
+      const win = (this.openDediks || []).find(d => d.id === id);
+      if (!win) return;
+      const M = 1;  // margin %
+      const presets = {
+        full:   { x: M,    y: M,    w: 100-2*M, h: 92-2*M },
+        left:   { x: M,    y: M,    w: 50-1.5*M, h: 92-2*M },
+        right:  { x: 50+M/2, y: M,  w: 50-1.5*M, h: 92-2*M },
+        top:    { x: M,    y: M,    w: 100-2*M, h: 46-M },
+        bottom: { x: M,    y: 46+M/2, w: 100-2*M, h: 46-1.5*M },
+        tl:     { x: M,    y: M,    w: 50-1.5*M, h: 46-M },
+        tr:     { x: 50+M/2, y: M,  w: 50-1.5*M, h: 46-M },
+        bl:     { x: M,    y: 46+M/2, w: 50-1.5*M, h: 46-1.5*M },
+        br:     { x: 50+M/2, y: 46+M/2, w: 50-1.5*M, h: 46-1.5*M },
+      };
+      const p = presets[slot];
+      if (!p) return;
+      win.x = p.x; win.y = p.y; win.w = p.w; win.h = p.h;
+      win.minimized = false;
+      win.z = ++this.nextDedikZ;
+      this.dedikSnapMenuFor = null;
+    },
+    tileAllDediks() {
+      // Авто-тайлинг всех открытых (не минимизированных) дедиков в сетку
+      const wins = (this.openDediks || []).filter(d => !d.minimized);
+      const n = wins.length;
+      if (n === 0) return;
+      const M = 1;
+      let cols, rows;
+      if (n === 1) { cols = 1; rows = 1; }
+      else if (n === 2) { cols = 2; rows = 1; }
+      else if (n <= 4) { cols = 2; rows = 2; }
+      else if (n <= 6) { cols = 3; rows = 2; }
+      else if (n <= 9) { cols = 3; rows = 3; }
+      else { cols = 4; rows = Math.ceil(n / 4); }
+      const wAvail = 100 - 2*M;
+      const hAvail = 92 - 2*M;
+      const wCell = wAvail / cols;
+      const hCell = hAvail / rows;
+      wins.forEach((w, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        w.x = M + col * wCell;
+        w.y = M + row * hCell;
+        w.w = wCell - 0.5;
+        w.h = hCell - 0.5;
+        w.z = ++this.nextDedikZ;
+      });
+    },
+    startDragDedik(id, ev) {
+      const win = (this.openDediks || []).find(d => d.id === id);
+      if (!win) return;
+      this.focusDedik(id);
+      const startX = ev.clientX, startY = ev.clientY;
+      const startWinX = win.x, startWinY = win.y;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const onMove = (e) => {
+        const dx = (e.clientX - startX) / vw * 100;
+        const dy = (e.clientY - startY) / vh * 100;
+        win.x = Math.max(0, Math.min(100 - win.w, startWinX + dx));
+        win.y = Math.max(0, Math.min(95 - win.h, startWinY + dy));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    startResizeDedik(id, ev) {
+      ev.stopPropagation();
+      const win = (this.openDediks || []).find(d => d.id === id);
+      if (!win) return;
+      this.focusDedik(id);
+      const startX = ev.clientX, startY = ev.clientY;
+      const startW = win.w, startH = win.h;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const onMove = (e) => {
+        const dw = (e.clientX - startX) / vw * 100;
+        const dh = (e.clientY - startY) / vh * 100;
+        win.w = Math.max(20, Math.min(100 - win.x, startW + dw));
+        win.h = Math.max(15, Math.min(95 - win.y, startH + dh));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
     },
     downloadRdp(card_id) {
       // Просто открываем endpoint — браузер скачает .rdp файл
@@ -10300,54 +10446,100 @@ function jarvis() {
   </div>
 </div>
 
-<!-- ===== OPERATIONAL: Дедик модалка ===== -->
-<div x-show="showDedikModal" x-cloak
-     style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center;"
-     @click.self="showDedikModal=false">
-  <div :style="dedikModalData?.guacamole_url ? 'background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 12px; max-width: 95vw; max-height: 95vh; width: 1280px; height: 800px; display: flex; flex-direction: column;' : 'background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 500px; width: 90%;'">
-    <div style="display: flex; align-items: center; margin-bottom: 10px;">
-      <h3 style="margin: 0; color: var(--hud-primary); flex: 1;">🖥 Зайти на дедик</h3>
-      <button class="chip-btn" @click="showDedikModal=false">✕ Закрыть</button>
+<!-- ===== OPERATIONAL: Дедики — floating windows ===== -->
+<template x-for="win in (openDediks || [])" :key="win.id">
+  <div x-show="!win.minimized" x-cloak
+       :style="`position:fixed; left:${win.x}vw; top:${win.y}vh; width:${win.w}vw; height:${win.h}vh; z-index:${win.z}; background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: flex; flex-direction: column; overflow: hidden;`"
+       @mousedown="focusDedik(win.id)">
+    <div @mousedown.self="startDragDedik(win.id, $event)"
+         style="display:flex; align-items:center; gap:8px; padding: 6px 10px; background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.08); cursor: move; user-select: none; flex-shrink:0;">
+      <span style="font-size: 12px; font-weight: 700; color: var(--hud-primary); pointer-events:none;">🖥</span>
+      <span style="font-size: 12px; font-weight: 700; pointer-events:none;" x-text="win.title"></span>
+      <span style="font-size: 10px; color: var(--text-dim); pointer-events:none;" x-text="win.ip"></span>
+      <div style="margin-left:auto; display:flex; gap:4px; align-items:center;">
+        <div style="position:relative;">
+          <button class="chip-btn" style="padding:2px 6px; font-size:10px;"
+                  @click.stop="dedikSnapMenuFor = (dedikSnapMenuFor === win.id ? null : win.id)"
+                  title="Расположение окна">▦</button>
+          <div x-show="dedikSnapMenuFor === win.id" x-cloak @click.outside="dedikSnapMenuFor = null"
+               style="position:absolute; top:100%; right:0; margin-top:4px; background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 6px; padding: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); z-index: 10001;">
+            <div style="font-size:10px; color: var(--text-dim); margin-bottom:6px;">Snap layout</div>
+            <div style="display:grid; grid-template-columns: repeat(3, 38px); grid-template-rows: repeat(3, 28px); gap: 4px;">
+              <button @click.stop="snapDedik(win.id, 'tl')" title="Верхний левый угол" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; left:2px; top:2px; width:14px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'top')" title="Верх (половина)" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; left:2px; top:2px; right:2px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'tr')" title="Верхний правый угол" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; right:2px; top:2px; width:14px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'left')" title="Левая половина" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; left:2px; top:2px; bottom:2px; width:14px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'full')" title="Развернуть" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; inset:2px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'right')" title="Правая половина" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; right:2px; top:2px; bottom:2px; width:14px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'bl')" title="Нижний левый угол" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; left:2px; bottom:2px; width:14px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'bottom')" title="Низ (половина)" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; left:2px; bottom:2px; right:2px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+              <button @click.stop="snapDedik(win.id, 'br')" title="Нижний правый угол" style="background:#222; border:1px solid #444; border-radius:3px; cursor:pointer; position:relative;"><span style="position:absolute; right:2px; bottom:2px; width:14px; height:9px; background:var(--hud-primary); border-radius:1px;"></span></button>
+            </div>
+            <button @click.stop="tileAllDediks(); dedikSnapMenuFor = null;"
+                    class="chip-btn" style="margin-top:8px; width:100%; font-size:10px;">⊞ Сетка всех</button>
+          </div>
+        </div>
+        <button class="chip-btn" style="padding:2px 6px; font-size:10px;" @click.stop="minimizeDedik(win.id)" title="Свернуть">━</button>
+        <button class="chip-btn" style="padding:2px 6px; font-size:10px; background:#a33; color:#fff;" @click.stop="closeDedik(win.id)" title="Закрыть">✕</button>
+      </div>
     </div>
-    <template x-if="dedikModalData && dedikModalData.guacamole_url">
-      <iframe :src="dedikModalData.guacamole_url" allow="clipboard-read; clipboard-write"
-              style="flex: 1; width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; background: #000;"></iframe>
+    <template x-if="win.guacamole_url">
+      <iframe :src="win.guacamole_url" allow="clipboard-read; clipboard-write"
+              style="flex: 1; width: 100%; border: 0; background: #000;"></iframe>
     </template>
-    <template x-if="dedikModalData && !dedikModalData.guacamole_url">
-      <div>
+    <template x-if="!win.guacamole_url">
+      <div style="flex:1; padding: 16px; overflow:auto;">
         <div style="margin-bottom: 8px;">
           <div style="font-size: 11px; color: var(--text-dim);">IP-адрес:</div>
           <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
-            <span x-text="dedikModalData.ip"></span>
-            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.ip)">📋</button>
+            <span x-text="win.ip"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(win.ip)">📋</button>
           </div>
         </div>
         <div style="margin-bottom: 8px;">
           <div style="font-size: 11px; color: var(--text-dim);">Логин:</div>
           <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
-            <span x-text="dedikModalData.login"></span>
-            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.login)">📋</button>
+            <span x-text="win.login"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(win.login)">📋</button>
           </div>
         </div>
         <div style="margin-bottom: 8px;">
           <div style="font-size: 11px; color: var(--text-dim);">Пароль:</div>
           <div style="font-family: monospace; font-size: 14px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; align-items: center; gap: 8px;">
-            <span x-text="dedikModalData.password || '—'"></span>
-            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(dedikModalData.password)">📋</button>
+            <span x-text="win.password || '—'"></span>
+            <button class="chip-btn" style="margin-left:auto;" @click="copyToClipboard(win.password)">📋</button>
           </div>
         </div>
         <div style="font-size: 11px; color: var(--text-dim); padding: 8px; background: rgba(255, 200, 0, 0.1); border-radius: 4px; margin-bottom: 12px;">
-          ⚠ Inline-RDP в окне работает только при включённом Apache Guacamole.<br>
-          Чтобы включить inline-окно, задай env <code>GUACAMOLE_URL=https://your-guac.example.com</code> в Railway.<br>
-          А пока — скачай .rdp файл, Windows откроет mstsc:
+          ⚠ Inline-RDP в окне работает только при включённом Apache Guacamole. А пока — скачай .rdp файл, Windows откроет mstsc:
         </div>
         <div style="display: flex; gap: 8px;">
           <button class="chip-btn" style="background: var(--hud-primary); color: #000; flex: 1;"
-                  @click="downloadRdp(dedikModalData.card_id)">⬇ Скачать .rdp</button>
+                  @click="downloadRdp(win.card_id)">⬇ Скачать .rdp</button>
         </div>
       </div>
     </template>
+    <div @mousedown="startResizeDedik(win.id, $event)"
+         style="position:absolute; right:0; bottom:0; width:14px; height:14px; cursor:nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--hud-primary) 50%); opacity: 0.6;"></div>
   </div>
+</template>
+
+<!-- ===== OPERATIONAL: Taskbar открытых дедиков ===== -->
+<div x-show="(openDediks || []).length > 0" x-cloak
+     style="position:fixed; left:0; right:0; bottom:0; z-index:9999; background: rgba(15,15,20,0.95); border-top: 1px solid var(--hud-primary); padding: 6px 10px; display:flex; align-items:center; gap:8px; backdrop-filter: blur(8px); overflow-x:auto;">
+  <span style="font-size: 10px; color: var(--text-dim); flex-shrink: 0;">🖥 Открыты:</span>
+  <template x-for="win in (openDediks || [])" :key="'tb_' + win.id">
+    <div :style="`display:flex; align-items:center; gap:6px; padding: 4px 8px; background: ${win.minimized ? 'rgba(255,255,255,0.04)' : 'rgba(var(--primary-rgb), 0.15)'}; border: 1px solid ${win.minimized ? 'rgba(255,255,255,0.08)' : 'var(--hud-primary)'}; border-radius: 4px; cursor: pointer; flex-shrink:0; max-width: 240px;`"
+         @click="win.minimized ? focusDedik(win.id) : minimizeDedik(win.id)"
+         :title="win.minimized ? 'Развернуть' : 'Свернуть'">
+      <span style="font-size: 11px; pointer-events:none;">🖥</span>
+      <span style="font-size: 11px; font-weight: 600; pointer-events:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" x-text="win.title"></span>
+      <span style="font-size: 9px; color: var(--text-dim); pointer-events:none;" x-text="win.ip"></span>
+      <button @click.stop="closeDedik(win.id)" style="background:none; border:none; color:#a55; cursor:pointer; padding:0 2px; font-size:11px;" title="Закрыть">✕</button>
+    </div>
+  </template>
+  <button @click="tileAllDediks()" class="chip-btn" style="margin-left:auto; font-size:10px; flex-shrink:0;" title="Развернуть все в сетку">⊞ Сетка</button>
 </div>
+
 </body>
 </html>
