@@ -540,6 +540,11 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
     elif warnings > 0:
         status_line = f"⚠️ Предупреждений: <b>{warnings}</b>\n\n"
 
+    # Баланс кошелька партнёра (TRC20 USDT)
+    wallet = crm_storage.get_partner_wallet(owner.get("username") or "")
+    wallet_balance = float(wallet.get("balance_usdt") or 0)
+    pending_count = len(wallet.get("pending_payouts") or [])
+
     text = (
         f"👤 <b>Профиль партнёра</b>\n\n"
         f"{status_line}"
@@ -547,6 +552,9 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
         f"<b>Username:</b> @{owner.get('username') or '—'}\n"
         f"<b>ID:</b> <code>{owner['owner_id']}</code>\n"
         f"<b>С нами с:</b> {joined}\n\n"
+        f"<b>💰 Кошелёк:</b> <b>{wallet_balance:.2f} USDT</b>"
+        + (f" · ⏳ {pending_count} pending" if pending_count else "")
+        + "\n\n"
         f"<b>📊 Статистика:</b>\n"
         f"• Всего клиентов: <b>{drops_total}</b>\n"
         f"• В ожидании: <b>{drops_pending}</b>\n"
@@ -560,11 +568,550 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
     kb = [
         [InlineKeyboardButton(text="📇 Мои клиенты", callback_data="drops")],
         [InlineKeyboardButton(text="➕ Новый клиент", callback_data="newdrop")],
+        [InlineKeyboardButton(text="💼 Кошелёк TRC20", callback_data="wallet")],
         [InlineKeyboardButton(text="❓ Помощь / FAQ", callback_data="help")],
     ]
     if in_group:
         kb.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
     await _send(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+
+# ============================================================================
+# Кошелёк партнёра (TRC20 USDT)
+# Custodial-схема: один наш TRC20-адрес для пополнений + ручной payout
+# через админ-чат.
+# ============================================================================
+
+class WalletForm(StatesGroup):
+    waiting_withdraw_amount = State()
+    waiting_withdraw_address = State()
+    waiting_deposit_txid = State()  # партнёр пишет TXID после пополнения
+
+
+def _trc20_deposit_address() -> str:
+    """Адрес куда партнёры пополняют (env TRC20_DEPOSIT_ADDRESS)."""
+    return (os.getenv("TRC20_DEPOSIT_ADDRESS", "") or "").strip()
+
+
+def _wallet_admin_chat_id() -> str:
+    """Чат куда сыпать запросы на выплаты + сообщения о пополнениях.
+    По умолчанию — тот же что CRM_ADMIN_CHAT_ID."""
+    env = (os.getenv("WALLET_ADMIN_CHAT_ID", "") or "").strip()
+    if env:
+        return env
+    return (os.getenv("CRM_ADMIN_CHAT_ID", "") or "").strip()
+
+
+WITHDRAW_MIN_USDT = float(os.getenv("WALLET_WITHDRAW_MIN_USDT", "10") or 10)
+
+
+def _render_wallet_text(owner: dict, wallet: dict) -> str:
+    """Текст для меню кошелька."""
+    balance = float(wallet.get("balance_usdt") or 0)
+    reserved = sum(float(p.get("amount") or 0) for p in (wallet.get("pending_payouts") or []))
+    available = max(0.0, balance - reserved)
+    text = (
+        f"💼 <b>Кошелёк TRC20</b>\n\n"
+        f"<b>Баланс:</b> <b>{balance:.2f} USDT</b>\n"
+    )
+    if reserved > 0:
+        text += f"<b>В заявках на вывод:</b> {reserved:.2f} USDT\n"
+        text += f"<b>Доступно к выводу:</b> {available:.2f} USDT\n"
+    text += "\n"
+    pending = wallet.get("pending_payouts") or []
+    if pending:
+        text += "⏳ <b>В обработке:</b>\n"
+        for p in pending[:5]:
+            ts_str = time.strftime("%d.%m %H:%M", time.localtime(p.get("ts") or 0))
+            text += (
+                f"  • <code>{p.get('payout_id')}</code> · "
+                f"{float(p.get('amount') or 0):.2f} USDT · {ts_str}\n"
+            )
+        text += "\n"
+    text += (
+        f"<i>Минимум на вывод: {WITHDRAW_MIN_USDT:.0f} USDT.\n"
+        f"Сеть: TRC20 (Tron). Комиссию сети платим мы.</i>"
+    )
+    return text
+
+
+@router.callback_query(F.data == "wallet")
+async def cb_wallet(call: CallbackQuery, state: FSMContext):
+    """Главное меню кошелька."""
+    await state.clear()
+    owner = crm_storage.find_crm_owner_by_tg(call.from_user.id)
+    if not owner:
+        await call.answer("Профиль партнёра не найден", show_alert=True)
+        return
+    wallet = crm_storage.get_partner_wallet(owner.get("username") or "")
+    await call.answer()
+    text = _render_wallet_text(owner, wallet)
+    kb = [
+        [InlineKeyboardButton(text="📥 Пополнить", callback_data="wallet:deposit")],
+        [InlineKeyboardButton(text="📤 Вывести", callback_data="wallet:withdraw")],
+        [InlineKeyboardButton(text="📜 История", callback_data="wallet:history")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="profile")],
+    ]
+    try:
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    except TelegramBadRequest:
+        await _send(call.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+
+@router.callback_query(F.data == "wallet:deposit")
+async def cb_wallet_deposit(call: CallbackQuery):
+    """Показать TRC20-адрес для пополнения."""
+    addr = _trc20_deposit_address()
+    await call.answer()
+    if not addr:
+        await call.message.edit_text(
+            "⚠️ <b>Адрес пополнения ещё не настроен</b>\n\n"
+            "Свяжись с админом — он установит TRC20-адрес в настройках бота.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Назад", callback_data="wallet"),
+            ]]),
+        )
+        return
+    text = (
+        f"📥 <b>Пополнение TRC20</b>\n\n"
+        f"Отправь USDT на этот адрес (сеть <b>TRC20 / Tron</b>):\n\n"
+        f"<code>{addr}</code>\n\n"
+        f"⚠️ <i>Только TRC20 (Tron). Другие сети — потеря средств!</i>\n\n"
+        f"После отправки — нажми <b>«Я отправил»</b>, пришли TXID транзакции, "
+        f"админ подтвердит зачисление в течение 1-2 часов."
+    )
+    kb = [
+        [InlineKeyboardButton(text="✅ Я отправил — пришлю TXID", callback_data="wallet:deposit_txid")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="wallet")],
+    ]
+    try:
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "wallet:deposit_txid")
+async def cb_wallet_deposit_txid_start(call: CallbackQuery, state: FSMContext):
+    """Партнёр готов прислать TXID."""
+    await call.answer()
+    await state.set_state(WalletForm.waiting_deposit_txid)
+    try:
+        await call.message.edit_text(
+            "💬 <b>Пришли TXID транзакции</b>\n\n"
+            "Это длинная строка вида <code>a8b3f9...</code> — можно скопировать из своего кошелька "
+            "(USDT TRC20 → история → нажми на отправленную транзакцию).\n\n"
+            "Просто отправь её сообщением — админ получит и подтвердит.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data="wallet"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(WalletForm.waiting_deposit_txid, F.text & ~F.text.startswith("/"))
+async def handle_wallet_deposit_txid(message: Message, state: FSMContext):
+    txid = (message.text or "").strip()
+    if len(txid) < 20 or len(txid) > 80:
+        await message.reply(
+            "⚠️ Не похоже на TXID. Перепроверь — обычно длина 60-65 символов hex.",
+        )
+        return
+    owner = crm_storage.find_crm_owner_by_tg(message.from_user.id)
+    if not owner:
+        await message.reply("Профиль не найден")
+        await state.clear()
+        return
+    await state.clear()
+    # Уведомляем админа
+    admin_chat = _wallet_admin_chat_id()
+    if admin_chat:
+        try:
+            admin_text = (
+                f"💰 <b>Запрос пополнения</b>\n\n"
+                f"Партнёр: @{owner.get('username') or '—'} (<code>{owner['owner_id']}</code>)\n"
+                f"TXID: <code>{txid}</code>\n\n"
+                f"<i>Проверь транзакцию в TronScan, потом подтверди сумму ниже.</i>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Подтвердить — ввести сумму",
+                    callback_data=f"wadm:cdep:{owner['owner_id']}:{txid[:50]}",
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"wadm:rdep:{owner['owner_id']}:{txid[:50]}",
+                )],
+            ])
+            await message.bot.send_message(
+                int(admin_chat), admin_text, reply_markup=kb,
+            )
+        except Exception as e:
+            logger.warning("wallet deposit admin notify fail: %s", e)
+    await message.reply(
+        f"✅ <b>TXID получен</b>\n\n"
+        f"<code>{txid}</code>\n\n"
+        f"Админ проверит транзакцию и зачислит сумму на твой баланс. "
+        f"Обычно занимает 1-2 часа в рабочее время.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ К кошельку", callback_data="wallet"),
+        ]]),
+    )
+
+
+@router.callback_query(F.data == "wallet:withdraw")
+async def cb_wallet_withdraw_start(call: CallbackQuery, state: FSMContext):
+    """FSM вывода — шаг 1: ввод суммы."""
+    owner = crm_storage.find_crm_owner_by_tg(call.from_user.id)
+    if not owner:
+        await call.answer("Профиль не найден", show_alert=True)
+        return
+    wallet = crm_storage.get_partner_wallet(owner.get("username") or "")
+    balance = float(wallet.get("balance_usdt") or 0)
+    reserved = sum(float(p.get("amount") or 0) for p in (wallet.get("pending_payouts") or []))
+    available = max(0.0, balance - reserved)
+    if available < WITHDRAW_MIN_USDT:
+        await call.answer(
+            f"Недостаточно средств. Минимум {WITHDRAW_MIN_USDT:.0f} USDT, доступно {available:.2f}",
+            show_alert=True,
+        )
+        return
+    await call.answer()
+    await state.set_state(WalletForm.waiting_withdraw_amount)
+    await state.update_data(available=available)
+    try:
+        await call.message.edit_text(
+            f"📤 <b>Вывод TRC20</b>\n\n"
+            f"<b>Доступно к выводу:</b> {available:.2f} USDT\n"
+            f"<b>Минимум:</b> {WITHDRAW_MIN_USDT:.0f} USDT\n\n"
+            f"Введи <b>сумму</b> в USDT (число, например <code>50</code> или <code>100.5</code>):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data="wallet"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.message(WalletForm.waiting_withdraw_amount, F.text & ~F.text.startswith("/"))
+async def handle_wallet_withdraw_amount(message: Message, state: FSMContext):
+    text = (message.text or "").strip().replace(",", ".")
+    try:
+        amt = float(text)
+    except ValueError:
+        await message.reply("⚠️ Введи число, например <code>50</code>.")
+        return
+    if amt < WITHDRAW_MIN_USDT:
+        await message.reply(f"⚠️ Минимум {WITHDRAW_MIN_USDT:.0f} USDT.")
+        return
+    data = await state.get_data()
+    available = float(data.get("available") or 0)
+    if amt > available + 1e-9:
+        await message.reply(f"⚠️ Доступно только {available:.2f} USDT.")
+        return
+    await state.update_data(amount=amt)
+    await state.set_state(WalletForm.waiting_withdraw_address)
+    await message.reply(
+        f"✅ Сумма: <b>{amt:.2f} USDT</b>\n\n"
+        f"Теперь пришли свой <b>TRC20-адрес</b> для вывода (начинается с <code>T</code>, "
+        f"длина 34 символа).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Отмена", callback_data="wallet"),
+        ]]),
+    )
+
+
+@router.message(WalletForm.waiting_withdraw_address, F.text & ~F.text.startswith("/"))
+async def handle_wallet_withdraw_address(message: Message, state: FSMContext):
+    addr = (message.text or "").strip()
+    # Базовая валидация TRC20-адреса: 34 символа, начинается с T
+    if len(addr) != 34 or not addr.startswith("T"):
+        await message.reply(
+            "⚠️ Не похоже на TRC20-адрес. Должен начинаться с <b>T</b> и быть длиной 34 символа.\n"
+            "Перепроверь в своём кошельке (USDT TRC20 → получить → копировать адрес).",
+        )
+        return
+    data = await state.get_data()
+    amt = float(data.get("amount") or 0)
+    owner = crm_storage.find_crm_owner_by_tg(message.from_user.id)
+    if not owner:
+        await message.reply("Профиль не найден")
+        await state.clear()
+        return
+    uname = owner.get("username") or ""
+    payout_id = await crm_storage.wallet_create_payout_request(uname, amt, addr)
+    await state.clear()
+    if not payout_id:
+        await message.reply(
+            "❌ Не удалось создать заявку (возможно недостаточно средств).",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ К кошельку", callback_data="wallet"),
+            ]]),
+        )
+        return
+    # Уведомляем admin
+    admin_chat = _wallet_admin_chat_id()
+    if admin_chat:
+        try:
+            admin_text = (
+                f"📤 <b>Запрос на вывод</b>\n\n"
+                f"Партнёр: @{uname} (<code>{owner['owner_id']}</code>)\n"
+                f"Сумма: <b>{amt:.2f} USDT</b>\n"
+                f"Адрес: <code>{addr}</code>\n"
+                f"Заявка: <code>{payout_id}</code>\n\n"
+                f"<i>Сделай TX вручную в своём кошельке, потом подтверди ниже.</i>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Выплачено — ввести TXID",
+                    callback_data=f"wadm:cpay:{payout_id}",
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"wadm:rpay:{payout_id}",
+                )],
+            ])
+            await message.bot.send_message(
+                int(admin_chat), admin_text, reply_markup=kb,
+            )
+        except Exception as e:
+            logger.warning("wallet payout admin notify fail: %s", e)
+    await message.reply(
+        f"✅ <b>Заявка создана</b>\n\n"
+        f"<code>{payout_id}</code>\n"
+        f"Сумма: <b>{amt:.2f} USDT</b>\n"
+        f"Адрес: <code>{addr}</code>\n\n"
+        f"Админ обработает в течение 1-2 часов в рабочее время.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ К кошельку", callback_data="wallet"),
+        ]]),
+    )
+
+
+@router.callback_query(F.data == "wallet:history")
+async def cb_wallet_history(call: CallbackQuery):
+    """Последние 15 операций кошелька."""
+    owner = crm_storage.find_crm_owner_by_tg(call.from_user.id)
+    if not owner:
+        await call.answer("Профиль не найден", show_alert=True)
+        return
+    wallet = crm_storage.get_partner_wallet(owner.get("username") or "")
+    await call.answer()
+    history = (wallet.get("history") or [])[-15:][::-1]
+    if not history:
+        text = "📜 <b>История</b>\n\n<i>Операций пока нет.</i>"
+    else:
+        lines = ["📜 <b>История операций</b> (последние 15)\n"]
+        for h in history:
+            ts = time.strftime("%d.%m %H:%M", time.localtime(h.get("ts") or 0))
+            typ = h.get("type") or ""
+            amt = float(h.get("amount") or 0)
+            icon = {
+                "credit": "🟢", "debit": "🔴",
+                "payout_request": "⏳", "payout_done": "✅",
+                "payout_rejected": "❌",
+            }.get(typ, "•")
+            reason = h.get("reason") or h.get("payout_id") or ""
+            lines.append(f"{icon} {ts} · {typ} <b>{amt:.2f}$</b> {reason}")
+        text = "\n".join(lines)
+    try:
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Назад", callback_data="wallet"),
+        ]]))
+    except TelegramBadRequest:
+        pass
+
+
+# ============================================================================
+# Admin callbacks (wadm:cpay, wadm:rpay, wadm:cdep, wadm:rdep)
+# ============================================================================
+
+class WalletAdminForm(StatesGroup):
+    waiting_payout_txid = State()  # admin вводит TXID реальной выплаты
+    waiting_deposit_amount = State()  # admin вводит сумму подтверждаемого пополнения
+
+
+@router.callback_query(F.data.startswith("wadm:cpay:"))
+async def cb_wallet_admin_confirm_payout(call: CallbackQuery, state: FSMContext):
+    """Admin: подтверждаю выплату — далее введу TXID."""
+    payout_id = call.data.split(":", 2)[2]
+    await call.answer()
+    await state.set_state(WalletAdminForm.waiting_payout_txid)
+    await state.update_data(payout_id=payout_id, menu_msg_id=call.message.message_id)
+    await call.message.reply(
+        f"💬 Пришли <b>TXID</b> выплаты <code>{payout_id}</code> (или «-» если без TXID):",
+    )
+
+
+@router.message(WalletAdminForm.waiting_payout_txid, F.text)
+async def handle_wadm_payout_txid(message: Message, state: FSMContext):
+    txid = (message.text or "").strip()
+    if txid == "-":
+        txid = ""
+    data = await state.get_data()
+    payout_id = data.get("payout_id")
+    await state.clear()
+    result = await crm_storage.wallet_confirm_payout(payout_id, txid=txid)
+    if not result:
+        await message.reply(f"❌ Заявка <code>{payout_id}</code> не найдена или баланс не покрывает.")
+        return
+    uname = result.get("username")
+    amt = float(result.get("amount") or 0)
+    addr = result.get("address") or ""
+    await message.reply(
+        f"✅ Выплата подтверждена.\n"
+        f"@{uname} · {amt:.2f} USDT · {addr[:8]}…{addr[-6:]}\n"
+        f"TXID: <code>{txid or '—'}</code>",
+    )
+    # Уведомляем партнёра
+    try:
+        owner = crm_storage.find_crm_owner_by_username(uname)
+        if owner and owner.get("tg_user_id"):
+            await message.bot.send_message(
+                int(owner["tg_user_id"]),
+                f"✅ <b>Выплата отправлена</b>\n\n"
+                f"<b>{amt:.2f} USDT</b> на адрес <code>{addr}</code>\n"
+                f"TXID: <code>{txid or '—'}</code>",
+            )
+    except Exception as e:
+        logger.warning("notify partner about payout fail: %s", e)
+
+
+@router.callback_query(F.data.startswith("wadm:rpay:"))
+async def cb_wallet_admin_reject_payout(call: CallbackQuery):
+    """Admin: отклонить выплату."""
+    payout_id = call.data.split(":", 2)[2]
+    await call.answer()
+    result = await crm_storage.wallet_reject_payout(payout_id, reason="rejected by admin")
+    if not result:
+        await call.message.reply("Заявка не найдена.")
+        return
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await call.message.reply(
+        f"❌ Заявка <code>{payout_id}</code> отклонена. "
+        f"Баланс @{result.get('username')} не изменён."
+    )
+    # Уведомляем партнёра
+    try:
+        owner = crm_storage.find_crm_owner_by_username(result.get("username") or "")
+        if owner and owner.get("tg_user_id"):
+            await call.bot.send_message(
+                int(owner["tg_user_id"]),
+                f"❌ <b>Заявка на вывод отклонена</b>\n"
+                f"<code>{payout_id}</code> на {float(result.get('amount') or 0):.2f} USDT\n"
+                f"Свяжись с админом для подробностей.",
+            )
+    except Exception as e:
+        logger.warning("notify partner reject fail: %s", e)
+
+
+@router.callback_query(F.data.startswith("wadm:cdep:"))
+async def cb_wallet_admin_confirm_deposit(call: CallbackQuery, state: FSMContext):
+    """Admin подтверждает пополнение — следующий шаг ввести сумму."""
+    parts = call.data.split(":", 3)
+    if len(parts) < 4:
+        await call.answer("Bad callback", show_alert=True)
+        return
+    owner_id = parts[2]
+    txid = parts[3]
+    await call.answer()
+    await state.set_state(WalletAdminForm.waiting_deposit_amount)
+    await state.update_data(owner_id=owner_id, txid=txid)
+    await call.message.reply(
+        f"💬 Сколько USDT пришло по TXID <code>{txid}</code>?\n"
+        f"(Введи число, например <code>100</code>):",
+    )
+
+
+@router.message(WalletAdminForm.waiting_deposit_amount, F.text)
+async def handle_wadm_deposit_amount(message: Message, state: FSMContext):
+    text = (message.text or "").strip().replace(",", ".")
+    try:
+        amt = float(text)
+    except ValueError:
+        await message.reply("⚠️ Введи число.")
+        return
+    if amt <= 0:
+        await message.reply("⚠️ Сумма должна быть положительной.")
+        return
+    data = await state.get_data()
+    owner_id = data.get("owner_id")
+    txid = data.get("txid") or ""
+    await state.clear()
+    owner = crm_storage.get_crm_owner(owner_id)
+    if not owner:
+        await message.reply(f"Партнёр <code>{owner_id}</code> не найден.")
+        return
+    uname = owner.get("username") or ""
+    ok = await crm_storage.wallet_credit(
+        uname, amt, reason="manual_deposit", txid=txid,
+    )
+    if not ok:
+        await message.reply("❌ Не удалось зачислить (ошибка storage).")
+        return
+    wallet = crm_storage.get_partner_wallet(uname)
+    new_balance = float(wallet.get("balance_usdt") or 0)
+    await message.reply(
+        f"✅ Зачислено <b>{amt:.2f} USDT</b> на @{uname}.\n"
+        f"Новый баланс: <b>{new_balance:.2f} USDT</b>",
+    )
+    # Уведомляем партнёра
+    try:
+        if owner.get("tg_user_id"):
+            await message.bot.send_message(
+                int(owner["tg_user_id"]),
+                f"💰 <b>Пополнение зачислено</b>\n\n"
+                f"<b>+{amt:.2f} USDT</b>\n"
+                f"TXID: <code>{txid}</code>\n"
+                f"Новый баланс: <b>{new_balance:.2f} USDT</b>",
+            )
+    except Exception as e:
+        logger.warning("notify partner deposit fail: %s", e)
+
+
+@router.callback_query(F.data.startswith("wadm:rdep:"))
+async def cb_wallet_admin_reject_deposit(call: CallbackQuery):
+    """Admin отклоняет пополнение (например невалидный TXID)."""
+    parts = call.data.split(":", 3)
+    owner_id = parts[2] if len(parts) > 2 else ""
+    txid = parts[3] if len(parts) > 3 else ""
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await call.message.reply(
+        f"❌ Пополнение отклонено (owner <code>{owner_id}</code>, TXID <code>{txid}</code>).",
+    )
+    try:
+        owner = crm_storage.get_crm_owner(owner_id)
+        if owner and owner.get("tg_user_id"):
+            await call.bot.send_message(
+                int(owner["tg_user_id"]),
+                f"❌ <b>Пополнение отклонено</b>\n"
+                f"TXID <code>{txid}</code> не подтвердился (не найден / неверная сумма / спам). "
+                f"Свяжись с админом.",
+            )
+    except Exception as e:
+        logger.warning("notify partner deposit reject fail: %s", e)
+
+
+@router.callback_query(F.data == "profile")
+async def cb_profile_back(call: CallbackQuery):
+    """Возврат в профиль из кошелька."""
+    owner = crm_storage.find_crm_owner_by_tg(call.from_user.id)
+    if not owner:
+        await call.answer("Профиль не найден", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _show_profile(call.message, owner)
 
 
 @router.callback_query(F.data == "help")
