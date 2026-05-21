@@ -1746,6 +1746,18 @@ class Storage:
     # Единый источник цен. Меняется через команду «прайс БАНК ЦЕНА» в
     # брейн-чате. accounting2.lookup_pricing использует это в первую очередь.
 
+    # Дефолтные цены по банкам (USD за ЛК) — fallback из knowledge когда
+    # в storage прайс не задан или price_usdt у конкретного ЛК пустой.
+    # Используется в resolve_lk_price(): если у ЛК нет price_usdt, берём
+    # из storage.pricing, а если и там нет — из этого hardcoded словаря.
+    DEFAULT_LK_PRICES = {
+        "АЛЬФА":   400.0,
+        "ЛОКО":    200.0,
+        "ТОЧКА":   200.0,
+        "ОЗОН":    400.0,
+        "РАЙФ":    400.0,
+    }
+
     @staticmethod
     def _norm_bank_key(bank: str) -> str:
         return (bank or "").strip().upper()
@@ -1756,6 +1768,34 @@ class Storage:
             return None
         prices = self.state.get("pricing") or {}
         return prices.get(self._norm_bank_key(bank))
+
+    def resolve_lk_price(self, bank: str, price_usdt) -> float:
+        """Резолвит цену ЛК по приоритетам:
+          1) Если price_usdt > 0 — возвращает как есть (явно задано)
+          2) Иначе цена из storage.pricing (по команде «прайс БАНК N»)
+          3) Иначе DEFAULT_LK_PRICES (hardcoded fallback из knowledge)
+          4) Иначе 0
+        Используется в list_lk_in_work и других местах где нужна цена
+        для отображения / выплат.
+        """
+        try:
+            p = float(price_usdt or 0)
+            if p > 0:
+                return p
+        except (TypeError, ValueError):
+            pass
+        key = self._norm_bank_key(bank)
+        if not key:
+            return 0.0
+        # 2) storage.pricing
+        stored = (self.state.get("pricing") or {}).get(key)
+        if stored:
+            try:
+                return float(stored)
+            except (TypeError, ValueError):
+                pass
+        # 3) hardcoded defaults
+        return float(self.DEFAULT_LK_PRICES.get(key, 0))
 
     def list_pricing(self) -> dict:
         """Копия всего прайса {BANK_UPPER: price_usdt}."""
@@ -2860,15 +2900,18 @@ class Storage:
         for key, lst in groups.items():
             is_combo = len(lst) > 1
             for cid, c in lst:
+                bank_upper = (c.get("bank") or "").upper()
                 result.append({
                     "card_id": cid,
-                    "bank": (c.get("bank") or "").upper(),
+                    "bank": bank_upper,
                     "fio": c.get("fio") or "",
                     "supplier": (c.get("supplier") or "").lstrip("@"),
                     "perevyaz_ts": c.get("created_at") or 0,
                     "deal_id": c.get("deal_id") or "",
                     "payment_method": c.get("payment_method") or "",
-                    "price_usdt": c.get("price_usdt") or 0,
+                    # Если у ЛК price_usdt пустой/0 — берём дефолт по банку
+                    # (storage.pricing → DEFAULT_LK_PRICES → 0)
+                    "price_usdt": self.resolve_lk_price(bank_upper, c.get("price_usdt")),
                     "is_combo": is_combo,
                     "combo_size": len(lst),
                 })
