@@ -10508,8 +10508,7 @@ function jarvis() {
 <!-- ===== OPERATIONAL: Дедики — floating windows ===== -->
 <template x-for="win in (openDediks || [])" :key="win.id">
   <div x-show="!win.minimized" x-cloak
-       :style="`position:fixed; left:${win.x}vw; top:${win.y}vh; width:${win.w}vw; height:${win.h}vh; z-index:${win.z}; background: var(--bg-card, #1a1a1a); border: 1px solid ${dedikSnapMenuFor===win.id ? 'var(--hud-amber)' : 'var(--hud-primary)'}; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.7), 0 0 24px rgba(var(--primary-rgb, 100, 200, 255), 0.15); display: flex; flex-direction: column; overflow: hidden; backdrop-filter: blur(4px); transition: border-color 0.15s ease;`"
-       @mousedown="focusDedik(win.id)">
+       :style="`position:fixed; left:${win.x}vw; top:${win.y}vh; width:${win.w}vw; height:${win.h}vh; z-index:${win.z}; background: var(--bg-card, #1a1a1a); border: 1px solid ${dedikSnapMenuFor===win.id ? 'var(--hud-amber)' : 'var(--hud-primary)'}; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.7), 0 0 24px rgba(var(--primary-rgb, 100, 200, 255), 0.15); display: flex; flex-direction: column; overflow: hidden; backdrop-filter: blur(4px); transition: border-color 0.15s ease;`">
     <div @mousedown.self="startDragDedik(win.id, $event)"
          style="display:flex; align-items:center; gap:8px; padding: 8px 12px; background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%); border-bottom: 1px solid rgba(255,255,255,0.1); cursor: move; user-select: none; flex-shrink:0;">
       <span style="font-size: 13px; pointer-events:none;">🖥</span>
