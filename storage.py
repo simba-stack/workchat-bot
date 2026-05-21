@@ -1857,6 +1857,36 @@ class Storage:
             await self._save_unlocked()
             return n
 
+    def find_active_lk_card(
+        self, supplier: str = "", bank: str = "", fio: str = "",
+    ) -> Optional[dict]:
+        """Ищет существующую активную карточку по (supplier, bank, fio).
+        Активная = status НЕ в (ЗАВЕРШЁН, БРАК, БЛОК, УДАЛЁНА).
+        Возвращает первую совпадающую или None.
+
+        Используется для dedupe в _create_lk_card_from_perevyaz и
+        _tool_create_lk_card — чтобы не плодить дубли при повторном триггере.
+        """
+        if not bank:
+            return None
+        sup = (supplier or "").lstrip("@").lower().strip()
+        bnk = bank.upper().strip()
+        f = (fio or "").lower().strip()
+        terminal = {"ЗАВЕРШЁН", "ЗАВЕРШЕН", "БРАК", "БЛОК", "УДАЛЕНА", "УДАЛЁНА"}
+        for c in (self.state.get("lk_cards") or {}).values():
+            if not c:
+                continue
+            if (c.get("status") or "").upper() in terminal:
+                continue
+            if (c.get("bank") or "").upper().strip() != bnk:
+                continue
+            if sup and (c.get("supplier") or "").lstrip("@").lower().strip() != sup:
+                continue
+            if f and (c.get("fio") or "").lower().strip() != f:
+                continue
+            return c
+        return None
+
     async def add_lk_card(self, **fields) -> str:
         """Создаёт новую карточку. Возвращает card_id ("lk001"...).
 

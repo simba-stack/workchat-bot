@@ -2935,6 +2935,14 @@ class UserbotService:
             return {"status": "error", "error": "bank_required"}
         if not fio:
             return {"status": "error", "error": "fio_required"}
+        # Если AI не передал цену — берём из прайса по банку (фоллбек на
+        # DEFAULT_LK_PRICES). Не возвращаем error: лучше создать карточку
+        # с дефолтной ценой чем не создать вообще.
+        if price_usdt is None or float(price_usdt or 0) <= 0:
+            try:
+                price_usdt = float(storage.resolve_lk_price(bank, 0) or 0)
+            except Exception:
+                price_usdt = 0.0
         if price_usdt <= 0:
             return {"status": "error", "error": "price_invalid"}
         if payment_method not in accounting2.PAYMENT_METHODS:
@@ -2973,6 +2981,37 @@ class UserbotService:
                     )
             except Exception as e:
                 logger.warning("create_lk_card: resolve username failed: %s", e)
+
+        # === DEDUPE ===
+        # Если у клиента (supplier+fio) уже есть АКТИВНАЯ карточка этого
+        # банка — не создаём дубль, а UPDATE её (price, method, deal_id, usdt).
+        # Это спасает от ситуации когда AI вызывает create_lk_card повторно
+        # (например после уточнения метода — он должен был использовать
+        # set_payment_method, но иногда повторно дёргает create).
+        existing = storage.find_active_lk_card(
+            supplier=client_username or "", bank=bank, fio=fio,
+        )
+        if existing:
+            ex_id = existing.get("card_id")
+            logger.info(
+                "create_lk_card: dedupe hit — обновляем существующую %s "
+                "(bank=%s fio=%s supplier=%s)",
+                ex_id, bank, fio, client_username,
+            )
+            await storage.update_lk_card(
+                ex_id,
+                price_usdt=float(price_usdt),
+                payment_method=payment_method,
+                deal_id=deal_id or existing.get("deal_id") or "",
+                usdt_address=usdt_address or existing.get("usdt_address") or "",
+                _allow_payment_method_change=True,
+            )
+            return {
+                "status": "ok",
+                "card_id": ex_id,
+                "deduped": True,
+                "note": "Существующая карточка обновлена (не плодим дубли)",
+            }
 
         card_id = await storage.add_lk_card(
             supplier=client_username or "—",
@@ -5929,6 +5968,44 @@ class UserbotService:
                 )
         except Exception as e:
             logger.warning("save_client_preferences failed: %s", e)
+
+        # === DEDUPE ===
+        # Если у этого клиента (supplier+fio) УЖЕ есть активная карточка
+        # этого банка — не создаём дубль, обновляем существующую.
+        # Это спасает от двойного вызова при повторной перевязке того же ЛК.
+        existing = storage.find_active_lk_card(
+            supplier=client_uname or "", bank=bank, fio=fio,
+        )
+        if existing:
+            ex_id = existing.get("card_id")
+            logger.info(
+                "perevyaz: dedupe hit — обновляем существующую %s "
+                "(bank=%s fio=%s supplier=%s)",
+                ex_id, bank, fio, client_uname,
+            )
+            # Обновляем поля только если они пустые / 0 — не перезатираем
+            # ручные правки.
+            patch = {}
+            if not existing.get("price_usdt") and price > 0:
+                patch["price_usdt"] = float(price)
+            if not existing.get("payment_method") and method:
+                patch["payment_method"] = method
+                patch["_allow_payment_method_change"] = True
+            if not existing.get("deal_id") and deal_id:
+                patch["deal_id"] = deal_id
+            if not existing.get("usdt_address") and usdt_addr:
+                patch["usdt_address"] = usdt_addr
+            if patch:
+                await storage.update_lk_card(ex_id, **patch)
+            return ex_id
+
+        # Если цена 0 — пытаемся подставить из прайса по банку
+        if not price or price <= 0:
+            try:
+                price = float(storage.resolve_lk_price(bank, 0) or 0)
+            except Exception:
+                price = 0.0
+
         card_id = await storage.add_lk_card(
             supplier=client_uname,
             bank=bank,
