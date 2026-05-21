@@ -1742,6 +1742,248 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # ========================================================================
+    # === Кошелёк партнёра (TRC20 USDT) ===
+    # Custodial-схема:
+    #   - У каждого партнёра (поставщика ЛК) есть `balance_usdt` в state.json.
+    #   - Партнёр пополняет наш единый TRC20-адрес (env TRC20_DEPOSIT_ADDRESS)
+    #     и присылает админу TXID — админ подтверждает зачисление вручную.
+    #   - Партнёр запрашивает вывод → бот создаёт pending payout → админ-чат
+    #     получает кнопку «Подтвердить выплачено» → админ делает manual TX
+    #     в кошельке и жмёт кнопку → баланс списывается.
+    #
+    # СТРУКТУРА state["partner_wallets"]:
+    # {
+    #   "username1": {
+    #     "balance_usdt": 0.0,
+    #     "address_default": "T...",          # последний адрес вывода
+    #     "history": [{ts, type, amount, reason, txid, address, lk_card_id, payout_id}, ...],
+    #     "pending_payouts": [{payout_id, ts, amount, address}, ...],
+    #   }
+    # }
+    # ========================================================================
+
+    @staticmethod
+    def _norm_partner_uname(u: str) -> str:
+        return (u or "").lstrip("@").strip().lower()
+
+    def get_partner_wallet(self, username: str) -> dict:
+        """Возвращает кошелёк партнёра (создаёт пустой если не было)."""
+        key = self._norm_partner_uname(username)
+        if not key:
+            return {}
+        wallets = self.state.get("partner_wallets") or {}
+        return wallets.get(key) or {
+            "balance_usdt": 0.0, "address_default": "",
+            "history": [], "pending_payouts": [],
+        }
+
+    def list_partner_wallets(self) -> dict:
+        """Все кошельки (для admin/dashboard)."""
+        return dict(self.state.get("partner_wallets") or {})
+
+    def list_pending_payouts(self) -> list:
+        """Все pending выводы по всем партнёрам (для admin списка)."""
+        result = []
+        for uname, w in (self.state.get("partner_wallets") or {}).items():
+            for p in (w.get("pending_payouts") or []):
+                result.append({"username": uname, **p})
+        result.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+        return result
+
+    async def _ensure_partner_wallet(self, username: str) -> dict:
+        """Внутренний: создать пустой wallet если ещё не существует.
+        Вызывается ВНУТРИ _lock — не дёргать снаружи."""
+        key = self._norm_partner_uname(username)
+        wallets = self.state.setdefault("partner_wallets", {})
+        if key not in wallets:
+            wallets[key] = {
+                "balance_usdt": 0.0, "address_default": "",
+                "history": [], "pending_payouts": [],
+            }
+        return wallets[key]
+
+    async def wallet_credit(
+        self, username: str, amount_usdt: float,
+        reason: str = "", txid: str = "", lk_card_id: str = "",
+    ) -> bool:
+        """Зачислить USDT на кошелёк партнёра.
+        reason: 'lk_payout' (за ЛК), 'manual_deposit' (адмиздачисление по TXID),
+                'correction' (правка), 'refund' (возврат)."""
+        key = self._norm_partner_uname(username)
+        if not key:
+            return False
+        try:
+            amt = float(amount_usdt or 0)
+        except (TypeError, ValueError):
+            return False
+        if amt <= 0:
+            return False
+        async with _lock:
+            w = await self._ensure_partner_wallet(key)
+            w["balance_usdt"] = round(float(w.get("balance_usdt") or 0) + amt, 6)
+            w.setdefault("history", []).append({
+                "ts": time.time(),
+                "type": "credit",
+                "amount": amt,
+                "reason": reason or "credit",
+                "txid": txid or "",
+                "lk_card_id": lk_card_id or "",
+            })
+            await self._save_unlocked()
+            return True
+
+    async def wallet_debit(
+        self, username: str, amount_usdt: float,
+        reason: str = "", txid: str = "", address: str = "",
+        payout_id: str = "",
+    ) -> bool:
+        """Списать USDT (для confirm payout или manual correction).
+        Возвращает False если баланс < amount."""
+        key = self._norm_partner_uname(username)
+        if not key:
+            return False
+        try:
+            amt = float(amount_usdt or 0)
+        except (TypeError, ValueError):
+            return False
+        if amt <= 0:
+            return False
+        async with _lock:
+            w = await self._ensure_partner_wallet(key)
+            cur = float(w.get("balance_usdt") or 0)
+            if cur + 1e-9 < amt:  # с поправкой на float
+                return False
+            w["balance_usdt"] = round(cur - amt, 6)
+            w.setdefault("history", []).append({
+                "ts": time.time(),
+                "type": "debit",
+                "amount": amt,
+                "reason": reason or "debit",
+                "txid": txid or "",
+                "address": address or "",
+                "payout_id": payout_id or "",
+            })
+            await self._save_unlocked()
+            return True
+
+    async def wallet_create_payout_request(
+        self, username: str, amount_usdt: float, trc20_address: str,
+    ) -> Optional[str]:
+        """Создаёт pending payout request. НЕ списывает баланс (списание
+        происходит только когда admin подтвердит выплату через wallet_confirm_payout).
+        Однако ПРОВЕРЯЕТ что баланс >= amount, иначе возвращает None.
+        Возвращает payout_id или None если баланса не хватает."""
+        key = self._norm_partner_uname(username)
+        if not key:
+            return None
+        try:
+            amt = float(amount_usdt or 0)
+        except (TypeError, ValueError):
+            return None
+        if amt <= 0:
+            return None
+        addr = (trc20_address or "").strip()
+        if not addr:
+            return None
+        async with _lock:
+            w = await self._ensure_partner_wallet(key)
+            # Сумма pending payouts уже зарезервирована — учитываем
+            reserved = sum(
+                float(p.get("amount") or 0)
+                for p in (w.get("pending_payouts") or [])
+            )
+            available = float(w.get("balance_usdt") or 0) - reserved
+            if available + 1e-9 < amt:
+                return None
+            seq = int(self.state.get("partner_wallets_payout_seq", 0)) + 1
+            self.state["partner_wallets_payout_seq"] = seq
+            payout_id = f"pw{seq:04d}"
+            w.setdefault("pending_payouts", []).append({
+                "payout_id": payout_id,
+                "ts": time.time(),
+                "amount": amt,
+                "address": addr,
+            })
+            w["address_default"] = addr
+            w.setdefault("history", []).append({
+                "ts": time.time(),
+                "type": "payout_request",
+                "amount": amt,
+                "address": addr,
+                "payout_id": payout_id,
+            })
+            await self._save_unlocked()
+            return payout_id
+
+    async def wallet_confirm_payout(
+        self, payout_id: str, txid: str = "",
+    ) -> Optional[dict]:
+        """Admin подтвердил что выплата сделана (manual TX).
+        Списывает баланс + перемещает payout в history. Возвращает данные
+        выплаты (username, amount, address) или None если не найдено."""
+        if not payout_id:
+            return None
+        async with _lock:
+            wallets = self.state.get("partner_wallets") or {}
+            for uname, w in wallets.items():
+                for i, p in enumerate(w.get("pending_payouts") or []):
+                    if p.get("payout_id") == payout_id:
+                        amt = float(p.get("amount") or 0)
+                        addr = p.get("address") or ""
+                        # Списать с баланса
+                        cur = float(w.get("balance_usdt") or 0)
+                        if cur + 1e-9 < amt:
+                            return None  # парадокс: pending без покрытия
+                        w["balance_usdt"] = round(cur - amt, 6)
+                        # Удалить из pending
+                        w["pending_payouts"].pop(i)
+                        # В history
+                        w.setdefault("history", []).append({
+                            "ts": time.time(),
+                            "type": "payout_done",
+                            "amount": amt,
+                            "address": addr,
+                            "txid": txid or "",
+                            "payout_id": payout_id,
+                        })
+                        await self._save_unlocked()
+                        return {
+                            "username": uname, "amount": amt,
+                            "address": addr, "payout_id": payout_id,
+                        }
+            return None
+
+    async def wallet_reject_payout(
+        self, payout_id: str, reason: str = "",
+    ) -> Optional[dict]:
+        """Admin отклонил вывод (например подозрительный адрес).
+        НЕ списывает баланс — просто удаляет из pending."""
+        if not payout_id:
+            return None
+        async with _lock:
+            wallets = self.state.get("partner_wallets") or {}
+            for uname, w in wallets.items():
+                for i, p in enumerate(w.get("pending_payouts") or []):
+                    if p.get("payout_id") == payout_id:
+                        amt = float(p.get("amount") or 0)
+                        addr = p.get("address") or ""
+                        w["pending_payouts"].pop(i)
+                        w.setdefault("history", []).append({
+                            "ts": time.time(),
+                            "type": "payout_rejected",
+                            "amount": amt,
+                            "address": addr,
+                            "payout_id": payout_id,
+                            "reason": reason or "",
+                        })
+                        await self._save_unlocked()
+                        return {
+                            "username": uname, "amount": amt,
+                            "address": addr, "reason": reason,
+                        }
+            return None
+
     # === Прайс ЛК ===
     # Единый источник цен. Меняется через команду «прайс БАНК ЦЕНА» в
     # брейн-чате. accounting2.lookup_pricing использует это в первую очередь.
