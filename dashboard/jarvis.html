@@ -10636,5 +10636,134 @@ function jarvis() {
   <button @click="tileAllDediks()" class="chip-btn" style="margin-left:auto; font-size:10px; flex-shrink:0;" title="Развернуть все в сетку">⊞ Сетка</button>
 </div>
 
+
+<!-- ===== EXCHANGE REQUEST MODAL (restored) ===== -->
+<div x-show="showExchangeModal" x-cloak
+     style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;overflow:auto;padding:20px;"
+     @click.self="closeExchangeModal()">
+  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;">
+    <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">➕ Новая заявка на обмен</h3>
+
+    <!-- BANK ВХОДА -->
+    <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 10px;">
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">БАНК ВХОДА</div>
+      <select x-model="exchangeForm.bank_in" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+        <option value="">— выберите банк —</option>
+        <option value="АЛЬФА">АЛЬФА</option>
+        <option value="ВТБ">ВТБ</option>
+      </select>
+      <div style="margin-top: 6px;">
+        <input type="text" x-model="fioSearchIn" @input="searchLkFio($event.target.value, 'in')"
+               placeholder="ФИО (поиск по ЛК)…"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+        <div x-show="(fioSearchResultsIn || []).length > 0"
+             style="background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; max-height: 160px; overflow-y: auto; margin-top: 4px;">
+          <template x-for="r in fioSearchResultsIn" :key="r.card_id">
+            <div style="padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05);"
+                 @click="pickLkIn(r)" class="hover:bg-white/10">
+              <span style="font-weight:700;" x-text="r.bank"></span> · <span x-text="r.fio"></span>
+              <span style="font-size:10px; color: var(--text-dim); margin-left: 4px;" x-text="'@' + r.supplier"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+      <input type="number" x-model.number="exchangeForm.amount_in" placeholder="Сумма входа (₽)"
+             style="width: 100%; margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+    </div>
+
+    <!-- ВЫХОДЫ -->
+    <div style="margin-bottom: 10px;">
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center;">
+        ВЫХОДЫ (можно несколько)
+        <button class="chip-btn" style="margin-left:auto;" @click="addExchangeOut()">+ ещё выход</button>
+      </div>
+      <template x-for="(out, idx) in exchangeForm.outs" :key="idx">
+        <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 6px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+            <span style="font-size: 11px; color: var(--text-dim);">Выход #<span x-text="idx+1"></span></span>
+            <button x-show="exchangeForm.outs.length > 1" class="chip-btn" style="margin-left:auto;" @click="removeExchangeOut(idx)">✕</button>
+          </div>
+          <select x-model="out.bank" style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+            <option value="">— банк ВЫХОДА —</option>
+            <option value="ОЗОН">ОЗОН</option>
+            <option value="РАЙФ">РАЙФ</option>
+            <option value="ТОЧКА">ТОЧКА</option>
+            <option value="УРАЛ">УРАЛ</option>
+            <option value="ПСБ">ПСБ</option>
+          </select>
+          <input type="text" x-model="out.fio" placeholder="ФИО"
+                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <input type="number" x-model.number="out.amount_out" placeholder="Сумма ВЫХОДА (₽)"
+                 style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <!-- юр-юр получатели -->
+          <div style="margin-top: 8px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 10px; color: var(--text-dim); display: flex; align-items: center;">
+              Юр-юр получатели с этого ЛК
+              <button class="chip-btn" style="margin-left:auto;" @click="addJurJur(idx)">+ ещё</button>
+            </div>
+            <template x-for="(jj, jjIdx) in out.jur_jur_receivers" :key="jjIdx">
+              <div style="display: flex; gap: 4px; margin-top: 4px;">
+                <select x-model="jj.bank" style="flex: 1; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+                  <option value="">— банк —</option>
+                  <option value="ОЗОН">ОЗОН</option>
+                  <option value="РАЙФ">РАЙФ</option>
+                  <option value="ТОЧКА">ТОЧКА</option>
+                  <option value="УРАЛ">УРАЛ</option>
+                  <option value="ПСБ">ПСБ</option>
+                  <option value="АЛЬФА">АЛЬФА</option>
+                  <option value="ВТБ">ВТБ</option>
+                </select>
+                <input type="text" x-model="jj.fio" placeholder="ФИО получателя"
+                       style="flex: 2; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+                <button class="chip-btn" style="padding: 2px 6px;" @click="removeJurJur(idx, jjIdx)">✕</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Курс / комиссия / % партнёра -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px;">
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">% партнёру</div>
+        <input type="number" step="0.1" x-model.number="exchangeForm.partner_pct"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">Курс вывода ₽/USDT</div>
+        <input type="number" step="0.01" x-model.number="exchangeForm.exchange_rate"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+      <div>
+        <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
+        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+    </div>
+
+    <!-- Маржа preview -->
+    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
+      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
+      <template x-if="exchangeForm._margin_preview">
+        <div style="font-size: 12px;">
+          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
+          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
+          Комиссия: <span x-text="exchangeForm._margin_preview.commission_usdt.toFixed(2)"></span>$ ·
+          Партнёру: <span x-text="exchangeForm._margin_preview.partner_share_usdt.toFixed(2)"></span>$
+          <br>
+          <b style="color: var(--hud-emerald); font-size: 16px;">МАРЖА: <span x-text="exchangeForm._margin_preview.margin_usdt.toFixed(2)"></span>$</b>
+        </div>
+      </template>
+    </div>
+
+    <div style="display: flex; gap: 8px;">
+      <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
+      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitExchangeRequest()">✅ Зафиксировать заявку</button>
+      <button class="chip-btn" @click="closeExchangeModal()">Отмена</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
