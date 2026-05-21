@@ -3914,7 +3914,12 @@
                     <span :style="'color: ' + crmStatusBadge(lk.status).color" x-text="crmStatusBadge(lk.status).icon + ' ' + (lk.status || '?')"></span>
                     <span x-show="lk.deal" style="color: var(--text-dim);" x-text="'#' + lk.deal"></span>
                   </div>
-                  <div style="margin-top: 4px; color: var(--text-dim);" x-text="lk.value || '—'"></div>
+                  <div style="margin-top: 4px; color: var(--text-dim); font-size: 10px;">
+                    <span x-show="lk.new_login" x-text="'👤 ' + lk.new_login"></span>
+                    <span x-show="lk.new_number" style="margin-left: 8px;" x-text="'📞 ' + lk.new_number"></span>
+                    <span x-show="!lk.new_login && !lk.new_number && lk.value" x-text="lk.value"></span>
+                    <span x-show="!lk.new_login && !lk.new_number && !lk.value">—</span>
+                  </div>
                 </div>
               </template>
             </div>
@@ -4871,7 +4876,14 @@
           <div x-show="lk.residence" class="anketa-row"><b>Место жительства:</b> <span x-text="lk.residence"></span></div>
           <div class="anketa-divider"></div>
           <div class="anketa-row"><b>Банк:</b> <span x-text="lk.bank"></span></div>
-          <div x-show="lk.value || lk.price" class="anketa-row"><b>Цена:</b> <span x-text="(lk.value || lk.price || 0) + ' USDT'"></span></div>
+          <!-- Данные ЛК (пошаговый ввод): логин/пароль/телефон/кодовое/почта.
+               Цена USDT — это отдельное свойство ЛК (price_usdt), а не value
+               (раньше путались, теперь чётко разделены). -->
+          <div x-show="lk.new_login" class="anketa-row"><b>Логин:</b> <span x-text="lk.new_login"></span></div>
+          <div x-show="lk.new_password" class="anketa-row"><b>Пароль:</b> <span x-text="lk.new_password"></span></div>
+          <div x-show="lk.new_number" class="anketa-row"><b>Телефон банка:</b> <span x-text="lk.new_number"></span></div>
+          <div x-show="lk.code_word" class="anketa-row"><b>Кодовое слово:</b> <span x-text="lk.code_word"></span></div>
+          <div x-show="lk.new_mail" class="anketa-row"><b>Почта:</b> <span x-text="lk.new_mail"></span></div>
           <div class="anketa-divider"></div>
           <div class="anketa-row">
             <b>📩 SMS-коды:</b>

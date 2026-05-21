@@ -202,6 +202,16 @@ class DropForm(StatesGroup):
 
 class LKForm(StatesGroup):
     waiting_bank = State()
+    # Пошаговый ввод данных ЛК (по точечным вопросам — как в PRIDE PASSWORD).
+    # После каждого шага и вопрос, и ответ user'а удаляются из чата
+    # (видны только в дашборде / в карточке ЛК).
+    waiting_login = State()
+    waiting_password = State()
+    waiting_phone = State()
+    waiting_code_word = State()
+    waiting_mail = State()
+    # Legacy single-shot ввод — оставляем чтобы не сломать обратную
+    # совместимость с возможными старыми FSM-сессиями.
     waiting_value = State()
 
 
@@ -1312,13 +1322,17 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
         await call.answer("Клиент не найден", show_alert=True)
         return
     await call.answer()
-    await state.set_state(LKForm.waiting_value)
-    await state.update_data(drop_id=drop_id, bank=bank, menu_msg_id=call.message.message_id)
+    await state.set_state(LKForm.waiting_login)
+    await state.update_data(
+        drop_id=drop_id, bank=bank, menu_msg_id=call.message.message_id,
+        # Промежуточные собранные поля — заполняются по шагам
+        _new_login="", _new_password="", _new_number="",
+        _code_word="", _new_mail="",
+    )
     try:
         await call.message.edit_text(
             f"<b>🏦 Новый ЛК — {bank}</b>\n\n"
-            f"Введите данные ЛК (логин/пароль, ссылку, что есть):\n\n"
-            f"<i>Можно несколькими строками.</i>",
+            f"<b>Шаг 1/5:</b> Введите <b>логин</b> от ЛК (или «-» если нет):",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="◀️ Отмена", callback_data=f"droplk:{drop_id}"),
             ]]),
@@ -1327,6 +1341,198 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
         pass
 
 
+# ============================================================================
+# Пошаговый ввод данных нового ЛК (5 шагов, как PRIDE PASSWORD).
+# После каждого шага: удаляем и вопрос-сообщение бота, и ответ user'а,
+# показываем следующий шаг как edit_message_text меню. В финале сохраняем
+# собранные данные в droplk.new_login/new_password/new_number/code_word/new_mail.
+# ============================================================================
+async def _lk_step_progress(message: Message, state: FSMContext, field: str, prompt_next: str, next_state):
+    """Обработка одного шага FSM ввода ЛК:
+      1. Сохраняем ответ user'а в state (field=значение)
+      2. Удаляем сообщение user'а
+      3. Редактируем меню-сообщение бота новым промптом
+      4. Переключаем state на next_state (или финал)
+    """
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    # Сохранить в state
+    await state.update_data(**{field: text})
+    # Удалить ответ user'а из чата
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    # Обновить меню-сообщение с следующим вопросом
+    menu_msg_id = data.get("menu_msg_id")
+    bank = data.get("bank") or ""
+    drop_id = data.get("drop_id") or ""
+    if menu_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=menu_msg_id,
+                text=f"<b>🏦 Новый ЛК — {bank}</b>\n\n{prompt_next}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="◀️ Отмена", callback_data=f"droplk:{drop_id}"),
+                ]]),
+            )
+        except TelegramBadRequest:
+            pass
+    await state.set_state(next_state)
+
+
+@router.message(LKForm.waiting_login, F.text & ~F.text.startswith("/"))
+async def handle_lk_login(message: Message, state: FSMContext):
+    await _lk_step_progress(
+        message, state, "_new_login",
+        "<b>Шаг 2/5:</b> Введите <b>пароль</b> от ЛК (или «-»):",
+        LKForm.waiting_password,
+    )
+
+
+@router.message(LKForm.waiting_password, F.text & ~F.text.startswith("/"))
+async def handle_lk_password(message: Message, state: FSMContext):
+    await _lk_step_progress(
+        message, state, "_new_password",
+        "<b>Шаг 3/5:</b> Введите <b>номер телефона</b> привязанный к банку (или «-»):",
+        LKForm.waiting_phone,
+    )
+
+
+@router.message(LKForm.waiting_phone, F.text & ~F.text.startswith("/"))
+async def handle_lk_phone(message: Message, state: FSMContext):
+    await _lk_step_progress(
+        message, state, "_new_number",
+        "<b>Шаг 4/5:</b> Введите <b>кодовое слово</b> (или «-»):",
+        LKForm.waiting_code_word,
+    )
+
+
+@router.message(LKForm.waiting_code_word, F.text & ~F.text.startswith("/"))
+async def handle_lk_code_word(message: Message, state: FSMContext):
+    await _lk_step_progress(
+        message, state, "_code_word",
+        "<b>Шаг 5/5:</b> Введите <b>почту</b> (или «-»):",
+        LKForm.waiting_mail,
+    )
+
+
+async def _crm_drop_lk_post_save(message: Message, drop: dict, droplk_id: str, bank: str):
+    """Общий post-save flow для новых ЛК:
+      - Если drop принят (status=accepted) → reply в ДОСТУПЫ + автопост в ПАРОЛИ
+      - Кросс-нотификация в work_chat если private chat
+    Вызывается ОБЕИМИ ветками FSM: новой (5-шаговой) и старой (single value).
+    """
+    try:
+        if drop.get("status") == "accepted":
+            bot = message.bot
+            try:
+                admin_chat = await get_admin_chat_resolved(bot)
+                admin_msg_id = drop.get("admin_msg_id")
+                if admin_chat and admin_msg_id:
+                    fio = drop.get("fio") or "—"
+                    notify_text = (
+                        f"🏦 <b>Добавлен новый банк: {bank}</b>\n"
+                        f"ФИО: <b>{fio}</b>\n"
+                        f"<code>{droplk_id}</code>"
+                    )
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="🔕 Закрыть",
+                            callback_data=f"closenewbank:{droplk_id}",
+                        ),
+                    ]])
+                    await bot.send_message(
+                        admin_chat, notify_text,
+                        reply_to_message_id=admin_msg_id,
+                        reply_markup=kb,
+                    )
+            except Exception as e:
+                logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
+            try:
+                pwd_chat = await get_password_chat_resolved(bot)
+                new_lk = crm_storage.get_crm_drop_lk(droplk_id)
+                if pwd_chat and new_lk:
+                    text_p = _render_password_text(drop, new_lk)
+                    msg_p = await bot.send_message(
+                        pwd_chat, text_p,
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(
+                                text="✏️ Заполнить",
+                                callback_data=f"filldrop:{droplk_id}",
+                            ),
+                        ]]),
+                    )
+                    pwd_str = str(pwd_chat).replace("-100", "").lstrip("-")
+                    link_p = f"https://t.me/c/{pwd_str}/{msg_p.message_id}"
+                    await crm_storage.update_crm_drop_lk(
+                        droplk_id,
+                        msgid_pass=msg_p.message_id, link_pass=link_p,
+                    )
+                    logger.info(
+                        "[new-bank] password template posted for %s (msg=%s)",
+                        droplk_id, msg_p.message_id,
+                    )
+            except Exception as e:
+                logger.warning("new-bank password post fail: %s", e)
+    except Exception as e:
+        logger.warning("new-bank handler outer fail: %s", e)
+    # Кросс-нотификация
+    if message.chat.type == "private":
+        owner = crm_storage.get_crm_owner(drop.get("owner_id", ""))
+        await _notify_work_chat(
+            message.bot, owner,
+            f"🏦 <b>Новый ЛК {bank}</b> у клиента <b>{drop.get('fio')}</b>\n"
+            f"<i>(добавлен через ЛС CRM-бота)</i>",
+        )
+
+
+@router.message(LKForm.waiting_mail, F.text & ~F.text.startswith("/"))
+async def handle_lk_mail(message: Message, state: FSMContext):
+    """Финальный шаг — сохраняем все 5 полей в droplk."""
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    await state.update_data(_new_mail=text)
+    data = await state.get_data()
+
+    drop_id = data.get("drop_id")
+    bank = data.get("bank")
+    drop = crm_storage.get_crm_drop(drop_id) if drop_id else None
+    if not drop:
+        await message.reply("❌ Сессия истекла")
+        await state.clear()
+        return
+
+    # Создаём droplk с пустым value (заполняем поля напрямую через update)
+    droplk_id = await crm_storage.add_crm_drop_lk(
+        drop_id=drop_id, owner_id=drop["owner_id"], bank=bank, value="",
+    )
+    await crm_storage.update_crm_drop_lk(
+        droplk_id,
+        new_login=data.get("_new_login", "").lstrip("-").strip(),
+        new_password=data.get("_new_password", "").lstrip("-").strip(),
+        new_number=data.get("_new_number", "").lstrip("-").strip(),
+        code_word=data.get("_code_word", "").lstrip("-").strip(),
+        new_mail=text.lstrip("-").strip(),
+    )
+
+    # Удалить ответ user'а + меню
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    if data.get("menu_msg_id"):
+        await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
+    await state.clear()
+
+    drop = crm_storage.get_crm_drop(drop_id)
+    await _send(message, f"✅ ЛК <b>{bank}</b> сохранён.")
+    await _show_drop_lks(message, drop)
+    # SSE
+    _emit_crm_event("lk.added", {
+        "droplk_id": droplk_id, "drop_id": drop_id, "bank": bank,
+    })
+    # Дальше вызовем тот же post-save flow что был в handle_lk_value
+    await _crm_drop_lk_post_save(message, drop, droplk_id, bank)
+
+
+# Legacy handler для старого waiting_value (на случай если кто-то ещё в нём)
 @router.message(LKForm.waiting_value, F.text & ~F.text.startswith("/"))
 async def handle_lk_value(message: Message, state: FSMContext):
     data = await state.get_data()
