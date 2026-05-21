@@ -6506,18 +6506,6 @@ function jarvis() {
       // Принимаем либо строку card_id, либо объект lk с {card_id, bank, fio, ...}
       const card_id = (typeof lkOrId === 'string') ? lkOrId : (lkOrId && lkOrId.card_id);
       if (!card_id) return;
-      const lkRef = (typeof lkOrId === 'object' && lkOrId) ? lkOrId : null;
-      const title = lkRef
-        ? `${(lkRef.bank || '—').toUpperCase()} · ${lkRef.fio || ''}`.trim()
-        : `Дедик #${card_id}`;
-
-      // Если этот дедик уже открыт — просто фокусим его (не убиваем!)
-      const existing = (this.openDediks || []).find(d => d.card_id === card_id);
-      if (existing) {
-        existing.minimized = false;
-        this.focusDedik(existing.id);
-        return;
-      }
 
       try {
         const r = await fetch('/api/operational/dedik_creds/' + card_id, { credentials: 'include' });
@@ -6530,6 +6518,28 @@ function jarvis() {
           alert('Дедик для этого ЛК не привязан в crm_passwords. Сначала заполни ded_ip/ded_login/ded_pass в System → ПАРОЛИ.');
           return;
         }
+
+        // === НОВАЯ ЛОГИКА: открываем дедик в новой вкладке ===
+        // iframe внутри dashboard'а ломает клавиатуру (cross-origin
+        // iframe + Alpine.js re-renders воруют focus). Открытие в
+        // отдельной вкладке = Guacamole на своём домене = клавиатура
+        // и Ctrl+C/V работают нативно без всяких костылей.
+        try {
+          const gr = await fetch('/api/operational/guacamole_session?card_id=' + card_id, { credentials: 'include' });
+          if (gr.ok) {
+            const gd = await gr.json();
+            if (gd.url) {
+              window.open(gd.url, '_blank', 'noopener,noreferrer');
+              return;
+            }
+          }
+        } catch (e) {}
+
+        // Fallback на скачивание .rdp если Guacamole недоступен
+        if (confirm('Guacamole недоступен. Скачать .rdp файл для mstsc?')) {
+          this.downloadRdp(card_id);
+        }
+        return;
 
         // Пробуем создать Guacamole-сессию
         let guacamole_url = null;
