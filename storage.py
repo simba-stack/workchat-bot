@@ -2179,6 +2179,7 @@ class Storage:
             # карточку от случайного перезатирания методом по умолчанию через
             # шорткаты/бэкфилл).
             allow_pm_change = bool(fields.pop("_allow_payment_method_change", False))
+            old_status = (c.get("status") or "").upper()
             for k, v in fields.items():
                 if k == "history":
                     continue
@@ -2198,6 +2199,48 @@ class Storage:
                         continue
                     # Разрешаем set если поле было пустым ИЛИ значения совпадают
                 c[k] = v
+            # === АВТО-ЗАЧИСЛЕНИЕ В КОШЕЛЁК ПАРТНЁРА ===
+            # Если переход статуса на ЗАВЕРШЁН/ОТРАБОТАН + метод USDT_TRC20
+            # + ещё не зачисляли — кладём price_usdt на partner_wallet.
+            new_status = (c.get("status") or "").upper()
+            method = (c.get("payment_method") or "").upper()
+            terminal = {"ЗАВЕРШЁН", "ЗАВЕРШЕН", "ОТРАБОТАН"}
+            if (
+                old_status != new_status
+                and new_status in terminal
+                and method == "USDT_TRC20"
+                and not c.get("wallet_credited_at")
+            ):
+                supplier = (c.get("supplier") or "").lstrip("@").strip()
+                price = float(c.get("price_usdt") or 0)
+                if supplier and price > 0:
+                    # Записываем в wallet через прямой доступ (мы УЖЕ внутри _lock)
+                    wallets = self.state.setdefault("partner_wallets", {})
+                    key = supplier.lower()
+                    if key not in wallets:
+                        wallets[key] = {
+                            "balance_usdt": 0.0, "address_default": "",
+                            "history": [], "pending_payouts": [],
+                        }
+                    w = wallets[key]
+                    w["balance_usdt"] = round(float(w.get("balance_usdt") or 0) + price, 6)
+                    w.setdefault("history", []).append({
+                        "ts": time.time(),
+                        "type": "credit",
+                        "amount": price,
+                        "reason": "lk_payout",
+                        "lk_card_id": card_id,
+                    })
+                    c["wallet_credited_at"] = time.time()
+                    c["wallet_credited_amount"] = price
+                    try:
+                        import logging
+                        logging.getLogger(__name__).info(
+                            "[wallet] auto-credit @%s +%.2f USDT за %s (%s)",
+                            supplier, price, card_id, new_status,
+                        )
+                    except Exception:
+                        pass
             await self._save_unlocked()
             return True
 

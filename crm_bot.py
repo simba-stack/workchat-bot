@@ -603,6 +603,9 @@ def _wallet_admin_chat_id() -> str:
 
 
 WITHDRAW_MIN_USDT = float(os.getenv("WALLET_WITHDRAW_MIN_USDT", "10") or 10)
+# Комиссия за вывод TRC20 (USDT). Вычитается СВЕРХ суммы вывода с баланса
+# партнёра (партнёр вводит сколько хочет получить — мы списываем сумму + fee).
+WITHDRAW_FEE_USDT = float(os.getenv("WALLET_WITHDRAW_FEE_USDT", "4.5") or 4.5)
 
 
 def _render_wallet_text(owner: dict, wallet: dict) -> str:
@@ -630,7 +633,8 @@ def _render_wallet_text(owner: dict, wallet: dict) -> str:
         text += "\n"
     text += (
         f"<i>Минимум на вывод: {WITHDRAW_MIN_USDT:.0f} USDT.\n"
-        f"Сеть: TRC20 (Tron). Комиссию сети платим мы.</i>"
+        f"Комиссия за вывод: <b>{WITHDRAW_FEE_USDT:.2f} USDT</b> (вычитается сверх суммы).\n"
+        f"Сеть: TRC20 (Tron).</i>"
     )
     return text
 
@@ -770,21 +774,26 @@ async def cb_wallet_withdraw_start(call: CallbackQuery, state: FSMContext):
     balance = float(wallet.get("balance_usdt") or 0)
     reserved = sum(float(p.get("amount") or 0) for p in (wallet.get("pending_payouts") or []))
     available = max(0.0, balance - reserved)
-    if available < WITHDRAW_MIN_USDT:
+    # Максимум который партнёр может УКАЗАТЬ к получению = available - fee
+    max_recv = max(0.0, available - WITHDRAW_FEE_USDT)
+    if max_recv < WITHDRAW_MIN_USDT:
         await call.answer(
-            f"Недостаточно средств. Минимум {WITHDRAW_MIN_USDT:.0f} USDT, доступно {available:.2f}",
+            f"Недостаточно. Минимум {WITHDRAW_MIN_USDT:.0f}+{WITHDRAW_FEE_USDT:.1f}fee, доступно {available:.2f}",
             show_alert=True,
         )
         return
     await call.answer()
     await state.set_state(WalletForm.waiting_withdraw_amount)
-    await state.update_data(available=available)
+    await state.update_data(available=available, max_recv=max_recv)
     try:
         await call.message.edit_text(
             f"📤 <b>Вывод TRC20</b>\n\n"
-            f"<b>Доступно к выводу:</b> {available:.2f} USDT\n"
-            f"<b>Минимум:</b> {WITHDRAW_MIN_USDT:.0f} USDT\n\n"
-            f"Введи <b>сумму</b> в USDT (число, например <code>50</code> или <code>100.5</code>):",
+            f"<b>Доступно с баланса:</b> {available:.2f} USDT\n"
+            f"<b>Комиссия за вывод:</b> {WITHDRAW_FEE_USDT:.2f} USDT\n"
+            f"<b>Можно получить максимум:</b> {max_recv:.2f} USDT\n"
+            f"<b>Минимум на получение:</b> {WITHDRAW_MIN_USDT:.0f} USDT\n\n"
+            f"Введи <b>сумму к ПОЛУЧЕНИЮ</b> в USDT (число, например <code>50</code>):\n"
+            f"<i>С твоего баланса спишется указанная сумма + {WITHDRAW_FEE_USDT:.2f} комиссии.</i>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="◀️ Отмена", callback_data="wallet"),
             ]]),
@@ -802,17 +811,22 @@ async def handle_wallet_withdraw_amount(message: Message, state: FSMContext):
         await message.reply("⚠️ Введи число, например <code>50</code>.")
         return
     if amt < WITHDRAW_MIN_USDT:
-        await message.reply(f"⚠️ Минимум {WITHDRAW_MIN_USDT:.0f} USDT.")
+        await message.reply(f"⚠️ Минимум на получение {WITHDRAW_MIN_USDT:.0f} USDT.")
         return
     data = await state.get_data()
-    available = float(data.get("available") or 0)
-    if amt > available + 1e-9:
-        await message.reply(f"⚠️ Доступно только {available:.2f} USDT.")
+    max_recv = float(data.get("max_recv") or 0)
+    if amt > max_recv + 1e-9:
+        await message.reply(
+            f"⚠️ С учётом комиссии {WITHDRAW_FEE_USDT:.2f} можно получить максимум {max_recv:.2f} USDT."
+        )
         return
-    await state.update_data(amount=amt)
+    total_debit = amt + WITHDRAW_FEE_USDT
+    await state.update_data(amount=amt, total_debit=total_debit)
     await state.set_state(WalletForm.waiting_withdraw_address)
     await message.reply(
-        f"✅ Сумма: <b>{amt:.2f} USDT</b>\n\n"
+        f"✅ К получению: <b>{amt:.2f} USDT</b>\n"
+        f"Комиссия: <b>{WITHDRAW_FEE_USDT:.2f} USDT</b>\n"
+        f"Спишется с баланса: <b>{total_debit:.2f} USDT</b>\n\n"
         f"Теперь пришли свой <b>TRC20-адрес</b> для вывода (начинается с <code>T</code>, "
         f"длина 34 символа).",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -832,14 +846,17 @@ async def handle_wallet_withdraw_address(message: Message, state: FSMContext):
         )
         return
     data = await state.get_data()
-    amt = float(data.get("amount") or 0)
+    amt = float(data.get("amount") or 0)               # партнёру к получению
+    total_debit = float(data.get("total_debit") or (amt + WITHDRAW_FEE_USDT))
     owner = crm_storage.find_crm_owner_by_tg(message.from_user.id)
     if not owner:
         await message.reply("Профиль не найден")
         await state.clear()
         return
     uname = owner.get("username") or ""
-    payout_id = await crm_storage.wallet_create_payout_request(uname, amt, addr)
+    # Резервируем С БАЛАНСА total_debit (включая комиссию).
+    # Партнёру отправляется amt (без fee). Когда админ confirm — спишется total_debit.
+    payout_id = await crm_storage.wallet_create_payout_request(uname, total_debit, addr)
     await state.clear()
     if not payout_id:
         await message.reply(
@@ -856,10 +873,12 @@ async def handle_wallet_withdraw_address(message: Message, state: FSMContext):
             admin_text = (
                 f"📤 <b>Запрос на вывод</b>\n\n"
                 f"Партнёр: @{uname} (<code>{owner['owner_id']}</code>)\n"
-                f"Сумма: <b>{amt:.2f} USDT</b>\n"
+                f"К отправке партнёру: <b>{amt:.2f} USDT</b>\n"
+                f"Комиссия: {WITHDRAW_FEE_USDT:.2f} USDT (наша маржа)\n"
+                f"Списано с баланса: <b>{total_debit:.2f} USDT</b>\n"
                 f"Адрес: <code>{addr}</code>\n"
                 f"Заявка: <code>{payout_id}</code>\n\n"
-                f"<i>Сделай TX вручную в своём кошельке, потом подтверди ниже.</i>"
+                f"<i>Отправь <b>{amt:.2f} USDT</b> на адрес выше — потом подтверди ниже.</i>"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -879,7 +898,9 @@ async def handle_wallet_withdraw_address(message: Message, state: FSMContext):
     await message.reply(
         f"✅ <b>Заявка создана</b>\n\n"
         f"<code>{payout_id}</code>\n"
-        f"Сумма: <b>{amt:.2f} USDT</b>\n"
+        f"К получению: <b>{amt:.2f} USDT</b>\n"
+        f"Комиссия: {WITHDRAW_FEE_USDT:.2f} USDT\n"
+        f"Списано с баланса: <b>{total_debit:.2f} USDT</b>\n"
         f"Адрес: <code>{addr}</code>\n\n"
         f"Админ обработает в течение 1-2 часов в рабочее время.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
