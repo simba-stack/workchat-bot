@@ -10703,8 +10703,19 @@ function jarvis() {
             <option value="УРАЛ">УРАЛ</option>
             <option value="ПСБ">ПСБ</option>
           </select>
-          <input type="text" x-model="out.fio" placeholder="ФИО"
+          <input type="text" x-model="out.fio" placeholder="ФИО (поиск по ЛК)…"
+                 @input="searchLkFio($event.target.value, {outIdx: idx})"
                  style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <div x-show="(out._results || []).length > 0"
+               style="background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; max-height: 140px; overflow-y: auto; margin-top: 2px;">
+            <template x-for="r in (out._results || [])" :key="r.card_id">
+              <div style="padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 11px;"
+                   @click="pickLkOut(idx, r)">
+                <span style="font-weight:700;" x-text="r.bank"></span> · <span x-text="r.fio"></span>
+                <span style="font-size:10px; color: var(--text-dim); margin-left: 4px;" x-text="'@' + r.supplier"></span>
+              </div>
+            </template>
+          </div>
           <input type="number" x-model.number="out.amount_out" placeholder="Сумма ВЫХОДА (₽)"
                  style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
           <!-- юр-юр получатели -->
@@ -10749,6 +10760,19 @@ function jarvis() {
       </div>
       <div>
         <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
+        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
+               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+    </div>
+
+    <!-- Маржа preview -->
+    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
+      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
+      <template x-if="exchangeForm._margin_preview">
+        <div style="font-size: 12px;">
+          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
+          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
+          Комиссия (USDT)</div>
         <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
                style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
       </div>
