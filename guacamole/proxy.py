@@ -118,6 +118,14 @@ class _GuacClient:
                 "enable-drive": "false",
                 "enable-printing": "false",
                 "color-depth": "24",
+                # === Keyboard layout: failsafe ===
+                # Передаём scancodes напрямую (физические позиции клавиш),
+                # игнорируем символы. Это критично для русской раскладки:
+                # Ctrl+C/Ctrl+V будут работать независимо от текущей
+                # раскладки на ПК пользователя. Без failsafe Guacamole
+                # пытается мапить по символам и Ctrl+ц вместо Ctrl+C
+                # ничего не делает в Windows RDP.
+                "server-layout": "failsafe",
                 # === Clipboard sync (PC <-> remote) ===
                 # Включаем двунаправленный обмен через clipboard.
                 # Guacamole default: clipboard ON, но явные параметры
