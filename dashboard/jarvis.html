@@ -6061,6 +6061,7 @@ function jarvis() {
     },
     fioSearchIn: '',
     fioSearchResultsIn: [],
+    submittingExchange: false,  // anti-double-click флаг для submitExchangeRequest
     // LK 4-section view (May 2026)
     lkSubTab: 'all',  // all | to_top_up | to_pay | to_release
     lkSections: { all: [], to_top_up: [], to_pay: [], to_release: [] },
@@ -6887,6 +6888,7 @@ function jarvis() {
       };
     },
     async submitExchangeRequest() {
+      if (this.submittingExchange) return;  // защита от двойного клика
       this.calcMargin();
       if (!this.exchangeForm.bank_in || !this.exchangeForm.fio_in) {
         alert('Заполните банк ВХОДА и ФИО'); return;
@@ -6900,6 +6902,7 @@ function jarvis() {
       if (!this.exchangeForm.outs.length || !this.exchangeForm.outs[0].bank) {
         alert('Добавьте минимум один ВЫХОД'); return;
       }
+      this.submittingExchange = true;
       const payload = {
         bank_in: this.exchangeForm.bank_in,
         fio_in: this.exchangeForm.fio_in,
@@ -6943,6 +6946,8 @@ function jarvis() {
         await this.refreshOpAll();
       } catch (e) {
         alert('Ошибка: ' + e.message);
+      } finally {
+        this.submittingExchange = false;
       }
     },
 
@@ -10663,6 +10668,13 @@ function jarvis() {
         <option value="">— выберите банк —</option>
         <option value="АЛЬФА">АЛЬФА</option>
         <option value="ВТБ">ВТБ</option>
+        <option value="ОЗОН">ОЗОН</option>
+        <option value="РАЙФ">РАЙФ</option>
+        <option value="ТОЧКА">ТОЧКА</option>
+        <option value="УРАЛ">УРАЛ</option>
+        <option value="ПСБ">ПСБ</option>
+        <option value="ЛОКО">ЛОКО</option>
+        <option value="УРАЛСИБ">УРАЛСИБ</option>
       </select>
       <div style="margin-top: 6px;">
         <input type="text" x-model="fioSearchIn" @input="searchLkFio($event.target.value, 'in')"
@@ -10702,6 +10714,10 @@ function jarvis() {
             <option value="ТОЧКА">ТОЧКА</option>
             <option value="УРАЛ">УРАЛ</option>
             <option value="ПСБ">ПСБ</option>
+            <option value="АЛЬФА">АЛЬФА</option>
+            <option value="ВТБ">ВТБ</option>
+            <option value="ЛОКО">ЛОКО</option>
+            <option value="УРАЛСИБ">УРАЛСИБ</option>
           </select>
           <input type="text" x-model="out.fio" placeholder="ФИО (поиск по ЛК)…"
                  @input="searchLkFio($event.target.value, {outIdx: idx})"
@@ -10765,28 +10781,17 @@ function jarvis() {
       </div>
     </div>
 
-    <!-- Маржа preview -->
+    <!-- Маржа preview (поля совпадают с calcMargin() — формула v2 май 2026) -->
     <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
       <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
       <template x-if="exchangeForm._margin_preview">
-        <div style="font-size: 12px;">
-          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
-          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
-          Комиссия (USDT)</div>
-        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-    </div>
-
-    <!-- Маржа preview -->
-    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
-      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
-      <template x-if="exchangeForm._margin_preview">
-        <div style="font-size: 12px;">
-          ВВОД: <span x-text="exchangeForm._margin_preview.in_usdt.toFixed(2)"></span>$ ·
-          ВЫВОД: <span x-text="exchangeForm._margin_preview.out_usdt.toFixed(2)"></span>$ ·
-          Комиссия: <span x-text="exchangeForm._margin_preview.commission_usdt.toFixed(2)"></span>$ ·
-          Партнёру: <span x-text="exchangeForm._margin_preview.partner_share_usdt.toFixed(2)"></span>$
+        <div style="font-size: 12px; line-height: 1.6;">
+          ВВОД: <span x-text="Math.round(exchangeForm._margin_preview.in_rub).toLocaleString('ru')"></span>₽ ·
+          ВЫВОД: <span x-text="Math.round(exchangeForm._margin_preview.out_rub).toLocaleString('ru')"></span>₽
+          <br>
+          Получили мы: <span x-text="exchangeForm._margin_preview.we_received_usdt.toFixed(2)"></span>$ ·
+          Партнёру: <span x-text="exchangeForm._margin_preview.partner_payout_usdt.toFixed(2)"></span>$ ·
+          Стоимость ЛК: <span x-text="exchangeForm._margin_preview.lk_prices_usdt.toFixed(2)"></span>$
           <br>
           <b style="color: var(--hud-emerald); font-size: 16px;">МАРЖА: <span x-text="exchangeForm._margin_preview.margin_usdt.toFixed(2)"></span>$</b>
         </div>
@@ -10795,8 +10800,12 @@ function jarvis() {
 
     <div style="display: flex; gap: 8px;">
       <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
-      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitExchangeRequest()">✅ Зафиксировать заявку</button>
-      <button class="chip-btn" @click="closeExchangeModal()">Отмена</button>
+      <button class="chip-btn"
+              :style="'background: var(--hud-emerald); color: #000; flex: 1;' + (submittingExchange ? ' opacity: 0.5; cursor: not-allowed;' : '')"
+              :disabled="submittingExchange"
+              @click="submitExchangeRequest()"
+              x-text="submittingExchange ? '⏳ Отправка…' : '✅ Зафиксировать заявку'"></button>
+      <button class="chip-btn" :disabled="submittingExchange" @click="closeExchangeModal()">Отмена</button>
     </div>
   </div>
 </div>
