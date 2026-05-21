@@ -1656,16 +1656,35 @@ async def cb_lkview(call: CallbackQuery):
     text = (
         f"{status_e} <b>{lk.get('bank')}</b>\n"
         f"клиент: <b>{drop and drop.get('fio') or '—'}</b>\n\n"
-        f"<b>Данные ЛК:</b>\n<code>{lk.get('value') or '—'}</code>\n"
+        f"<b>Данные ЛК:</b>\n"
     )
+    # Показываем поля которые заполнены через пошаговый ввод (LKForm).
+    # Backward compat: legacy `value` показываем если новых полей нет.
+    has_new_fields = any([
+        lk.get("new_login"), lk.get("new_password"), lk.get("new_number"),
+        lk.get("code_word"), lk.get("new_mail"),
+    ])
+    if has_new_fields:
+        if lk.get("new_login"):
+            text += f"<b>Логин:</b> <code>{lk.get('new_login')}</code>\n"
+        if lk.get("new_password"):
+            text += f"<b>Пароль:</b> <code>{lk.get('new_password')}</code>\n"
+        if lk.get("new_number"):
+            text += f"<b>Телефон банка:</b> <code>{lk.get('new_number')}</code>\n"
+        if lk.get("code_word"):
+            text += f"<b>Кодовое слово:</b> <code>{lk.get('code_word')}</code>\n"
+        if lk.get("new_mail"):
+            text += f"<b>Почта:</b> <code>{lk.get('new_mail')}</code>\n"
+    else:
+        text += f"<code>{lk.get('value') or '—'}</code>\n"
     # Сделка показывается только если она реально привязана (auto-set от AI)
     if lk.get("deal"):
         text += f"\n<b>Сделка:</b> #{lk.get('deal')}\n"
-    # 🔒 БЕЗОПАСНОСТЬ: new_password / new_mail / ded_ip / ded_pass и т.п. —
-    # это данные операционистов и сервера. Они НЕ должны попадать в чаты партнёров
-    # (включая ЛС CRM-бота и work-чаты). Видны только в группе «PRIDE | Пароли».
-    if lk.get("new_password") or lk.get("ded_ip"):
-        text += "\n<i>🔒 Данные перевязки заполнены операционистами.</i>\n"
+    # 🔒 БЕЗОПАСНОСТЬ: ded_ip / ded_pass — данные операционистов и сервера.
+    # Они НЕ должны попадать в чаты партнёров (включая ЛС CRM-бота и work-чаты).
+    # Видны только в группе «PRIDE | Пароли».
+    if lk.get("ded_ip"):
+        text += "\n<i>🔒 Доступ к серверу заполнен операционистами.</i>\n"
     # SMS history также — операционные данные, скрываем от партнёра
     kb = [
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"lkeditvalue:{droplk_id}")],
@@ -4642,6 +4661,7 @@ async def cmd_ideas_all(message: Message):
         text = (i.get("text") or "")[:150]
         author = i.get("author") or "?"
         lines.append(f"\n<b>#{i['id']}</b> {status} {kind_icon} {author}\n  {text}")
+
     await message.reply("\n".join(lines))
 
 
