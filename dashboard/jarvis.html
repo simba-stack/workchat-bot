@@ -6506,6 +6506,19 @@ function jarvis() {
       // Принимаем либо строку card_id, либо объект lk с {card_id, bank, fio, ...}
       const card_id = (typeof lkOrId === 'string') ? lkOrId : (lkOrId && lkOrId.card_id);
       if (!card_id) return;
+      const lkRef = (typeof lkOrId === 'object' && lkOrId) ? lkOrId : null;
+      const title = lkRef
+        ? `${(lkRef.bank || '—').toUpperCase()} · ${lkRef.fio || ''}`.trim()
+        : `Дедик #${card_id}`;
+
+      // Если этот дедик уже открыт — просто фокусим его
+      const existing = (this.openDediks || []).find(d => d.card_id === card_id);
+      if (existing) {
+        existing.minimized = false;
+        existing.z = ++this.nextDedikZ;
+        this._setupDedikAutoRefocus();
+        return;
+      }
 
       try {
         const r = await fetch('/api/operational/dedik_creds/' + card_id, { credentials: 'include' });
@@ -6518,28 +6531,6 @@ function jarvis() {
           alert('Дедик для этого ЛК не привязан в crm_passwords. Сначала заполни ded_ip/ded_login/ded_pass в System → ПАРОЛИ.');
           return;
         }
-
-        // === НОВАЯ ЛОГИКА: открываем дедик в новой вкладке ===
-        // iframe внутри dashboard'а ломает клавиатуру (cross-origin
-        // iframe + Alpine.js re-renders воруют focus). Открытие в
-        // отдельной вкладке = Guacamole на своём домене = клавиатура
-        // и Ctrl+C/V работают нативно без всяких костылей.
-        try {
-          const gr = await fetch('/api/operational/guacamole_session?card_id=' + card_id, { credentials: 'include' });
-          if (gr.ok) {
-            const gd = await gr.json();
-            if (gd.url) {
-              window.open(gd.url, '_blank', 'noopener,noreferrer');
-              return;
-            }
-          }
-        } catch (e) {}
-
-        // Fallback на скачивание .rdp если Guacamole недоступен
-        if (confirm('Guacamole недоступен. Скачать .rdp файл для mstsc?')) {
-          this.downloadRdp(card_id);
-        }
-        return;
 
         // Пробуем создать Guacamole-сессию
         let guacamole_url = null;
@@ -6593,9 +6584,40 @@ function jarvis() {
             }
           } catch (e) {}
         }
+        // Глобальный auto-refocus listener (рекомендация Apache Guacamole
+        // docs: https://guacamole.apache.org/faq/ — "automatically refocus
+        // iframe whenever focus is not explicitly on some other part of
+        // the page")
+        this._setupDedikAutoRefocus();
       } catch (e) {
         alert('Ошибка: ' + e.message);
       }
+    },
+    _setupDedikAutoRefocus() {
+      // Устанавливается один раз. Возвращает фокус iframe'у дедика когда
+      // user случайно кликает на body / outside.
+      if (this._dedikRefocusInstalled) return;
+      this._dedikRefocusInstalled = true;
+      const refocusActive = () => {
+        if (!this.openDediks || !this.openDediks.length) return;
+        // Найти top-most (max z) не-minimized дедик
+        const top = this.openDediks
+          .filter(d => !d.minimized && d.guacamole_url)
+          .sort((a, b) => b.z - a.z)[0];
+        if (!top) return;
+        const iframe = document.querySelector(`iframe[data-dedik-id="${top.id}"]`);
+        if (iframe) {
+          try { iframe.contentWindow.focus(); } catch (e) {}
+          try { iframe.focus({ preventScroll: true }); } catch (e) {}
+        }
+      };
+      // При потере фокуса body — refocus iframe
+      window.addEventListener('focus', () => setTimeout(refocusActive, 50), true);
+      // Когда возвращаемся в окно браузера
+      window.addEventListener('blur', () => setTimeout(refocusActive, 50));
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) setTimeout(refocusActive, 100);
+      });
     },
     closeDedik(id) {
       this.openDediks = (this.openDediks || []).filter(d => d.id !== id);
@@ -10556,6 +10578,7 @@ function jarvis() {
     </div>
     <template x-if="win.guacamole_url">
       <iframe :src="win.guacamole_url"
+              :data-dedik-id="win.id"
               allow="clipboard-read; clipboard-write"
               style="flex: 1; width: 100%; border: 0; background: #000;"></iframe>
     </template>
