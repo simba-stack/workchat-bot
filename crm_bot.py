@@ -1348,16 +1348,17 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
 # собранные данные в droplk.new_login/new_password/new_number/code_word/new_mail.
 # ============================================================================
 async def _lk_step_progress(message: Message, state: FSMContext, field: str, prompt_next: str, next_state):
-    """Обработка одного шага FSM ввода ЛК:
-      1. Сохраняем ответ user'а в state (field=значение)
-      2. Удаляем сообщение user'а
-      3. Редактируем меню-сообщение бота новым промптом
-      4. Переключаем state на next_state (или финал)
+    """Обработка одного шага FSM ввода ЛК.
+    Использует nested dict pattern (как FillForm) — данные хранятся в
+    state["new_lk_data"] чтобы гарантированно persist между шагами FSM.
     """
     text = (message.text or "").strip()
     data = await state.get_data()
-    # Сохранить в state
-    await state.update_data(**{field: text})
+    # Nested dict pattern — копируем, мутируем, записываем обратно через update_data
+    nlk = dict(data.get("new_lk_data") or {})
+    nlk[field] = text
+    await state.update_data(new_lk_data=nlk)
+    logger.info("[LKForm] step %s=%r (data has %d fields)", field, text, len(nlk))
     # Удалить ответ user'а из чата
     await _safe_delete(message.bot, message.chat.id, message.message_id)
     # Обновить меню-сообщение с следующим вопросом
@@ -1383,7 +1384,7 @@ async def _lk_step_progress(message: Message, state: FSMContext, field: str, pro
 @router.message(LKForm.waiting_login, F.text & ~F.text.startswith("/"))
 async def handle_lk_login(message: Message, state: FSMContext):
     await _lk_step_progress(
-        message, state, "_new_login",
+        message, state, "login",
         "<b>Шаг 2/5:</b> Введите <b>пароль</b> от ЛК (или «-»):",
         LKForm.waiting_password,
     )
@@ -1392,7 +1393,7 @@ async def handle_lk_login(message: Message, state: FSMContext):
 @router.message(LKForm.waiting_password, F.text & ~F.text.startswith("/"))
 async def handle_lk_password(message: Message, state: FSMContext):
     await _lk_step_progress(
-        message, state, "_new_password",
+        message, state, "password",
         "<b>Шаг 3/5:</b> Введите <b>номер телефона</b> привязанный к банку (или «-»):",
         LKForm.waiting_phone,
     )
@@ -1401,7 +1402,7 @@ async def handle_lk_password(message: Message, state: FSMContext):
 @router.message(LKForm.waiting_phone, F.text & ~F.text.startswith("/"))
 async def handle_lk_phone(message: Message, state: FSMContext):
     await _lk_step_progress(
-        message, state, "_new_number",
+        message, state, "number",
         "<b>Шаг 4/5:</b> Введите <b>кодовое слово</b> (или «-»):",
         LKForm.waiting_code_word,
     )
@@ -1410,7 +1411,7 @@ async def handle_lk_phone(message: Message, state: FSMContext):
 @router.message(LKForm.waiting_code_word, F.text & ~F.text.startswith("/"))
 async def handle_lk_code_word(message: Message, state: FSMContext):
     await _lk_step_progress(
-        message, state, "_code_word",
+        message, state, "code_word",
         "<b>Шаг 5/5:</b> Введите <b>почту</b> (или «-»):",
         LKForm.waiting_mail,
     )
@@ -1491,8 +1492,10 @@ async def handle_lk_mail(message: Message, state: FSMContext):
     """Финальный шаг — сохраняем все 5 полей в droplk."""
     text = (message.text or "").strip()
     data = await state.get_data()
-    await state.update_data(_new_mail=text)
-    data = await state.get_data()
+    # Финальное поле — почта — добавляем в nested dict
+    nlk = dict(data.get("new_lk_data") or {})
+    nlk["mail"] = text
+    logger.info("[LKForm] final mail=%r, collected: %s", text, list(nlk.keys()))
 
     drop_id = data.get("drop_id")
     bank = data.get("bank")
@@ -1502,18 +1505,24 @@ async def handle_lk_mail(message: Message, state: FSMContext):
         await state.clear()
         return
 
+    def _clean(v):
+        s = (v or "").strip()
+        return "" if s == "-" else s
+
     # Создаём droplk с пустым value (заполняем поля напрямую через update)
     droplk_id = await crm_storage.add_crm_drop_lk(
         drop_id=drop_id, owner_id=drop["owner_id"], bank=bank, value="",
     )
-    await crm_storage.update_crm_drop_lk(
+    saved = await crm_storage.update_crm_drop_lk(
         droplk_id,
-        new_login=data.get("_new_login", "").lstrip("-").strip(),
-        new_password=data.get("_new_password", "").lstrip("-").strip(),
-        new_number=data.get("_new_number", "").lstrip("-").strip(),
-        code_word=data.get("_code_word", "").lstrip("-").strip(),
-        new_mail=text.lstrip("-").strip(),
+        new_login=_clean(nlk.get("login")),
+        new_password=_clean(nlk.get("password")),
+        new_number=_clean(nlk.get("number")),
+        code_word=_clean(nlk.get("code_word")),
+        new_mail=_clean(nlk.get("mail")),
     )
+    logger.info("[LKForm] saved droplk %s (status=%s) data=%s",
+                droplk_id, saved, {k: _clean(nlk.get(k)) for k in ("login","password","number","code_word","mail")})
 
     # Удалить ответ user'а + меню
     await _safe_delete(message.bot, message.chat.id, message.message_id)
