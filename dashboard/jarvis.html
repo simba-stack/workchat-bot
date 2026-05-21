@@ -10508,8 +10508,13 @@ function jarvis() {
       </div>
     </div>
     <template x-if="win.guacamole_url">
-      <iframe :src="win.guacamole_url" allow="clipboard-read; clipboard-write"
-              style="flex: 1; width: 100%; border: 0; background: #000;"></iframe>
+      <iframe :src="win.guacamole_url"
+              :data-dedik-id="win.id"
+              allow="clipboard-read; clipboard-write"
+              tabindex="0"
+              @load="$el.focus()"
+              @mouseenter="$el.focus()"
+              style="flex: 1; width: 100%; border: 0; background: #000; outline: none;"></iframe>
     </template>
     <template x-if="!win.guacamole_url">
       <div style="flex:1; padding: 16px; overflow:auto;">
