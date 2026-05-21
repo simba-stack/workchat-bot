@@ -3374,6 +3374,44 @@
 
   <!-- RIGHT -->
   <aside class="space-y-4">
+    <!-- OPERATIONAL: правый sidebar — Заявки на обмен + кнопка добавить -->
+    <div class="jarvis-panel" x-show="currentView === 'operational'">
+      <div class="panel-title">
+        Заявки на обмен
+        <span class="badge-mini" x-text="(opExchangeRequests?.length || 0) + ' шт.'"></span>
+      </div>
+      <div style="padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <button class="chip-btn" style="width:100%; padding: 10px; background: var(--hud-primary); color: #000; font-weight: 700; font-size: 13px;"
+                @click="openExchangeModal()">➕ Новая заявка на обмен</button>
+      </div>
+      <div style="padding: 8px 12px; max-height: calc(100vh - 280px); overflow-y: auto;">
+        <template x-if="(opExchangeRequests || []).length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">Заявок ещё нет</div>
+        </template>
+        <template x-for="req in opExchangeRequests" :key="'side_' + req.req_id">
+          <div class="metric" style="padding: 8px; margin-bottom: 6px; border-left: 3px solid var(--hud-amber);">
+            <div class="flex items-center gap-2 text-xs">
+              <span style="font-weight:700; color: var(--hud-primary);" x-text="'#' + req.req_id"></span>
+              <span style="margin-left:auto; font-weight:700; font-size: 11px;"
+                    :class="(req.margin_usdt || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'"
+                    x-text="(req.margin_usdt || 0).toFixed(2) + '$'"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 10px;">
+              <b x-text="(req.bank_in || '—').toUpperCase()"></b> →
+              <span x-text="(req.outs || []).map(o => (o.bank || '—').toUpperCase()).join(' / ')"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 10px;">
+              <span x-text="(req.amount_in || 0).toLocaleString() + ' ₽'"></span> ·
+              <span x-text="req.fio_in"></span>
+            </div>
+            <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 9px; opacity: 0.6;">
+              <span x-text="new Date((req.created_at || 0) * 1000).toLocaleString('ru-RU', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Финансы
