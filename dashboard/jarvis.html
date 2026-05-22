@@ -5203,60 +5203,8 @@
     </div>
   </div>
 
-  <!-- Stats -->
-  <div x-show="accountingData.stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 16px;">
-    <div class="jarvis-panel" style="padding: 12px;">
-      <div style="font-size: 10px; color: var(--text-dim);">USDT в очереди</div>
-      <div style="font-size: 22px; color: var(--hud-emerald);" x-text="accountingData.stats?.count_usdt || 0"></div>
-    </div>
-    <div class="jarvis-panel" style="padding: 12px;">
-      <div style="font-size: 10px; color: var(--text-dim);">Отпустить</div>
-      <div style="font-size: 22px; color: var(--hud-primary);" x-text="accountingData.stats?.count_release || 0"></div>
-    </div>
-    <div class="jarvis-panel" style="padding: 12px;">
-      <div style="font-size: 10px; color: var(--text-dim);">Пополнить и отпустить</div>
-      <div style="font-size: 22px; color: var(--hud-amber);" x-text="accountingData.stats?.count_fund_release || 0"></div>
-    </div>
-    <div class="jarvis-panel" style="padding: 12px;">
-      <div style="font-size: 10px; color: var(--text-dim);">Всего к выплате</div>
-      <div style="font-size: 22px;" x-text="(accountingData.stats?.total_pending_usdt || 0) + '$'"></div>
-    </div>
-  </div>
-
-  <!-- 3 очереди как таблицы -->
-  <template x-for="qName in ['usdt', 'release', 'fund_release']" :key="qName">
-    <div class="jarvis-panel" style="padding: 12px; margin-bottom: 14px;">
-      <div class="panel-title">
-        <span x-text="qName === 'usdt' ? '💸 USDT TRC20' : (qName === 'release' ? '🤝 Отпустить сделку' : '💎 Пополнить и отпустить')"></span>
-        — <span x-text="(accountingData.queues?.[qName]?.length || 0)"></span>
-      </div>
-      <div style="max-height: 50vh; overflow-y: auto;">
-        <template x-for="p in (accountingData.queues?.[qName] || [])" :key="p.id">
-          <div style="padding: 10px; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 6px;">
-            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-              <b style="color: var(--hud-primary);" x-text="p.bank"></b>
-              <span x-text="p.fio"></span>
-              <span style="color: var(--hud-emerald); font-weight: 700;" x-text="(p.amount_usdt || 0) + '$'"></span>
-              <span x-show="p.deal_id" style="font-size: 11px; color: var(--text-dim);" x-text="'сделка #' + p.deal_id"></span>
-              <span x-show="p.usdt_address" style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace;" x-text="(p.usdt_address || '').slice(0, 12) + '...'"></span>
-            </div>
-            <!-- Заметка -->
-            <div style="margin-top: 6px; display: flex; gap: 6px; align-items: center;">
-              <input type="text" placeholder="Заметка бухгалтера..."
-                     x-model="accountingNotes[qName + ':' + p.id]"
-                     :value="p.accounting_note || ''"
-                     style="flex: 1; padding: 5px 10px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-size: 12px;">
-              <button class="btn" @click="accountingAddNote(qName, p.id)" style="padding: 5px 12px; font-size: 11px;">💾</button>
-              <span x-show="p.accounting_note" style="font-size: 11px; color: var(--text-dim);" x-text="'было: ' + (p.accounting_note || '')"></span>
-            </div>
-          </div>
-        </template>
-        <div x-show="(accountingData.queues?.[qName]?.length || 0) === 0" style="text-align: center; color: var(--text-dim); padding: 16px; font-size: 12px;">
-          пусто
-        </div>
-      </div>
-    </div>
-  </template>
+  <!-- ЛК-секция (stats + 3 очереди) убрана — дублировала ЛК-отдел.
+       JS (accountingData/accountingNotes/refreshAccounting) оставлен на случай если используется ещё где-то. -->
 </section>
 
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
