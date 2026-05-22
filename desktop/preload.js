@@ -10,6 +10,31 @@ contextBridge.exposeInMainWorld("pride", {
   getUpdateState: () => ipcRenderer.invoke("pride-get-update-state"),
   version: () => process.versions.electron,
   platform: () => process.platform,
+
+  // === Call popout API (для voice звонков) ===
+  // Используется из jarvis.html для управления popout-окном звонка.
+  call: {
+    // Открыть popout. Если уже открыто — фокус.
+    openPopout: () => ipcRenderer.send("call:open-popout"),
+    // Закрыть popout. Звонок продолжает работать в main-окне.
+    closePopout: () => ipcRenderer.send("call:close-popout"),
+    // Проверить открыт ли popout
+    isPopoutOpen: () => ipcRenderer.invoke("call:is-popout-open"),
+    // Отправить состояние звонка в popout
+    sendState: (state) => ipcRenderer.send("call:push-state", state),
+    // Подписка на действия от popout (mute/deafen/leave)
+    onAction: (cb) => {
+      ipcRenderer.on("call:action-from-popout", (_e, data) => {
+        try { cb(data); } catch (e) { console.error("call onAction:", e); }
+      });
+    },
+    // Popout запросил state (на своей загрузке) — main-jarvis должен ответить
+    onStateRequest: (cb) => {
+      ipcRenderer.on("call:state-requested", () => {
+        try { cb(); } catch (e) { console.error("onStateRequest:", e); }
+      });
+    },
+  },
 });
 
 // === UI: Update banner ===

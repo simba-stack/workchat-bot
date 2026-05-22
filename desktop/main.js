@@ -46,6 +46,7 @@ const DASHBOARD_URL = process.env.PRIDE_URL ||
 let mainWindow = null;
 let splashWindow = null;
 let tray = null;
+let callPopoutWindow = null;   // popout-окно звонка (frameless, alwaysOnTop)
 let isQuitting = false;
 let updateState = { status: "idle", percent: 0, version: null };
 
@@ -284,6 +285,99 @@ ipcMain.on("pride-install-update", () => {
 
 ipcMain.on("pride-check-updates", () => {
   autoUpdater.checkForUpdates().catch((e) => log.error("manual check:", e));
+});
+
+// === Call popout window (frameless, alwaysOnTop, draggable, transparent) ===
+// Открывает отдельное окно с UI звонка которое можно таскать ЗА пределы основного окна.
+// WebRTC живёт в main-jarvis-окне — popout это чистое UI-зеркало через IPC.
+function createCallPopoutWindow() {
+  if (callPopoutWindow && !callPopoutWindow.isDestroyed()) {
+    callPopoutWindow.show();
+    callPopoutWindow.focus();
+    return;
+  }
+  callPopoutWindow = new BrowserWindow({
+    width: 320,
+    height: 360,
+    minWidth: 260,
+    minHeight: 280,
+    frame: false,                     // без рамки ОС
+    transparent: true,                // прозрачный фон
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,                // поверх всех окон
+    skipTaskbar: true,                // не светим в панели задач
+    resizable: true,
+    movable: true,
+    hasShadow: false,
+    title: "PRIDE Call",
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "call-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  callPopoutWindow.loadFile(path.join(__dirname, "call-popout.html"));
+
+  callPopoutWindow.once("ready-to-show", () => {
+    if (callPopoutWindow && !callPopoutWindow.isDestroyed()) callPopoutWindow.show();
+  });
+
+  callPopoutWindow.on("closed", () => {
+    callPopoutWindow = null;
+    // Уведомим main-jarvis что popout закрылся (чтобы кнопка в UI обновилась)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("call:popout-closed");
+    }
+  });
+}
+
+// === IPC: Call popout ===
+// Из main-jarvis: открыть/закрыть/слать state
+ipcMain.on("call:open-popout", () => {
+  log.info("[call] open popout requested");
+  createCallPopoutWindow();
+  // Сразу попросим main отправить актуальный state в popout
+  // (popout сам пришлёт call:request-state когда загрузится — двойная страховка)
+});
+
+ipcMain.on("call:close-popout", () => {
+  log.info("[call] close popout requested");
+  if (callPopoutWindow && !callPopoutWindow.isDestroyed()) {
+    callPopoutWindow.close();
+  }
+});
+
+ipcMain.on("call:minimize-popout", () => {
+  if (callPopoutWindow && !callPopoutWindow.isDestroyed()) {
+    callPopoutWindow.minimize();
+  }
+});
+
+ipcMain.handle("call:is-popout-open", () => {
+  return !!(callPopoutWindow && !callPopoutWindow.isDestroyed());
+});
+
+// Main-jarvis шлёт обновление state — мы пересылаем в popout
+ipcMain.on("call:push-state", (_e, state) => {
+  if (callPopoutWindow && !callPopoutWindow.isDestroyed()) {
+    callPopoutWindow.webContents.send("call:state", state);
+  }
+});
+
+// Popout запросил state (на своей загрузке) — попросим main-jarvis отправить
+ipcMain.on("call:request-state", () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("call:state-requested");
+  }
+});
+
+// Popout кликнул mute/deafen/leave — пересылаем в main-jarvis
+ipcMain.on("call:action", (_e, data) => {
+  log.info("[call] action from popout:", data?.type);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("call:action-from-popout", data);
+  }
 });
 
 // === Auto-update events (electron-updater) ===

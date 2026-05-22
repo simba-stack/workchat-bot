@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';"/>
+<title>PRIDE Call</title>
+<style>
+  /* === Сброс === */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    color: #fff; font-size: 12px;
+    user-select: none; -webkit-user-select: none; }
+  button { font-family: inherit; }
+
+  /* === Корпус окна === */
+  .shell {
+    position: fixed; inset: 0;
+    background: rgba(18, 22, 30, 0.94);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* === Header (draggable native region) === */
+  .hdr {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.45);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    -webkit-app-region: drag;  /* нативный draggable region Electron */
+    flex-shrink: 0;
+  }
+  .hdr .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #28b463;
+    box-shadow: 0 0 8px #28b463;
+    flex-shrink: 0;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(40,180,99,0.7); }
+    70%  { box-shadow: 0 0 0 8px rgba(40,180,99,0); }
+    100% { box-shadow: 0 0 0 0 rgba(40,180,99,0); }
+  }
+  .hdr .title { font-weight: 700; font-size: 12px;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hdr .meta { color: rgba(255,255,255,0.55); font-size: 10px; margin-left: 4px; }
+  .hdr button {
+    background: transparent; border: none; color: rgba(255,255,255,0.65);
+    width: 24px; height: 24px; border-radius: 5px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    -webkit-app-region: no-drag;  /* кнопки кликабельны */
+  }
+  .hdr button:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+  /* === Body === */
+  .body { padding: 12px; flex: 1; overflow-y: auto; }
+  .participants {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 12px;
+  }
+  .user {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    position: relative;
+  }
+  .user .avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: #2a3340;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 700;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+  }
+  .user .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .user.speaking .avatar {
+    border-color: #28b463;
+    box-shadow: 0 0 10px rgba(40,180,99,0.55);
+  }
+  .user .name {
+    font-size: 10px; color: rgba(255,255,255,0.78);
+    max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .user .flag {
+    position: absolute; bottom: 18px; right: 4px;
+    background: rgba(18,22,30,0.95); border-radius: 50%;
+    width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+  }
+  .empty {
+    grid-column: 1/-1; text-align: center; padding: 24px 0;
+    color: rgba(255,255,255,0.5); font-size: 11px;
+  }
+
+  /* === Controls === */
+  .controls {
+    display: flex; gap: 8px; justify-content: center;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    background: rgba(0,0,0,0.25);
+    flex-shrink: 0;
+  }
+  .ctrl {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .ctrl:hover { background: rgba(255,255,255,0.16); transform: translateY(-1px); }
+  .ctrl.active { background: rgba(255,180,0,0.28); }
+  .ctrl.danger { background: rgba(220,53,69,0.65); border-color: rgba(220,53,69,0.85); }
+  .ctrl.danger:hover { background: rgba(220,53,69,0.9); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="hdr">
+    <span class="dot"></span>
+    <div class="title" id="title">Звонок</div>
+    <span class="meta" id="meta">0 уч.</span>
+    <button id="btn-min" title="свернуть в трей основного окна">—</button>
+    <button id="btn-close" title="закрыть popout (звонок продолжается в основном окне)">✕</button>
+  </div>
+  <div class="body">
+    <div class="participants" id="participants">
+      <div class="empty">Никого в звонке</div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="ctrl" id="btn-mute" title="mute/unmute"><span id="ic-mute">🎙</span></button>
+    <button class="ctrl" id="btn-deaf" title="deafen/undeafen"><span id="ic-deaf">🔊</span></button>
+    <button class="ctrl danger" id="btn-leave" title="выйти из звонка">🚪</button>
+  </div>
+</div>
+
+<script>
+  // === IPC мост (определён в call-preload.js как window.prideCall) ===
+  const api = window.prideCall || null;
+  if (!api) {
+    document.getElementById('title').textContent = 'IPC мост не доступен';
+  }
+
+  // === Рендер UI ===
+  function escapeHTML(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function render(state) {
+    if (!state) return;
+    const title = state.channelName || 'Звонок';
+    document.getElementById('title').textContent = title;
+    const cnt = (state.participants || []).length;
+    document.getElementById('meta').textContent = '· ' + cnt + ' уч.';
+
+    // Кнопки mute/deaf
+    const muteBtn = document.getElementById('btn-mute');
+    const muteIc = document.getElementById('ic-mute');
+    if (state.muted) { muteBtn.classList.add('active'); muteIc.textContent = '🔇'; }
+    else { muteBtn.classList.remove('active'); muteIc.textContent = '🎙'; }
+
+    const deafBtn = document.getElementById('btn-deaf');
+    const deafIc = document.getElementById('ic-deaf');
+    if (state.deafened) { deafBtn.classList.add('active'); deafIc.textContent = '🔕'; }
+    else { deafBtn.classList.remove('active'); deafIc.textContent = '🔊'; }
+
+    // Участники
+    const wrap = document.getElementById('participants');
+    if (!cnt) {
+      wrap.innerHTML = '<div class="empty">Никого в звонке</div>';
+      return;
+    }
+    const html = state.participants.map(p => {
+      const speakingClass = p.speaking ? 'speaking' : '';
+      const muteFlag = p.muted ? '<div class="flag">🔇</div>' : '';
+      const initial = ((p.username || p.first_name || '?')[0] || '?').toUpperCase();
+      const avatarInner = p.photo_url
+        ? `<img src="${escapeHTML(p.photo_url)}" alt=""/>`
+        : escapeHTML(initial);
+      const displayName = p.isMe ? 'Вы' : (p.username || p.first_name || 'guest');
+      return `
+        <div class="user ${speakingClass}">
+          <div class="avatar">${avatarInner}</div>
+          <div class="name">${escapeHTML(displayName)}</div>
+          ${muteFlag}
+        </div>`;
+    }).join('');
+    wrap.innerHTML = html;
+  }
+
+  // === Кнопки → действия в main-окно через IPC ===
+  document.getElementById('btn-mute').addEventListener('click', () => {
+    if (api) api.action('mute');
+  });
+  document.getElementById('btn-deaf').addEventListener('click', () => {
+    if (api) api.action('deafen');
+  });
+  document.getElementById('btn-leave').addEventListener('click', () => {
+    if (api) api.action('leave');
+  });
+  document.getElementById('btn-close').addEventListener('click', () => {
+    if (api) api.close();
+  });
+  document.getElementById('btn-min').addEventListener('click', () => {
+    if (api) api.minimize();
+  });
+
+  // === Слушаем state от main ===
+  if (api && api.onState) {
+    api.onState(render);
+    // Запросим текущее состояние сразу
+    api.requestState();
+  }
+</script>
+</body>
+</html>

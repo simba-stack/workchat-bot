@@ -6198,6 +6198,9 @@ function jarvis() {
     voiceFloatingPos: { x: 20, y: 90 }, // позиция (left/top), сохраняется в localStorage
     _voiceDragging: false,
     _voiceDragOffset: { x: 0, y: 0 },
+    // === Electron popout (отдельное окно ОС, можно тащить за пределы JARVIS) ===
+    callPopoutAvailable: false,  // true если запущены в Electron desktop
+    callPopoutOpen: false,       // true если нативное popout-окно открыто
     // LK 4-section view (May 2026)
     lkSubTab: 'all',  // all | to_top_up | to_pay | to_release
     lkSections: { all: [], to_top_up: [], to_pay: [], to_release: [] },
@@ -6346,10 +6349,23 @@ function jarvis() {
           this.voiceFloatingMinimized = false;
         }
         if (!newVal) {
-          // Вышел из звонка — закрываем окошко
+          // Вышел из звонка — закрываем окошко + закрываем popout если открыт
           this.voiceFloatingOpen = false;
+          if (this.callPopoutOpen) this.closeCallPopout();
         }
       });
+
+      // Electron popout — настроить IPC и пушить state при любых изменениях звонка
+      this._setupCallPopoutIPC();
+      // Любое изменение в participants/mute/deaf → пуш в popout
+      const pushState = () => this._pushCallState();
+      this.$watch('dcVoiceParticipants', pushState);
+      this.$watch('dcMuted', pushState);
+      this.$watch('dcDeafened', pushState);
+      // А ещё периодически (раз в 500мс) — для speaking-индикаторов (которые меняются часто)
+      setInterval(() => {
+        if (this.callPopoutOpen && this.dcCurrentVoiceChannel) this._pushCallState();
+      }, 500);
 
       this.initBackgrounds();
       this.bootStatus = 'FETCHING STATE';
@@ -6992,6 +7008,73 @@ function jarvis() {
           }
         }
       } catch (e) {}
+    },
+
+    // === Electron popout — открыть native окно звонка вне границ JARVIS ===
+    // Доступно только в Electron desktop (window.pride.call есть только там).
+    openCallPopout() {
+      if (!window.pride?.call) {
+        alert('Popout доступен только в desktop-приложении PRIDE J.A.R.V.I.S.');
+        return;
+      }
+      window.pride.call.openPopout();
+      this.callPopoutOpen = true;
+      // Сразу пушим текущий state
+      setTimeout(() => this._pushCallState(), 100);
+    },
+    closeCallPopout() {
+      if (!window.pride?.call) return;
+      window.pride.call.closePopout();
+      this.callPopoutOpen = false;
+    },
+    // Собирает state звонка и отправляет в popout-окно
+    _pushCallState() {
+      if (!window.pride?.call || !this.callPopoutOpen) return;
+      const ch = (this.discordChannels || []).find(c => c.id === this.dcCurrentVoiceChannel);
+      const participants = (this.dcVoiceParticipants || []).map(p => {
+        const isMe = p.session_id === this.dcSessionId;
+        const speaking = isMe
+          ? (this.isSpeaking('__local__') && !p.muted)
+          : this.isSpeaking(p.session_id);
+        return {
+          session_id: p.session_id,
+          username: p.username || '',
+          first_name: p.first_name || '',
+          photo_url: p.photo_url || '',
+          muted: !!p.muted,
+          isMe,
+          speaking: !!speaking,
+        };
+      });
+      window.pride.call.sendState({
+        channelName: ch?.name || 'Звонок',
+        participants,
+        muted: !!this.dcMuted,
+        deafened: !!this.dcDeafened,
+      });
+    },
+    // === Подписка на события от popout (вызывается в init) ===
+    _setupCallPopoutIPC() {
+      if (!window.pride?.call) return;
+      this.callPopoutAvailable = true;
+      // Popout закрылся (юзер нажал ✕ или Alt+F4 на окне) — обновим флаг
+      try {
+        if (window.pride?.call && typeof window.pride.call.onAction === 'function') {
+          // Действие из popout: mute/deafen/leave
+          window.pride.call.onAction((data) => {
+            const t = data?.type;
+            if (t === 'mute' && this.toggleMute) this.toggleMute();
+            else if (t === 'deafen' && this.toggleDeafen) this.toggleDeafen();
+            else if (t === 'leave' && this.leaveDiscordVoice) this.leaveDiscordVoice();
+          });
+        }
+        // Popout запросил state (на своей загрузке)
+        if (window.pride?.call && typeof window.pride.call.onStateRequest === 'function') {
+          window.pride.call.onStateRequest(() => this._pushCallState());
+        }
+        // popout-закрыто событие шлёт main.js напрямую через preload bridge
+        // (он у нас не expose'ит этот канал — простоты ради проверяем через isPopoutOpen)
+      } catch (e) { console.warn('callPopoutIPC setup:', e); }
     },
     addExchangeOut() {
       this.exchangeForm.outs.push({
@@ -11052,6 +11135,10 @@ function jarvis() {
     <span class="pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #28b463; box-shadow: 0 0 6px #28b463; flex-shrink: 0;"></span>
     <div class="vf-title" x-text="(discordChannels || []).find(c => c.id === dcCurrentVoiceChannel)?.name || 'Голосовой звонок'"></div>
     <span class="vf-meta" x-text="(dcVoiceParticipants?.length || 0) + ' уч.'"></span>
+    <button x-show="callPopoutAvailable && !callPopoutOpen" @click="openCallPopout()"
+            title="Открыть в отдельном окне (можно вынести за пределы JARVIS)">⇱</button>
+    <button x-show="callPopoutAvailable && callPopoutOpen" @click="closeCallPopout()"
+            title="Закрыть отдельное окно (вернуть звонок в JARVIS)">⇲</button>
     <button @click="minimizeVoiceFloating()" title="свернуть">—</button>
     <button @click="voiceFloatingOpen = false" title="закрыть окошко (звонок продолжается)">✕</button>
   </div>
