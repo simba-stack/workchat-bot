@@ -2639,6 +2639,156 @@
   }
 
   /* Mobile shell CSS lives in jarvis-mobile.html */
+
+  /* ===== Voice Call: TG-style banner + floating window ===== */
+  /* Top banner — компактная полоса над вкладками когда в эфире */
+  .voice-call-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    background: linear-gradient(90deg, rgba(40,180,99,0.18) 0%, rgba(40,180,99,0.08) 100%);
+    border-bottom: 1px solid rgba(40,180,99,0.35);
+    font-size: 12px;
+    color: #d6f5e3;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+  }
+  .voice-call-banner:hover { background: linear-gradient(90deg, rgba(40,180,99,0.28) 0%, rgba(40,180,99,0.14) 100%); }
+  .voice-call-banner .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #28b463;
+    box-shadow: 0 0 0 0 rgba(40,180,99,0.7);
+    animation: voice-pulse 1.6s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes voice-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(40,180,99,0.7); }
+    70%  { box-shadow: 0 0 0 10px rgba(40,180,99,0); }
+    100% { box-shadow: 0 0 0 0 rgba(40,180,99,0); }
+  }
+  .voice-call-banner .vb-title { font-weight: 700; }
+  .voice-call-banner .vb-meta { color: rgba(214,245,227,0.7); }
+  .voice-call-banner .vb-mini-avatars {
+    display: flex; align-items: center; gap: 2px; margin-left: 4px;
+  }
+  .voice-call-banner .vb-mini-av {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #1f3a2a; color: #d6f5e3;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+    border: 1px solid rgba(40,180,99,0.5);
+    overflow: hidden;
+  }
+  .voice-call-banner .vb-mini-av img { width: 100%; height: 100%; object-fit: cover; }
+  .voice-call-banner .vb-mini-av.is-speaking { box-shadow: 0 0 0 2px #28b463; }
+  .voice-call-banner .vb-actions {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+  }
+  .voice-call-banner .vb-btn {
+    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
+    color: #fff; padding: 4px 10px; border-radius: 12px;
+    font-size: 11px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .voice-call-banner .vb-btn:hover { background: rgba(0,0,0,0.5); }
+  .voice-call-banner .vb-btn.danger { background: rgba(220,53,69,0.25); border-color: rgba(220,53,69,0.5); }
+  .voice-call-banner .vb-btn.danger:hover { background: rgba(220,53,69,0.45); }
+
+  /* Floating call window */
+  .voice-floating-window {
+    position: fixed;
+    width: 320px;
+    background: rgba(18,22,30,0.95);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+    z-index: 9999;
+    overflow: hidden;
+    font-size: 12px;
+    color: #fff;
+  }
+  .voice-floating-window.minimized {
+    width: 60px; height: 60px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #28b463, #1d8348);
+  }
+  .voice-floating-window.minimized .vf-min-icon { font-size: 24px; }
+  .voice-floating-window .vf-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.4);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    cursor: move;
+    user-select: none;
+  }
+  .voice-floating-window .vf-header .vf-title {
+    font-weight: 700; font-size: 12px;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .voice-floating-window .vf-header .vf-meta {
+    color: rgba(255,255,255,0.55); font-size: 10px; margin-left: 4px;
+  }
+  .voice-floating-window .vf-header button {
+    background: transparent; border: none; color: rgba(255,255,255,0.6);
+    width: 22px; height: 22px; border-radius: 4px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+  }
+  .voice-floating-window .vf-header button:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  .voice-floating-window .vf-body { padding: 10px 12px; }
+  .voice-floating-window .vf-participants {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 10px; margin-bottom: 12px; max-height: 200px; overflow-y: auto;
+  }
+  .voice-floating-window .vf-user {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    position: relative;
+  }
+  .voice-floating-window .vf-user .vf-avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #2a3340; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+    overflow: hidden;
+  }
+  .voice-floating-window .vf-user .vf-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .voice-floating-window .vf-user.speaking .vf-avatar { border-color: #28b463; box-shadow: 0 0 8px rgba(40,180,99,0.55); }
+  .voice-floating-window .vf-user .vf-name {
+    font-size: 10px; color: rgba(255,255,255,0.75);
+    max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .voice-floating-window .vf-user .vf-flag {
+    position: absolute; bottom: 18px; right: 6px;
+    background: rgba(18,22,30,0.95); border-radius: 50%;
+    width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+  }
+  .voice-floating-window .vf-controls {
+    display: flex; gap: 6px; justify-content: center;
+    padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .voice-floating-window .vf-ctrl-btn {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.05);
+    color: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; transition: background 0.15s, transform 0.1s;
+  }
+  .voice-floating-window .vf-ctrl-btn:hover { background: rgba(255,255,255,0.16); transform: translateY(-1px); }
+  .voice-floating-window .vf-ctrl-btn.active { background: rgba(255,180,0,0.25); }
+  .voice-floating-window .vf-ctrl-btn.danger { background: rgba(220,53,69,0.6); border-color: rgba(220,53,69,0.8); }
+  .voice-floating-window .vf-ctrl-btn.danger:hover { background: rgba(220,53,69,0.85); }
 </style>
 </head>
 <body x-data="jarvis()" x-init="init()" :data-theme="theme">
@@ -2690,6 +2840,38 @@
     <div class="stat-pill"><span x-text="clockText"></span></div>
   </div>
 </header>
+
+<!-- VOICE CALL BANNER — показывается когда в эфире -->
+<div class="voice-call-banner" x-show="dcCurrentVoiceChannel" x-cloak @click="goToActiveCallChannel()">
+  <span class="pulse-dot"></span>
+  <span class="vb-title">🟢 В эфире</span>
+  <span class="vb-meta">
+    · <span x-text="(discordChannels || []).find(c => c.id === dcCurrentVoiceChannel)?.name || 'voice'"></span>
+    · <span x-text="(dcVoiceParticipants?.length || 0) + ' уч.'"></span>
+  </span>
+  <div class="vb-mini-avatars">
+    <template x-for="p in (dcVoiceParticipants || []).slice(0, 5)" :key="p.session_id">
+      <div class="vb-mini-av"
+           :class="isSpeaking(p.session_id === dcSessionId ? '__local__' : p.session_id) && !p.muted ? 'is-speaking' : ''"
+           :title="p.username || p.first_name || 'guest'">
+        <template x-if="p.photo_url">
+          <img :src="p.photo_url"/>
+        </template>
+        <template x-if="!p.photo_url">
+          <span x-text="((p.username || p.first_name || '?')[0] || '?').toUpperCase()"></span>
+        </template>
+      </div>
+    </template>
+  </div>
+  <div class="vb-actions" @click.stop>
+    <button class="vb-btn" @click="toggleMute()" :title="dcMuted ? 'unmute' : 'mute'"
+            x-text="dcMuted ? '🔇' : '🎙'"></button>
+    <button class="vb-btn" @click="toggleVoiceFloating()" :title="voiceFloatingOpen ? 'скрыть окошко' : 'показать окошко'">
+      <span x-text="voiceFloatingOpen ? '🗗' : '🗖'"></span>
+    </button>
+    <button class="vb-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
+  </div>
+</div>
 
 <!-- TABS -->
 <nav class="view-tabs">
@@ -6010,6 +6192,12 @@ function jarvis() {
     fioSearchIn: '',
     fioSearchResultsIn: [],
     submittingExchange: false,  // anti-double-click флаг для submitExchangeRequest
+    // === Voice floating window (TG-style) ===
+    voiceFloatingOpen: false,        // показано ли окошко звонка
+    voiceFloatingMinimized: false,   // свёрнуто в пузырь
+    voiceFloatingPos: { x: 20, y: 90 }, // позиция (left/top), сохраняется в localStorage
+    _voiceDragging: false,
+    _voiceDragOffset: { x: 0, y: 0 },
     // LK 4-section view (May 2026)
     lkSubTab: 'all',  // all | to_top_up | to_pay | to_release
     lkSections: { all: [], to_top_up: [], to_pay: [], to_release: [] },
@@ -6148,6 +6336,20 @@ function jarvis() {
         if (this._globalSyncInterval) clearInterval(this._globalSyncInterval);
         this._globalSyncInterval = setInterval(() => { this._globalSync(); }, 4000);
       } catch (e) {}
+
+      // Voice floating window: восстановить позицию + автооткрытие при входе в звонок
+      this._restoreVoicePos();
+      this.$watch('dcCurrentVoiceChannel', (newVal, oldVal) => {
+        if (newVal && !oldVal) {
+          // Только что вошёл в звонок — открываем окошко (один раз)
+          this.voiceFloatingOpen = true;
+          this.voiceFloatingMinimized = false;
+        }
+        if (!newVal) {
+          // Вышел из звонка — закрываем окошко
+          this.voiceFloatingOpen = false;
+        }
+      });
 
       this.initBackgrounds();
       this.bootStatus = 'FETCHING STATE';
@@ -6718,6 +6920,78 @@ function jarvis() {
     },
     closeExchangeModal() {
       this.showExchangeModal = false;
+    },
+
+    // ====== Voice Floating Window (TG-style) ======
+    // Перейти на текущий voice-канал из баннера/окошка
+    goToActiveCallChannel() {
+      const cid = this.dcCurrentVoiceChannel;
+      if (!cid) return;
+      const ch = (this.discordChannels || []).find(c => c.id === cid);
+      this.goToView('discord');
+      if (ch) this.openDiscordChannel(ch);
+    },
+    // Показать/скрыть floating call window
+    toggleVoiceFloating() {
+      this.voiceFloatingOpen = !this.voiceFloatingOpen;
+      if (this.voiceFloatingOpen) this.voiceFloatingMinimized = false;
+    },
+    minimizeVoiceFloating() {
+      this.voiceFloatingMinimized = !this.voiceFloatingMinimized;
+    },
+    // Drag handlers — bound to this через стрелочные функции (создаются один раз)
+    _voiceDragMove: null,
+    _voiceDragEnd: null,
+    startVoiceDrag(e) {
+      // Игнорируем драг если кликнули на кнопку внутри хедера
+      if (e.target.closest('button')) return;
+      this._voiceDragging = true;
+      const win = e.currentTarget.closest('.voice-floating-window');
+      if (!win) return;
+      const rect = win.getBoundingClientRect();
+      this._voiceDragOffset.x = e.clientX - rect.left;
+      this._voiceDragOffset.y = e.clientY - rect.top;
+      // Лениво создаём bound handlers
+      if (!this._voiceDragMove) {
+        this._voiceDragMove = (ev) => {
+          if (!this._voiceDragging) return;
+          const newX = ev.clientX - this._voiceDragOffset.x;
+          const newY = ev.clientY - this._voiceDragOffset.y;
+          // Держим окошко в границах viewport
+          const maxX = Math.max(0, window.innerWidth - 320);
+          const maxY = Math.max(0, window.innerHeight - 60);
+          this.voiceFloatingPos.x = Math.max(0, Math.min(maxX, newX));
+          this.voiceFloatingPos.y = Math.max(0, Math.min(maxY, newY));
+        };
+        this._voiceDragEnd = () => {
+          if (!this._voiceDragging) return;
+          this._voiceDragging = false;
+          document.removeEventListener('mousemove', this._voiceDragMove);
+          document.removeEventListener('mouseup', this._voiceDragEnd);
+          this._persistVoicePos();
+        };
+      }
+      document.addEventListener('mousemove', this._voiceDragMove);
+      document.addEventListener('mouseup', this._voiceDragEnd);
+      e.preventDefault();
+    },
+    // Сохранить позицию в localStorage
+    _persistVoicePos() {
+      try {
+        localStorage.setItem('voiceFloatingPos', JSON.stringify(this.voiceFloatingPos));
+      } catch (e) {}
+    },
+    // Восстановить позицию из localStorage (вызывается в init)
+    _restoreVoicePos() {
+      try {
+        const saved = localStorage.getItem('voiceFloatingPos');
+        if (saved) {
+          const p = JSON.parse(saved);
+          if (typeof p?.x === 'number' && typeof p?.y === 'number') {
+            this.voiceFloatingPos = { x: p.x, y: p.y };
+          }
+        }
+      } catch (e) {}
     },
     addExchangeOut() {
       this.exchangeForm.outs.push({
@@ -10754,6 +11028,65 @@ function jarvis() {
               @click="submitExchangeRequest()"
               x-text="submittingExchange ? '⏳ Отправка…' : '✅ Зафиксировать заявку'"></button>
       <button class="chip-btn" :disabled="submittingExchange" @click="closeExchangeModal()">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== FLOATING VOICE CALL WINDOW (TG-style) ===== -->
+<!-- Свёрнутая версия — пузырь с пульсом -->
+<div class="voice-floating-window minimized"
+     x-show="dcCurrentVoiceChannel && voiceFloatingOpen && voiceFloatingMinimized"
+     x-cloak
+     :style="'left: ' + voiceFloatingPos.x + 'px; top: ' + voiceFloatingPos.y + 'px;'"
+     @click="minimizeVoiceFloating()"
+     title="Развернуть звонок">
+  <div class="vf-min-icon">🎙</div>
+</div>
+
+<!-- Полное окошко -->
+<div class="voice-floating-window"
+     x-show="dcCurrentVoiceChannel && voiceFloatingOpen && !voiceFloatingMinimized"
+     x-cloak
+     :style="'left: ' + voiceFloatingPos.x + 'px; top: ' + voiceFloatingPos.y + 'px;'">
+  <div class="vf-header" @mousedown="startVoiceDrag($event)">
+    <span class="pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #28b463; box-shadow: 0 0 6px #28b463; flex-shrink: 0;"></span>
+    <div class="vf-title" x-text="(discordChannels || []).find(c => c.id === dcCurrentVoiceChannel)?.name || 'Голосовой звонок'"></div>
+    <span class="vf-meta" x-text="(dcVoiceParticipants?.length || 0) + ' уч.'"></span>
+    <button @click="minimizeVoiceFloating()" title="свернуть">—</button>
+    <button @click="voiceFloatingOpen = false" title="закрыть окошко (звонок продолжается)">✕</button>
+  </div>
+  <div class="vf-body">
+    <div class="vf-participants">
+      <template x-for="p in (dcVoiceParticipants || [])" :key="p.session_id">
+        <div class="vf-user"
+             :class="{ 'speaking': (p.session_id === dcSessionId
+                ? (isSpeaking('__local__') && !p.muted)
+                : isSpeaking(p.session_id)) }">
+          <div class="vf-avatar">
+            <template x-if="p.photo_url">
+              <img :src="p.photo_url" :alt="p.username || p.first_name"/>
+            </template>
+            <template x-if="!p.photo_url">
+              <span x-text="((p.username || p.first_name || '?')[0] || '?').toUpperCase()"></span>
+            </template>
+          </div>
+          <div class="vf-name" x-text="p.session_id === dcSessionId ? 'Вы' : (p.username || p.first_name || 'guest')"></div>
+          <div class="vf-flag" x-show="p.muted">🔇</div>
+        </div>
+      </template>
+      <template x-if="(dcVoiceParticipants?.length || 0) === 0">
+        <div style="grid-column: 1/-1; text-align: center; padding: 20px 0; color: rgba(255,255,255,0.5); font-size: 11px;">Пусто</div>
+      </template>
+    </div>
+    <div class="vf-controls">
+      <button class="vf-ctrl-btn" :class="dcMuted ? 'active' : ''" @click="toggleMute()" :title="dcMuted ? 'unmute' : 'mute'">
+        <span x-text="dcMuted ? '🔇' : '🎙'"></span>
+      </button>
+      <button class="vf-ctrl-btn" :class="dcDeafened ? 'active' : ''" @click="toggleDeafen()" :title="dcDeafened ? 'undeaf' : 'deafen'">
+        <span x-text="dcDeafened ? '🔕' : '🔊'"></span>
+      </button>
+      <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
+      <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
     </div>
   </div>
 </div>
