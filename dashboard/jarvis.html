@@ -2930,7 +2930,7 @@
 
   <!-- CENTER -->
   <section class="central-office">
-    <div class="jarvis-panel">
+    <div class="jarvis-panel" x-show="currentView === 'office'">
       <div class="panel-title">
         Operations Floor
         <span class="badge-mini">REAL-TIME</span>
@@ -3696,8 +3696,8 @@
   </div>
 </template>
 
-<!-- FEED -->
-<section class="jarvis-panel" style="margin: 0 14px 14px;">
+<!-- FEED — только на главной (Office), на других вкладках не мешается -->
+<section class="jarvis-panel" style="margin: 0 14px 14px;" x-show="currentView === 'office'">
   <div class="panel-title">
     Live Event Feed
     <span class="badge-mini" x-text="logs.length + ' EVENTS'"></span>
