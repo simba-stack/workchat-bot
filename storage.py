@@ -3266,16 +3266,34 @@ class Storage:
             return False
 
     def is_credit_chat(self, chat_id, kind: str = "any") -> bool:
-        """kind: 'any' | 'access' | 'password'. True если chat относится к кредитованию."""
+        """kind: 'any' | 'access' | 'password'. True если chat относится к кредитованию.
+        Источник истины (по приоритету):
+          1) config.CREDIT_ACCESS_CHAT_ID / CREDIT_PASSWORD_CHAT_ID (хардкод/env)
+          2) state credit_access_chat_id / credit_password_chat_id
+          3) credit_chats (зарегистрированные доп. чаты)
+        """
         cid_int = None
         try: cid_int = int(chat_id)
         except Exception: pass
-        access_main = self.state.get("credit_access_chat_id") or 0
-        password_main = self.state.get("credit_password_chat_id") or 0
+        # 1) config
+        access_main = 0
+        password_main = 0
+        try:
+            import config as _cfg
+            access_main = int(getattr(_cfg, "CREDIT_ACCESS_CHAT_ID", 0) or 0)
+            password_main = int(getattr(_cfg, "CREDIT_PASSWORD_CHAT_ID", 0) or 0)
+        except Exception:
+            pass
+        # 2) state (fallback)
+        if not access_main:
+            access_main = self.state.get("credit_access_chat_id") or 0
+        if not password_main:
+            password_main = self.state.get("credit_password_chat_id") or 0
         if kind in ("any", "access") and cid_int and cid_int == access_main:
             return True
         if kind in ("any", "password") and cid_int and cid_int == password_main:
             return True
+        # 3) credit_chats (зарегистрированные через "Ассистент возьми...")
         chat_entry = self.get_credit_chat(chat_id)
         if not chat_entry:
             return False

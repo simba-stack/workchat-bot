@@ -55,6 +55,13 @@ KNOWLEDGE_SUBDIR = os.getenv("KNOWLEDGE_SUBDIR", "knowledge")
 # Persistent JSON storage path (mount Railway Volume here)
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/app/data/state.json")
 
+# === Credit (Кредитование) — фиксированные ID групп Telegram ===
+# Можно переопределить через env. Если ID неверный — сервис продолжит работать,
+# но захардкоженные main-чаты не будут распознаваться (доп. чаты через
+# «Ассистент возьми этот чат под кредитование - менеджер @ник» работают всегда).
+CREDIT_ACCESS_CHAT_ID = int(os.getenv("CREDIT_ACCESS_CHAT_ID", "-1005116975272"))
+CREDIT_PASSWORD_CHAT_ID = int(os.getenv("CREDIT_PASSWORD_CHAT_ID", "-1005234590907"))
+
 # === Defaults (used on first run; later editable via /admin) ===
 DEFAULT_WELCOME = (
     "👋 Здравствуйте!\n\n"
