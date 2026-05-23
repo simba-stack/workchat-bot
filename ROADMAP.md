@@ -167,6 +167,51 @@ Regex:
 
 ## 4. Активный план (что ещё в работе)
 
+### 4.0. КУЦ (Кружок Удостоверения Клиента) — KYC через одноразовую ссылку ✅
+**Сделано MVP без AI.** Архитектура:
+
+```
+Работник в JARVIS → жмёт «📹 КУЦ» в карточке ЛК
+  → API POST /api/system/lk/{id}/kuc/request  (prompt'ит текст инструкции)
+  → storage.create_kuc_request(...) генерирует uuid-токен
+  → enqueue userbot команду __send_kuc_link <chat_id> <token>
+  → userbot пишет в work_chat клиента: «Пройдите проверку: https://.../kuc/<token>»
+
+Клиент открывает ссылку на телефоне
+  → GET /kuc/{token} отдаёт kuc_capture.html
+  → MediaRecorder API: камера + 10s запись + submit
+  → POST /kuc/{token}/submit с multipart video → сохраняется в /app/data/kuc/<token>.webm
+  → SSE event "kuc-submitted"
+
+Работник видит в карточке статус «📥 кружок получен · проверить»
+  → клик → modal с <video> + ✅ Одобрить / ❌ Отклонить + заметка
+  → POST /api/system/kuc/{token}/decide
+```
+
+**Файлы:**
+- `storage.py` — новая сущность `kuc_requests`, helpers: `create_kuc_request`, `mark_kuc_url_sent`, `mark_kuc_opened`, `mark_kuc_submitted`, `decide_kuc`, `set_kuc_ai_result`, `get_kuc_for_droplk`, `get_work_chat_for_droplk`
+- `api.py` — 7 endpoints: POST /kuc/request, GET /kuc/{token} (HTML), GET /kuc/{token}/info, POST /kuc/{token}/open, POST /kuc/{token}/submit, GET /api/system/kuc/{token}/video, POST /api/system/kuc/{token}/decide, GET /api/system/kuc/list
+- `dashboard/kuc_capture.html` — новая страница для клиента (camera + MediaRecorder + submit)
+- `userbot.py` — handler `__send_kuc_link <chat_id> <token>` пишет ссылку в work_chat
+- `dashboard/jarvis.html` — кнопка «📹 КУЦ» во всех 4 вкладках System + state badge + модалка просмотра/approve/reject
+
+**Env переменные (опциональные):**
+- `KUC_VIDEO_DIR` (default `/app/data/kuc`) — папка для видео на Railway Volume
+- `KUC_MAX_BYTES` (default 20 MB) — лимит размера видео
+- `KUC_BASE_URL` (default `https://workchat-bot-production.up.railway.app`) — base URL для ссылок (можно переопределить если другой домен)
+
+**Срок жизни ссылки:** без лимита (живёт пока status != approved/rejected).
+
+### 4.0.B. КУЦ — AI face match (Claude Vision) ⏳
+**План:** при `POST /kuc/{token}/submit`:
+- Извлечь один frame из видео через `ffmpeg -ss 00:00:05 -frames:v 1 frame.jpg`
+- Взять `scan_file_ids[0]` (паспорт) из связанного drop
+- Отправить оба в Claude Vision с промптом «Сравни лица. JSON: {score: 0-100, comment, same_person: bool}»
+- Записать `kuc_request.ai_score` + `ai_comment` через `storage.set_kuc_ai_result`
+- В JARVIS — показать AI score в модалке перед approve/reject
+
+**Что нужно:** ffmpeg в Dockerfile (`apt-get install ffmpeg`), Anthropic Python SDK уже стоит.
+
 ### 4.1. Нумерация в TG-сообщениях бота (Шаг B) ⏳
 - Нужно пройтись по crm_bot.py — найти ~20 мест где формируются сообщения с упоминанием ЛК (accept_drop, post_to_pass_group, post_anketa и т.д.)
 - Добавить `#slot_number/slot_total` в формат

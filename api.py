@@ -33,6 +33,7 @@ from typing import Dict, Optional
 
 from fastapi import (
     FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect,
+    UploadFile, File,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
@@ -1584,6 +1585,227 @@ async def api_system_credit_managers(_: None = Depends(_auth)):
         })
     out.sort(key=lambda x: -(x.get("last_active_ts") or 0))
     return {"ok": True, "items": out, "count": len(out)}
+
+
+# =====================================================================
+# KUC (Кружок Удостоверения Клиента — KYC через одноразовую ссылку)
+# =====================================================================
+import os as _os_kuc
+from pathlib import Path as _Path_kuc
+
+_KUC_VIDEO_DIR = _Path_kuc(_os_kuc.environ.get("KUC_VIDEO_DIR", "/app/data/kuc"))
+_KUC_MAX_BYTES = int(_os_kuc.environ.get("KUC_MAX_BYTES", 20 * 1024 * 1024))  # 20 MB
+
+
+def _kuc_base_url(request: Request) -> str:
+    """Возвращает базовый URL для ссылок (https://workchat-bot-production.up.railway.app)."""
+    return _os_kuc.environ.get("KUC_BASE_URL") or str(request.base_url).rstrip("/")
+
+
+@app.post("/api/system/lk/{droplk_id}/kuc/request")
+async def api_system_lk_kuc_request(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Работник создаёт KUC-запрос для ЛК. Body: {message: str}.
+    Возвращает токен + ссылку. Userbot затем отправит её клиенту в work_chat."""
+    if me.get("role") not in ("owner", "manager", "system"):
+        raise HTTPException(403, "forbidden")
+    body = {}
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        pass
+    request_text = (body.get("message") or "").strip() or (
+        "Здравствуйте! Для подтверждения принадлежности счёта, пожалуйста, "
+        "запишите короткий видео-кружок: чётко скажите ваше ФИО и фразу "
+        "«счёт в [банк] принадлежит мне»."
+    )
+    # Проверим что ЛК существует
+    lk = storage.get_drop_lk_any(droplk_id)
+    if not lk:
+        raise HTTPException(404, f"ЛК {droplk_id} не найден")
+    work_chat_id = storage.get_work_chat_for_droplk(droplk_id) if hasattr(storage, "get_work_chat_for_droplk") else None
+    if not work_chat_id:
+        raise HTTPException(400, "Не найден work_chat_id для этого ЛК — невозможно отправить ссылку клиенту")
+    # Создаём токен
+    token = await storage.create_kuc_request(
+        droplk_id=droplk_id, work_chat_id=work_chat_id,
+        requested_by=me.get("username") or "", request_text=request_text,
+    )
+    url = f"{_kuc_base_url(request)}/kuc/{token}"
+    # Ставим команду userbot'у отправить ссылку в work_chat
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__send_kuc_link {work_chat_id} {token}",
+            source=f"dashboard-kuc-request-by-{me.get('username') or 'unknown'}",
+        )
+    except Exception as e:
+        logger.warning("KUC enqueue cmd failed: %s", e)
+    try:
+        event_bus.emit_event("kuc-requested", {
+            "droplk_id": droplk_id, "token": token,
+            "requested_by": me.get("username") or "",
+        }, severity="info")
+    except Exception:
+        pass
+    return {"ok": True, "token": token, "url": url, "work_chat_id": work_chat_id}
+
+
+@app.get("/kuc/{token}")
+async def kuc_capture_page(token: str):
+    """Отдаёт kuc_capture.html для клиента (без auth — публичный доступ по токену)."""
+    kuc = storage.get_kuc_request(token)
+    if not kuc:
+        return HTMLResponse("<h1>Ссылка недействительна</h1>", status_code=404)
+    path = _Path_kuc(__file__).parent / "dashboard" / "kuc_capture.html"
+    if not path.exists():
+        return HTMLResponse("<h1>Страница не найдена</h1>", status_code=500)
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get("/kuc/{token}/info")
+async def kuc_info(token: str):
+    """Клиентский endpoint — возвращает request_text и status. Без auth."""
+    kuc = storage.get_kuc_request(token)
+    if not kuc:
+        raise HTTPException(404, "Токен не найден")
+    return {
+        "token": token,
+        "request_text": kuc.get("request_text") or "",
+        "status": kuc.get("status") or "pending",
+        "created_at": kuc.get("created_at") or 0,
+    }
+
+
+@app.post("/kuc/{token}/open")
+async def kuc_mark_opened(token: str):
+    """Клиент открыл страницу — отмечаем used_at. Без auth."""
+    if not storage.get_kuc_request(token):
+        raise HTTPException(404, "not found")
+    await storage.mark_kuc_opened(token)
+    return {"ok": True}
+
+
+@app.post("/kuc/{token}/submit")
+async def kuc_submit(token: str, video: UploadFile = File(...)):
+    """Клиент загружает видео. Без auth (доверяем token).
+    Видео сохраняется в _KUC_VIDEO_DIR, статус → submitted."""
+    kuc = storage.get_kuc_request(token)
+    if not kuc:
+        raise HTTPException(404, "Токен не найден")
+    if kuc.get("status") not in ("pending",):
+        raise HTTPException(400, f"Видео уже отправлено (статус: {kuc.get('status')})")
+    # Создаём папку
+    _KUC_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    ext = ".webm"
+    if video.content_type and "mp4" in video.content_type:
+        ext = ".mp4"
+    file_path = _KUC_VIDEO_DIR / f"{token}{ext}"
+    total = 0
+    try:
+        with open(file_path, "wb") as f:
+            while True:
+                chunk = await video.read(1024 * 64)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _KUC_MAX_BYTES:
+                    f.close()
+                    try: file_path.unlink()
+                    except Exception: pass
+                    raise HTTPException(413, f"Видео слишком большое (>{_KUC_MAX_BYTES // 1024 // 1024} MB)")
+                f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("KUC video save failed: %s", e)
+        raise HTTPException(500, "Ошибка сохранения видео")
+    await storage.mark_kuc_submitted(
+        token=token, video_file_path=str(file_path),
+        video_size_bytes=total, video_mime=video.content_type or "video/webm",
+    )
+    # Notify работника через SSE
+    try:
+        event_bus.emit_event("kuc-submitted", {
+            "droplk_id": kuc.get("droplk_id"), "token": token,
+            "size_bytes": total,
+        }, severity="success")
+    except Exception:
+        pass
+    return {"ok": True, "token": token, "size_bytes": total}
+
+
+@app.get("/api/system/kuc/{token}/video")
+async def kuc_get_video(token: str, _: None = Depends(_auth)):
+    """Работник смотрит видео. Auth обязателен."""
+    kuc = storage.get_kuc_request(token)
+    if not kuc:
+        raise HTTPException(404, "not found")
+    path = kuc.get("video_file_path") or ""
+    if not path or not _Path_kuc(path).exists():
+        raise HTTPException(404, "video file missing on disk")
+
+    def _iter():
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+    mime = kuc.get("video_mime") or "video/webm"
+    return StreamingResponse(_iter(), media_type=mime)
+
+
+@app.post("/api/system/kuc/{token}/decide")
+async def kuc_decide(token: str, request: Request, me: dict = Depends(_get_me)):
+    """Работник одобряет/отклоняет КУЦ. Body: {decision: 'approved'|'rejected', note?: str}."""
+    if me.get("role") not in ("owner", "manager", "system"):
+        raise HTTPException(403, "forbidden")
+    body = {}
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        pass
+    decision = (body.get("decision") or "").strip().lower()
+    note = (body.get("note") or "").strip()
+    if decision not in ("approved", "rejected"):
+        raise HTTPException(400, "decision must be 'approved' or 'rejected'")
+    ok = await storage.decide_kuc(
+        token=token, decision=decision,
+        decision_by=me.get("username") or "", decision_note=note,
+    )
+    if not ok:
+        raise HTTPException(404, "kuc not found")
+    try:
+        event_bus.emit_event("kuc-decided", {
+            "token": token, "decision": decision,
+            "decision_by": me.get("username") or "",
+        }, severity="info")
+    except Exception:
+        pass
+    return {"ok": True, "token": token, "decision": decision}
+
+
+@app.get("/api/system/kuc/list")
+async def kuc_list(_: None = Depends(_auth)):
+    """Возвращает все KUC-запросы (для JARVIS отображения статуса в карточках ЛК)."""
+    kucs = storage.list_kuc_requests() if hasattr(storage, "list_kuc_requests") else {}
+    # Возвращаем dict {droplk_id: kuc} — последний активный для каждого ЛК
+    by_droplk = {}
+    for k in kucs.values():
+        did = k.get("droplk_id")
+        if not did:
+            continue
+        existing = by_droplk.get(did)
+        # active > decided ; новее > старее
+        if not existing:
+            by_droplk[did] = k
+            continue
+        a_active = (existing.get("status") in ("pending", "submitted"))
+        b_active = (k.get("status") in ("pending", "submitted"))
+        if b_active and not a_active:
+            by_droplk[did] = k
+        elif (b_active == a_active) and (k.get("created_at") or 0) > (existing.get("created_at") or 0):
+            by_droplk[did] = k
+    return {"ok": True, "by_droplk": by_droplk, "count": len(by_droplk)}
 
 
 # =====================================================================

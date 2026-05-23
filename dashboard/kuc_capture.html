@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0"/>
+<title>PRIDE — Проверка личности</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; min-height: 100vh;
+    background: linear-gradient(135deg, #0a0e1a 0%, #14182c 100%);
+    color: #e8eef5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell {
+    max-width: 480px; margin: 0 auto; padding: 20px 16px;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  .head {
+    text-align: center; margin-bottom: 20px;
+  }
+  .head .brand {
+    font-size: 13px; letter-spacing: 4px; color: #6ad8ff;
+    font-weight: 700; margin-bottom: 8px;
+  }
+  .head h1 {
+    margin: 0; font-size: 22px; font-weight: 700;
+  }
+  .head p {
+    margin: 8px 0 0; color: rgba(232,238,245,0.6); font-size: 13px;
+  }
+
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 18px; margin-bottom: 14px;
+  }
+  .card .label {
+    font-size: 11px; color: rgba(232,238,245,0.55); margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .card .request-text {
+    font-size: 14px; line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  /* Видео круг */
+  .video-wrap {
+    position: relative; width: 280px; height: 280px;
+    margin: 0 auto 14px; border-radius: 50%; overflow: hidden;
+    background: #000;
+    border: 3px solid rgba(106,216,255,0.3);
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .video-wrap.recording {
+    border-color: #ff4d6d;
+    box-shadow: 0 0 40px rgba(255,77,109,0.55);
+    animation: rec-pulse 1.4s ease-in-out infinite;
+  }
+  .video-wrap.done {
+    border-color: #28b463;
+    box-shadow: 0 0 20px rgba(40,180,99,0.45);
+  }
+  @keyframes rec-pulse {
+    0%, 100% { box-shadow: 0 0 30px rgba(255,77,109,0.4); }
+    50% { box-shadow: 0 0 50px rgba(255,77,109,0.8); }
+  }
+  .video-wrap video {
+    width: 100%; height: 100%; object-fit: cover;
+    transform: scaleX(-1); /* mirror selfie */
+  }
+  .video-wrap .timer {
+    position: absolute; top: 14px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    padding: 4px 12px; border-radius: 12px;
+    font-size: 12px; font-weight: 700;
+    color: #fff;
+    display: none;
+  }
+  .video-wrap.recording .timer { display: block; }
+  .video-wrap .rec-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #ff4d6d; display: inline-block;
+    margin-right: 6px; vertical-align: middle;
+    animation: blink 1s ease-in-out infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .btn {
+    width: 100%; padding: 14px;
+    border: none; border-radius: 10px;
+    font-size: 15px; font-weight: 700;
+    cursor: pointer; margin-bottom: 10px;
+    transition: transform 0.1s, opacity 0.2s;
+    font-family: inherit;
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary {
+    background: linear-gradient(135deg, #6ad8ff, #4a9fff);
+    color: #0a0e1a;
+  }
+  .btn.danger { background: #ff4d6d; color: #fff; }
+  .btn.success { background: #28b463; color: #fff; }
+  .btn.ghost {
+    background: rgba(255,255,255,0.06);
+    color: #e8eef5;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+
+  .status {
+    padding: 14px; border-radius: 10px;
+    text-align: center; margin-bottom: 14px;
+    font-size: 13px;
+  }
+  .status.info { background: rgba(106,216,255,0.1); color: #6ad8ff; border: 1px solid rgba(106,216,255,0.25); }
+  .status.success { background: rgba(40,180,99,0.12); color: #4ade80; border: 1px solid rgba(40,180,99,0.3); }
+  .status.error { background: rgba(255,77,109,0.12); color: #ff8fa0; border: 1px solid rgba(255,77,109,0.3); }
+
+  .foot {
+    margin-top: auto; padding-top: 18px; text-align: center;
+    font-size: 11px; color: rgba(232,238,245,0.4);
+  }
+  .step {
+    color: rgba(106,216,255,0.8); font-size: 11px;
+    margin-bottom: 10px; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="head">
+    <div class="brand">PRIDE · ПРОВЕРКА</div>
+    <h1>Подтверждение личности</h1>
+    <p>Запишите короткий видео-кружок чтобы подтвердить, что счёт принадлежит вам.</p>
+  </div>
+
+  <!-- Текст инструкции от работника -->
+  <div class="card" id="instruction-card" style="display: none;">
+    <div class="label">Что нужно сказать в видео</div>
+    <div class="request-text" id="instruction-text"></div>
+  </div>
+
+  <!-- Видео-окно -->
+  <div class="video-wrap" id="video-wrap">
+    <div class="timer"><span class="rec-dot"></span><span id="timer-text">0:00</span></div>
+    <video id="preview" autoplay muted playsinline></video>
+  </div>
+
+  <div class="step" id="step-label">Шаг 1 из 2 — разрешите доступ к камере</div>
+
+  <!-- Кнопки управления -->
+  <div id="controls">
+    <button class="btn primary" id="btn-start-camera">📷 Включить камеру</button>
+    <button class="btn danger" id="btn-record" style="display: none;">⏺ Записать (10 сек)</button>
+    <button class="btn ghost" id="btn-retry" style="display: none;">↺ Перезаписать</button>
+    <button class="btn success" id="btn-submit" style="display: none;">📤 Отправить</button>
+  </div>
+
+  <!-- Статусы -->
+  <div class="status info" id="status-info" style="display: none;"></div>
+  <div class="status success" id="status-success" style="display: none;"></div>
+  <div class="status error" id="status-error" style="display: none;"></div>
+
+  <div class="foot">
+    PRIDE J.A.R.V.I.S. · защищённая верификация
+  </div>
+</div>
+
+<script>
+  const TOKEN = window.location.pathname.split('/').filter(Boolean).pop();
+  const RECORD_SECONDS = 10;
+
+  const els = {
+    wrap: document.getElementById('video-wrap'),
+    preview: document.getElementById('preview'),
+    timer: document.getElementById('timer-text'),
+    instrCard: document.getElementById('instruction-card'),
+    instrText: document.getElementById('instruction-text'),
+    stepLabel: document.getElementById('step-label'),
+    btnStart: document.getElementById('btn-start-camera'),
+    btnRecord: document.getElementById('btn-record'),
+    btnRetry: document.getElementById('btn-retry'),
+    btnSubmit: document.getElementById('btn-submit'),
+    info: document.getElementById('status-info'),
+    success: document.getElementById('status-success'),
+    error: document.getElementById('status-error'),
+  };
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let recordedBlob = null;
+  let countdown = null;
+
+  function setStatus(kind, msg) {
+    els.info.style.display = 'none';
+    els.success.style.display = 'none';
+    els.error.style.display = 'none';
+    if (!msg) return;
+    if (kind === 'info') { els.info.textContent = msg; els.info.style.display = 'block'; }
+    if (kind === 'success') { els.success.textContent = msg; els.success.style.display = 'block'; }
+    if (kind === 'error') { els.error.textContent = msg; els.error.style.display = 'block'; }
+  }
+
+  // Загружаем инструкцию от работника + статус токена
+  async function loadInstruction() {
+    try {
+      const r = await fetch(`/kuc/${TOKEN}/info`);
+      if (!r.ok) {
+        const txt = await r.text();
+        setStatus('error', 'Ссылка недействительна: ' + txt);
+        document.getElementById('controls').style.display = 'none';
+        return;
+      }
+      const data = await r.json();
+      if (data.request_text) {
+        els.instrText.textContent = data.request_text;
+        els.instrCard.style.display = 'block';
+      }
+      if (data.status === 'approved') {
+        setStatus('success', '✅ Эта проверка уже пройдена и подтверждена.');
+        document.getElementById('controls').style.display = 'none';
+      } else if (data.status === 'rejected') {
+        setStatus('error', '❌ Эта проверка была отклонена. Свяжитесь с менеджером для повторного запроса.');
+        document.getElementById('controls').style.display = 'none';
+      } else if (data.status === 'submitted') {
+        setStatus('info', '⏳ Видео отправлено и ожидает проверки.');
+        document.getElementById('controls').style.display = 'none';
+      }
+    } catch (e) {
+      setStatus('error', 'Ошибка загрузки: ' + e.message);
+    }
+  }
+
+  els.btnStart.addEventListener('click', async () => {
+    try {
+      setStatus(null);
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 640, facingMode: 'user' },
+        audio: true,
+      });
+      els.preview.srcObject = stream;
+      els.btnStart.style.display = 'none';
+      els.btnRecord.style.display = 'block';
+      els.stepLabel.textContent = 'Шаг 2 из 2 — нажмите запись и говорите 10 секунд';
+    } catch (e) {
+      setStatus('error', 'Не удалось включить камеру: ' + e.message + '. Разрешите доступ в настройках браузера.');
+    }
+  });
+
+  els.btnRecord.addEventListener('click', () => {
+    chunks = [];
+    const mimes = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+    let mime = '';
+    for (const m of mimes) { if (MediaRecorder.isTypeSupported(m)) { mime = m; break; } }
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+    recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+    recorder.onstop = () => {
+      els.wrap.classList.remove('recording');
+      els.wrap.classList.add('done');
+      recordedBlob = new Blob(chunks, { type: mime || 'video/webm' });
+      els.preview.srcObject = null;
+      els.preview.src = URL.createObjectURL(recordedBlob);
+      els.preview.muted = false;
+      els.preview.controls = false;
+      els.preview.loop = true;
+      els.btnRecord.style.display = 'none';
+      els.btnRetry.style.display = 'block';
+      els.btnSubmit.style.display = 'block';
+      els.stepLabel.textContent = 'Готово — нажмите «Отправить» если всё хорошо';
+      // Останавливаем камеру (но stream держим для retry)
+    };
+    recorder.start();
+    els.wrap.classList.add('recording');
+    els.wrap.classList.remove('done');
+
+    let elapsed = 0;
+    els.timer.textContent = `0:0${RECORD_SECONDS}`;
+    countdown = setInterval(() => {
+      elapsed += 1;
+      const remain = RECORD_SECONDS - elapsed;
+      els.timer.textContent = `0:${remain < 10 ? '0' : ''}${remain}`;
+      if (remain <= 0) {
+        clearInterval(countdown);
+        if (recorder.state === 'recording') recorder.stop();
+      }
+    }, 1000);
+  });
+
+  els.btnRetry.addEventListener('click', async () => {
+    recordedBlob = null;
+    els.wrap.classList.remove('done');
+    els.btnRetry.style.display = 'none';
+    els.btnSubmit.style.display = 'none';
+    // Перезапускаем preview
+    if (stream) {
+      els.preview.srcObject = stream;
+      els.preview.muted = true;
+      els.preview.controls = false;
+      els.preview.loop = false;
+      els.btnRecord.style.display = 'block';
+      els.stepLabel.textContent = 'Нажмите запись когда готовы';
+    } else {
+      els.btnStart.style.display = 'block';
+    }
+  });
+
+  els.btnSubmit.addEventListener('click', async () => {
+    if (!recordedBlob) return;
+    els.btnSubmit.disabled = true;
+    els.btnRetry.disabled = true;
+    setStatus('info', '📤 Отправка видео...');
+    try {
+      const form = new FormData();
+      form.append('video', recordedBlob, 'kuc.webm');
+      const r = await fetch(`/kuc/${TOKEN}/submit`, { method: 'POST', body: form });
+      if (!r.ok) {
+        const txt = await r.text();
+        setStatus('error', 'Ошибка отправки: ' + txt);
+        els.btnSubmit.disabled = false;
+        els.btnRetry.disabled = false;
+        return;
+      }
+      setStatus('success', '✅ Видео отправлено. Спасибо! Менеджер свяжется с вами после проверки.');
+      els.btnSubmit.style.display = 'none';
+      els.btnRetry.style.display = 'none';
+      els.stepLabel.style.display = 'none';
+      // Останавливаем камеру
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      setStatus('error', 'Ошибка отправки: ' + e.message);
+      els.btnSubmit.disabled = false;
+      els.btnRetry.disabled = false;
+    }
+  });
+
+  // Открыть страницу
+  loadInstruction();
+  // Уведомить бэк что страницу открыли
+  fetch(`/kuc/${TOKEN}/open`, { method: 'POST' }).catch(() => {});
+</script>
+</body>
+</html>

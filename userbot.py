@@ -8637,6 +8637,46 @@ class UserbotService:
                 logger.warning("notify_client_otrabotan %s %s: %s", wc, cid, e)
                 return f"⚠️ notify failed: {e}"
 
+        # ===== KUC (Кружок Удостоверения Клиента) → отправить ссылку клиенту =====
+        # Команда ставится API: POST /api/system/lk/{id}/kuc/request
+        # Формат: __send_kuc_link <work_chat_id> <token>
+        m = re.match(r"^__send_kuc_link\s+(-?\d+)\s+([\w]{6,32})\s*$", text, re.I)
+        if m:
+            wc = int(m.group(1))
+            token = m.group(2)
+            try:
+                kuc = storage.get_kuc_request(token) if hasattr(storage, "get_kuc_request") else None
+                if not kuc:
+                    return f"⚠️ KUC token {token} not found"
+                # Базовый URL
+                import os as _os
+                base_url = _os.environ.get("KUC_BASE_URL") or "https://workchat-bot-production.up.railway.app"
+                url = f"{base_url.rstrip('/')}/kuc/{token}"
+                request_text = kuc.get("request_text") or ""
+                msg = (
+                    f"🛡 <b>Подтверждение принадлежности счёта</b>\n\n"
+                    f"Для безопасности сделки нужно пройти короткую проверку — "
+                    f"запись видео-кружка (займёт 10 секунд).\n\n"
+                )
+                if request_text:
+                    msg += f"<b>В видео нужно сказать:</b>\n<i>{request_text}</i>\n\n"
+                msg += (
+                    f"👉 <b><a href='{url}'>Открыть проверку</a></b>\n\n"
+                    f"<i>Ссылка одноразовая и защищённая. После прохождения "
+                    f"менеджер увидит результат.</i>"
+                )
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(target, msg, parse_mode="html", link_preview=False)
+                try:
+                    await storage.mark_kuc_url_sent(token)
+                except Exception:
+                    pass
+                _e("kuc-link-sent", {"chat_id": wc, "token": token, "droplk_id": kuc.get("droplk_id")}, character="lk", severity="info")
+                return f"✅ KUC link sent chat={wc} token={token[:8]}"
+            except Exception as e:
+                logger.warning("__send_kuc_link %s %s: %s", wc, token, e)
+                return f"⚠️ kuc link send failed: {e}"
+
         # ===== CRM-БОТ → публикация анкеты в Группу 1 ЛК после перевязки =====
         # Команда ставится crm_bot._queue_anketa_post_via_userbot после
         # успешной перевязки. Userbot публикует карточку ЛК в lk_group_id.

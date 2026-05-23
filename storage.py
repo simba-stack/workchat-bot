@@ -231,6 +231,18 @@ def _default_state() -> dict:
         # Текст разделов welcome (для редактирования без перезаписи кода).
         "invite_jobs_text": "",
 
+        # ==== KUC (Кружок Удостоверения Клиента — KYC через одноразовую ссылку) ====
+        # Структура: {token: {
+        #   token, droplk_id, work_chat_id, requested_by, request_text,
+        #   created_at, url_sent_at, used_at, submitted_at,
+        #   status: 'pending' | 'submitted' | 'approved' | 'rejected',
+        #   video_file_path (на Railway Volume), video_size_bytes, video_mime,
+        #   ai_score (0-100, после AI-этапа), ai_comment,
+        #   decision_by, decision_at, decision_note,
+        # }}
+        # Token = uuid4().hex[:24]. Без TTL (живёт пока не approved/rejected).
+        "kuc_requests": {},
+
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3169,6 +3181,143 @@ class Storage:
 
     async def clear_crm_fsm(self, tg_user_id):
         await self.set_crm_fsm(tg_user_id, action=None)
+
+    # =====================================================================
+    # KUC (Кружок Удостоверения Клиента — KYC через одноразовую ссылку)
+    # =====================================================================
+    def list_kuc_requests(self) -> dict:
+        return self.state.get("kuc_requests") or {}
+
+    def get_kuc_request(self, token: str) -> Optional[dict]:
+        return (self.state.get("kuc_requests") or {}).get(str(token))
+
+    def get_kuc_for_droplk(self, droplk_id: str) -> Optional[dict]:
+        """Возвращает последний (активный) КУЦ-запрос для этого ЛК.
+        Активный = status в ('pending', 'submitted'). Если все decided — возвращает последний по created_at."""
+        kucs = self.state.get("kuc_requests") or {}
+        matching = [k for k in kucs.values() if k.get("droplk_id") == str(droplk_id)]
+        if not matching:
+            return None
+        active = [k for k in matching if k.get("status") in ("pending", "submitted")]
+        if active:
+            return sorted(active, key=lambda k: -(k.get("created_at") or 0))[0]
+        return sorted(matching, key=lambda k: -(k.get("created_at") or 0))[0]
+
+    async def create_kuc_request(
+        self, droplk_id: str, work_chat_id: Optional[int],
+        requested_by: str, request_text: str = "",
+    ) -> str:
+        """Создаёт новый KUC-запрос. Возвращает token."""
+        import uuid as _uuid
+        async with _lock:
+            token = _uuid.uuid4().hex[:24]
+            kucs = self.state.setdefault("kuc_requests", {})
+            kucs[token] = {
+                "token": token,
+                "droplk_id": str(droplk_id),
+                "work_chat_id": int(work_chat_id or 0),
+                "requested_by": (requested_by or "").lstrip("@").lower(),
+                "request_text": request_text or "",
+                "created_at": time.time(),
+                "url_sent_at": 0,
+                "used_at": 0,
+                "submitted_at": 0,
+                "status": "pending",
+                "video_file_path": "",
+                "video_size_bytes": 0,
+                "video_mime": "",
+                "ai_score": 0,
+                "ai_comment": "",
+                "decision_by": "",
+                "decision_at": 0,
+                "decision_note": "",
+            }
+            await self._save_unlocked()
+            return token
+
+    async def mark_kuc_url_sent(self, token: str) -> bool:
+        async with _lock:
+            k = (self.state.get("kuc_requests") or {}).get(str(token))
+            if not k:
+                return False
+            k["url_sent_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    async def mark_kuc_opened(self, token: str) -> bool:
+        async with _lock:
+            k = (self.state.get("kuc_requests") or {}).get(str(token))
+            if not k:
+                return False
+            if not k.get("used_at"):
+                k["used_at"] = time.time()
+                await self._save_unlocked()
+            return True
+
+    async def mark_kuc_submitted(
+        self, token: str, video_file_path: str,
+        video_size_bytes: int = 0, video_mime: str = "",
+    ) -> bool:
+        async with _lock:
+            k = (self.state.get("kuc_requests") or {}).get(str(token))
+            if not k:
+                return False
+            k["video_file_path"] = video_file_path or ""
+            k["video_size_bytes"] = int(video_size_bytes or 0)
+            k["video_mime"] = video_mime or ""
+            k["submitted_at"] = time.time()
+            k["status"] = "submitted"
+            await self._save_unlocked()
+            return True
+
+    async def decide_kuc(
+        self, token: str, decision: str, decision_by: str = "",
+        decision_note: str = "",
+    ) -> bool:
+        """decision: 'approved' | 'rejected'"""
+        if decision not in ("approved", "rejected"):
+            return False
+        async with _lock:
+            k = (self.state.get("kuc_requests") or {}).get(str(token))
+            if not k:
+                return False
+            k["status"] = decision
+            k["decision_by"] = (decision_by or "").lstrip("@").lower()
+            k["decision_at"] = time.time()
+            k["decision_note"] = decision_note or ""
+            await self._save_unlocked()
+            return True
+
+    async def set_kuc_ai_result(
+        self, token: str, score: float, comment: str = "",
+    ) -> bool:
+        """Записать результат AI-проверки лица (Этап B — Claude Vision)."""
+        async with _lock:
+            k = (self.state.get("kuc_requests") or {}).get(str(token))
+            if not k:
+                return False
+            k["ai_score"] = float(score or 0)
+            k["ai_comment"] = comment or ""
+            await self._save_unlocked()
+            return True
+
+    def get_work_chat_for_droplk(self, droplk_id: str) -> Optional[int]:
+        """Возвращает work_chat_id (для отправки сообщений клиенту) для любого ЛК.
+        Работает и для crm_drop_lks, и для credit_drop_lks."""
+        lk = self.get_drop_lk_any(droplk_id)
+        if not lk:
+            return None
+        drop_id = lk.get("drop_id") or lk.get("credit_drop_id")
+        if not drop_id:
+            return None
+        drop = self.get_drop_any(drop_id)
+        if not drop:
+            return None
+        cid = drop.get("work_chat_id") or drop.get("chat_id")
+        try:
+            return int(cid) if cid else None
+        except (ValueError, TypeError):
+            return None
 
     # =====================================================================
     # CREDIT (Кредитование) — параллельная инфраструктура, зеркало crm_*

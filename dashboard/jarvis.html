@@ -2640,6 +2640,29 @@
 
   /* Mobile shell CSS lives in jarvis-mobile.html */
 
+  /* ===== KUC (Кружок Удостоверения Клиента) ===== */
+  .btn-kuc {
+    padding: 3px 10px;
+    background: rgba(106,216,255,0.15);
+    color: #6ad8ff;
+    border: 1px solid rgba(106,216,255,0.35);
+    border-radius: 4px;
+    font-size: 10px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .btn-kuc:hover { background: rgba(106,216,255,0.3); }
+  .btn-kuc.pending { background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35); }
+  .btn-kuc.submitted { background: rgba(106,216,255,0.25); color: #6ad8ff; border-color: rgba(106,216,255,0.5); animation: kuc-pulse 1.6s ease-in-out infinite; }
+  .btn-kuc.approved { background: rgba(34,197,94,0.18); color: #4ade80; border-color: rgba(34,197,94,0.45); }
+  .btn-kuc.rejected { background: rgba(239,68,68,0.18); color: #f87171; border-color: rgba(239,68,68,0.45); }
+  @keyframes kuc-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(106,216,255,0.4); }
+    50% { box-shadow: 0 0 0 4px rgba(106,216,255,0); }
+  }
+
   /* ===== Slot badge (нумерация ЛК внутри анкеты) ===== */
   .lk-slot-badge {
     display: inline-flex; align-items: center; gap: 2px;
@@ -5116,6 +5139,15 @@
                   x-text="(lk.drop_number || '')"></span>
             <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 в КРЕДИТ</button>
+            <!-- KUC button -->
+            <template x-if="!kucByDroplk[lk.droplk_id]">
+              <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
+            </template>
+            <template x-if="kucByDroplk[lk.droplk_id]">
+              <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                      @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                      x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+            </template>
             <span style="font-size: 11px; color: var(--text-dim);" x-text="lk.created_at ? new Date(lk.created_at * 1000).toLocaleString('ru-RU') : '—'"></span>
             <span x-show="!lk.scan_count" style="color: var(--text-dim); font-size: 11px;">📷 Документов нет</span>
             <span x-show="(lk.existing_done_banks || []).length"
@@ -5245,6 +5277,14 @@
           <div style="display: flex; gap: 6px; align-items: center;">
             <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 КРЕДИТ</button>
+            <template x-if="!kucByDroplk[lk.droplk_id]">
+              <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            </template>
+            <template x-if="kucByDroplk[lk.droplk_id]">
+              <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                      @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                      x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+            </template>
             <a x-show="lk.tg_pass_link" :href="lk.tg_pass_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 Открыть в TG</a>
             <span x-show="lk.filled" class="role-badge role-accounting" style="margin-left: 6px;">✅ Заполнено</span>
           </div>
@@ -5341,6 +5381,14 @@
           </span>
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+          <template x-if="!kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+          </template>
+          <template x-if="kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                    @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                    x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+          </template>
           <span x-show="lk.sms_stage" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(99,102,241,0.15); color: #6366f1; border-radius: 3px;"
                 x-text="systemStageLabel(lk.sms_stage)"></span>
         </div>
@@ -5395,6 +5443,14 @@
           </span>
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+          <template x-if="!kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+          </template>
+          <template x-if="kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                    @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                    x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+          </template>
           <span x-show="lk.filled" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(40,180,99,0.18); color: #28b463; border-radius: 3px;">✅ заполнено</span>
         </div>
         <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; font-size: 11px;">
@@ -6252,6 +6308,12 @@ function jarvis() {
     creditPasswordsInbox: [],  // 💳 КРЕДИТ | Пароли — inbox с заполнением
     creditManagers: [],        // список менеджеров со статистикой
     creditLoading: false,
+    // === KUC (Кружок Удостоверения Клиента) ===
+    kucByDroplk: {},           // {droplk_id: {token, status, ...}} — текущий KUC для каждого ЛК
+    kucModalOpen: false,
+    kucModalToken: '',
+    kucModalNote: '',
+    kucModalLoading: false,
     systemInstalledLks: [],  // УСТАНОВЛЕННЫЕ ЛК (done + creds + dedik)
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
     systemPeriod: 'all',  // all | day | week | month
@@ -10189,6 +10251,8 @@ function jarvis() {
       } finally {
         this.systemLoading = false;
       }
+      // Параллельно подгружаем KUC статусы — для отображения в карточках
+      try { await this.refreshKuc(); } catch (e) {}
     },
 
     // === Перенос ЛК между отделами (Поставщики ↔ Кредитование) ===
@@ -10252,6 +10316,96 @@ function jarvis() {
       }
     },
 
+    // === KUC (Кружок Удостоверения Клиента) ===
+    async refreshKuc() {
+      try {
+        const r = await fetch('/api/system/kuc/list', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        this.kucByDroplk = j.by_droplk || {};
+      } catch (e) { console.warn('refreshKuc', e); }
+    },
+    async requestKuc(lk) {
+      const droplk_id = lk.droplk_id;
+      const bank = lk.bank || '—';
+      const fio = lk.fio || '—';
+      const defaultText = `Здравствуйте! Скажите ваше ФИО и фразу: «счёт в ${bank} принадлежит мне».`;
+      const message = prompt(
+        `📹 Запросить КУЦ\n\n` +
+        `ЛК: ${bank} / ${fio}\n` +
+        `ID: ${droplk_id}\n\n` +
+        `Текст инструкции клиенту (можно поправить):`,
+        defaultText
+      );
+      if (!message) return;
+      try {
+        const r = await fetch(`/api/system/lk/${droplk_id}/kuc/request`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          alert('Ошибка: ' + txt); return;
+        }
+        const j = await r.json();
+        const copyMsg = `✅ КУЦ запрошен.\n\nКлиент получил ссылку в рабочем чате.\nТокен: ${j.token.slice(0, 12)}...\n\nСкопировать ссылку?`;
+        if (confirm(copyMsg)) {
+          try {
+            await navigator.clipboard.writeText(j.url);
+            alert('Ссылка скопирована в буфер');
+          } catch (e) { alert('Ссылка: ' + j.url); }
+        }
+        await this.refreshKuc();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      }
+    },
+    openKucModal(token) {
+      this.kucModalToken = token;
+      this.kucModalNote = '';
+      this.kucModalOpen = true;
+    },
+    closeKucModal() {
+      this.kucModalOpen = false;
+      this.kucModalToken = '';
+      this.kucModalNote = '';
+    },
+    async decideKuc(decision) {
+      if (!this.kucModalToken) return;
+      if (!confirm(`Точно ${decision === 'approved' ? 'ОДОБРИТЬ' : 'ОТКЛОНИТЬ'} КУЦ?`)) return;
+      this.kucModalLoading = true;
+      try {
+        const r = await fetch(`/api/system/kuc/${this.kucModalToken}/decide`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision, note: this.kucModalNote || '' }),
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          alert('Ошибка: ' + txt);
+          return;
+        }
+        alert(`✅ КУЦ ${decision === 'approved' ? 'одобрен' : 'отклонён'}`);
+        this.closeKucModal();
+        await this.refreshKuc();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.kucModalLoading = false;
+      }
+    },
+    kucStatusBadge(droplk_id) {
+      const k = this.kucByDroplk[droplk_id];
+      if (!k) return null;
+      const s = k.status;
+      if (s === 'pending') return { text: '⏳ ждём кружок', color: '#f59e0b' };
+      if (s === 'submitted') return { text: '📥 кружок получен · проверить', color: '#6ad8ff' };
+      if (s === 'approved') return { text: '✅ КУЦ одобрен', color: '#22c55e' };
+      if (s === 'rejected') return { text: '❌ КУЦ отклонён', color: '#ef4444' };
+      return null;
+    },
+
     // === Кредитование: загрузка данных параллельно с CRM-поставщиками ===
     async refreshCredit() {
       if (this.creditLoading) return;
@@ -10279,6 +10433,7 @@ function jarvis() {
       } finally {
         this.creditLoading = false;
       }
+      try { await this.refreshKuc(); } catch (e) {}
     },
 
     systemStageLabel(stage) {
@@ -11467,6 +11622,60 @@ function jarvis() {
       <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
       <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== KUC MODAL (просмотр видео + approve/reject) ===== -->
+<div x-show="kucModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeKucModal()">
+  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 18px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1;">📹 Проверка КУЦ</h3>
+      <button @click="closeKucModal()" style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+
+    <template x-if="kucModalToken && kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]">
+      <div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">
+          Token: <code x-text="kucModalToken.slice(0, 16) + '...'"></code>
+        </div>
+        <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'pending'"
+             style="padding: 14px; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; margin-bottom: 12px; font-size: 13px; color: #fbbf24;">
+          ⏳ Клиент ещё не записал видео. Ссылка отправлена в его рабочий чат.
+        </div>
+        <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'submitted'">
+          <video :src="'/api/system/kuc/' + kucModalToken + '/video'" controls
+                 style="width: 100%; max-height: 360px; background: #000; border-radius: 8px; margin-bottom: 12px;"></video>
+          <textarea x-model="kucModalNote"
+                    placeholder="Заметка по решению (опционально)…"
+                    style="width: 100%; min-height: 60px; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; margin-bottom: 12px;"></textarea>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn success" :disabled="kucModalLoading" @click="decideKuc('approved')"
+                    style="flex: 1; padding: 12px; background: #22c55e; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">✅ Одобрить</button>
+            <button class="btn danger" :disabled="kucModalLoading" @click="decideKuc('rejected')"
+                    style="flex: 1; padding: 12px; background: #ef4444; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">❌ Отклонить</button>
+          </div>
+        </div>
+        <template x-if="['approved','rejected'].includes(kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status)">
+          <div>
+            <video :src="'/api/system/kuc/' + kucModalToken + '/video'" controls
+                   style="width: 100%; max-height: 360px; background: #000; border-radius: 8px; margin-bottom: 12px;"></video>
+            <div style="padding: 14px; border-radius: 8px; font-size: 13px;"
+                 :style="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'approved'
+                   ? 'background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.3);'
+                   : 'background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'">
+              <div style="font-weight: 700; margin-bottom: 6px;"
+                   x-text="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'approved' ? '✅ ОДОБРЕНО' : '❌ ОТКЛОНЕНО'"></div>
+              <div x-text="'Решил: @' + (kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_by || '—')"></div>
+              <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"
+                   style="margin-top: 6px; font-style: italic;"
+                   x-text="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
   </div>
 </div>
 
