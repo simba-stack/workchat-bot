@@ -6,7 +6,8 @@
 <title>PRIDE Call · Гость</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; background: #0a0e1a;
+  html, body { margin: 0; padding: 0; height: 100%;
+    background: radial-gradient(ellipse at top, #14182c 0%, #0a0e1a 60%);
     color: #e8eef5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
   button { font-family: inherit; }
@@ -30,68 +31,92 @@
   /* === Call screen === */
   .call-shell { display: none; flex-direction: column; height: 100vh; }
   .call-shell.active { display: flex; }
-  .call-header { padding: 10px 16px; background: rgba(0,0,0,0.5); border-bottom: 1px solid rgba(255,255,255,0.06);
+  .call-header { padding: 12px 16px; background: rgba(0,0,0,0.4);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
     display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-  .call-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e;
-    animation: pulse 2s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.5;} }
-  .call-header h2 { margin: 0; font-size: 14px; font-weight: 700; flex: 1;
+  .call-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e;
+    box-shadow: 0 0 8px #22c55e; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+  .call-header h2 { margin: 0; font-size: 15px; font-weight: 700; flex: 1;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .call-header .info { font-size: 11px; color: rgba(255,255,255,0.5); }
+  .call-header .info { font-size: 12px; color: rgba(255,255,255,0.5); }
 
-  /* === Videos grid — адаптивный layout под количество tile'ов === */
-  .videos-grid { flex: 1; padding: 8px; display: grid; gap: 8px; overflow: hidden;
-    grid-template-columns: 1fr; grid-template-rows: 1fr;
-    align-content: stretch; }
-  .videos-grid[data-count="1"] { grid-template-columns: 1fr; }
-  .videos-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
-  .videos-grid[data-count="3"], .videos-grid[data-count="4"] {
-    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-  .videos-grid[data-count="5"], .videos-grid[data-count="6"] {
-    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
-  .videos-grid[data-count="7"], .videos-grid[data-count="8"], .videos-grid[data-count="9"] {
-    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr; }
-  .videos-grid[data-count="10"] {
-    grid-template-columns: 1fr 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr; }
+  /* === Stage === */
+  /* Audio-only mode: круглые аватары компактно по центру (как WhatsApp/Telegram) */
+  .stage { flex: 1; padding: 24px; display: flex; align-items: center; justify-content: center;
+    overflow: auto; }
+  .stage.video-mode { padding: 8px; align-items: stretch; justify-content: stretch; }
 
-  .video-tile { position: relative; background: linear-gradient(135deg, #1a1f30, #0a0e1a);
-    border-radius: 12px; overflow: hidden;
-    border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s;
-    min-height: 0; min-width: 0; }
-  .video-tile.speaking { border-color: #22c55e; box-shadow: 0 0 16px rgba(34,197,94,0.5); }
-  .video-tile video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
-  .video-tile.local video { transform: scaleX(-1); }
-  .video-tile .avatar { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    font-size: 64px; font-weight: 700; color: rgba(255,255,255,0.5);
-    background: linear-gradient(135deg, #1a3a5c, #2a5a8c); }
-  .video-tile.has-video .avatar { display: none; }
-  .video-tile .name { position: absolute; bottom: 10px; left: 10px;
-    background: rgba(0,0,0,0.7); backdrop-filter: blur(6px);
-    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    max-width: calc(100% - 20px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .video-tile .badges { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
-  .video-tile .badge { background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px;
-    font-size: 11px; backdrop-filter: blur(6px); }
-  .video-tile .badge.muted { background: rgba(239,68,68,0.85); }
-  .video-tile .badge.conn-warn { background: rgba(245,158,11,0.85); }
-  .video-tile .badge.conn-fail { background: rgba(239,68,68,0.85); }
-  .video-tile .audio-meter { position: absolute; left: 10px; bottom: 40px; width: 4px; height: 20px;
-    background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
-  .video-tile .audio-meter::after { content:''; display: block; width: 100%; height: 0%;
-    background: #22c55e; transition: height 0.1s; }
+  .avatars-wrap { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; align-items: center;
+    max-width: 900px; }
+
+  .person { display: flex; flex-direction: column; align-items: center; gap: 10px;
+    transition: transform 0.2s; min-width: 120px; }
+  .avatar-circle { position: relative; width: 140px; height: 140px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--ava-bg-from, #4a9fff), var(--ava-bg-to, #6ad8ff));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 56px; font-weight: 700; color: #fff;
+    border: 3px solid transparent;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+    overflow: hidden; }
+  .person.speaking .avatar-circle { border-color: #22c55e;
+    box-shadow: 0 0 0 6px rgba(34,197,94,0.25), 0 8px 24px rgba(0,0,0,0.4);
+    transform: scale(1.04); }
+  .person.muted .avatar-circle::after { content: '🔇'; position: absolute; bottom: 4px; right: 4px;
+    background: #dc2626; width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; border: 2px solid #0a0e1a; }
+  .person.conn-failed .avatar-circle { border-color: #ef4444;
+    box-shadow: 0 0 0 6px rgba(239,68,68,0.2), 0 8px 24px rgba(0,0,0,0.4); }
+  .person.conn-failed .avatar-circle::before { content: '⚠'; position: absolute; top: 4px; right: 4px;
+    background: #dc2626; width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; border: 2px solid #0a0e1a; }
+  .person.conn-warn .avatar-circle::before { content: '⏳'; position: absolute; top: 4px; right: 4px;
+    background: #f59e0b; width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; border: 2px solid #0a0e1a; }
+  .person .name { font-size: 13px; font-weight: 600; max-width: 160px; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .person .status { font-size: 10px; color: rgba(255,255,255,0.5); }
+
+  /* Video tile (когда кто-то включил камеру) */
+  .person video { display: none; }
+  .person.has-video { width: 280px; }
+  .person.has-video .avatar-circle { width: 280px; height: 200px; border-radius: 16px;
+    background: #000; padding: 0; overflow: hidden; }
+  .person.has-video .avatar-circle .avatar-letter { display: none; }
+  .person.has-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .person.has-video.local video { transform: scaleX(-1); }
+
+  /* === Global connection error banner === */
+  .net-banner { display: none; padding: 12px 16px; background: rgba(239,68,68,0.15);
+    border-bottom: 1px solid rgba(239,68,68,0.3); color: #f87171; font-size: 13px;
+    text-align: center; flex-shrink: 0; }
+  .net-banner.show { display: block; }
 
   /* === Controls === */
-  .controls { padding: 14px; display: flex; gap: 10px; justify-content: center; align-items: center;
-    background: rgba(0,0,0,0.6); border-top: 1px solid rgba(255,255,255,0.05); flex-shrink: 0;
+  .controls { padding: 16px; display: flex; gap: 12px; justify-content: center; align-items: center;
+    background: rgba(0,0,0,0.5); border-top: 1px solid rgba(255,255,255,0.05); flex-shrink: 0;
     flex-wrap: wrap; }
-  .ctrl-btn { width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,0.1);
+  .ctrl-btn { width: 54px; height: 54px; border-radius: 50%; background: rgba(255,255,255,0.1);
     border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 20px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; transition: background 0.15s, transform 0.1s; }
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, transform 0.1s; }
   .ctrl-btn:hover { background: rgba(255,255,255,0.18); transform: translateY(-1px); }
   .ctrl-btn.active { background: rgba(245,158,11,0.4); border-color: rgba(245,158,11,0.7); }
   .ctrl-btn.leave { background: #dc2626; border-color: #dc2626; }
   .ctrl-btn.leave:hover { background: #ef4444; }
   .ctrl-status { font-size: 11px; color: rgba(255,255,255,0.5); padding: 0 16px; min-width: 100px; text-align: center; }
+
+  @media (max-width: 600px) {
+    .avatar-circle { width: 100px; height: 100px; font-size: 40px; }
+    .person.has-video { width: 160px; }
+    .person.has-video .avatar-circle { width: 160px; height: 120px; }
+    .ctrl-btn { width: 48px; height: 48px; font-size: 18px; }
+    .ctrl-status { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -118,7 +143,10 @@
     <h2 id="call-title">Звонок</h2>
     <span class="info" id="call-count">0 уч.</span>
   </div>
-  <div class="videos-grid" id="videos-grid" data-count="1"></div>
+  <div class="net-banner" id="net-banner">⚠ Не удаётся установить соединение. Проверь интернет / VPN или перезагрузи страницу.</div>
+  <div class="stage" id="stage">
+    <div class="avatars-wrap" id="avatars-wrap"></div>
+  </div>
   <div class="controls">
     <button class="ctrl-btn" id="ctrl-mic" title="Микрофон">🎙</button>
     <button class="ctrl-btn" id="ctrl-cam" title="Камера">📹</button>
@@ -131,20 +159,29 @@
 <script>
 const ROOM_ID = window.location.pathname.split('/').filter(Boolean).pop();
 
-// === ICE: STUN + бесплатный TURN от openrelayproject (работает через NAT/firewall) ===
-// Если TURN-серверы упали — можно добавить свой (coturn) или взять платный (Twilio/Xirsys).
+// === ICE servers: STUN + несколько TURN серверов разных провайдеров для надёжности ===
+// Если все TURN упадут — соединение может не пробить симметричный NAT.
 const ICE_SERVERS = [
-  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
-  // Публичный TURN — для NAT/firewall traversal
+  // Google STUN
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302",
+           "stun:stun2.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+  // Public TURN от Open Relay Project (Metered) — бесплатные, UDP/TCP, 80/443
   {
     urls: [
       "turn:openrelay.metered.ca:80",
       "turn:openrelay.metered.ca:443",
       "turn:openrelay.metered.ca:443?transport=tcp",
+      "turns:openrelay.metered.ca:443",
     ],
     username: "openrelayproject",
     credential: "openrelayproject",
   },
+];
+
+const PALETTE = [
+  ['#4a9fff', '#6ad8ff'], ['#a855f7', '#d946ef'], ['#22c55e', '#84cc16'],
+  ['#f59e0b', '#fbbf24'], ['#ef4444', '#f87171'], ['#06b6d4', '#22d3ee'],
+  ['#ec4899', '#f472b6'], ['#8b5cf6', '#a78bfa'],
 ];
 
 const els = {
@@ -157,7 +194,9 @@ const els = {
   callNameDisplay: document.getElementById('call-name-display'),
   callTitle: document.getElementById('call-title'),
   callCount: document.getElementById('call-count'),
-  videosGrid: document.getElementById('videos-grid'),
+  stage: document.getElementById('stage'),
+  avatarsWrap: document.getElementById('avatars-wrap'),
+  netBanner: document.getElementById('net-banner'),
   ctrlMic: document.getElementById('ctrl-mic'),
   ctrlCam: document.getElementById('ctrl-cam'),
   ctrlScreen: document.getElementById('ctrl-screen'),
@@ -171,9 +210,10 @@ let screenStream = null;
 let myId = '';
 let myName = '';
 let micEnabled = true;
-let camEnabled = true;
+let camEnabled = false;  // По умолчанию камера выключена — audio-only mode
 let screenSharing = false;
-const peers = {}; // {participantId: {pc, name, videoEl, tileEl}}
+let audioCtx = null;
+const peers = {}; // {participantId: {pc, name, person, remoteStream, audioAnalyser}}
 
 // === Загрузка инфы ===
 async function loadInfo() {
@@ -195,7 +235,6 @@ async function loadInfo() {
   }
 }
 loadInfo();
-
 els.authPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') els.authJoin.click(); });
 
 // === Авторизация ===
@@ -205,7 +244,7 @@ els.authJoin.addEventListener('click', async () => {
   if (!password) { els.authError.textContent = 'Введите пароль'; els.authError.style.display = 'block'; return; }
   els.authError.style.display = 'none';
   els.authJoin.disabled = true;
-  els.authJoin.textContent = '⏳ Запрашиваем доступ…';
+  els.authJoin.textContent = '⏳ Подключаемся…';
   try {
     const r = await fetch(`/api/calls/${ROOM_ID}/join`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -222,27 +261,21 @@ els.authJoin.addEventListener('click', async () => {
     const j = await r.json();
     myId = j.participant_id;
     myName = j.name;
-    // Запрашиваем камеру/мик с качественными audio constraints
+    // По умолчанию только аудио (как WhatsApp call) — камеру можно потом включить
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch (e) {
-      console.warn('Camera failed, trying audio-only:', e);
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      } catch (e2) {
-        console.warn('No mic/cam:', e2);
-        alert('Не удалось получить доступ к камере/микрофону. Войдём без них (только смотреть).');
-        localStream = new MediaStream();
-      }
+      console.warn('No mic:', e);
+      alert('Не удалось получить доступ к микрофону. Войдём только слушать.');
+      localStream = new MediaStream();
     }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     els.authShell.style.display = 'none';
     els.callShell.classList.add('active');
-    addVideoTile(myId, myName, localStream, true);
+    addPerson(myId, myName, true);
+    if (localStream) attachLocalVADetector();
     connectWebSocket();
   } catch (e) {
     els.authError.textContent = 'Ошибка: ' + e.message;
@@ -252,70 +285,66 @@ els.authJoin.addEventListener('click', async () => {
   }
 });
 
-// === WebSocket signaling ===
+// === WebSocket ===
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/ws-guest-call?room_id=${ROOM_ID}&participant_id=${myId}`;
   ws = new WebSocket(url);
   ws.onopen = () => { setStatus('✓ подключён'); };
-  ws.onclose = () => { setStatus('✗ соединение разорвано'); };
+  ws.onclose = () => { setStatus('✗ соединение разорвано'); showNetBanner(true); };
   ws.onerror = (e) => console.warn('WS err:', e);
   ws.onmessage = async (ev) => {
     let msg = null;
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === 'ready') {
-      // Initiator: создаём PC для каждого уже-в-комнате
       for (const p of (msg.peers || [])) {
         await createPeerConnection(p.participant_id, p.name, true);
       }
-      updateGrid();
+      updateCount();
     } else if (msg.type === 'peer-joined') {
-      // Не initiator: новый peer создаст offer сам
       await createPeerConnection(msg.participant.participant_id, msg.participant.name, false);
-      updateGrid();
+      updateCount();
     } else if (msg.type === 'peer-left') {
       closePeer(msg.participant_id);
-      updateGrid();
+      updateCount();
     } else if (msg.type === 'signal') {
       await handleSignal(msg.from, msg.payload);
-    } else if (msg.type === 'pong') {
-      // ok
     }
   };
 }
 
-// === WebRTC peer connection ===
+// === WebRTC ===
 async function createPeerConnection(peerId, peerName, initiator) {
   if (peers[peerId]) return peers[peerId].pc;
+  console.log('[WebRTC] createPeerConnection', peerId, peerName, 'initiator=', initiator);
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: 'all' });
-  peers[peerId] = { pc, name: peerName, videoEl: null, tileEl: null, remoteStream: new MediaStream() };
-  // Создаём tile сразу с placeholder (аватаром) — даже до прихода первого track
-  addVideoTile(peerId, peerName, peers[peerId].remoteStream, false);
+  const remoteStream = new MediaStream();
+  peers[peerId] = { pc, name: peerName, person: null, remoteStream, audioAnalyser: null };
 
-  // Add local tracks (audio first — критично для звука!)
+  // Создаём person сразу (даже до tracks) — чтобы был placeholder
+  addPerson(peerId, peerName, false);
+
+  // Add local tracks
   if (localStream) {
-    for (const tr of localStream.getTracks()) {
-      pc.addTrack(tr, localStream);
-    }
+    for (const tr of localStream.getTracks()) pc.addTrack(tr, localStream);
   }
 
-  // Когда приходят remote tracks — добавляем в remoteStream
   pc.ontrack = (ev) => {
-    const stream = peers[peerId]?.remoteStream;
-    if (!stream) return;
-    if (ev.track && !stream.getTracks().some(t => t.id === ev.track.id)) {
-      stream.addTrack(ev.track);
+    if (ev.track && !remoteStream.getTracks().some(t => t.id === ev.track.id)) {
+      remoteStream.addTrack(ev.track);
     }
-    // Re-bind в видеоэлемент чтобы триггернуть автоплей
-    const v = peers[peerId]?.videoEl;
-    if (v && v.srcObject !== stream) v.srcObject = stream;
-    // Помечаем что появилось видео — скроется аватар-плейсхолдер
-    if (ev.track.kind === 'video' && peers[peerId]?.tileEl) {
-      peers[peerId].tileEl.classList.add('has-video');
+    const p = peers[peerId];
+    if (!p) return;
+    // Audio: создаём <audio> для воспроизведения
+    if (ev.track.kind === 'audio') {
+      ensureAudioPlayback(peerId, remoteStream);
+      ensureVADetector(peerId, remoteStream);
     }
-    // Autoplay-фикс для Safari/строгого autoplay policy
-    if (v) {
-      v.play().catch(() => {});
+    // Video: показываем в person.video
+    if (ev.track.kind === 'video') {
+      if (p.person) p.person.classList.add('has-video');
+      const v = p.person?.querySelector('video');
+      if (v) { v.srcObject = remoteStream; v.play().catch(() => {}); }
     }
   };
 
@@ -326,30 +355,15 @@ async function createPeerConnection(peerId, peerName, initiator) {
     }
   };
 
-  // Tracking connection state — НЕ убиваем peer на 'disconnected' (это временно!)
+  pc.oniceconnectionstatechange = () => {
+    console.log('[WebRTC]', peerId, 'iceState=', pc.iceConnectionState);
+    updateConnBadge(peerId, pc.iceConnectionState);
+  };
   pc.onconnectionstatechange = () => {
-    const st = pc.connectionState;
-    const tile = peers[peerId]?.tileEl;
-    if (!tile) return;
-    // Обновляем badge статуса
-    let warn = tile.querySelector('.badge.conn-warn');
-    let fail = tile.querySelector('.badge.conn-fail');
-    if (warn) warn.remove();
-    if (fail) fail.remove();
-    if (st === 'connecting' || st === 'new') {
-      const b = document.createElement('div'); b.className = 'badge conn-warn'; b.textContent = '⏳';
-      tile.querySelector('.badges').appendChild(b);
-    } else if (st === 'failed') {
-      const b = document.createElement('div'); b.className = 'badge conn-fail'; b.textContent = '⚠';
-      tile.querySelector('.badges').appendChild(b);
-      // Попробуем пересоздать с iceRestart
-      try { restartIce(peerId); } catch (e) { console.warn('iceRestart fail', e); }
-    } else if (st === 'disconnected') {
-      const b = document.createElement('div'); b.className = 'badge conn-warn'; b.textContent = '🔄';
-      tile.querySelector('.badges').appendChild(b);
-      // НЕ закрываем — даём время восстановиться (часто это короткие сетевые лаги)
+    console.log('[WebRTC]', peerId, 'connState=', pc.connectionState);
+    if (pc.connectionState === 'failed') {
+      try { pc.restartIce(); } catch (e) {}
     }
-    // На 'closed' tile удалится через closePeer (когда WS пришлёт peer-left или мы сами вызовем)
   };
 
   if (initiator) {
@@ -361,17 +375,6 @@ async function createPeerConnection(peerId, peerName, initiator) {
     } catch (e) { console.error('createOffer fail:', e); }
   }
   return pc;
-}
-
-async function restartIce(peerId) {
-  const entry = peers[peerId];
-  if (!entry || !entry.pc) return;
-  try {
-    const offer = await entry.pc.createOffer({ iceRestart: true });
-    await entry.pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: 'signal', target: peerId,
-                             payload: { kind: 'offer', sdp: offer } }));
-  } catch (e) { console.warn('iceRestart failed', e); }
 }
 
 async function handleSignal(fromId, payload) {
@@ -390,7 +393,7 @@ async function handleSignal(fromId, payload) {
   } else if (payload.kind === 'answer') {
     await pc.setRemoteDescription(payload.sdp);
   } else if (payload.kind === 'ice') {
-    try { await pc.addIceCandidate(payload.candidate); } catch (e) { /* silent */ }
+    try { await pc.addIceCandidate(payload.candidate); } catch (e) {}
   }
 }
 
@@ -398,62 +401,159 @@ function closePeer(peerId) {
   const p = peers[peerId];
   if (!p) return;
   try { p.pc.close(); } catch (e) {}
-  if (p.tileEl) p.tileEl.remove();
+  if (p.person) p.person.remove();
+  const aud = document.querySelector(`audio[data-peer="${peerId}"]`);
+  if (aud) aud.remove();
   delete peers[peerId];
 }
 
-function updateGrid() {
-  const count = Object.keys(peers).length + 1;  // +1 — я
-  els.callCount.textContent = count + ' уч.';
-  els.videosGrid.dataset.count = String(Math.min(count, 10));
+function updateConnBadge(peerId, state) {
+  const p = peers[peerId];
+  if (!p || !p.person) return;
+  p.person.classList.remove('conn-warn', 'conn-failed');
+  let anyFailed = false;
+  if (state === 'connected' || state === 'completed') {
+    // OK
+  } else if (state === 'checking' || state === 'new') {
+    p.person.classList.add('conn-warn');
+  } else if (state === 'failed') {
+    p.person.classList.add('conn-failed');
+    anyFailed = true;
+  } else if (state === 'disconnected') {
+    p.person.classList.add('conn-warn');
+  }
+  // Если хоть один peer failed — показать баннер
+  let anyFailedGlobal = false;
+  for (const pid in peers) {
+    const st = peers[pid].pc?.iceConnectionState;
+    if (st === 'failed') { anyFailedGlobal = true; break; }
+  }
+  showNetBanner(anyFailedGlobal);
+}
+
+function showNetBanner(show) {
+  els.netBanner.classList.toggle('show', show);
 }
 
 // === UI ===
-function addVideoTile(peerId, peerName, stream, isLocal) {
-  const existing = document.querySelector(`[data-peer="${peerId}"]`);
-  if (existing) {
-    const v = existing.querySelector('video');
-    if (v && stream) v.srcObject = stream;
-    return existing;
-  }
-  const tile = document.createElement('div');
-  tile.className = 'video-tile' + (isLocal ? ' local' : '');
-  tile.dataset.peer = peerId;
+function addPerson(peerId, peerName, isLocal) {
+  const existing = document.querySelector(`[data-person="${peerId}"]`);
+  if (existing) return existing;
+  const person = document.createElement('div');
+  person.className = 'person' + (isLocal ? ' local' : '');
+  person.dataset.person = peerId;
+  // Цвет аватара (детерминированный по peerId)
+  let hash = 0;
+  for (const c of peerId) hash = (hash * 31 + c.charCodeAt(0)) | 0;
+  const [from, to] = PALETTE[Math.abs(hash) % PALETTE.length];
+  person.style.setProperty('--ava-bg-from', from);
+  person.style.setProperty('--ava-bg-to', to);
 
-  // Аватар-плейсхолдер (показывается пока нет video track)
-  const avatar = document.createElement('div');
-  avatar.className = 'avatar';
-  avatar.textContent = (peerName || '?')[0].toUpperCase();
-  tile.appendChild(avatar);
-
+  const circle = document.createElement('div');
+  circle.className = 'avatar-circle';
+  const letter = document.createElement('span');
+  letter.className = 'avatar-letter';
+  letter.textContent = ((peerName || '?')[0] || '?').toUpperCase();
+  circle.appendChild(letter);
+  // Video (внутри circle, скрыт если нет video track)
   const video = document.createElement('video');
   video.autoplay = true;
   video.playsInline = true;
-  video.muted = isLocal;  // mute свой stream (чтобы не было echo)
-  if (stream) video.srcObject = stream;
-  tile.appendChild(video);
+  video.muted = isLocal;
+  circle.appendChild(video);
+  person.appendChild(circle);
 
   const name = document.createElement('div');
   name.className = 'name';
   name.textContent = (isLocal ? '(Вы) ' : '') + (peerName || 'Гость');
-  tile.appendChild(name);
+  person.appendChild(name);
 
-  const badges = document.createElement('div');
-  badges.className = 'badges';
-  tile.appendChild(badges);
-
-  els.videosGrid.appendChild(tile);
-  // Local — сразу has-video, чтобы скрыть аватар
+  els.avatarsWrap.appendChild(person);
+  if (peers[peerId]) peers[peerId].person = person;
+  // Для local: если есть video tracks, сразу show video
   if (isLocal && localStream && localStream.getVideoTracks().length > 0) {
-    tile.classList.add('has-video');
+    person.classList.add('has-video');
+    video.srcObject = localStream;
   }
-  if (peers[peerId]) { peers[peerId].videoEl = video; peers[peerId].tileEl = tile; }
-  return tile;
+  // Если у локального уже включена камера потом — установим
+  return person;
 }
 
-function setStatus(text) {
-  els.ctrlStatus.textContent = text;
+function ensureAudioPlayback(peerId, stream) {
+  // Создаём отдельный <audio> для каждого peer (autoplay) — гарантирует звук
+  let aud = document.querySelector(`audio[data-peer="${peerId}"]`);
+  if (!aud) {
+    aud = document.createElement('audio');
+    aud.dataset.peer = peerId;
+    aud.autoplay = true;
+    aud.playsInline = true;
+    aud.controls = false;
+    aud.style.display = 'none';
+    document.body.appendChild(aud);
+  }
+  aud.srcObject = stream;
+  aud.play().catch(() => {});
 }
+
+function ensureVADetector(peerId, stream) {
+  // Speaking detection через Web Audio API
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  const audioTrack = stream.getAudioTracks()[0];
+  if (!audioTrack) return;
+  const p = peers[peerId];
+  if (!p || p.audioAnalyser) return;
+  try {
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    p.audioAnalyser = analyser;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    function tick() {
+      if (!peers[peerId]) return;
+      analyser.getByteFrequencyData(data);
+      let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i];
+      const avg = sum / data.length;
+      const speaking = avg > 15;
+      p.person?.classList.toggle('speaking', speaking);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  } catch (e) { console.warn('VA detector fail:', e); }
+}
+
+function attachLocalVADetector() {
+  if (!localStream || !audioCtx) return;
+  const audioTrack = localStream.getAudioTracks()[0];
+  if (!audioTrack) return;
+  try {
+    const source = audioCtx.createMediaStreamSource(localStream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const myPerson = document.querySelector(`[data-person="${myId}"]`);
+    function tick() {
+      analyser.getByteFrequencyData(data);
+      let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i];
+      const avg = sum / data.length;
+      const speaking = avg > 15 && micEnabled;
+      myPerson?.classList.toggle('speaking', speaking);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  } catch (e) { console.warn('local VA fail:', e); }
+}
+
+function updateCount() {
+  const count = Object.keys(peers).length + 1;
+  els.callCount.textContent = count + ' уч.';
+}
+
+function setStatus(text) { els.ctrlStatus.textContent = text; }
 
 // === Controls ===
 els.ctrlMic.addEventListener('click', () => {
@@ -461,27 +561,55 @@ els.ctrlMic.addEventListener('click', () => {
   if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
   els.ctrlMic.textContent = micEnabled ? '🎙' : '🔇';
   els.ctrlMic.classList.toggle('active', !micEnabled);
-  updateMyBadges();
+  const myPerson = document.querySelector(`[data-person="${myId}"]`);
+  if (myPerson) myPerson.classList.toggle('muted', !micEnabled);
 });
-els.ctrlCam.addEventListener('click', () => {
-  camEnabled = !camEnabled;
-  if (localStream) localStream.getVideoTracks().forEach(t => t.enabled = camEnabled);
-  els.ctrlCam.textContent = camEnabled ? '📹' : '📷';
-  els.ctrlCam.classList.toggle('active', !camEnabled);
-  const myTile = document.querySelector(`[data-peer="${myId}"]`);
-  if (myTile) myTile.classList.toggle('has-video', camEnabled);
-});
-function updateMyBadges() {
-  const myTile = document.querySelector(`[data-peer="${myId}"]`);
-  if (!myTile) return;
-  const badges = myTile.querySelector('.badges');
-  if (!badges) return;
-  badges.innerHTML = '';
-  if (!micEnabled) {
-    const b = document.createElement('div'); b.className = 'badge muted'; b.textContent = '🔇';
-    badges.appendChild(b);
+
+els.ctrlCam.addEventListener('click', async () => {
+  if (camEnabled) {
+    // Выключаем камеру — убираем video tracks
+    if (localStream) {
+      localStream.getVideoTracks().forEach(t => { t.stop(); localStream.removeTrack(t); });
+    }
+    for (const peerId in peers) {
+      const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) { try { peers[peerId].pc.removeTrack(sender); } catch (e) {} }
+    }
+    const myPerson = document.querySelector(`[data-person="${myId}"]`);
+    if (myPerson) myPerson.classList.remove('has-video');
+    camEnabled = false;
+    els.ctrlCam.classList.remove('active');
+    els.ctrlCam.textContent = '📹';
+    return;
   }
-}
+  try {
+    const camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    const videoTrack = camStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    if (!localStream) localStream = new MediaStream();
+    localStream.addTrack(videoTrack);
+    for (const peerId in peers) {
+      try { peers[peerId].pc.addTrack(videoTrack, localStream); } catch (e) {}
+      // renegotiate (отправим новый offer)
+      try {
+        const offer = await peers[peerId].pc.createOffer();
+        await peers[peerId].pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: 'signal', target: peerId, payload: { kind: 'offer', sdp: offer } }));
+      } catch (e) { console.warn('renegotiate fail', e); }
+    }
+    const myPerson = document.querySelector(`[data-person="${myId}"]`);
+    if (myPerson) {
+      myPerson.classList.add('has-video');
+      const v = myPerson.querySelector('video');
+      if (v) v.srcObject = localStream;
+    }
+    camEnabled = true;
+    els.ctrlCam.classList.add('active');
+    els.ctrlCam.textContent = '📷';
+  } catch (e) {
+    alert('Не удалось включить камеру: ' + e.message);
+  }
+});
 
 els.ctrlScreen.addEventListener('click', async () => {
   if (screenSharing) {
@@ -489,14 +617,14 @@ els.ctrlScreen.addEventListener('click', async () => {
     screenStream = null;
     screenSharing = false;
     els.ctrlScreen.classList.remove('active');
-    if (localStream) {
-      const camTrack = localStream.getVideoTracks()[0];
-      for (const peerId in peers) {
-        const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender && camTrack) await sender.replaceTrack(camTrack);
+    // Если камера есть — вернём её. Иначе уберём video
+    const camTrack = localStream?.getVideoTracks().find(t => t.label !== 'screen-share') || null;
+    for (const peerId in peers) {
+      const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) {
+        if (camTrack) await sender.replaceTrack(camTrack);
+        else { try { peers[peerId].pc.removeTrack(sender); } catch (e) {} }
       }
-      const myTile = document.querySelector(`[data-peer="${myId}"] video`);
-      if (myTile) myTile.srcObject = localStream;
     }
     return;
   }
@@ -505,17 +633,12 @@ els.ctrlScreen.addEventListener('click', async () => {
     screenSharing = true;
     els.ctrlScreen.classList.add('active');
     const screenTrack = screenStream.getVideoTracks()[0];
-    if (screenTrack) {
-      for (const peerId in peers) {
-        const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) await sender.replaceTrack(screenTrack);
-      }
-      const myTile = document.querySelector(`[data-peer="${myId}"] video`);
-      if (myTile) myTile.srcObject = screenStream;
-      const myTileEl = document.querySelector(`[data-peer="${myId}"]`);
-      if (myTileEl) myTileEl.classList.add('has-video');
-      screenTrack.onended = () => els.ctrlScreen.click();
+    for (const peerId in peers) {
+      const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) await sender.replaceTrack(screenTrack);
+      else peers[peerId].pc.addTrack(screenTrack, screenStream);
     }
+    screenTrack.onended = () => els.ctrlScreen.click();
   } catch (e) { console.warn('screen share fail:', e); }
 });
 
@@ -530,7 +653,7 @@ els.ctrlLeave.addEventListener('click', () => {
   document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#888;font-size:16px;text-align:center;padding:20px;">👋 Звонок завершён.<br><br>Можно закрыть вкладку.</div>';
 });
 
-// Keepalive ping
+// Keepalive
 setInterval(() => {
   if (ws && ws.readyState === 1) {
     try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {}
