@@ -5835,7 +5835,7 @@
     </div>
 
     <!-- ====== TG-ЧАТЫ ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'chats'" :class="settingsActiveSection === 'chats' ? 'active' : ''">
+    <div class="settings-card" @click="settingsActiveSection = 'chats'; loadSettings()" :class="settingsActiveSection === 'chats' ? 'active' : ''">
       <div class="settings-card-icon">💬</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Telegram-чаты</div>
@@ -5844,7 +5844,7 @@
     </div>
 
     <!-- ====== AI ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'ai'" :class="settingsActiveSection === 'ai' ? 'active' : ''">
+    <div class="settings-card" @click="settingsActiveSection = 'ai'; loadSettings()" :class="settingsActiveSection === 'ai' ? 'active' : ''">
       <div class="settings-card-icon">🤖</div>
       <div class="settings-card-body">
         <div class="settings-card-title">AI-модель</div>
@@ -5853,7 +5853,7 @@
     </div>
 
     <!-- ====== ПРАЙС ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'pricing'" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
+    <div class="settings-card" @click="settingsActiveSection = 'pricing'; loadSettings()" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
       <div class="settings-card-icon">💸</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Прайс ЛК</div>
@@ -5862,7 +5862,7 @@
     </div>
 
     <!-- ====== INVITE / WELCOME ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'invite'" :class="settingsActiveSection === 'invite' ? 'active' : ''">
+    <div class="settings-card" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
       <div class="settings-card-icon">📨</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Invite-бот</div>
@@ -10743,9 +10743,24 @@ function jarvis() {
         const r = await fetch('/api/settings/all', { credentials: 'include' });
         if (!r.ok) { alert('Нет доступа к настройкам'); return; }
         const j = await r.json();
-        // Простое присваивание
-        Object.assign(this.settingsData, j);
-        // Триггеры — массив → строка с переносами
+        // Индивидуальное присваивание — для гарантированной реактивности Alpine
+        this.settingsData.pricing = j.pricing || {};
+        this.settingsData.ai_enabled = !!j.ai_enabled;
+        this.settingsData.ai_model = j.ai_model || 'claude-haiku-4-5-20251001';
+        this.settingsData.ai_max_tokens = j.ai_max_tokens || 512;
+        this.settingsData.ai_history_limit = j.ai_history_limit || 15;
+        this.settingsData.ai_typing_delay_min = j.ai_typing_delay_min ?? 3;
+        this.settingsData.ai_typing_delay_max = j.ai_typing_delay_max ?? 8;
+        this.settingsData.client_idle_minutes = j.client_idle_minutes || 5;
+        this.settingsData.brain_chat_id = j.brain_chat_id || 0;
+        this.settingsData.lk_group_id = j.lk_group_id || 0;
+        this.settingsData.coordination_chat_id = j.coordination_chat_id || 0;
+        this.settingsData.ideas_chat_id = j.ideas_chat_id || 0;
+        this.settingsData.accounting_group_id = j.accounting_group_id || 0;
+        this.settingsData.welcome_message = j.welcome_message || '';
+        this.settingsData.invite_welcome_gif_id = j.invite_welcome_gif_id || '';
+        this.settingsData.invite_jobs_text = j.invite_jobs_text || '';
+        this.settingsData.cooldown_minutes = j.cooldown_minutes || 60;
         this.settingsTriggersText = (j.trigger_phrases || []).join('\n');
         this.settingsLoaded = true;
       } catch (e) { alert('Ошибка загрузки: ' + e.message); }
