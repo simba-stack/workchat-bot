@@ -252,7 +252,18 @@ Regex:
 - `dashboard/guest_call.html` — новая страница: ввод имени+пароля → getUserMedia → WebRTC mesh с STUN (Google) → видео-tiles, кнопки 🎙/📹/🖥/🚪. Screen share через `getDisplayMedia` + `replaceTrack`.
 - В JARVIS → Owner Panel — кнопка «📞 Создать звонок» (модалка с url+password)
 
-**WebRTC:** P2P mesh без SFU (до 10 человек). STUN: stun.l.google.com. TURN не настроен — может не работать через NAT (тогда добавь TURN сервер в `ICE_SERVERS` в guest_call.html).
+**WebRTC:** P2P mesh без SFU (до 10 человек).
+- STUN: stun.l.google.com
+- **TURN: openrelay.metered.ca** (бесплатный, public, поддерживает 80/443/443+tcp) — нужен для звонков через симметричный NAT. Если openrelay упадёт — заменить на свой coturn или Twilio (см. ICE_SERVERS в guest_call.html).
+- iceRestart автоматический при `pc.connectionState === 'failed'`
+- НЕ закрываем peer на `disconnected` (это часто временное состояние, восстанавливается)
+
+**UI guest_call.html:**
+- Адаптивный grid layout (1/2/3-4/5-6/7-9/10) под количество участников
+- Аватар-плейсхолдер с инициалом пока нет video track (вместо чёрного экрана)
+- Audio constraints: echoCancellation + noiseSuppression + autoGainControl
+- Badges: 🔇 (muted), ⏳ (connecting), 🔄 (disconnected), ⚠ (failed)
+- Speaking indicator (зелёная обводка тайла) — TODO в Этапе B (нужен Web Audio API analyser)
 
 ### 4.1. Нумерация в TG-сообщениях бота (Шаг B) ⏳
 - Нужно пройтись по crm_bot.py — найти ~20 мест где формируются сообщения с упоминанием ЛК (accept_drop, post_to_pass_group, post_anketa и т.д.)

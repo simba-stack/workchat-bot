@@ -8,9 +8,10 @@
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; background: #0a0e1a;
     color: #e8eef5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: 14px; -webkit-font-smoothing: antialiased; }
+    font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
   button { font-family: inherit; }
-  /* Auth screen */
+
+  /* === Auth screen === */
   .auth-shell { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
   .auth-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
     border-radius: 14px; padding: 28px; max-width: 400px; width: 100%; }
@@ -26,37 +27,71 @@
   .auth-error { padding: 12px; background: rgba(239,68,68,0.12); color: #f87171;
     border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
 
-  /* Call screen */
+  /* === Call screen === */
   .call-shell { display: none; flex-direction: column; height: 100vh; }
   .call-shell.active { display: flex; }
-  .call-header { padding: 10px 16px; background: rgba(0,0,0,0.4); border-bottom: 1px solid rgba(255,255,255,0.05);
-    display: flex; align-items: center; gap: 10px; }
-  .call-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-  .call-header h2 { margin: 0; font-size: 14px; font-weight: 700; flex: 1; }
+  .call-header { padding: 10px 16px; background: rgba(0,0,0,0.5); border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .call-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e;
+    animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.5;} }
+  .call-header h2 { margin: 0; font-size: 14px; font-weight: 700; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .call-header .info { font-size: 11px; color: rgba(255,255,255,0.5); }
-  .videos-grid { flex: 1; padding: 12px; display: grid; gap: 10px;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    align-content: start;
-    overflow-y: auto; }
-  .video-tile { position: relative; background: #000; border-radius: 10px; overflow: hidden;
-    border: 2px solid transparent; transition: border-color 0.2s; aspect-ratio: 16/10; }
-  .video-tile.speaking { border-color: #22c55e; box-shadow: 0 0 12px rgba(34,197,94,0.4); }
-  .video-tile video { width: 100%; height: 100%; object-fit: cover; }
+
+  /* === Videos grid — адаптивный layout под количество tile'ов === */
+  .videos-grid { flex: 1; padding: 8px; display: grid; gap: 8px; overflow: hidden;
+    grid-template-columns: 1fr; grid-template-rows: 1fr;
+    align-content: stretch; }
+  .videos-grid[data-count="1"] { grid-template-columns: 1fr; }
+  .videos-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
+  .videos-grid[data-count="3"], .videos-grid[data-count="4"] {
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .videos-grid[data-count="5"], .videos-grid[data-count="6"] {
+    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .videos-grid[data-count="7"], .videos-grid[data-count="8"], .videos-grid[data-count="9"] {
+    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr; }
+  .videos-grid[data-count="10"] {
+    grid-template-columns: 1fr 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr; }
+
+  .video-tile { position: relative; background: linear-gradient(135deg, #1a1f30, #0a0e1a);
+    border-radius: 12px; overflow: hidden;
+    border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s;
+    min-height: 0; min-width: 0; }
+  .video-tile.speaking { border-color: #22c55e; box-shadow: 0 0 16px rgba(34,197,94,0.5); }
+  .video-tile video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
   .video-tile.local video { transform: scaleX(-1); }
-  .video-tile .name { position: absolute; bottom: 8px; left: 8px;
-    background: rgba(0,0,0,0.7); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .video-tile .muted-badge { position: absolute; top: 8px; right: 8px;
-    background: rgba(239,68,68,0.8); padding: 3px 6px; border-radius: 4px; font-size: 11px; }
+  .video-tile .avatar { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 64px; font-weight: 700; color: rgba(255,255,255,0.5);
+    background: linear-gradient(135deg, #1a3a5c, #2a5a8c); }
+  .video-tile.has-video .avatar { display: none; }
+  .video-tile .name { position: absolute; bottom: 10px; left: 10px;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(6px);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    max-width: calc(100% - 20px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .video-tile .badges { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
+  .video-tile .badge { background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px;
+    font-size: 11px; backdrop-filter: blur(6px); }
+  .video-tile .badge.muted { background: rgba(239,68,68,0.85); }
+  .video-tile .badge.conn-warn { background: rgba(245,158,11,0.85); }
+  .video-tile .badge.conn-fail { background: rgba(239,68,68,0.85); }
+  .video-tile .audio-meter { position: absolute; left: 10px; bottom: 40px; width: 4px; height: 20px;
+    background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+  .video-tile .audio-meter::after { content:''; display: block; width: 100%; height: 0%;
+    background: #22c55e; transition: height 0.1s; }
+
+  /* === Controls === */
   .controls { padding: 14px; display: flex; gap: 10px; justify-content: center; align-items: center;
-    background: rgba(0,0,0,0.5); border-top: 1px solid rgba(255,255,255,0.05); }
-  .ctrl-btn { width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 18px; cursor: pointer;
+    background: rgba(0,0,0,0.6); border-top: 1px solid rgba(255,255,255,0.05); flex-shrink: 0;
+    flex-wrap: wrap; }
+  .ctrl-btn { width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 20px; cursor: pointer;
     display: flex; align-items: center; justify-content: center; transition: background 0.15s, transform 0.1s; }
   .ctrl-btn:hover { background: rgba(255,255,255,0.18); transform: translateY(-1px); }
-  .ctrl-btn.active { background: rgba(245,158,11,0.3); border-color: rgba(245,158,11,0.6); }
-  .ctrl-btn.leave { background: rgba(239,68,68,0.7); border-color: rgba(239,68,68,0.9); }
-  .ctrl-btn.leave:hover { background: rgba(239,68,68,0.9); }
-  .ctrl-status { margin-left: 16px; font-size: 11px; color: rgba(255,255,255,0.5); }
+  .ctrl-btn.active { background: rgba(245,158,11,0.4); border-color: rgba(245,158,11,0.7); }
+  .ctrl-btn.leave { background: #dc2626; border-color: #dc2626; }
+  .ctrl-btn.leave:hover { background: #ef4444; }
+  .ctrl-status { font-size: 11px; color: rgba(255,255,255,0.5); padding: 0 16px; min-width: 100px; text-align: center; }
 </style>
 </head>
 <body>
@@ -81,21 +116,36 @@
   <div class="call-header">
     <span class="dot"></span>
     <h2 id="call-title">Звонок</h2>
-    <span class="info" id="call-count">0 участников</span>
+    <span class="info" id="call-count">0 уч.</span>
   </div>
-  <div class="videos-grid" id="videos-grid"></div>
+  <div class="videos-grid" id="videos-grid" data-count="1"></div>
   <div class="controls">
     <button class="ctrl-btn" id="ctrl-mic" title="Микрофон">🎙</button>
     <button class="ctrl-btn" id="ctrl-cam" title="Камера">📹</button>
     <button class="ctrl-btn" id="ctrl-screen" title="Демонстрация экрана">🖥</button>
     <button class="ctrl-btn leave" id="ctrl-leave" title="Выйти">🚪</button>
-    <span class="ctrl-status" id="ctrl-status"></span>
+    <span class="ctrl-status" id="ctrl-status">подключение…</span>
   </div>
 </div>
 
 <script>
 const ROOM_ID = window.location.pathname.split('/').filter(Boolean).pop();
-const ICE_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+
+// === ICE: STUN + бесплатный TURN от openrelayproject (работает через NAT/firewall) ===
+// Если TURN-серверы упали — можно добавить свой (coturn) или взять платный (Twilio/Xirsys).
+const ICE_SERVERS = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  // Публичный TURN — для NAT/firewall traversal
+  {
+    urls: [
+      "turn:openrelay.metered.ca:80",
+      "turn:openrelay.metered.ca:443",
+      "turn:openrelay.metered.ca:443?transport=tcp",
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
 
 const els = {
   authShell: document.getElementById('auth-shell'),
@@ -120,12 +170,12 @@ let localStream = null;
 let screenStream = null;
 let myId = '';
 let myName = '';
-const peers = {}; // {participantId: {pc, name, videoEl}}
 let micEnabled = true;
 let camEnabled = true;
 let screenSharing = false;
+const peers = {}; // {participantId: {pc, name, videoEl, tileEl}}
 
-// === Загрузка инфы о звонке ===
+// === Загрузка инфы ===
 async function loadInfo() {
   try {
     const r = await fetch(`/api/calls/${ROOM_ID}/info`);
@@ -145,6 +195,8 @@ async function loadInfo() {
   }
 }
 loadInfo();
+
+els.authPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') els.authJoin.click(); });
 
 // === Авторизация ===
 els.authJoin.addEventListener('click', async () => {
@@ -170,20 +222,27 @@ els.authJoin.addEventListener('click', async () => {
     const j = await r.json();
     myId = j.participant_id;
     myName = j.name;
-    // Запрашиваем камеру/мик
+    // Запрашиваем камеру/мик с качественными audio constraints
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
     } catch (e) {
-      // Можем войти без камеры/мика
-      try { localStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-      catch (e2) { console.warn('No mic/cam:', e2); localStream = new MediaStream(); }
+      console.warn('Camera failed, trying audio-only:', e);
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch (e2) {
+        console.warn('No mic/cam:', e2);
+        alert('Не удалось получить доступ к камере/микрофону. Войдём без них (только смотреть).');
+        localStream = new MediaStream();
+      }
     }
-    // Переключаемся на call view
     els.authShell.style.display = 'none';
     els.callShell.classList.add('active');
-    // Добавляем свой tile
     addVideoTile(myId, myName, localStream, true);
-    // Подключаемся к WS
     connectWebSocket();
   } catch (e) {
     els.authError.textContent = 'Ошибка: ' + e.message;
@@ -193,76 +252,133 @@ els.authJoin.addEventListener('click', async () => {
   }
 });
 
-// === WebSocket ===
+// === WebSocket signaling ===
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/ws-guest-call?room_id=${ROOM_ID}&participant_id=${myId}`;
   ws = new WebSocket(url);
-  ws.onopen = () => { els.ctrlStatus.textContent = '✓ подключён'; };
-  ws.onclose = () => { els.ctrlStatus.textContent = '✗ соединение разорвано'; };
+  ws.onopen = () => { setStatus('✓ подключён'); };
+  ws.onclose = () => { setStatus('✗ соединение разорвано'); };
   ws.onerror = (e) => console.warn('WS err:', e);
   ws.onmessage = async (ev) => {
     let msg = null;
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === 'ready') {
-      // Создаём peer connections для всех уже в комнате (initiator = я)
+      // Initiator: создаём PC для каждого уже-в-комнате
       for (const p of (msg.peers || [])) {
         await createPeerConnection(p.participant_id, p.name, true);
       }
-      updateCount();
+      updateGrid();
     } else if (msg.type === 'peer-joined') {
-      // Новый peer вошёл — он сам создаст offer (мы НЕ initiator)
+      // Не initiator: новый peer создаст offer сам
       await createPeerConnection(msg.participant.participant_id, msg.participant.name, false);
-      updateCount();
+      updateGrid();
     } else if (msg.type === 'peer-left') {
       closePeer(msg.participant_id);
-      updateCount();
+      updateGrid();
     } else if (msg.type === 'signal') {
       await handleSignal(msg.from, msg.payload);
+    } else if (msg.type === 'pong') {
+      // ok
     }
   };
 }
 
-// === WebRTC ===
+// === WebRTC peer connection ===
 async function createPeerConnection(peerId, peerName, initiator) {
   if (peers[peerId]) return peers[peerId].pc;
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  peers[peerId] = { pc, name: peerName, videoEl: null };
-  // Add local tracks
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: 'all' });
+  peers[peerId] = { pc, name: peerName, videoEl: null, tileEl: null, remoteStream: new MediaStream() };
+  // Создаём tile сразу с placeholder (аватаром) — даже до прихода первого track
+  addVideoTile(peerId, peerName, peers[peerId].remoteStream, false);
+
+  // Add local tracks (audio first — критично для звука!)
   if (localStream) {
-    for (const tr of localStream.getTracks()) pc.addTrack(tr, localStream);
+    for (const tr of localStream.getTracks()) {
+      pc.addTrack(tr, localStream);
+    }
   }
-  // Remote tracks
+
+  // Когда приходят remote tracks — добавляем в remoteStream
   pc.ontrack = (ev) => {
-    const remoteStream = ev.streams[0];
-    if (!remoteStream) return;
-    addVideoTile(peerId, peerName, remoteStream, false);
+    const stream = peers[peerId]?.remoteStream;
+    if (!stream) return;
+    if (ev.track && !stream.getTracks().some(t => t.id === ev.track.id)) {
+      stream.addTrack(ev.track);
+    }
+    // Re-bind в видеоэлемент чтобы триггернуть автоплей
+    const v = peers[peerId]?.videoEl;
+    if (v && v.srcObject !== stream) v.srcObject = stream;
+    // Помечаем что появилось видео — скроется аватар-плейсхолдер
+    if (ev.track.kind === 'video' && peers[peerId]?.tileEl) {
+      peers[peerId].tileEl.classList.add('has-video');
+    }
+    // Autoplay-фикс для Safari/строгого autoplay policy
+    if (v) {
+      v.play().catch(() => {});
+    }
   };
+
   pc.onicecandidate = (ev) => {
     if (ev.candidate && ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: 'signal', target: peerId,
                                payload: { kind: 'ice', candidate: ev.candidate } }));
     }
   };
+
+  // Tracking connection state — НЕ убиваем peer на 'disconnected' (это временно!)
   pc.onconnectionstatechange = () => {
-    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-      closePeer(peerId);
+    const st = pc.connectionState;
+    const tile = peers[peerId]?.tileEl;
+    if (!tile) return;
+    // Обновляем badge статуса
+    let warn = tile.querySelector('.badge.conn-warn');
+    let fail = tile.querySelector('.badge.conn-fail');
+    if (warn) warn.remove();
+    if (fail) fail.remove();
+    if (st === 'connecting' || st === 'new') {
+      const b = document.createElement('div'); b.className = 'badge conn-warn'; b.textContent = '⏳';
+      tile.querySelector('.badges').appendChild(b);
+    } else if (st === 'failed') {
+      const b = document.createElement('div'); b.className = 'badge conn-fail'; b.textContent = '⚠';
+      tile.querySelector('.badges').appendChild(b);
+      // Попробуем пересоздать с iceRestart
+      try { restartIce(peerId); } catch (e) { console.warn('iceRestart fail', e); }
+    } else if (st === 'disconnected') {
+      const b = document.createElement('div'); b.className = 'badge conn-warn'; b.textContent = '🔄';
+      tile.querySelector('.badges').appendChild(b);
+      // НЕ закрываем — даём время восстановиться (часто это короткие сетевые лаги)
     }
+    // На 'closed' tile удалится через closePeer (когда WS пришлёт peer-left или мы сами вызовем)
   };
+
   if (initiator) {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: 'signal', target: peerId,
-                             payload: { kind: 'offer', sdp: offer } }));
+    try {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'signal', target: peerId,
+                               payload: { kind: 'offer', sdp: offer } }));
+    } catch (e) { console.error('createOffer fail:', e); }
   }
   return pc;
+}
+
+async function restartIce(peerId) {
+  const entry = peers[peerId];
+  if (!entry || !entry.pc) return;
+  try {
+    const offer = await entry.pc.createOffer({ iceRestart: true });
+    await entry.pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: 'signal', target: peerId,
+                             payload: { kind: 'offer', sdp: offer } }));
+  } catch (e) { console.warn('iceRestart failed', e); }
 }
 
 async function handleSignal(fromId, payload) {
   let entry = peers[fromId];
   if (!entry) {
-    // Если peer ещё не создан (например, мы initiator и получили answer) — создадим
-    entry = { pc: await createPeerConnection(fromId, 'Гость', false), name: 'Гость', videoEl: null };
+    await createPeerConnection(fromId, 'Гость', false);
+    entry = peers[fromId];
   }
   const pc = entry.pc;
   if (payload.kind === 'offer') {
@@ -282,39 +398,61 @@ function closePeer(peerId) {
   const p = peers[peerId];
   if (!p) return;
   try { p.pc.close(); } catch (e) {}
-  if (p.videoEl) p.videoEl.parentElement?.remove();
+  if (p.tileEl) p.tileEl.remove();
   delete peers[peerId];
 }
 
-function updateCount() {
-  const count = Object.keys(peers).length + 1;  // +1 for me
+function updateGrid() {
+  const count = Object.keys(peers).length + 1;  // +1 — я
   els.callCount.textContent = count + ' уч.';
+  els.videosGrid.dataset.count = String(Math.min(count, 10));
 }
 
-// === UI: видео tile ===
+// === UI ===
 function addVideoTile(peerId, peerName, stream, isLocal) {
-  // Если для peer уже есть tile — обновим stream
   const existing = document.querySelector(`[data-peer="${peerId}"]`);
   if (existing) {
     const v = existing.querySelector('video');
-    if (v) v.srcObject = stream;
-    return;
+    if (v && stream) v.srcObject = stream;
+    return existing;
   }
   const tile = document.createElement('div');
   tile.className = 'video-tile' + (isLocal ? ' local' : '');
   tile.dataset.peer = peerId;
+
+  // Аватар-плейсхолдер (показывается пока нет video track)
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = (peerName || '?')[0].toUpperCase();
+  tile.appendChild(avatar);
+
   const video = document.createElement('video');
   video.autoplay = true;
-  video.playsinline = true;
-  video.muted = isLocal;  // mute свой stream
-  video.srcObject = stream;
+  video.playsInline = true;
+  video.muted = isLocal;  // mute свой stream (чтобы не было echo)
+  if (stream) video.srcObject = stream;
   tile.appendChild(video);
+
   const name = document.createElement('div');
   name.className = 'name';
-  name.textContent = (isLocal ? '(Вы) ' : '') + peerName;
+  name.textContent = (isLocal ? '(Вы) ' : '') + (peerName || 'Гость');
   tile.appendChild(name);
+
+  const badges = document.createElement('div');
+  badges.className = 'badges';
+  tile.appendChild(badges);
+
   els.videosGrid.appendChild(tile);
-  if (peers[peerId]) peers[peerId].videoEl = video;
+  // Local — сразу has-video, чтобы скрыть аватар
+  if (isLocal && localStream && localStream.getVideoTracks().length > 0) {
+    tile.classList.add('has-video');
+  }
+  if (peers[peerId]) { peers[peerId].videoEl = video; peers[peerId].tileEl = tile; }
+  return tile;
+}
+
+function setStatus(text) {
+  els.ctrlStatus.textContent = text;
 }
 
 // === Controls ===
@@ -323,28 +461,40 @@ els.ctrlMic.addEventListener('click', () => {
   if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
   els.ctrlMic.textContent = micEnabled ? '🎙' : '🔇';
   els.ctrlMic.classList.toggle('active', !micEnabled);
+  updateMyBadges();
 });
 els.ctrlCam.addEventListener('click', () => {
   camEnabled = !camEnabled;
   if (localStream) localStream.getVideoTracks().forEach(t => t.enabled = camEnabled);
   els.ctrlCam.textContent = camEnabled ? '📹' : '📷';
   els.ctrlCam.classList.toggle('active', !camEnabled);
+  const myTile = document.querySelector(`[data-peer="${myId}"]`);
+  if (myTile) myTile.classList.toggle('has-video', camEnabled);
 });
+function updateMyBadges() {
+  const myTile = document.querySelector(`[data-peer="${myId}"]`);
+  if (!myTile) return;
+  const badges = myTile.querySelector('.badges');
+  if (!badges) return;
+  badges.innerHTML = '';
+  if (!micEnabled) {
+    const b = document.createElement('div'); b.className = 'badge muted'; b.textContent = '🔇';
+    badges.appendChild(b);
+  }
+}
+
 els.ctrlScreen.addEventListener('click', async () => {
   if (screenSharing) {
-    // Stop screen, восстанавливаем камеру
     if (screenStream) screenStream.getTracks().forEach(t => t.stop());
     screenStream = null;
     screenSharing = false;
     els.ctrlScreen.classList.remove('active');
-    // Восстанавливаем видеотрек камеры во всех peer connections
     if (localStream) {
       const camTrack = localStream.getVideoTracks()[0];
       for (const peerId in peers) {
         const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
         if (sender && camTrack) await sender.replaceTrack(camTrack);
       }
-      // Обновим свой preview tile
       const myTile = document.querySelector(`[data-peer="${myId}"] video`);
       if (myTile) myTile.srcObject = localStream;
     }
@@ -360,16 +510,15 @@ els.ctrlScreen.addEventListener('click', async () => {
         const sender = peers[peerId].pc.getSenders().find(s => s.track?.kind === 'video');
         if (sender) await sender.replaceTrack(screenTrack);
       }
-      // Обновим свой preview
       const myTile = document.querySelector(`[data-peer="${myId}"] video`);
       if (myTile) myTile.srcObject = screenStream;
-      // Когда юзер прекращает шарить через UI браузера — выключаем
+      const myTileEl = document.querySelector(`[data-peer="${myId}"]`);
+      if (myTileEl) myTileEl.classList.add('has-video');
       screenTrack.onended = () => els.ctrlScreen.click();
     }
-  } catch (e) {
-    console.warn('screen share fail:', e);
-  }
+  } catch (e) { console.warn('screen share fail:', e); }
 });
+
 els.ctrlLeave.addEventListener('click', () => {
   if (ws && ws.readyState === 1) {
     try { ws.send(JSON.stringify({ type: 'leave' })); } catch (e) {}
@@ -378,15 +527,15 @@ els.ctrlLeave.addEventListener('click', () => {
   for (const pid in peers) closePeer(pid);
   if (localStream) localStream.getTracks().forEach(t => t.stop());
   if (screenStream) screenStream.getTracks().forEach(t => t.stop());
-  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#888;font-size:16px;">👋 Звонок завершён. Можно закрыть вкладку.</div>';
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#888;font-size:16px;text-align:center;padding:20px;">👋 Звонок завершён.<br><br>Можно закрыть вкладку.</div>';
 });
 
-// Ping каждые 30с чтобы WebSocket не отвалился
+// Keepalive ping
 setInterval(() => {
   if (ws && ws.readyState === 1) {
     try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {}
   }
-}, 30000);
+}, 25000);
 </script>
 </body>
 </html>
