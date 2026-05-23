@@ -171,18 +171,40 @@ Regex:
 - Нужно пройтись по crm_bot.py — найти ~20 мест где формируются сообщения с упоминанием ЛК (accept_drop, post_to_pass_group, post_anketa и т.д.)
 - Добавить `#slot_number/slot_total` в формат
 
-### 4.2. КРЕДИТОВАНИЕ — Этап 2 (routing-методы) ⏳
-**Цель:** чтобы юристы могли через CRM-бота заполнять анкеты в credit-чатах, как поставщики в своих.
+### 4.2. КРЕДИТОВАНИЕ — Этап 2 (routing-методы) ✅
+**Сделано:** auto-detect по префиксу ID (cdrp/clk → credit, остальное → crm).
 
-**Подход:** добавить в `storage.py` маршрутизирующие методы:
-- `add_drop_for_chat(chat_id, ...)` → routes to `add_crm_drop` or `add_credit_drop`
-- `get_drop_for_chat(...)`, `list_drops_for_chat(...)`, `update_drop_for_chat(...)`
-- Аналогично для drop_lks, sms_history, fsm
-- Внутри метода проверка `if self.is_credit_chat(chat_id): ...`
+**storage.py** — добавлены методы:
+- `get_drop_any(drop_id)`, `get_drop_lk_any(droplk_id)` — read
+- `list_drop_lks_any(drop_id=None)` — без drop_id возвращает оба склеенно
+- `update_drop_any(drop_id, **fields)`, `update_drop_lk_any(droplk_id, **fields)`
+- `delete_drop_lk_any(droplk_id)`, `append_drop_sms_any(droplk_id, code, time_str)`
+- Helpers для credit: `delete_credit_drop_lk`, `append_credit_sms`
 
-Затем в `crm_bot.py` заменить ~15-20 вызовов `crm_storage.add_crm_drop(...)` → `add_drop_for_chat(...)`. Handler'ы и FSM-state классы НЕ дублируем — те же.
+**crm_bot.py** — 121 вызов заменён глобально:
+- `crm_storage.get_crm_drop(` → `get_drop_any(`
+- `crm_storage.get_crm_drop_lk(` → `get_drop_lk_any(`
+- `crm_storage.list_crm_drop_lks(` → `list_drop_lks_any(`
+- `crm_storage.update_crm_drop(` → `update_drop_any(`
+- `crm_storage.update_crm_drop_lk(` → `update_drop_lk_any(`
+- `crm_storage.delete_crm_drop_lk(` → `delete_drop_lk_any(`
+- `crm_storage.append_crm_sms(` → `append_drop_sms_any(`
 
-**Важно:** не сломать существующий код поставщиков. Делать поэтапно, каждый Edit ≤30 строк.
+**Что теперь работает в credit-чатах:**
+- ✅ Все callback'и принимающие drop_id/droplk_id: `acceptdrop`, `declinedrop`, `dropdone`, `dropproblem`, `lkview`, `lkdelete`, `filldrop`, `smsadv`, `cliready`, `cligivecode` и т.д. — теперь корректно работают если ID начинается с `cdrp`/`clk`
+- ✅ FillForm FSM (заполнение паролей юристом) пишет в credit_drop_lks
+- ✅ SMSForm FSM пишет sms_history в credit_drop_lks
+- ✅ Перенос ЛК с поставщика на юриста (Этап 1.9) + полная работа юриста с перенесённым ЛК через бота
+
+### 4.3. КРЕДИТОВАНИЕ — Этап 3 (create новых credit_drop через бот) ⏳
+**Не сделано:** `add_crm_drop` остаётся завязан на owner_id (партнёра-поставщика).
+
+Чтобы юрист мог создать **новую** анкету через бота прямо в credit-чате (а не только импорт через перенос) — нужно:
+- Развилка в `cb_newdrop` (новая анкета) и DropForm FSM: если `is_credit_chat(message.chat.id)` → `add_credit_drop(...)` (требует manager_username вместо owner_id)
+- Альтернатива: новые отдельные callback'и `cnewdrop:` / `cnewlk:` (с префиксом `c`) → отдельные FSM-handler'ы для credit
+- ~200-300 строк, делать аккуратно
+
+Для **миграции существующих** ЛК уже сейчас работает кнопка «→ 💳 в КРЕДИТ» в JARVIS (Этап 1.9).
 
 ### 4.3. Operational редизайн (отложен)
 - Toolbar с фильтрами (поиск ФИО/#заявки, chips банков, метод оплаты, время)

@@ -3425,6 +3425,95 @@ class Storage:
     async def clear_credit_fsm(self, tg_user_id):
         await self.set_credit_fsm(tg_user_id, action=None)
 
+    async def delete_credit_drop_lk(self, droplk_id) -> bool:
+        async with _lock:
+            lks = self.state.get("credit_drop_lks") or {}
+            if str(droplk_id) in lks:
+                lk = lks[str(droplk_id)]
+                # Отвязываем от анкеты
+                cdrop_id = lk.get("credit_drop_id")
+                if cdrop_id:
+                    drop = (self.state.get("credit_drops") or {}).get(cdrop_id)
+                    if drop and droplk_id in (drop.get("lk_card_ids") or []):
+                        try: drop["lk_card_ids"].remove(droplk_id)
+                        except ValueError: pass
+                del lks[str(droplk_id)]
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def append_credit_sms(self, droplk_id, code, time_str=""):
+        async with _lock:
+            lk = (self.state.get("credit_drop_lks") or {}).get(str(droplk_id))
+            if not lk:
+                return False
+            sms = lk.setdefault("sms_history", [])
+            sms.append({"code": code, "time": time_str or time.strftime("%d.%m.%Y %H:%M")})
+            await self._save_unlocked()
+            return True
+
+    # =====================================================================
+    # AUTO-ROUTING (любой track по префиксу ID — для совместимости handler'ов)
+    # =====================================================================
+    # Префиксы:
+    #   crm_drops:     'd' + 4 цифры       (например 'd0042')
+    #   credit_drops:  'cdrp' + 5 цифр     (например 'cdrp00001')
+    #   crm_drop_lks:  'lk' + цифры         (например 'lk0123')
+    #   credit_drop_lks: 'clk' + 5 цифр    (например 'clk00001')
+    # auto-detect по префиксу: cdrp/clk → credit, остальное → crm.
+
+    def get_drop_any(self, drop_id) -> Optional[dict]:
+        s = str(drop_id or "")
+        if s.startswith("cdrp"):
+            return self.get_credit_drop(s)
+        return self.get_crm_drop(s)
+
+    def get_drop_lk_any(self, droplk_id) -> Optional[dict]:
+        s = str(droplk_id or "")
+        if s.startswith("clk"):
+            return self.get_credit_drop_lk(s)
+        return self.get_crm_drop_lk(s)
+
+    def list_drop_lks_any(self, drop_id=None) -> dict:
+        if drop_id is None:
+            # Без фильтра — оба склеенно (для глобальных сводок)
+            out = {}
+            out.update(self.state.get("crm_drop_lks") or {})
+            out.update(self.state.get("credit_drop_lks") or {})
+            return out
+        s = str(drop_id)
+        if s.startswith("cdrp"):
+            return self.list_credit_drop_lks(credit_drop_id=s)
+        return self.list_crm_drop_lks(drop_id=s)
+
+    async def update_drop_any(self, drop_id, **fields) -> bool:
+        s = str(drop_id or "")
+        if s.startswith("cdrp"):
+            return await self.update_credit_drop(s, **fields)
+        return await self.update_crm_drop(s, **fields)
+
+    async def update_drop_lk_any(self, droplk_id, **fields) -> bool:
+        s = str(droplk_id or "")
+        if s.startswith("clk"):
+            return await self.update_credit_drop_lk(s, **fields)
+        return await self.update_crm_drop_lk(s, **fields)
+
+    async def delete_drop_lk_any(self, droplk_id) -> bool:
+        s = str(droplk_id or "")
+        if s.startswith("clk"):
+            return await self.delete_credit_drop_lk(s)
+        return await self.delete_crm_drop_lk(s)
+
+    async def append_drop_sms_any(self, droplk_id, code, time_str=""):
+        s = str(droplk_id or "")
+        if s.startswith("clk"):
+            return await self.append_credit_sms(s, code, time_str)
+        return await self.append_crm_sms(s, code, time_str)
+
+    def get_drop_lks_for_drop_any(self, drop_id) -> dict:
+        """Алиас list_drop_lks_any — для семантической ясности в handler'ах."""
+        return self.list_drop_lks_any(drop_id)
+
     # =====================================================================
     # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
     # =====================================================================
