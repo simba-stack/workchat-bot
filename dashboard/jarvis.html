@@ -2640,6 +2640,44 @@
 
   /* Mobile shell CSS lives in jarvis-mobile.html */
 
+  /* ===== Slot badge (нумерация ЛК внутри анкеты) ===== */
+  .lk-slot-badge {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 2px 8px;
+    background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(99,102,241,0.12));
+    color: #c7d2fe;
+    border: 1px solid rgba(99,102,241,0.4);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .lk-slot-badge.credit {
+    background: linear-gradient(135deg, rgba(34,197,94,0.25), rgba(34,197,94,0.12));
+    color: #bbf7d0;
+    border-color: rgba(34,197,94,0.4);
+  }
+  .lk-slot-drop {
+    color: rgba(255,255,255,0.4);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+  }
+  .btn-move-track {
+    padding: 3px 10px;
+    background: rgba(99,102,241,0.15);
+    color: #c7d2fe;
+    border: 1px solid rgba(99,102,241,0.35);
+    border-radius: 4px;
+    font-size: 10px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.15s;
+  }
+  .btn-move-track:hover { background: rgba(99,102,241,0.35); }
+  .btn-move-track.to-supplier { background: rgba(245,158,11,0.15); color: #fde68a; border-color: rgba(245,158,11,0.35); }
+  .btn-move-track.to-supplier:hover { background: rgba(245,158,11,0.35); }
+
   /* ===== Voice Call: TG-style banner + floating window ===== */
   /* Top banner — компактная полоса над вкладками когда в эфире */
   .voice-call-banner {
@@ -5071,6 +5109,13 @@
         <!-- Шапка с фото-индикатором + supplier -->
         <div class="crm-card-head">
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <span class="lk-slot-badge" x-show="lk.slot_number"
+                  :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
+                  x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
+            <span class="lk-slot-drop" x-show="lk.drop_number"
+                  x-text="(lk.drop_number || '')"></span>
+            <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
+                    title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 в КРЕДИТ</button>
             <span style="font-size: 11px; color: var(--text-dim);" x-text="lk.created_at ? new Date(lk.created_at * 1000).toLocaleString('ru-RU') : '—'"></span>
             <span x-show="!lk.scan_count" style="color: var(--text-dim); font-size: 11px;">📷 Документов нет</span>
             <span x-show="(lk.existing_done_banks || []).length"
@@ -5185,13 +5230,21 @@
       <div class="crm-card password" :class="lk.filled ? 'filled' : ''">
         <div class="crm-card-head">
           <div>
-            <span style="font-size: 15px;">🔐 ЛК <b style="color: var(--hud-primary);" x-text="lk.bank"></b> · <span x-text="lk.fio"></span></span>
+            <span style="display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+              <span class="lk-slot-badge" x-show="lk.slot_number"
+                    :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
+                    x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
+              <span style="font-size: 15px;">🔐 ЛК <b style="color: var(--hud-primary);" x-text="lk.bank"></b> · <span x-text="lk.fio"></span></span>
+            </span>
             <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">
               поставщик: <code x-text="lk.supplier ? '@' + lk.supplier : '—'"></code>
               · <code x-text="lk.droplk_id"></code>
+              <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 6px;" x-text="lk.drop_number"></span>
             </div>
           </div>
-          <div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
+                    title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 КРЕДИТ</button>
             <a x-show="lk.tg_pass_link" :href="lk.tg_pass_link" target="_blank" class="btn" style="padding: 4px 12px; font-size: 11px;">📲 Открыть в TG</a>
             <span x-show="lk.filled" class="role-badge role-accounting" style="margin-left: 6px;">✅ Заполнено</span>
           </div>
@@ -5278,10 +5331,16 @@
     <template x-for="lk in creditPendingLks" :key="lk.droplk_id">
       <div class="crm-card" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span class="lk-slot-badge credit" x-show="lk.slot_number"
+                :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
+                x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
           <span style="font-size: 14px;">💳 <b style="color: #6366f1;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
           <span style="font-size: 11px; color: var(--text-dim);">
             юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+            <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
+          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+                  title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <span x-show="lk.sms_stage" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(99,102,241,0.15); color: #6366f1; border-radius: 3px;"
                 x-text="systemStageLabel(lk.sms_stage)"></span>
         </div>
@@ -5326,10 +5385,16 @@
     <template x-for="lk in creditPasswordsInbox" :key="lk.droplk_id">
       <div class="crm-card password" :class="lk.filled ? 'filled' : ''" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span class="lk-slot-badge credit" x-show="lk.slot_number"
+                :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
+                x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
           <span style="font-size: 14px;">🔐 <b style="color: #6366f1;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
           <span style="font-size: 11px; color: var(--text-dim);">
             юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+            <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
+          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+                  title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <span x-show="lk.filled" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(40,180,99,0.18); color: #28b463; border-radius: 3px;">✅ заполнено</span>
         </div>
         <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; font-size: 11px;">
@@ -10123,6 +10188,67 @@ function jarvis() {
         console.error('refreshSystem error', e);
       } finally {
         this.systemLoading = false;
+      }
+    },
+
+    // === Перенос ЛК между отделами (Поставщики ↔ Кредитование) ===
+    async moveLkTrack(lk, target) {
+      // target: 'credit' (из CRM в Кредит) | 'supplier' (из Кредита в CRM)
+      const droplk_id = lk.droplk_id;
+      const bank = lk.bank || '—';
+      const fio = lk.fio || '—';
+      let manager_username = '';
+      let owner_id = '';
+      if (target === 'credit') {
+        manager_username = prompt(
+          `Перенос ЛК → 💳 КРЕДИТОВАНИЕ\n\n` +
+          `Карточка: ${bank} / ${fio}\n` +
+          `ID: ${droplk_id}\n\n` +
+          `Юрист (username без @), к кому перейдёт ЛК:`,
+          ''
+        );
+        if (!manager_username) return;
+        manager_username = manager_username.trim().replace(/^@/, '').toLowerCase();
+        if (!manager_username) return;
+      } else if (target === 'supplier') {
+        owner_id = prompt(
+          `Перенос ЛК → 🤝 ПОСТАВЩИКИ\n\n` +
+          `Карточка: ${bank} / ${fio}\n` +
+          `ID: ${droplk_id}\n\n` +
+          `ID поставщика (owner_id) — оставь пустым чтобы создать draft:`,
+          ''
+        );
+        if (owner_id === null) return;  // отмена
+        owner_id = (owner_id || '').trim();
+      }
+      const confirmText = target === 'credit'
+        ? `Точно переносим ЛК ${bank}/${fio} в КРЕДИТ к @${manager_username}?\n\nИсходная карточка будет удалена.`
+        : `Точно переносим ЛК ${bank}/${fio} в ПОСТАВЩИКИ?\n\nИсходная карточка будет удалена.`;
+      if (!confirm(confirmText)) return;
+      try {
+        const url = target === 'credit'
+          ? `/api/system/lk/${droplk_id}/move_to_credit`
+          : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
+        const body = target === 'credit' ? { manager_username } : { owner_id };
+        const r = await fetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          alert('Ошибка переноса: ' + txt);
+          return;
+        }
+        const j = await r.json();
+        const newId = j.new_credit_droplk_id || j.new_droplk_id || '?';
+        alert(`✅ Перенесено.\nНовый ID: ${newId}`);
+        // Обновляем оба источника
+        if (this.refreshSystem) await this.refreshSystem();
+        if (this.refreshCredit) await this.refreshCredit();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
       }
     },
 

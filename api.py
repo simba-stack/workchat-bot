@@ -952,6 +952,21 @@ async def api_manager_session_disconnect(request: Request, _: None = Depends(_au
 
 # ============== SYSTEM DEPARTMENT (SMS / ДОСТУПЫ / ПАРОЛИ) ==============
 
+def _compute_lk_slot(drop: dict, droplk_id: str) -> tuple:
+    """Возвращает (slot_number, slot_total) — порядковый номер ЛК внутри анкеты.
+    slot_number = 1..N (индекс в drop.lk_card_ids + 1), 0 если не найден.
+    slot_total = N (всего ЛК в анкете). Применимо и для crm_drops, и для credit_drops.
+    """
+    try:
+        siblings = (drop or {}).get("lk_card_ids") or []
+        total = len(siblings)
+        if droplk_id in siblings:
+            return (siblings.index(droplk_id) + 1, total)
+        return (0, total)
+    except Exception:
+        return (0, 0)
+
+
 @app.get("/api/system/pending_lk")
 async def api_system_pending_lk(
     period: Optional[str] = None,  # 'day' | 'week' | 'month' | None
@@ -1065,6 +1080,11 @@ async def api_system_pending_lk(
             "value": lk.get("value") or "",
             "ded_login": lk.get("ded_login") or "",
             "created_at": lk.get("created_at") or 0,
+            # Нумерация для UI
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "supplier",
+            "drop_number": drop.get("drop_id") or "",
         })
     # Фильтр по периоду (если задан)
     if period:
@@ -1407,6 +1427,11 @@ async def api_system_passwords_inbox(_: None = Depends(_auth)):
             "tg_pass_link": tg_pass_link,
             "updated_at": lk.get("updated_at") or 0,
             "created_at": lk.get("created_at") or 0,
+            # Нумерация для UI
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "supplier",
+            "drop_number": drop.get("drop_id") or "",
         })
     # Заполненные в конец, заполняемые первыми
     out.sort(key=lambda x: (x.get("filled"), -(x.get("created_at") or 0)))
@@ -1464,6 +1489,11 @@ async def api_system_credit_pending_lk(_: None = Depends(_auth)):
             "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
             "created_at": lk.get("created_at") or 0,
             "updated_at": lk.get("updated_at") or 0,
+            # Нумерация для UI
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "credit",
+            "drop_number": drop.get("drop_id") or "",
         })
     # Свежие сверху (новые сообщения = новые msg_id ~ created_at)
     out.sort(key=lambda x: -(x.get("created_at") or 0))
@@ -1515,6 +1545,11 @@ async def api_system_credit_passwords_inbox(_: None = Depends(_auth)):
             "filled": filled_creds and filled_dedik,
             "updated_at": lk.get("updated_at") or 0,
             "created_at": lk.get("created_at") or 0,
+            # Нумерация для UI
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "credit",
+            "drop_number": drop.get("drop_id") or "",
         })
     out.sort(key=lambda x: -(x.get("created_at") or 0))
     return {"ok": True, "items": out, "count": len(out)}
@@ -1549,6 +1584,79 @@ async def api_system_credit_managers(_: None = Depends(_auth)):
         })
     out.sort(key=lambda x: -(x.get("last_active_ts") or 0))
     return {"ok": True, "items": out, "count": len(out)}
+
+
+# =====================================================================
+# MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
+# =====================================================================
+
+@app.post("/api/system/lk/{droplk_id}/move_to_credit")
+async def api_system_lk_move_to_credit(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Переносит ЛК поставщика в КРЕДИТОВАНИЕ.
+    Body: { "manager_username": "ivan" } — менеджер-юрист, к кому перейдёт ЛК.
+    Доступно только owner/manager роли."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        body = {}
+    manager_username = (body.get("manager_username") or "").strip().lstrip("@").lower()
+    if not manager_username:
+        raise HTTPException(400, "manager_username required")
+    if not hasattr(storage, "move_crm_lk_to_credit"):
+        raise HTTPException(500, "move_crm_lk_to_credit not available — обновите storage.py")
+    try:
+        # Регистрируем менеджера если впервые
+        await storage.register_credit_manager(username=manager_username)
+        new_id = await storage.move_crm_lk_to_credit(droplk_id, manager_username=manager_username)
+        if not new_id:
+            raise HTTPException(404, f"ЛК {droplk_id} не найден в crm_drop_lks")
+        try:
+            event_bus.emit_event("lk-moved-to-credit", {
+                "from_droplk_id": droplk_id, "to_credit_droplk_id": new_id,
+                "manager": manager_username, "moved_by": me.get("username") or "",
+            }, severity="info")
+        except Exception:
+            pass
+        return {"ok": True, "new_credit_droplk_id": new_id, "manager": manager_username}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("move_to_credit failed: %s", e)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/system/credit_lk/{credit_droplk_id}/move_to_supplier")
+async def api_system_credit_lk_move_to_supplier(credit_droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Переносит ЛК из КРЕДИТОВАНИЯ обратно в crm_drop_lks (к поставщику).
+    Body (опционально): { "owner_id": "owner-uuid" }. Если не указано — создастся draft."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        body = {}
+    owner_id = (body.get("owner_id") or "").strip() or None
+    if not hasattr(storage, "move_credit_lk_to_crm"):
+        raise HTTPException(500, "move_credit_lk_to_crm not available — обновите storage.py")
+    try:
+        new_id = await storage.move_credit_lk_to_crm(credit_droplk_id, owner_id=owner_id)
+        if not new_id:
+            raise HTTPException(404, f"ЛК {credit_droplk_id} не найден в credit_drop_lks")
+        try:
+            event_bus.emit_event("lk-moved-to-supplier", {
+                "from_credit_droplk_id": credit_droplk_id, "to_droplk_id": new_id,
+                "owner_id": owner_id, "moved_by": me.get("username") or "",
+            }, severity="info")
+        except Exception:
+            pass
+        return {"ok": True, "new_droplk_id": new_id, "owner_id": owner_id or ""}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("move_to_supplier failed: %s", e)
+        raise HTTPException(500, str(e))
 
 
 @app.post("/api/system/lk/{droplk_id}/sms_action")

@@ -3426,6 +3426,159 @@ class Storage:
         await self.set_credit_fsm(tg_user_id, action=None)
 
     # =====================================================================
+    # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
+    # =====================================================================
+    async def move_crm_lk_to_credit(
+        self, droplk_id: str, manager_username: str,
+    ) -> Optional[str]:
+        """Переносит ЛК из crm_drop_lks → credit_drop_lks.
+        Если у анкеты остаются ещё ЛК — она НЕ удаляется.
+        Если это последний ЛК анкеты — анкета тоже переезжает.
+        Возвращает новый credit_droplk_id или None.
+        """
+        async with _lock:
+            crm_lks = self.state.get("crm_drop_lks") or {}
+            crm_drops = self.state.get("crm_drops") or {}
+            lk = crm_lks.get(str(droplk_id))
+            if not lk:
+                return None
+            old_drop_id = lk.get("drop_id")
+            old_drop = crm_drops.get(old_drop_id, {}) if old_drop_id else {}
+
+            # 1) Создаём (или находим) credit_drop под этого менеджера + этого FIO
+            credit_drops = self.state.setdefault("credit_drops", {})
+            credit_lks = self.state.setdefault("credit_drop_lks", {})
+            mgr_lower = (manager_username or "").lstrip("@").lower()
+            fio = (old_drop.get("fio") or "").strip()
+            existing_cdrop_id = None
+            for cdid, cdrop in credit_drops.items():
+                if (cdrop.get("manager_username") or "") == mgr_lower and (
+                    (cdrop.get("fio") or "").strip() == fio
+                ):
+                    existing_cdrop_id = cdid
+                    break
+            if existing_cdrop_id:
+                cdrop_id = existing_cdrop_id
+            else:
+                seq = (self.state.get("credit_drops_seq") or 0) + 1
+                self.state["credit_drops_seq"] = seq
+                cdrop_id = f"cdrp{seq:05d}"
+                credit_drops[cdrop_id] = {
+                    "drop_id": cdrop_id,
+                    "chat_id": old_drop.get("chat_id") or "",
+                    "manager_username": mgr_lower,
+                    "fio": fio,
+                    "about": old_drop.get("about") or "",
+                    "scan_file_ids": list(old_drop.get("scan_file_ids") or []),
+                    "status": old_drop.get("status") or "draft",
+                    "created_at": time.time(),
+                    "lk_card_ids": [],
+                    "_moved_from_crm_drop": old_drop_id or "",
+                }
+                await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
+
+            # 2) Создаём credit_droplk с теми же данными
+            seq_lk = (self.state.get("credit_drop_lks_seq") or 0) + 1
+            self.state["credit_drop_lks_seq"] = seq_lk
+            new_clk_id = f"clk{seq_lk:05d}"
+            credit_lks[new_clk_id] = {
+                **{k: v for k, v in lk.items() if k != "drop_id"},
+                "droplk_id": new_clk_id,
+                "credit_drop_id": cdrop_id,
+                "manager_username": mgr_lower,
+                "_moved_from_crm_lk": str(droplk_id),
+                "_moved_at": time.time(),
+                "updated_at": time.time(),
+            }
+            credit_drops[cdrop_id].setdefault("lk_card_ids", []).append(new_clk_id)
+            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
+
+            # 3) Удаляем ЛК из crm_drop_lks
+            del crm_lks[str(droplk_id)]
+            # Убираем из drop.lk_card_ids
+            if old_drop and old_drop.get("lk_card_ids"):
+                try:
+                    old_drop["lk_card_ids"].remove(str(droplk_id))
+                except ValueError:
+                    pass
+            # Если у crm_drop не осталось ЛК — пометим как пустой (не удаляем для истории)
+            if old_drop and not old_drop.get("lk_card_ids"):
+                old_drop["status"] = "moved_to_credit"
+
+            await self._save_unlocked()
+            return new_clk_id
+
+    async def move_credit_lk_to_crm(
+        self, credit_droplk_id: str, owner_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Переносит ЛК из credit_drop_lks → crm_drop_lks. Зеркало move_crm_lk_to_credit.
+        owner_id — куда переносить (если None и есть crm_drop с тем же FIO — туда; иначе создаст draft).
+        """
+        async with _lock:
+            credit_lks = self.state.get("credit_drop_lks") or {}
+            credit_drops = self.state.get("credit_drops") or {}
+            lk = credit_lks.get(str(credit_droplk_id))
+            if not lk:
+                return None
+            old_cdrop_id = lk.get("credit_drop_id")
+            old_cdrop = credit_drops.get(old_cdrop_id, {}) if old_cdrop_id else {}
+
+            crm_drops = self.state.setdefault("crm_drops", {})
+            crm_lks = self.state.setdefault("crm_drop_lks", {})
+            fio = (old_cdrop.get("fio") or "").strip()
+            # Ищем подходящий crm_drop по owner_id + FIO
+            target_drop_id = None
+            for did, drop in crm_drops.items():
+                if owner_id and drop.get("owner_id") != owner_id:
+                    continue
+                if (drop.get("fio") or "").strip() == fio:
+                    target_drop_id = did
+                    break
+            if not target_drop_id:
+                # Создаём новый draft crm_drop
+                seq = (self.state.get("crm_drops_seq") or 0) + 1
+                self.state["crm_drops_seq"] = seq
+                target_drop_id = f"drp{seq:05d}"
+                crm_drops[target_drop_id] = {
+                    "drop_id": target_drop_id,
+                    "owner_id": owner_id or "",
+                    "chat_id": old_cdrop.get("chat_id") or "",
+                    "fio": fio, "about": old_cdrop.get("about") or "",
+                    "scan_file_ids": list(old_cdrop.get("scan_file_ids") or []),
+                    "status": old_cdrop.get("status") or "draft",
+                    "created_at": time.time(), "lk_card_ids": [],
+                    "_moved_from_credit_drop": old_cdrop_id or "",
+                }
+
+            # Создаём новый crm_drop_lk
+            seq_lk = (self.state.get("crm_drop_lks_seq") or 0) + 1
+            self.state["crm_drop_lks_seq"] = seq_lk
+            new_lk_id = f"lk{seq_lk:05d}"
+            crm_lks[new_lk_id] = {
+                **{k: v for k, v in lk.items() if k != "credit_drop_id" and k != "manager_username"},
+                "droplk_id": new_lk_id,
+                "drop_id": target_drop_id,
+                "owner_id": owner_id or "",
+                "_moved_from_credit_lk": str(credit_droplk_id),
+                "_moved_at": time.time(),
+                "updated_at": time.time(),
+            }
+            crm_drops[target_drop_id].setdefault("lk_card_ids", []).append(new_lk_id)
+
+            # Удаляем credit_drop_lk
+            del credit_lks[str(credit_droplk_id)]
+            if old_cdrop and old_cdrop.get("lk_card_ids"):
+                try:
+                    old_cdrop["lk_card_ids"].remove(str(credit_droplk_id))
+                except ValueError:
+                    pass
+            if old_cdrop and not old_cdrop.get("lk_card_ids"):
+                old_cdrop["status"] = "moved_to_supplier"
+
+            await self._save_unlocked()
+            return new_lk_id
+
+    # =====================================================================
     # OPERATIONAL / EXCHANGE REQUESTS (фикс заявок на обмен)
     # =====================================================================
     def list_exchange_requests(self, status: Optional[str] = None) -> dict:
