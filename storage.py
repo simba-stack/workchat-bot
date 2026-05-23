@@ -3514,6 +3514,61 @@ class Storage:
         """Алиас list_drop_lks_any — для семантической ясности в handler'ах."""
         return self.list_drop_lks_any(drop_id)
 
+    # === Write-routing (для create операций) ===
+    async def add_drop_for_chat(
+        self, chat_id, fio: str = "",
+        owner_id: Optional[str] = None,
+        manager_username: Optional[str] = None,
+        work_chat_id: Optional[int] = None,
+        about: str = "", scan_file_ids: Optional[list] = None,
+    ):
+        """Создаёт дроп. Routing по chat_id:
+          - is_credit_chat(chat_id) → add_credit_drop (manager_username из credit_chats если не передан)
+          - иначе → add_crm_drop (owner_id обязателен)
+        Возвращает drop_id (формат `d000X` для crm или `cdrpXXXXX` для credit).
+        """
+        if self.is_credit_chat(chat_id):
+            mgr = manager_username
+            if not mgr:
+                entry = self.get_credit_chat(chat_id) or {}
+                mgr = entry.get("manager_username") or ""
+            if not mgr:
+                # Централизованная группа без явного менеджера — fallback "system"
+                mgr = "system"
+            return await self.add_credit_drop(
+                chat_id=chat_id, manager_username=mgr, fio=fio,
+                about=about, scan_file_ids=scan_file_ids,
+            )
+        # CRM (поставщики)
+        if not owner_id:
+            raise ValueError("owner_id required for CRM drop (non-credit chat)")
+        return await self.add_crm_drop(
+            owner_id=owner_id, fio=fio, work_chat_id=work_chat_id,
+        )
+
+    async def add_drop_lk_for_drop(
+        self, drop_id: str, bank: str = "", value: str = "", deal: str = "",
+        owner_id: Optional[str] = None,
+    ):
+        """Создаёт ЛК банка под анкетой. Routing по префиксу drop_id.
+        Для CRM подтягивает owner_id из дропа (если не передан).
+        Для credit подтягивает manager_username из credit_drop."""
+        s = str(drop_id or "")
+        if s.startswith("cdrp"):
+            drop = self.get_credit_drop(s) or {}
+            mgr = drop.get("manager_username") or ""
+            return await self.add_credit_drop_lk(
+                credit_drop_id=s, manager_username=mgr,
+                bank=bank, value=value, deal=deal,
+            )
+        # CRM: add_crm_drop_lk(drop_id, owner_id, bank, value)
+        if not owner_id:
+            drop = self.get_crm_drop(s) or {}
+            owner_id = drop.get("owner_id") or ""
+        return await self.add_crm_drop_lk(
+            drop_id=s, owner_id=owner_id, bank=bank, value=value,
+        )
+
     # =====================================================================
     # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
     # =====================================================================

@@ -196,15 +196,33 @@ Regex:
 - ✅ SMSForm FSM пишет sms_history в credit_drop_lks
 - ✅ Перенос ЛК с поставщика на юриста (Этап 1.9) + полная работа юриста с перенесённым ЛК через бота
 
-### 4.3. КРЕДИТОВАНИЕ — Этап 3 (create новых credit_drop через бот) ⏳
-**Не сделано:** `add_crm_drop` остаётся завязан на owner_id (партнёра-поставщика).
+### 4.3. КРЕДИТОВАНИЕ — Этап 3 (create новых credit_drop через бот) ✅
+**Сделано:** юрист в credit-чате может создавать новые анкеты через CRM-бота, они идут в `credit_drops`.
 
-Чтобы юрист мог создать **новую** анкету через бота прямо в credit-чате (а не только импорт через перенос) — нужно:
-- Развилка в `cb_newdrop` (новая анкета) и DropForm FSM: если `is_credit_chat(message.chat.id)` → `add_credit_drop(...)` (требует manager_username вместо owner_id)
-- Альтернатива: новые отдельные callback'и `cnewdrop:` / `cnewlk:` (с префиксом `c`) → отдельные FSM-handler'ы для credit
-- ~200-300 строк, делать аккуратно
+**Подход:** новый отдельный callback `cnewdrop:<manager>` + развилка в существующих handlers (НЕ дублируя FSM-state классы — DropForm используется для обоих).
 
-Для **миграции существующих** ЛК уже сейчас работает кнопка «→ 💳 в КРЕДИТ» в JARVIS (Этап 1.9).
+**storage.py — write-routing методы:**
+- `add_drop_for_chat(chat_id, fio, owner_id=None, manager_username=None, work_chat_id=None, ...)` — выбирает между `add_crm_drop` и `add_credit_drop` по `is_credit_chat(chat_id)`
+- `add_drop_lk_for_drop(drop_id, bank, value, deal, owner_id=None)` — routing по префиксу drop_id (`cdrp` → credit). Для CRM сам подтягивает `owner_id` из дропа
+
+**crm_bot.py:**
+- `cmd_clients` — развилка: если `is_credit_chat(message.chat.id)` → `_show_credit_clients(message, manager)` (показывает `credit_drops` менеджера + кнопку «➕ Новая анкета (кредит)»)
+- Новый `_show_credit_clients(message, manager_username)` — параллель `_show_clients`
+- Новый callback `@router.callback_query(F.data.startswith("cnewdrop:"))` → `cb_credit_newdrop` — запускает DropForm FSM с `track="credit"` в FSM data
+- `handle_fio` — теперь читает `track` из FSM data и вызывает `add_drop_for_chat(...)` который сам роутит
+- 2 вызова `add_crm_drop_lk` → `add_drop_lk_for_drop` (через replace_all)
+
+**Flow юриста (как работает):**
+1. Зарегистрировать credit-чат: «Ассистент возьми этот чат под кредитование - менеджер @ник» (Этап 1.fix)
+2. В credit-чате: `/clients` → видит свой список (пока пустой) + кнопку «➕ Новая анкета (кредит)»
+3. Жмёт кнопку → вводит ФИО → создаётся `credit_drop` с префиксом `cdrp00001`
+4. Дальше — точно как у поставщиков (через единые FSM-классы) — заполнение сканов, добавление ЛК, паролей, SMS-флоу
+5. Все callback'и (`acceptdrop`, `lkview`, `filldrop`, `smsadv` и т.д.) — работают для credit благодаря routing-методам Этапа 2
+
+**Что НЕ изменено в существующем flow поставщиков:**
+- `cb_newdrop` остался с owner_id (просто добавлен `track="crm"` в FSM data)
+- `_show_clients` без изменений
+- DropForm/LKForm/FillForm/SMSForm — те же FSM-классы для обоих треков
 
 ### 4.3. Operational редизайн (отложен)
 - Toolbar с фильтрами (поиск ФИО/#заявки, chips банков, метод оплаты, время)

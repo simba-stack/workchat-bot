@@ -1284,6 +1284,21 @@ async def cmd_credit_chat_capture(message: Message, matched=None):
 
 @router.message(Command("clients"))
 async def cmd_clients(message: Message):
+    # === CREDIT branch: если чат закреплён за кредитованием — другой flow ===
+    if message.chat.type != "private" and crm_storage.is_credit_chat(message.chat.id):
+        await _safe_delete(message.bot, message.chat.id, message.message_id)
+        credit_chat = crm_storage.get_credit_chat(message.chat.id) or {}
+        manager = credit_chat.get("manager_username") or ""
+        if not manager:
+            await ephemeral(
+                message,
+                "❌ Чат помечен как кредитный, но менеджер не назначен.\n"
+                "Выполни заново: «Ассистент возьми этот чат под кредитование - менеджер @ник»"
+            )
+            return
+        await _show_credit_clients(message, manager)
+        return
+    # === CRM branch (оригинал — поставщики) ===
     if message.chat.type == "private":
         if not await _require_pride(message):
             return
@@ -1308,6 +1323,29 @@ async def cmd_clients(message: Message):
             await ephemeral(message, "❌ Партнёр группы не найден.")
             return
     await _show_clients(message, owner)
+
+
+async def _show_credit_clients(message: Message, manager_username: str):
+    """Аналог _show_clients для credit-чатов. Показывает credit_drops + кнопку «Новая анкета»."""
+    drops = crm_storage.list_credit_drops(manager_username=manager_username)
+    order = {"accepted": 0, "pending": 1, "draft": 2, "done": 3, "brak": 4}
+    sorted_drops = sorted(
+        drops.values(),
+        key=lambda d: (order.get(d.get("status"), 99), -float(d.get("created_at") or 0)),
+    )
+    kb_rows = []
+    for d in sorted_drops:
+        emoji = _drop_status_emoji(d.get("status", "draft"))
+        label = f"{emoji} {d.get('fio', '—')[:40]}"
+        kb_rows.append([InlineKeyboardButton(text=label, callback_data=f"drop:{d['drop_id']}")])
+    if not kb_rows:
+        kb_rows.append([InlineKeyboardButton(text="⚠️ Анкет пока нет", callback_data="noop")])
+    # Особый callback для credit-create: cnewdrop:<manager_username>
+    kb_rows.append([InlineKeyboardButton(text="➕ Новая анкета (кредит)", callback_data=f"cnewdrop:{manager_username}")])
+    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
+    text = f"💳 <b>Кредитные анкеты юриста @{manager_username}:</b>"
+    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    await message.reply(text, reply_markup=markup)
 
 
 async def _show_clients(message: Message, owner: dict, edit_msg_id: Optional[int] = None):
@@ -1411,6 +1449,7 @@ async def cb_newdrop(call: CallbackQuery, state: FSMContext):
         owner_id=owner_id,
         work_chat_id=call.message.chat.id if call.message.chat.type != "private" else None,
         menu_msg_id=call.message.message_id,
+        track="crm",  # маркер CRM-track для handle_fio
     )
     try:
         await call.message.edit_text(
@@ -1425,6 +1464,42 @@ async def cb_newdrop(call: CallbackQuery, state: FSMContext):
         await call.message.reply("Введите ФИО клиента:")
 
 
+@router.callback_query(F.data.startswith("cnewdrop:"))
+async def cb_credit_newdrop(call: CallbackQuery, state: FSMContext):
+    """CREDIT-флоу: создание новой кредитной анкеты юристом.
+    Callback format: cnewdrop:<manager_username>
+    Проверка прав: вызывающий должен быть админом workchat-bot ИЛИ работником,
+    ИЛИ его username совпадает с manager_username из credit_chat."""
+    manager_username = (call.data.split(":", 1)[1] or "").lstrip("@").lower()
+    if not manager_username:
+        await call.answer("manager_username не задан", show_alert=True)
+        return
+    # Проверяем что чат — credit
+    if not crm_storage.is_credit_chat(call.message.chat.id):
+        await call.answer("Этот чат не помечен как кредитный", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(DropForm.waiting_fio)
+    await state.update_data(
+        manager_username=manager_username,
+        work_chat_id=call.message.chat.id,
+        menu_msg_id=call.message.message_id,
+        track="credit",  # маркер CREDIT-track для handle_fio
+    )
+    try:
+        await call.message.edit_text(
+            f"<b>💳 ➕ Новая кредитная анкета</b>\n"
+            f"<i>юрист: @{manager_username}</i>\n\n"
+            f"Введите <b>ФИО</b> клиента полностью.\n\n"
+            f"<i>⚠ Бот реагирует на ваше следующее сообщение.</i>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data="cancel"),
+            ]]),
+        )
+    except TelegramBadRequest:
+        await call.message.reply("Введите ФИО клиента (кредит):")
+
+
 @router.message(DropForm.waiting_fio, F.text & ~F.text.startswith("/"))
 async def handle_fio(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -1432,14 +1507,28 @@ async def handle_fio(message: Message, state: FSMContext):
     if len(fio) < 5 or len(fio) > 100:
         await ephemeral(message, "❌ ФИО слишком короткое или длинное (5-100 символов)")
         return
+    track = data.get("track", "crm")  # 'crm' (default) | 'credit'
     owner_id = data.get("owner_id")
-    if not owner_id:
-        await message.reply("❌ Сессия истекла, начни заново через /clients")
-        await state.clear()
-        return
-    drop_id = await crm_storage.add_crm_drop(
-        owner_id=owner_id, fio=fio,
-        work_chat_id=data.get("work_chat_id"),
+    manager_username = data.get("manager_username")
+    work_chat_id = data.get("work_chat_id")
+    # Sanity check по track'у
+    if track == "credit":
+        if not manager_username:
+            await message.reply("❌ Сессия истекла (credit), начни заново через /clients")
+            await state.clear()
+            return
+    else:
+        if not owner_id:
+            await message.reply("❌ Сессия истекла, начни заново через /clients")
+            await state.clear()
+            return
+    # Routing через storage.add_drop_for_chat (выберет add_crm_drop или add_credit_drop)
+    drop_id = await crm_storage.add_drop_for_chat(
+        chat_id=work_chat_id or message.chat.id,
+        fio=fio,
+        owner_id=owner_id,
+        manager_username=manager_username,
+        work_chat_id=work_chat_id,
     )
     drop = crm_storage.get_drop_any(drop_id)
     await _safe_delete(message.bot, message.chat.id, message.message_id)
@@ -2160,7 +2249,7 @@ async def handle_lk_mail(message: Message, state: FSMContext):
         return "" if s == "-" else s
 
     # Создаём droplk с пустым value (заполняем поля напрямую через update)
-    droplk_id = await crm_storage.add_crm_drop_lk(
+    droplk_id = await crm_storage.add_drop_lk_for_drop(
         drop_id=drop_id, owner_id=drop["owner_id"], bank=bank, value="",
     )
     saved = await crm_storage.update_drop_lk_any(
@@ -2203,7 +2292,7 @@ async def handle_lk_value(message: Message, state: FSMContext):
         await message.reply("❌ Сессия истекла")
         await state.clear()
         return
-    droplk_id = await crm_storage.add_crm_drop_lk(
+    droplk_id = await crm_storage.add_drop_lk_for_drop(
         drop_id=drop_id, owner_id=drop["owner_id"],
         bank=bank, value=value,
     )
