@@ -402,6 +402,18 @@ class Storage:
                 self.state["admins"].append(config.ADMIN_ID)
             await self._save_unlocked()
 
+    async def save(self):
+        """Публичный thread-safe save (для API endpoints которые меняют state напрямую)."""
+        async with _lock:
+            await self._save_unlocked()
+
+    async def set_state_fields(self, **fields):
+        """Помощник: одной операцией обновить несколько полей в state + save."""
+        async with _lock:
+            for k, v in fields.items():
+                self.state[k] = v
+            await self._save_unlocked()
+
     async def _save_unlocked(self):
         try:
             tmp = self.path + ".tmp"

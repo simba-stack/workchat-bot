@@ -1829,6 +1829,159 @@ async def kuc_list(_: None = Depends(_auth)):
 
 
 # =====================================================================
+# SETTINGS UI — управление настройками из JARVIS (без бота)
+# =====================================================================
+def _require_owner_or_manager(me: dict):
+    role = (me.get("role") or "").lower()
+    if role not in ("owner", "manager"):
+        raise HTTPException(403, "owner or manager only")
+
+
+@app.get("/api/settings/all")
+async def settings_get_all(me: dict = Depends(_get_me)):
+    """Возвращает все настройки одним вызовом — для дашборда."""
+    _require_owner_or_manager(me)
+    storage.reload_sync()
+    return {
+        "ok": True,
+        # Прайс
+        "pricing": storage.list_pricing() or {},
+        # AI
+        "ai_enabled": bool(storage.state.get("ai_enabled")),
+        "ai_model": storage.get_ai_model() or "",
+        "ai_max_tokens": int(storage.state.get("ai_max_tokens") or 512),
+        "ai_history_limit": int(storage.state.get("ai_history_limit") or 15),
+        "ai_typing_delay_min": float(storage.state.get("ai_typing_delay_min") or 3),
+        "ai_typing_delay_max": float(storage.state.get("ai_typing_delay_max") or 8),
+        "client_idle_minutes": int(storage.state.get("client_idle_minutes") or 5),
+        # TG-чаты
+        "brain_chat_id": int(storage.state.get("brain_chat_id") or 0),
+        "lk_group_id": int(storage.state.get("lk_group_id") or 0),
+        "coordination_chat_id": int(storage.state.get("coordination_chat_id") or 0),
+        "ideas_chat_id": int(storage.state.get("ideas_chat_id") or 0) if hasattr(storage, "get_ideas_chat_id") else 0,
+        "accounting_group_id": int(storage.state.get("accounting_group_id") or 0),
+        # Invite-бот
+        "welcome_message": storage.get_welcome() or "",
+        "invite_welcome_gif_id": storage.get_invite_welcome_gif() if hasattr(storage, "get_invite_welcome_gif") else "",
+        "invite_jobs_text": storage.get_invite_jobs_text() if hasattr(storage, "get_invite_jobs_text") else "",
+        "invite_premium_emoji": storage.get_invite_premium_emoji() if hasattr(storage, "get_invite_premium_emoji") else {},
+        # Default triggers + workers (для базовых настроек)
+        "trigger_phrases": list(storage.state.get("trigger_phrases") or []),
+        "cooldown_minutes": int(storage.state.get("cooldown_minutes") or 60),
+    }
+
+
+# --- Прайс ЛК ---
+@app.post("/api/settings/pricing/set")
+async def settings_set_pricing(request: Request, me: dict = Depends(_get_me)):
+    """Body: {bank: str, price: number}. Удалить — price=0."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    bank = (body.get("bank") or "").strip().upper()
+    price = float(body.get("price") or 0)
+    if not bank:
+        raise HTTPException(400, "bank required")
+    await storage.set_pricing(bank, price)
+    return {"ok": True, "bank": bank, "price": price}
+
+
+@app.post("/api/settings/pricing/delete")
+async def settings_delete_pricing(request: Request, me: dict = Depends(_get_me)):
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    bank = (body.get("bank") or "").strip().upper()
+    if not bank:
+        raise HTTPException(400, "bank required")
+    pr = storage.state.setdefault("pricing", {})
+    if bank in pr:
+        del pr[bank]
+        await storage.save()
+    return {"ok": True, "bank": bank}
+
+
+# --- AI настройки ---
+@app.post("/api/settings/ai/update")
+async def settings_update_ai(request: Request, me: dict = Depends(_get_me)):
+    """Body: {ai_enabled?, ai_model?, ai_max_tokens?, ai_history_limit?,
+             ai_typing_delay_min?, ai_typing_delay_max?, client_idle_minutes?}"""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    if "ai_enabled" in body:
+        await storage.set_ai_enabled(bool(body["ai_enabled"]))
+    if "ai_model" in body:
+        await storage.set_ai_model(str(body["ai_model"]).strip())
+    for k in ["ai_max_tokens", "ai_history_limit"]:
+        if k in body:
+            try: storage.state[k] = int(body[k])
+            except Exception: pass
+    for k in ["ai_typing_delay_min", "ai_typing_delay_max"]:
+        if k in body:
+            try: storage.state[k] = float(body[k])
+            except Exception: pass
+    if "client_idle_minutes" in body:
+        try: storage.state["client_idle_minutes"] = int(body["client_idle_minutes"])
+        except Exception: pass
+    await storage.save()
+    return {"ok": True}
+
+
+# --- Telegram чаты ---
+@app.post("/api/settings/tg_chats/update")
+async def settings_update_tg_chats(request: Request, me: dict = Depends(_get_me)):
+    """Body: {brain_chat_id?, lk_group_id?, coordination_chat_id?, ideas_chat_id?, accounting_group_id?}"""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    field_to_setter = {
+        "brain_chat_id": storage.set_brain_chat_id,
+        "lk_group_id": storage.set_lk_group_id,
+        "coordination_chat_id": storage.set_coordination_chat_id,
+    }
+    for f, setter in field_to_setter.items():
+        if f in body:
+            try:
+                cid = int(body[f] or 0)
+                # Нормализация: если положительное и > 0 — добавляем -100 префикс
+                if cid > 0 and cid < 10**12:
+                    cid = -1000000000000 - cid
+                await setter(cid)
+            except Exception as e:
+                logger.warning("set %s fail: %s", f, e)
+    # ideas + accounting через прямой state-set
+    for f in ["ideas_chat_id", "accounting_group_id"]:
+        if f in body:
+            try:
+                cid = int(body[f] or 0)
+                if cid > 0 and cid < 10**12:
+                    cid = -1000000000000 - cid
+                storage.state[f] = cid
+            except Exception:
+                pass
+    await storage.save()
+    return {"ok": True}
+
+
+# --- Invite-бот ---
+@app.post("/api/settings/invite/update")
+async def settings_update_invite(request: Request, me: dict = Depends(_get_me)):
+    """Body: {welcome_message?, invite_jobs_text?, invite_welcome_gif_id?, trigger_phrases?, cooldown_minutes?}"""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    if "welcome_message" in body:
+        await storage.set_welcome(str(body["welcome_message"]))
+    if "invite_jobs_text" in body and hasattr(storage, "set_invite_jobs_text"):
+        await storage.set_invite_jobs_text(str(body["invite_jobs_text"]))
+    if "invite_welcome_gif_id" in body and hasattr(storage, "set_invite_welcome_gif"):
+        await storage.set_invite_welcome_gif(str(body["invite_welcome_gif_id"]))
+    if "trigger_phrases" in body and isinstance(body["trigger_phrases"], list):
+        storage.state["trigger_phrases"] = [str(s).strip() for s in body["trigger_phrases"] if str(s).strip()]
+    if "cooldown_minutes" in body:
+        try: storage.state["cooldown_minutes"] = int(body["cooldown_minutes"])
+        except Exception: pass
+    await storage.save()
+    return {"ok": True}
+
+
+# =====================================================================
 # OWNER PANEL — управление ролями и разрешениями
 # =====================================================================
 # Доступ только для simba_pride_adm (или role == "owner" из worker_roles).

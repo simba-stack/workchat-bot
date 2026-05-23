@@ -6057,43 +6057,153 @@
     </div>
 
     <!-- CHATS -->
-    <div x-show="settingsActiveSection === 'chats'" class="jarvis-panel" style="padding: 20px;">
+    <div x-show="settingsActiveSection === 'chats'" x-init="if(settingsActiveSection==='chats') loadSettings()" class="jarvis-panel" style="padding: 20px;">
       <h3 style="margin: 0 0 16px 0;">💬 Telegram-чаты</h3>
-      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
-        Настраиваются через <code>/admin → 🧠 Brain-чат / 📋 ЛК-группа / 📒 Бухгалтерия / 💡 Идеи / 🤝 Координация</code>.
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px; padding: 10px; background: rgba(106,216,255,0.08); border-radius: 6px;">
+        ℹ Можно вводить как полный ID с минусом (<code>-1003788743917</code>), так и короткий (<code>3788743917</code> — система сама добавит <code>-100</code>).
       </div>
-      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin', '_blank')">📲 Открыть в боте</button>
+      <div style="display: grid; gap: 14px; max-width: 600px;">
+        <template x-for="f in [
+          {key:'brain_chat_id', label:'🧠 Brain-чат (обучение AI)', help:'Сюда пишешь админ-сообщения чтобы AI запоминал в knowledge'},
+          {key:'lk_group_id', label:'📋 ЛК-группа (Группа 1)', help:'Анкеты ЛК банков'},
+          {key:'coordination_chat_id', label:'🤝 Координационная (escalate)', help:'AI зовёт спецов сюда'},
+          {key:'accounting_group_id', label:'📒 Бухгалтерия (Группа 2)', help:'СТАРТ-отчёты, маржа'},
+          {key:'ideas_chat_id', label:'💡 Идеи / Bug Reports', help:'Где собираются идеи и баги'}
+        ]" :key="f.key">
+          <div>
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;" x-text="f.label"></label>
+            <input type="text" x-model.number="settingsData[f.key]"
+                   :placeholder="'-1003' + '...'"
+                   style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace;">
+            <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 3px;" x-text="f.help"></div>
+          </div>
+        </template>
+        <button class="btn success" @click="saveSettingsChats()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700; margin-top: 6px;"
+                x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить ID чатов'"></button>
+      </div>
     </div>
 
     <!-- AI -->
-    <div x-show="settingsActiveSection === 'ai'" class="jarvis-panel" style="padding: 20px;">
+    <div x-show="settingsActiveSection === 'ai'" x-init="if(settingsActiveSection==='ai') loadSettings()" class="jarvis-panel" style="padding: 20px;">
       <h3 style="margin: 0 0 16px 0;">🤖 AI-модель и поведение</h3>
-      <div style="display: grid; gap: 12px; font-size: 13px;">
-        <div>Активна модель: <code x-text="state.stats.ai_model || 'claude-haiku-4-5'"></code></div>
-        <div>AI отвечает в чатах: <b x-text="state.stats.ai_enabled ? '✅ ВКЛ' : '❌ ВЫКЛ'"></b></div>
-        <div>Idle-таймер: <code x-text="(state.stats.idle_minutes || 5) + ' мин'"></code> ожидания работника</div>
-      </div>
-      <div style="margin-top: 16px; display: flex; gap: 10px;">
-        <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_ai', '_blank')">📲 Настроить в боте</button>
+      <div style="display: grid; gap: 16px; max-width: 600px;">
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">AI отвечает в чатах</label>
+          <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" x-model="settingsData.ai_enabled" style="width: 18px; height: 18px;">
+            <span x-text="settingsData.ai_enabled ? '✅ Включено — AI пишет клиентам' : '❌ Выключено — AI молчит'"></span>
+          </label>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Модель Claude</label>
+          <select x-model="settingsData.ai_model"
+                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+            <option value="claude-haiku-4-5-20251001">Haiku 4.5 (быстрый, дешёвый)</option>
+            <option value="claude-sonnet-4-6">Sonnet 4.6 (умный, дороже)</option>
+            <option value="claude-opus-4-6">Opus 4.6 (максимум, дорого)</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Max output tokens (длина ответа)</label>
+          <input type="number" x-model.number="settingsData.ai_max_tokens" min="100" max="4096" step="64"
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">History limit (сколько последних сообщений в контексте)</label>
+          <input type="number" x-model.number="settingsData.ai_history_limit" min="5" max="50" step="1"
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div>
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Typing delay min (сек)</label>
+            <input type="number" x-model.number="settingsData.ai_typing_delay_min" min="0" max="20" step="0.5"
+                   style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Typing delay max (сек)</label>
+            <input type="number" x-model.number="settingsData.ai_typing_delay_max" min="0" max="30" step="0.5"
+                   style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+          </div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Client idle (мин) — после скольких минут молчания клиента AI снова отвечает</label>
+          <input type="number" x-model.number="settingsData.client_idle_minutes" min="1" max="60" step="1"
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+        </div>
+        <button class="btn success" @click="saveSettingsAi()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
+                x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить AI-настройки'"></button>
       </div>
     </div>
 
     <!-- PRICING -->
-    <div x-show="settingsActiveSection === 'pricing'" class="jarvis-panel" style="padding: 20px;">
-      <h3 style="margin: 0 0 16px 0;">💸 Прайс ЛК</h3>
-      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
-        В брейн-чате напиши «<code>прайс</code>» — увидишь текущие цены.<br>
-        Чтобы поменять: «<code>Ассистент поставь цену [банк] [сумма]</code>».
+    <div x-show="settingsActiveSection === 'pricing'" x-init="if(settingsActiveSection==='pricing') loadSettings()" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💸 Прайс ЛК (цены за банки в USDT)</h3>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
+        Эти цены используются AI при общении с клиентами и в расчёте маржи.
+      </div>
+      <div style="display: grid; gap: 8px; max-width: 600px;">
+        <template x-for="bank in Object.keys(settingsData.pricing || {}).sort()" :key="bank">
+          <div style="display: flex; gap: 8px; align-items: center; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+            <span style="flex: 1; font-weight: 700; color: var(--hud-primary);" x-text="bank"></span>
+            <input type="number" :value="settingsData.pricing[bank]"
+                   @change="savePricing(bank, $event.target.value)"
+                   step="1" min="0"
+                   style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; text-align: right;">
+            <span style="color: var(--text-dim); font-size: 12px;">USDT</span>
+            <button @click="deletePricing(bank)"
+                    style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer;">✕</button>
+          </div>
+        </template>
+        <div x-show="Object.keys(settingsData.pricing || {}).length === 0" style="text-align: center; color: var(--text-dim); padding: 20px; font-size: 13px;">
+          Цены не заданы. Добавь банк ниже.
+        </div>
+        <!-- Добавление нового банка -->
+        <div style="margin-top: 12px; display: flex; gap: 8px; padding: 12px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
+          <input type="text" x-model="settingsNewBank" placeholder="БАНК (например ОЗОН)"
+                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <input type="number" x-model.number="settingsNewBankPrice" placeholder="USDT" step="1" min="0"
+                 style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <button class="btn success" @click="addPricing()" style="padding: 8px 16px;">+ Добавить</button>
+        </div>
       </div>
     </div>
 
     <!-- INVITE -->
-    <div x-show="settingsActiveSection === 'invite'" class="jarvis-panel" style="padding: 20px;">
+    <div x-show="settingsActiveSection === 'invite'" x-init="if(settingsActiveSection==='invite') loadSettings()" class="jarvis-panel" style="padding: 20px;">
       <h3 style="margin: 0 0 16px 0;">📨 Invite-бот / Welcome</h3>
-      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 12px;">
-        Настраивается через <code>/admin → 📨 Invite-бот</code>: GIF, эмодзи, текст welcome.
+      <div style="display: grid; gap: 16px; max-width: 700px;">
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Welcome-сообщение (клиенту после капчи)</label>
+          <textarea x-model="settingsData.welcome_message" rows="5"
+                    style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 13px; line-height: 1.5; resize: vertical; box-sizing: border-box;"></textarea>
+          <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 4px;">Это первое что увидит клиент в новом рабочем чате</div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Триггерные фразы (запятая или новая строка)</label>
+          <textarea x-model="settingsTriggersText" rows="3"
+                    placeholder="выдай рабочую беседу&#10;создай рабочую беседу&#10;новая беседа"
+                    style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; font-size: 12px; resize: vertical; box-sizing: border-box;"></textarea>
+          <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 4px;">Когда клиент пишет одну из этих фраз — бот создаёт ему work-чат</div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Cooldown (мин) — как часто один клиент может запрашивать новый чат</label>
+          <input type="number" x-model.number="settingsData.cooldown_minutes" min="0" max="1440" step="5"
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">GIF file_id (для welcome — приходит от @userinfobot или из Telegram)</label>
+          <input type="text" x-model="settingsData.invite_welcome_gif_id" placeholder="CAACAgIAAxkB..."
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; font-size: 11px;">
+          <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 4px;">Чтобы получить file_id: перешли GIF боту @RawDataBot или @userinfobot</div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Текст разделов работ (для главного welcome)</label>
+          <textarea x-model="settingsData.invite_jobs_text" rows="6"
+                    style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 12px; resize: vertical; box-sizing: border-box;"></textarea>
+        </div>
+        <button class="btn success" @click="saveSettingsInvite()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
+                x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить Invite-настройки'"></button>
       </div>
-      <button class="btn" @click="window.open('https://t.me/PrideCRMv4?start=admin_invite', '_blank')">📲 Открыть в боте</button>
     </div>
 
     <!-- APPEARANCE -->
@@ -6473,6 +6583,18 @@ function jarvis() {
     creditPasswordsInbox: [],  // 💳 КРЕДИТ | Пароли — inbox с заполнением
     creditManagers: [],        // список менеджеров со статистикой
     creditLoading: false,
+    // === SETTINGS UI ===
+    settingsData: { pricing: {}, ai_enabled: false, ai_model: '', ai_max_tokens: 512,
+                    ai_history_limit: 15, ai_typing_delay_min: 3, ai_typing_delay_max: 8,
+                    client_idle_minutes: 5, brain_chat_id: 0, lk_group_id: 0,
+                    coordination_chat_id: 0, ideas_chat_id: 0, accounting_group_id: 0,
+                    welcome_message: '', invite_welcome_gif_id: '', invite_jobs_text: '',
+                    trigger_phrases: [], cooldown_minutes: 60 },
+    settingsTriggersText: '',
+    settingsNewBank: '',
+    settingsNewBankPrice: 0,
+    settingsSaving: false,
+    settingsLoaded: false,
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -10615,6 +10737,114 @@ function jarvis() {
       }
     },
     // === OWNER PANEL ===
+    // === SETTINGS UI: загрузка/сохранение ===
+    async loadSettings() {
+      try {
+        const r = await fetch('/api/settings/all', { credentials: 'include' });
+        if (!r.ok) { alert('Нет доступа к настройкам'); return; }
+        const j = await r.json();
+        // Простое присваивание
+        Object.assign(this.settingsData, j);
+        // Триггеры — массив → строка с переносами
+        this.settingsTriggersText = (j.trigger_phrases || []).join('\n');
+        this.settingsLoaded = true;
+      } catch (e) { alert('Ошибка загрузки: ' + e.message); }
+    },
+    async saveSettingsChats() {
+      this.settingsSaving = true;
+      try {
+        const r = await fetch('/api/settings/tg_chats/update', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brain_chat_id: this.settingsData.brain_chat_id,
+            lk_group_id: this.settingsData.lk_group_id,
+            coordination_chat_id: this.settingsData.coordination_chat_id,
+            ideas_chat_id: this.settingsData.ideas_chat_id,
+            accounting_group_id: this.settingsData.accounting_group_id,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ ID чатов сохранены');
+        await this.loadSettings();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+      finally { this.settingsSaving = false; }
+    },
+    async saveSettingsAi() {
+      this.settingsSaving = true;
+      try {
+        const r = await fetch('/api/settings/ai/update', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ai_enabled: this.settingsData.ai_enabled,
+            ai_model: this.settingsData.ai_model,
+            ai_max_tokens: this.settingsData.ai_max_tokens,
+            ai_history_limit: this.settingsData.ai_history_limit,
+            ai_typing_delay_min: this.settingsData.ai_typing_delay_min,
+            ai_typing_delay_max: this.settingsData.ai_typing_delay_max,
+            client_idle_minutes: this.settingsData.client_idle_minutes,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ AI-настройки сохранены');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+      finally { this.settingsSaving = false; }
+    },
+    async saveSettingsInvite() {
+      this.settingsSaving = true;
+      try {
+        const triggers = (this.settingsTriggersText || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        const r = await fetch('/api/settings/invite/update', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            welcome_message: this.settingsData.welcome_message,
+            invite_welcome_gif_id: this.settingsData.invite_welcome_gif_id,
+            invite_jobs_text: this.settingsData.invite_jobs_text,
+            trigger_phrases: triggers,
+            cooldown_minutes: this.settingsData.cooldown_minutes,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Invite-настройки сохранены');
+        await this.loadSettings();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+      finally { this.settingsSaving = false; }
+    },
+    async savePricing(bank, price) {
+      try {
+        const r = await fetch('/api/settings/pricing/set', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bank, price: parseFloat(price) || 0 }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this.settingsData.pricing[bank.toUpperCase()] = parseFloat(price) || 0;
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async deletePricing(bank) {
+      if (!confirm(`Удалить цену для ${bank}?`)) return;
+      try {
+        const r = await fetch('/api/settings/pricing/delete', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bank }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        delete this.settingsData.pricing[bank];
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async addPricing() {
+      const bank = (this.settingsNewBank || '').trim().toUpperCase();
+      const price = parseFloat(this.settingsNewBankPrice) || 0;
+      if (!bank) { alert('Введи название банка'); return; }
+      if (price <= 0) { alert('Цена должна быть > 0'); return; }
+      await this.savePricing(bank, price);
+      this.settingsNewBank = '';
+      this.settingsNewBankPrice = 0;
+    },
+
     // Русские названия для views и actions в Owner Panel
     _OWNER_VIEW_LABELS: {
       'office': '🏢 Главная',
