@@ -230,6 +230,39 @@ def _default_state() -> dict:
         "invite_premium_emoji": {},
         # Текст разделов welcome (для редактирования без перезаписи кода).
         "invite_jobs_text": "",
+
+        # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
+        # Юристы готовят счета к подаче заявки на кредит.
+        # Структура зеркалит crm_* для поставщиков, но изолирована.
+        # ID групп Telegram (по умолчанию 0 — задать через env или /admin).
+        "credit_access_chat_id": 0,    # «КРЕДИТОВАНИЕ — ДОСТУПЫ» — приёмка анкет
+        "credit_password_chat_id": 0,  # «КРЕДИТОВАНИЕ — ПАРОЛИ» — RDP + пароли ЛК
+        # Менеджеры (юристы). Ключ — username_lower (без @).
+        # {username_lower: {tg_user_id, first_seen_ts, last_active_ts,
+        #   stats: {drops_total, drops_done, lks_total, lks_done}}}
+        "credit_managers": {},
+        # Доп. чаты кредитования, привязанные к менеджерам.
+        # {chat_id_norm: {manager_username, is_access, is_password,
+        #   registered_at, registered_by_owner_id}}
+        # Помимо двух главных захардкоженных есть и доп.чаты под конкретных менеджеров.
+        "credit_chats": {},
+        # Анкеты кредитования (по аналогии с crm_drops).
+        # {credit_drop_id: {chat_id, manager_username, fio, about, scan_file_ids[],
+        #   status: 'draft'|'pending'|'accepted'|'done',
+        #   accept_ts, send_ts, done_ts, admin_msg_id, lk_card_ids[]}}
+        "credit_drops": {},
+        # ЛК банков под анкетами кредитования (зеркало crm_drop_lks).
+        # {credit_droplk_id: {credit_drop_id, manager_username, bank, value, deal,
+        #   sms_history: [{code, time}], sms_stage,
+        #   new_login, new_password, new_mail, new_number, code_word,
+        #   ded_ip, ded_login, ded_pass, ded_location, msgid_pass,
+        #   sms_tracker_msg_id, created_at, updated_at}}
+        "credit_drop_lks": {},
+        # Sequential ID counters
+        "credit_drops_seq": 0,
+        "credit_drop_lks_seq": 0,
+        # FSM для CRM-бота в credit-чатах (зеркало crm_fsm).
+        "credit_fsm": {},
     }
 
 
@@ -3136,6 +3169,243 @@ class Storage:
 
     async def clear_crm_fsm(self, tg_user_id):
         await self.set_crm_fsm(tg_user_id, action=None)
+
+    # =====================================================================
+    # CREDIT (Кредитование) — параллельная инфраструктура, зеркало crm_*
+    # =====================================================================
+    # --- Менеджеры (юристы) ---
+    def list_credit_managers(self) -> dict:
+        return self.state.get("credit_managers") or {}
+
+    def get_credit_manager(self, username: str) -> Optional[dict]:
+        if not username:
+            return None
+        u = username.lstrip("@").lower()
+        return (self.state.get("credit_managers") or {}).get(u)
+
+    async def register_credit_manager(
+        self, username: str, tg_user_id: Optional[int] = None,
+    ) -> dict:
+        """Регистрирует/обновляет менеджера. Возвращает запись."""
+        if not username:
+            return {}
+        u = username.lstrip("@").lower()
+        async with _lock:
+            mgrs = self.state.setdefault("credit_managers", {})
+            now = time.time()
+            if u not in mgrs:
+                mgrs[u] = {
+                    "username": u,
+                    "tg_user_id": tg_user_id or 0,
+                    "first_seen_ts": now,
+                    "last_active_ts": now,
+                    "stats": {
+                        "drops_total": 0, "drops_done": 0,
+                        "lks_total": 0, "lks_done": 0,
+                    },
+                }
+            else:
+                mgrs[u]["last_active_ts"] = now
+                if tg_user_id and not mgrs[u].get("tg_user_id"):
+                    mgrs[u]["tg_user_id"] = tg_user_id
+            await self._save_unlocked()
+            return mgrs[u]
+
+    async def bump_credit_manager_stat(self, username: str, key: str, delta: int = 1):
+        if not username:
+            return
+        u = username.lstrip("@").lower()
+        async with _lock:
+            mgrs = self.state.setdefault("credit_managers", {})
+            if u not in mgrs:
+                mgrs[u] = {
+                    "username": u, "tg_user_id": 0,
+                    "first_seen_ts": time.time(), "last_active_ts": time.time(),
+                    "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
+                }
+            stats = mgrs[u].setdefault("stats", {})
+            stats[key] = (stats.get(key) or 0) + delta
+            await self._save_unlocked()
+
+    # --- Чаты кредитования ---
+    def list_credit_chats(self) -> dict:
+        return self.state.get("credit_chats") or {}
+
+    def get_credit_chat(self, chat_id) -> Optional[dict]:
+        c = _norm_chat_id(chat_id)
+        return (self.state.get("credit_chats") or {}).get(c)
+
+    async def register_credit_chat(
+        self, chat_id, manager_username: str,
+        is_access: bool = True, is_password: bool = False,
+        registered_by_owner_id: Optional[int] = None,
+    ) -> dict:
+        async with _lock:
+            chats = self.state.setdefault("credit_chats", {})
+            c = _norm_chat_id(chat_id)
+            entry = chats.get(c) or {}
+            entry.update({
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "is_access": bool(is_access),
+                "is_password": bool(is_password),
+                "registered_at": entry.get("registered_at") or time.time(),
+                "registered_by_owner_id": registered_by_owner_id or entry.get("registered_by_owner_id"),
+            })
+            chats[c] = entry
+            await self._save_unlocked()
+            return entry
+
+    async def unregister_credit_chat(self, chat_id) -> bool:
+        async with _lock:
+            chats = self.state.get("credit_chats") or {}
+            c = _norm_chat_id(chat_id)
+            if c in chats:
+                del chats[c]
+                await self._save_unlocked()
+                return True
+            return False
+
+    def is_credit_chat(self, chat_id, kind: str = "any") -> bool:
+        """kind: 'any' | 'access' | 'password'. True если chat относится к кредитованию."""
+        cid_int = None
+        try: cid_int = int(chat_id)
+        except Exception: pass
+        access_main = self.state.get("credit_access_chat_id") or 0
+        password_main = self.state.get("credit_password_chat_id") or 0
+        if kind in ("any", "access") and cid_int and cid_int == access_main:
+            return True
+        if kind in ("any", "password") and cid_int and cid_int == password_main:
+            return True
+        chat_entry = self.get_credit_chat(chat_id)
+        if not chat_entry:
+            return False
+        if kind == "any":
+            return bool(chat_entry.get("is_access") or chat_entry.get("is_password"))
+        if kind == "access":
+            return bool(chat_entry.get("is_access"))
+        if kind == "password":
+            return bool(chat_entry.get("is_password"))
+        return False
+
+    # --- Анкеты кредитования ---
+    def list_credit_drops(self, manager_username: Optional[str] = None) -> dict:
+        drops = self.state.get("credit_drops") or {}
+        if manager_username:
+            u = manager_username.lstrip("@").lower()
+            return {k: v for k, v in drops.items() if (v.get("manager_username") or "") == u}
+        return drops
+
+    def get_credit_drop(self, drop_id) -> Optional[dict]:
+        return (self.state.get("credit_drops") or {}).get(str(drop_id))
+
+    async def add_credit_drop(
+        self, chat_id, manager_username: str, fio: str = "",
+        about: str = "", scan_file_ids: Optional[list] = None,
+    ) -> str:
+        async with _lock:
+            seq = (self.state.get("credit_drops_seq") or 0) + 1
+            self.state["credit_drops_seq"] = seq
+            drop_id = f"cdrp{seq:05d}"
+            drops = self.state.setdefault("credit_drops", {})
+            drops[drop_id] = {
+                "drop_id": drop_id,
+                "chat_id": _norm_chat_id(chat_id),
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "fio": fio or "",
+                "about": about or "",
+                "scan_file_ids": list(scan_file_ids or []),
+                "status": "draft",
+                "created_at": time.time(),
+                "lk_card_ids": [],
+            }
+            await self._save_unlocked()
+            await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
+            return drop_id
+
+    async def update_credit_drop(self, drop_id: str, **fields) -> bool:
+        async with _lock:
+            drop = (self.state.get("credit_drops") or {}).get(str(drop_id))
+            if not drop:
+                return False
+            for k, v in fields.items():
+                drop[k] = v
+            drop["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    # --- ЛК банков под анкетами кредитования ---
+    def list_credit_drop_lks(self, credit_drop_id: Optional[str] = None) -> dict:
+        lks = self.state.get("credit_drop_lks") or {}
+        if credit_drop_id:
+            return {k: v for k, v in lks.items() if v.get("credit_drop_id") == credit_drop_id}
+        return lks
+
+    def get_credit_drop_lk(self, droplk_id) -> Optional[dict]:
+        return (self.state.get("credit_drop_lks") or {}).get(str(droplk_id))
+
+    async def add_credit_drop_lk(
+        self, credit_drop_id: str, manager_username: str,
+        bank: str = "", value: str = "", deal: str = "",
+    ) -> str:
+        async with _lock:
+            seq = (self.state.get("credit_drop_lks_seq") or 0) + 1
+            self.state["credit_drop_lks_seq"] = seq
+            droplk_id = f"clk{seq:05d}"
+            lks = self.state.setdefault("credit_drop_lks", {})
+            lks[droplk_id] = {
+                "droplk_id": droplk_id,
+                "credit_drop_id": credit_drop_id,
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "bank": bank or "",
+                "value": value or "",
+                "deal": deal or "",
+                "sms_history": [],
+                "sms_stage": "",
+                "new_login": "", "new_password": "",
+                "new_mail": "", "new_number": "", "code_word": "",
+                "ded_ip": "", "ded_login": "Administrator",
+                "ded_pass": "", "ded_location": "",
+                "msgid_pass": 0, "sms_tracker_msg_id": 0,
+                "created_at": time.time(), "updated_at": time.time(),
+            }
+            drop = (self.state.get("credit_drops") or {}).get(credit_drop_id)
+            if drop:
+                drop.setdefault("lk_card_ids", []).append(droplk_id)
+            await self._save_unlocked()
+            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
+            return droplk_id
+
+    async def update_credit_drop_lk(self, droplk_id, **fields) -> bool:
+        async with _lock:
+            lk = (self.state.get("credit_drop_lks") or {}).get(str(droplk_id))
+            if not lk:
+                return False
+            for k, v in fields.items():
+                lk[k] = v
+            lk["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    # --- FSM для credit-чатов ---
+    def get_credit_fsm(self, tg_user_id):
+        return (self.state.get("credit_fsm") or {}).get(str(tg_user_id)) or {}
+
+    async def set_credit_fsm(self, tg_user_id, action=None, data=None, msg_id=None, chat_id=None):
+        async with _lock:
+            fsm = self.state.setdefault("credit_fsm", {})
+            if action is None:
+                fsm.pop(str(tg_user_id), None)
+            else:
+                fsm[str(tg_user_id)] = {
+                    "action": action, "data": dict(data or {}),
+                    "msg_id": msg_id, "chat_id": chat_id,
+                    "updated_at": time.time(),
+                    "expires_at": time.time() + 1800,
+                }
+            await self._save_unlocked()
+
+    async def clear_credit_fsm(self, tg_user_id):
+        await self.set_credit_fsm(tg_user_id, action=None)
 
     # =====================================================================
     # OPERATIONAL / EXCHANGE REQUESTS (фикс заявок на обмен)

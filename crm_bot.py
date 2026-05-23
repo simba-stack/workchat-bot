@@ -1200,6 +1200,71 @@ async def cmd_help(message: Message):
     await message.reply(base)
 
 
+# ─── CREDIT (Кредитование): захват чата по тексту ──────────────
+# Триггер: текст содержит "кредит*" + "менеджер @ник". Доступно только владельцам.
+# Опционально: "как ПАРОЛИ" / "как ДОСТУПЫ" (по умолчанию ДОСТУПЫ).
+# Примеры:
+#   "Ассистент возьми этот чат под кредитование - менеджер @ivan"
+#   "регистрируй чат для кредита, менеджер @anna, как пароли"
+#   "@CRM возьми чат кредитование менеджер @oleg"
+
+import re as _re_credit  # отдельный alias чтобы не конфликтовать
+
+
+@router.message(F.text.regexp(r"(?i)кредит\w*").as_("matched"))
+async def cmd_credit_chat_capture(message: Message, matched=None):
+    # Только владельцы могут регистрировать кредит-чаты
+    if not is_owner(message.from_user.id):
+        return
+    text = (message.text or "")
+    # Должна быть упомянута роль "менеджер"
+    if not _re_credit.search(r"менеджер", text, _re_credit.IGNORECASE):
+        return
+    # Извлекаем @username (требуется)
+    m = _re_credit.search(r"менеджер[\s,:\-—]*@?(\w{3,})", text, _re_credit.IGNORECASE)
+    if not m:
+        await message.reply(
+            "Понял про кредитование, но не нашёл <b>@username менеджера</b>.\n"
+            "Пример: <code>Ассистент возьми этот чат под кредитование - менеджер @ivan</code>"
+        )
+        return
+    manager_username = m.group(1).lower()
+    # Тип чата: pwd/access
+    is_password = bool(_re_credit.search(r"парол", text, _re_credit.IGNORECASE))
+    is_access = not is_password
+    chat_id = message.chat.id
+    chat_title = (message.chat.title or "").strip() or "(без названия)"
+    try:
+        # 1) Регистрируем чат под кредит
+        await crm_storage.register_credit_chat(
+            chat_id=chat_id,
+            manager_username=manager_username,
+            is_access=is_access,
+            is_password=is_password,
+            registered_by_owner_id=message.from_user.id,
+        )
+        # 2) Регистрируем менеджера (если впервые)
+        await crm_storage.register_credit_manager(username=manager_username)
+        logger.info(
+            "CREDIT chat registered: chat=%s '%s' manager=@%s type=%s by_owner=%s",
+            chat_id, chat_title, manager_username,
+            "ПАРОЛИ" if is_password else "ДОСТУПЫ", message.from_user.id,
+        )
+        kind_emoji = "🔐" if is_password else "📥"
+        kind_name = "ПАРОЛИ" if is_password else "ДОСТУПЫ"
+        await message.reply(
+            f"✅ <b>Чат закреплён за КРЕДИТОВАНИЕМ</b>\n\n"
+            f"{kind_emoji} Тип: <b>{kind_name}</b>\n"
+            f"👤 Менеджер: <b>@{manager_username}</b>\n"
+            f"💬 Чат: <code>{chat_id}</code>\n\n"
+            f"Все ЛК/анкеты из этого чата теперь идут в раздел "
+            f"<b>System → 💳 КРЕДИТ | {kind_name}</b> в дашборде."
+        )
+    except Exception as e:
+        logger.error("CREDIT chat capture failed: %s", e, exc_info=True)
+        await message.reply(f"❌ Ошибка при регистрации: <code>{e}</code>")
+
+
 # ─── /clients ───────────────────────────────────────────────────
 
 @router.message(Command("clients"))

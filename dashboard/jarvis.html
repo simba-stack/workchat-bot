@@ -3669,6 +3669,53 @@
       </div>
     </div>
 
+    <!-- ===== БЛОКИ (только в ЛК Отделе) ===== -->
+    <div class="jarvis-panel" x-show="currentView === 'lk'">
+      <div class="panel-title">
+        🚫 Блоки
+        <span class="badge-mini"
+              x-text="(cards.filter(c => (c.status || '').startsWith('БЛОК')).length) + ' шт.'"></span>
+      </div>
+      <div style="max-height: 360px; overflow-y: auto;">
+        <template x-if="cards.filter(c => (c.status || '').startsWith('БЛОК')).length === 0">
+          <div class="text-center py-6 text-xs" style="color: var(--text-dim)">
+            Блоков нет 🎉
+          </div>
+        </template>
+        <template x-for="lk in cards.filter(c => (c.status || '').startsWith('БЛОК'))" :key="lk.card_id">
+          <div class="metric" style="padding: 8px 14px; border-left: 3px solid var(--hud-rose, #e76f51); margin-bottom: 4px; cursor: pointer;"
+               @click="openLkDetail && openLkDetail(lk.card_id)"
+               :title="'#' + lk.card_id + ' · клик для подробностей'">
+            <!-- Шапка: банк + ФИО + сумма блока -->
+            <div class="flex items-center gap-2 text-xs">
+              <span style="font-weight: 700;" x-text="(lk.bank || '—').toUpperCase()"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                    x-text="lk.fio || '—'"></span>
+              <span x-show="lk.block_amount_rub && lk.block_amount_rub > 0"
+                    style="margin-left: auto; font-weight: 700; color: var(--hud-rose, #e76f51); font-size: 11px;"
+                    x-text="(lk.block_amount_rub || 0).toLocaleString('ru') + ' ₽'"></span>
+            </div>
+            <!-- Линия 2: статус + supplier -->
+            <div class="text-xs mt-1" style="color: var(--text-dim); display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+              <span style="padding: 1px 6px; border-radius: 3px; background: rgba(231,111,81,0.15); color: var(--hud-rose, #e76f51); font-size: 10px; font-weight: 700;"
+                    x-text="lk.status === 'БЛОК_БЕЗ_ОТРАБОТКИ' ? '⛔ БЕЗ ОТРАБОТКИ' : (lk.status || 'БЛОК')"></span>
+              <span style="font-size: 10px;" x-show="lk.supplier" x-text="'@' + lk.supplier"></span>
+              <span style="font-size: 10px;" x-show="lk.deal_id" x-text="'· сделка #' + lk.deal_id"></span>
+            </div>
+            <!-- Линия 3: причина блока -->
+            <div x-show="lk.block_note" class="text-xs mt-1"
+                 style="color: var(--text-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis;
+                        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal;"
+                 x-text="lk.block_note"></div>
+            <!-- Линия 4: время блока -->
+            <div class="text-xs mt-1" style="color: var(--text-dim); font-size: 10px; opacity: 0.7;"
+                 x-show="lk.updated_at || lk.created_at"
+                 x-text="'⏱ ' + new Date(((lk.updated_at || lk.created_at) || 0) * 1000).toLocaleString('ru-RU', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- ===== BRAIN NOTES (LEO) ===== -->
     <div class="jarvis-panel" x-show="['office','lk','fin'].includes(currentView)">
       <div class="panel-title">
@@ -4999,6 +5046,8 @@
   <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06);">
     <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📥 CRM | Доступы <span x-show="systemPendingLks?.length" class="support-tab-badge" x-text="systemPendingLks?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'credit_access' ? 'active' : ''" @click="systemSection='credit_access'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Доступы <span x-show="creditPendingLks?.length" class="support-tab-badge" x-text="creditPendingLks?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'credit_password' ? 'active' : ''" @click="systemSection='credit_password'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Пароли <span x-show="creditPasswordsInbox?.length" class="support-tab-badge" x-text="creditPasswordsInbox?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'installed' ? 'active' : ''" @click="systemSection='installed'">✅ Установленные ЛК <span x-show="systemInstalledLks?.length" class="support-tab-badge" x-text="systemInstalledLks?.length"></span></button>
   </div>
 
@@ -5215,6 +5264,88 @@
       ⏳ Карточки появятся когда ЛК пойдут в работу (после login_received стадии)
     </div>
     </div><!-- /password tab -->
+
+  <!-- ============= ВКЛАДКА: 💳 КРЕДИТ | ДОСТУПЫ ============= -->
+  <div x-show="systemSection === 'credit_access'" x-init="refreshCredit()">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+      <h3 style="margin: 0;">💳 Кредитование — Доступы</h3>
+      <span class="badge-mini" x-text="creditPendingLks.length + ' анкет'"></span>
+      <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+    <div x-show="creditPendingLks.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
+      Пока пусто. Зарегистрируй кредитный чат через <code>«Ассистент возьми этот чат под кредитование - менеджер @ник»</code> в TG.
+    </div>
+    <template x-for="lk in creditPendingLks" :key="lk.droplk_id">
+      <div class="crm-card" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span style="font-size: 14px;">💳 <b style="color: #6366f1;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
+          <span style="font-size: 11px; color: var(--text-dim);">
+            юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+          </span>
+          <span x-show="lk.sms_stage" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(99,102,241,0.15); color: #6366f1; border-radius: 3px;"
+                x-text="systemStageLabel(lk.sms_stage)"></span>
+        </div>
+        <div x-show="lk.value" style="margin-top: 6px; font-size: 11px; color: var(--text-dim);" x-text="'значение: ' + (lk.value || '')"></div>
+        <div x-show="lk.new_login || lk.new_password" style="margin-top: 6px; font-size: 11px; color: var(--text-dim); display: flex; gap: 12px; flex-wrap: wrap;">
+          <span x-show="lk.new_login">логин: <code x-text="lk.new_login"></code></span>
+          <span x-show="lk.new_password">пароль: <code x-text="lk.new_password"></code></span>
+          <span x-show="lk.new_mail">mail: <code x-text="lk.new_mail"></code></span>
+        </div>
+        <div style="margin-top: 6px; font-size: 10px; color: var(--text-dim); opacity: 0.7;"
+             x-show="lk.created_at"
+             x-text="'добавлено: ' + new Date((lk.created_at || 0) * 1000).toLocaleString('ru-RU')"></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ============= ВКЛАДКА: 💳 КРЕДИТ | ПАРОЛИ ============= -->
+  <div x-show="systemSection === 'credit_password'" x-init="refreshCredit()">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+      <h3 style="margin: 0;">💳 Кредитование — Пароли</h3>
+      <span class="badge-mini" x-text="creditPasswordsInbox.length + ' ЛК'"></span>
+      <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+
+    <!-- Сводка менеджеров -->
+    <div x-show="creditManagers.length > 0" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 16px;">
+      <template x-for="m in creditManagers" :key="m.username">
+        <div class="jarvis-panel" style="padding: 10px;">
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">@<span x-text="m.username"></span></div>
+          <div style="display: flex; gap: 12px; font-size: 11px;">
+            <span>анкет: <b x-text="m.stats?.drops_total || 0"></b></span>
+            <span>ЛК: <b x-text="m.stats?.lks_total || 0"></b></span>
+            <span>чатов: <b x-text="m.chats_count || 0"></b></span>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div x-show="creditPasswordsInbox.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
+      Нет ЛК на заполнении паролями.
+    </div>
+    <template x-for="lk in creditPasswordsInbox" :key="lk.droplk_id">
+      <div class="crm-card password" :class="lk.filled ? 'filled' : ''" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span style="font-size: 14px;">🔐 <b style="color: #6366f1;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
+          <span style="font-size: 11px; color: var(--text-dim);">
+            юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+          </span>
+          <span x-show="lk.filled" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(40,180,99,0.18); color: #28b463; border-radius: 3px;">✅ заполнено</span>
+        </div>
+        <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; font-size: 11px;">
+          <div><span style="color: var(--text-dim);">login:</span> <code x-text="lk.new_login || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">password:</span> <code x-text="lk.new_password || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">mail:</span> <code x-text="lk.new_mail || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">code:</span> <code x-text="lk.code_word || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded IP:</span> <code x-text="lk.ded_ip || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded login:</span> <code x-text="lk.ded_login || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded pass:</span> <code x-text="lk.ded_pass || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded location:</span> <code x-text="lk.ded_location || '—'"></code></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
 
     <!-- ============= ВКЛАДКА 3: УСТАНОВЛЕННЫЕ ЛК ============= -->
     <div x-show="systemSection === 'installed'">
@@ -6051,6 +6182,11 @@ function jarvis() {
     systemFillOpen: {},  // droplk_id -> bool
     systemFillData: {},  // droplk_id -> {new_login, new_password, ...}
     systemPasswordsInbox: [],  // CRM | Пароли — inbox
+    // === КРЕДИТОВАНИЕ (параллельно CRM поставщиков) ===
+    creditPendingLks: [],      // 💳 КРЕДИТ | Доступы — ЛК в SMS-флоу
+    creditPasswordsInbox: [],  // 💳 КРЕДИТ | Пароли — inbox с заполнением
+    creditManagers: [],        // список менеджеров со статистикой
+    creditLoading: false,
     systemInstalledLks: [],  // УСТАНОВЛЕННЫЕ ЛК (done + creds + dedik)
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
     systemPeriod: 'all',  // all | day | week | month
@@ -9989,6 +10125,36 @@ function jarvis() {
         this.systemLoading = false;
       }
     },
+
+    // === Кредитование: загрузка данных параллельно с CRM-поставщиками ===
+    async refreshCredit() {
+      if (this.creditLoading) return;
+      this.creditLoading = true;
+      try {
+        const [pendingRes, pwdRes, mgrsRes] = await Promise.all([
+          fetch('/api/system/credit_pending_lk', { credentials: 'include' }),
+          fetch('/api/system/credit_passwords_inbox', { credentials: 'include' }),
+          fetch('/api/system/credit_managers', { credentials: 'include' }),
+        ]);
+        if (pendingRes.ok) {
+          const j = await pendingRes.json();
+          this.creditPendingLks = j.items || [];
+        }
+        if (pwdRes.ok) {
+          const j = await pwdRes.json();
+          this.creditPasswordsInbox = j.items || [];
+        }
+        if (mgrsRes.ok) {
+          const j = await mgrsRes.json();
+          this.creditManagers = j.items || [];
+        }
+      } catch (e) {
+        console.error('refreshCredit error', e);
+      } finally {
+        this.creditLoading = false;
+      }
+    },
+
     systemStageLabel(stage) {
       const labels = {
         '': 'Пусто',
