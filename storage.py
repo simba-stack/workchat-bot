@@ -3203,6 +3203,12 @@ class Storage:
             return sorted(active, key=lambda k: -(k.get("created_at") or 0))[0]
         return sorted(matching, key=lambda k: -(k.get("created_at") or 0))[0]
 
+    def list_kuc_for_droplk(self, droplk_id: str) -> list:
+        """Возвращает ВСЕ КУЦ-запросы этого ЛК (история), отсортированы по created_at desc."""
+        kucs = self.state.get("kuc_requests") or {}
+        matching = [k for k in kucs.values() if k.get("droplk_id") == str(droplk_id)]
+        return sorted(matching, key=lambda k: -(k.get("created_at") or 0))
+
     async def create_kuc_request(
         self, droplk_id: str, work_chat_id: Optional[int],
         requested_by: str, request_text: str = "",

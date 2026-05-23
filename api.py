@@ -1774,6 +1774,17 @@ async def kuc_decide(token: str, request: Request, me: dict = Depends(_get_me)):
     )
     if not ok:
         raise HTTPException(404, "kuc not found")
+    # Notify клиента в work_chat: бот пишет о результате проверки
+    try:
+        kuc_obj = storage.get_kuc_request(token) or {}
+        wc = int(kuc_obj.get("work_chat_id") or 0)
+        if wc:
+            await storage.enqueue_dashboard_command(
+                f"__notify_client_kuc_result {wc} {token} {decision}",
+                source=f"dashboard-kuc-decide-by-{me.get('username') or 'unknown'}",
+            )
+    except Exception as e:
+        logger.warning("KUC notify enqueue failed: %s", e)
     try:
         event_bus.emit_event("kuc-decided", {
             "token": token, "decision": decision,
@@ -1782,6 +1793,15 @@ async def kuc_decide(token: str, request: Request, me: dict = Depends(_get_me)):
     except Exception:
         pass
     return {"ok": True, "token": token, "decision": decision}
+
+
+@app.get("/api/system/kuc/by_droplk/{droplk_id}")
+async def kuc_history_by_droplk(droplk_id: str, _: None = Depends(_auth)):
+    """История ВСЕХ КУЦ-запросов для этого ЛК — для отображения в JARVIS."""
+    if not hasattr(storage, "list_kuc_for_droplk"):
+        return {"ok": True, "items": [], "count": 0}
+    items = storage.list_kuc_for_droplk(droplk_id) or []
+    return {"ok": True, "items": items, "count": len(items)}
 
 
 @app.get("/api/system/kuc/list")

@@ -8637,6 +8637,37 @@ class UserbotService:
                 logger.warning("notify_client_otrabotan %s %s: %s", wc, cid, e)
                 return f"⚠️ notify failed: {e}"
 
+        # ===== KUC → уведомить клиента в work_chat о решении =====
+        # Формат: __notify_client_kuc_result <work_chat_id> <token> <decision>
+        # decision: 'approved' | 'rejected'
+        m = re.match(r"^__notify_client_kuc_result\s+(-?\d+)\s+([\w]{6,32})\s+(approved|rejected)\s*$", text, re.I)
+        if m:
+            wc = int(m.group(1))
+            token = m.group(2)
+            decision = m.group(3).lower()
+            try:
+                kuc = storage.get_kuc_request(token) if hasattr(storage, "get_kuc_request") else None
+                note = (kuc or {}).get("decision_note") or ""
+                if decision == "approved":
+                    msg = (
+                        f"✅ <b>Проверка успешно пройдена</b>\n\n"
+                        f"Спасибо! Ваш счёт подтверждён, продолжаем работу."
+                    )
+                else:  # rejected
+                    msg = (
+                        f"❌ <b>Проверка не прошла</b>\n\n"
+                    )
+                    if note:
+                        msg += f"Причина: <i>{note}</i>\n\n"
+                    msg += "Свяжитесь с менеджером — мы пришлём новую ссылку для повторного прохождения."
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(target, msg, parse_mode="html", link_preview=False)
+                _e("kuc-client-notified", {"chat_id": wc, "token": token, "decision": decision}, character="lk", severity="info")
+                return f"✅ KUC client notified chat={wc} decision={decision}"
+            except Exception as e:
+                logger.warning("__notify_client_kuc_result %s %s %s: %s", wc, token, decision, e)
+                return f"⚠️ kuc notify client failed: {e}"
+
         # ===== KUC (Кружок Удостоверения Клиента) → отправить ссылку клиенту =====
         # Команда ставится API: POST /api/system/lk/{id}/kuc/request
         # Формат: __send_kuc_link <work_chat_id> <token>
