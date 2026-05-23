@@ -5141,7 +5141,7 @@
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 в КРЕДИТ</button>
             <!-- KUC button -->
             <template x-if="!kucByDroplk[lk.droplk_id]">
-              <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
+              <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
             </template>
             <template x-if="kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5278,7 +5278,7 @@
             <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 КРЕДИТ</button>
             <template x-if="!kucByDroplk[lk.droplk_id]">
-              <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+              <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
             </template>
             <template x-if="kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5382,7 +5382,7 @@
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5444,7 +5444,7 @@
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="requestKuc(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -6314,6 +6314,11 @@ function jarvis() {
     kucModalToken: '',
     kucModalNote: '',
     kucModalLoading: false,
+    // Модалка запроса (вместо prompt — для Electron-совместимости)
+    kucReqModalOpen: false,
+    kucReqModalLk: null,
+    kucReqModalText: '',
+    kucReqModalLoading: false,
     systemInstalledLks: [],  // УСТАНОВЛЕННЫЕ ЛК (done + creds + dedik)
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
     systemPeriod: 'all',  // all | day | week | month
@@ -10325,40 +10330,51 @@ function jarvis() {
         this.kucByDroplk = j.by_droplk || {};
       } catch (e) { console.warn('refreshKuc', e); }
     },
-    async requestKuc(lk) {
-      const droplk_id = lk.droplk_id;
+    // Открывает HTML-модалку запроса КУЦ (вместо prompt — для Electron-совместимости)
+    openKucRequestModal(lk) {
       const bank = lk.bank || '—';
-      const fio = lk.fio || '—';
-      const defaultText = `Здравствуйте! Скажите ваше ФИО и фразу: «счёт в ${bank} принадлежит мне».`;
-      const message = prompt(
-        `📹 Запросить КУЦ\n\n` +
-        `ЛК: ${bank} / ${fio}\n` +
-        `ID: ${droplk_id}\n\n` +
-        `Текст инструкции клиенту (можно поправить):`,
-        defaultText
-      );
-      if (!message) return;
+      this.kucReqModalLk = lk;
+      this.kucReqModalText = `Здравствуйте! Скажите ваше ФИО и фразу: «счёт в ${bank} принадлежит мне».`;
+      this.kucReqModalOpen = true;
+    },
+    closeKucRequestModal() {
+      this.kucReqModalOpen = false;
+      this.kucReqModalLk = null;
+      this.kucReqModalText = '';
+    },
+    async submitKucRequest() {
+      const lk = this.kucReqModalLk;
+      if (!lk) return;
+      const message = (this.kucReqModalText || '').trim();
+      if (!message) { alert('Введите текст инструкции'); return; }
+      this.kucReqModalLoading = true;
       try {
-        const r = await fetch(`/api/system/lk/${droplk_id}/kuc/request`, {
+        const r = await fetch(`/api/system/lk/${lk.droplk_id}/kuc/request`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message }),
         });
         if (!r.ok) {
           const txt = await r.text();
-          alert('Ошибка: ' + txt); return;
+          alert('Ошибка: ' + txt);
+          return;
         }
         const j = await r.json();
-        const copyMsg = `✅ КУЦ запрошен.\n\nКлиент получил ссылку в рабочем чате.\nТокен: ${j.token.slice(0, 12)}...\n\nСкопировать ссылку?`;
-        if (confirm(copyMsg)) {
-          try {
-            await navigator.clipboard.writeText(j.url);
-            alert('Ссылка скопирована в буфер');
-          } catch (e) { alert('Ссылка: ' + j.url); }
+        // Копируем ссылку автоматически (вместо confirm)
+        let copyMsg = '✅ КУЦ запрошен. Клиент получил ссылку в рабочем чате.';
+        try {
+          await navigator.clipboard.writeText(j.url);
+          copyMsg += '\n\n📋 Ссылка также скопирована в буфер.';
+        } catch (e) {
+          copyMsg += '\n\nСсылка: ' + j.url;
         }
+        alert(copyMsg);
+        this.closeKucRequestModal();
         await this.refreshKuc();
       } catch (e) {
         alert('Ошибка: ' + e.message);
+      } finally {
+        this.kucReqModalLoading = false;
       }
     },
     openKucModal(token) {
@@ -11622,6 +11638,45 @@ function jarvis() {
       <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
       <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== KUC REQUEST MODAL (ввод текста инструкции, замена prompt) ===== -->
+<div x-show="kucReqModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeKucRequestModal()">
+  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1;">📹 Запросить КУЦ</h3>
+      <button @click="closeKucRequestModal()" :disabled="kucReqModalLoading"
+              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+    <template x-if="kucReqModalLk">
+      <div>
+        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-bottom: 10px;">
+          ЛК: <b style="color: var(--hud-primary);" x-text="(kucReqModalLk.bank || '—').toUpperCase()"></b>
+          / <span x-text="kucReqModalLk.fio || '—'"></span>
+          · <code style="font-size: 10px; color: rgba(255,255,255,0.4);" x-text="kucReqModalLk.droplk_id"></code>
+        </div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
+          Текст инструкции клиенту (можно поправить):
+        </div>
+        <textarea x-model="kucReqModalText"
+                  :disabled="kucReqModalLoading"
+                  placeholder="Введите что клиент должен сказать в видео…"
+                  style="width: 100%; min-height: 110px; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; line-height: 1.5; resize: vertical; margin-bottom: 14px; box-sizing: border-box;"></textarea>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(106,216,255,0.08); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px;">
+          ℹ После отправки бот напишет клиенту в его рабочий чат: <b>«Пройдите проверку: &lt;одноразовая ссылка&gt;»</b>. Клиент откроет ссылку и запишет 10-секундный видео-кружок. Вы получите его в этой же карточке.
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button :disabled="kucReqModalLoading" @click="submitKucRequest()"
+                  style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
+                  x-text="kucReqModalLoading ? '⏳ Отправка…' : '📤 Отправить запрос'"></button>
+          <button :disabled="kucReqModalLoading" @click="closeKucRequestModal()"
+                  style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
+        </div>
+      </div>
+    </template>
   </div>
 </div>
 
