@@ -55,12 +55,14 @@ KNOWLEDGE_SUBDIR = os.getenv("KNOWLEDGE_SUBDIR", "knowledge")
 # Persistent JSON storage path (mount Railway Volume here)
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/app/data/state.json")
 
-# === Credit (Кредитование) — фиксированные ID групп Telegram ===
-# Можно переопределить через env. Если ID неверный — сервис продолжит работать,
-# но захардкоженные main-чаты не будут распознаваться (доп. чаты через
-# «Ассистент возьми этот чат под кредитование - менеджер @ник» работают всегда).
-CREDIT_ACCESS_CHAT_ID = int(os.getenv("CREDIT_ACCESS_CHAT_ID", "-1005116975272"))
-CREDIT_PASSWORD_CHAT_ID = int(os.getenv("CREDIT_PASSWORD_CHAT_ID", "-1005234590907"))
+# === Credit (Кредитование) — фиксированные ID централизованных групп Telegram ===
+# Это «общие» группы куда CRM-бот пишет анкеты/ЛК всех кредитных клиентов
+# (зеркало HARDCODED_ADMIN_CHAT_ID / HARDCODED_PASSWORD_CHAT_ID у поставщиков).
+# Рабочие группы клиентов (где юрист общается) — отдельная история, они
+# регистрируются через команду «Ассистент возьми этот чат под кредитование - менеджер @ник»
+# и попадают в storage.credit_chats. Обе цепочки активируют credit-track.
+CREDIT_ACCESS_CHAT_ID = int(os.getenv("CREDIT_ACCESS_CHAT_ID", "-1003457011118"))
+CREDIT_PASSWORD_CHAT_ID = int(os.getenv("CREDIT_PASSWORD_CHAT_ID", "-1003945639230"))
 
 # === Defaults (used on first run; later editable via /admin) ===
 DEFAULT_WELCOME = (
