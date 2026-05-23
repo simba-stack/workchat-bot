@@ -4353,6 +4353,17 @@
     </template>
     <button class="btn" style="margin: 12px; font-size: 10px;" @click="openCreateChannel()">+ канал</button>
 
+    <!-- Гостевые звонки (Яндекс.Телемост-стиль) — ссылка по которой может зайти любой -->
+    <div class="dc-cat" style="margin-top: 4px;">
+      <div class="dc-cat-title">🌐 Гостевые звонки</div>
+      <button class="btn"
+              style="margin: 6px 12px; width: calc(100% - 24px); padding: 10px; font-size: 11px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; font-weight: 700; border: none; border-radius: 6px; cursor: pointer;"
+              @click="openCallCreateModal()">📞 Создать звонок (по ссылке)</button>
+      <div style="font-size: 9px; color: var(--text-dim); margin: 0 12px 8px; line-height: 1.4;">
+        Получишь ссылку + пароль. Любой человек заходит по ним — не нужно TG-логина.
+      </div>
+    </div>
+
     <!-- ME panel внизу -->
     <div class="dc-me-bar">
       <template x-if="me.photo_url">
