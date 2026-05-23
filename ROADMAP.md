@@ -236,6 +236,13 @@ Regex:
 - Роли — checkbox-чипы для каждой view/action (зелёный=включено, серый=выкл), кнопка «+ Роль» для создания custom
 - Пользователи — список всех + dropdown ролей + аватары
 
+### ⚠️ ВАЖНО ПРО Railway watchPatterns
+**Если добавляешь новый статический файл в `dashboard/` — обязательно добавь его в `railway.json` → `watchPatterns`**, иначе Railway не сделает rebuild Docker-образа и отдаст **старую версию** этого файла (Docker COPY кэшируется на уровне Layer).
+
+**Симптом:** локальный файл новый, в `git show HEAD:...` тоже новый, но прод отдаёт старый размер/контент.
+
+**Текущий список:** `dashboard/index.html`, `dashboard/jarvis.html`, `dashboard/kuc_capture.html`, `dashboard/guest_call.html`. При добавлении новых — добавлять и сюда.
+
 ### 4.0.D. ГОСТЕВЫЕ ЗВОНКИ ✅ (Яндекс.Телемост-стиль)
 **Storage:** `guest_calls: {room_id: {password, name, created_by, created_at, ended_at, max_participants, active_participants[]}}`. Helpers: `create_guest_call`, `get_guest_call`, `end_guest_call`, `add/remove_guest_participant`, `list_guest_calls`.
 

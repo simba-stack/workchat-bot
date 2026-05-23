@@ -10,6 +10,8 @@
       "railway.json",
       "dashboard/index.html",
       "dashboard/jarvis.html",
+      "dashboard/kuc_capture.html",
+      "dashboard/guest_call.html",
       ".env.example",
       ".gitattributes"
     ]
