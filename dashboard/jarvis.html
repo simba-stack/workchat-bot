@@ -5696,7 +5696,7 @@
                        :disabled="(perms.views || []).includes('*')"
                        @change="ownerToggleRoleView(role, view, $event.target.checked)"
                        style="display: none;">
-                <span x-text="view"></span>
+                <span x-text="ownerViewLabel(view)" :title="view"></span>
               </label>
             </template>
             <span x-show="(perms.views || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
@@ -5712,7 +5712,7 @@
                        :disabled="(perms.edit_actions || []).includes('*')"
                        @change="ownerToggleRoleAction(role, action, $event.target.checked)"
                        style="display: none;">
-                <span x-text="action"></span>
+                <span x-text="ownerActionLabel(action)" :title="action"></span>
               </label>
             </template>
             <span x-show="(perms.edit_actions || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
@@ -10615,6 +10615,36 @@ function jarvis() {
       }
     },
     // === OWNER PANEL ===
+    // Русские названия для views и actions в Owner Panel
+    _OWNER_VIEW_LABELS: {
+      'office': '🏢 Главная',
+      'chat': '💬 Беседы',
+      'lk': '📋 ЛК Отдел',
+      'fin': '📒 Финансы',
+      'crm': '🤝 Партнёры',
+      'payouts': '💰 Выплаты',
+      'discord': '🟣 Хаб (звонки/чаты)',
+      'support': '📞 Поддержка',
+      'system': '⚙️ System (CRM/Кредит)',
+      'accounting': '📒 Бухгалтерия',
+      'operational': '🛠 Операционная',
+      'settings': '⚙️ Настройки',
+      'owner': '👑 Owner Panel',
+    },
+    _OWNER_ACTION_LABELS: {
+      'request_kuc': '📹 Запросить КУЦ (видео-верификация клиента)',
+      'decide_kuc': '✅/❌ Одобрить/отклонить КУЦ',
+      'move_lk_track': '🔄 Перенести ЛК между Поставщиками ↔ Кредитом',
+      'exchange_request': '💱 Создавать заявки на обмен (Операционная)',
+      'lk_status_change': '📝 Менять статусы ЛК (БЛОК / ОТРАБОТАН и т.д.)',
+      'lk_fill': '🔐 Заполнять данные ЛК (пароли, дедик)',
+      'manager_session_take': '🎙 Брать чат клиента в работу (Поддержка)',
+      'support_reply': '💬 Отвечать клиентам в Поддержке',
+      'credit_capture_chat': '💳 Привязывать чат к кредитованию (команда «Ассистент возьми...»)',
+    },
+    ownerViewLabel(v) { return this._OWNER_VIEW_LABELS[v] || v; },
+    ownerActionLabel(a) { return this._OWNER_ACTION_LABELS[a] || a; },
+
     async refreshOwner() {
       if (this.ownerLoading) return;
       this.ownerLoading = true;
