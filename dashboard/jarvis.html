@@ -2961,6 +2961,10 @@
           x-text="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.reduce((a,c)=>a+c.size,0) || 0)"></span>
   </button>
   <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
+  <!-- 👑 OWNER PANEL — только для owner-роли -->
+  <button class="view-tab" x-show="(dashMe?.role || '') === 'owner'"
+          :class="currentView === 'owner' ? 'active' : ''"
+          @click="goToView('owner'); refreshOwner && refreshOwner()">👑 OWNER</button>
 
   <!-- Виджет профиля работника справа -->
   <div class="worker-profile-widget" x-show="dashMe">
@@ -5641,6 +5645,156 @@
        JS (accountingData/accountingNotes/refreshAccounting) оставлен на случай если используется ещё где-то. -->
 </section>
 
+<!-- ===== 👑 OWNER PANEL — только для owner ===== -->
+<section x-show="currentView === 'owner'" x-cloak style="padding: 24px; max-width: 1300px; margin: 0 auto;">
+  <div style="margin-bottom: 24px; display: flex; align-items: center; gap: 12px;">
+    <h2 style="margin: 0; font-size: 22px;">👑 Owner Panel</h2>
+    <span style="font-size: 13px; color: var(--text-dim);">— роли, разрешения, пользователи</span>
+    <button class="btn" @click="refreshOwner()" :disabled="ownerLoading" style="margin-left: auto;">↻ Обновить</button>
+    <button class="btn" @click="openCallCreateModal()" style="background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a;">📞 Создать звонок</button>
+  </div>
+
+  <!-- РОЛИ -->
+  <div class="jarvis-panel" style="padding: 16px; margin-bottom: 20px;">
+    <div class="panel-title" style="display: flex; align-items: center;">
+      🎭 Роли и разрешения
+      <span class="badge-mini" style="margin-left: 8px;" x-text="Object.keys(ownerRoles).length + ' ролей'"></span>
+      <div style="margin-left: auto; display: flex; gap: 6px; align-items: center;">
+        <input x-model="ownerNewRoleName" placeholder="new_role_name" style="padding: 5px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-size: 12px;">
+        <button class="btn" @click="ownerCreateRole()" style="padding: 5px 12px; font-size: 11px;">+ Роль</button>
+      </div>
+    </div>
+    <div style="max-height: 500px; overflow-y: auto; padding: 10px;">
+      <template x-for="(perms, role) in ownerRoles" :key="role">
+        <div style="padding: 14px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px; border-left: 3px solid var(--hud-primary);">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <code style="font-weight: 700; font-size: 13px; color: var(--hud-primary);" x-text="role"></code>
+            <span style="font-size: 12px; color: var(--text-dim);" x-text="perms.label || role"></span>
+            <button x-show="!['owner','manager','system','accounting','operationist'].includes(role)"
+                    @click="ownerDeleteRole(role)"
+                    style="margin-left: auto; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 3px 8px; font-size: 10px; cursor: pointer;">✕ Удалить</button>
+          </div>
+          <!-- Views -->
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">👁 ВКЛАДКИ (что видит):</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;">
+            <template x-for="view in ownerAllViews" :key="view">
+              <label style="font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer;"
+                     :style="(perms.views || []).includes(view) || (perms.views || []).includes('*') ? 'background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4);' : 'background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06);'">
+                <input type="checkbox"
+                       :checked="(perms.views || []).includes(view) || (perms.views || []).includes('*')"
+                       :disabled="(perms.views || []).includes('*')"
+                       @change="ownerToggleRoleView(role, view, $event.target.checked)"
+                       style="display: none;">
+                <span x-text="view"></span>
+              </label>
+            </template>
+            <span x-show="(perms.views || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
+          </div>
+          <!-- Edit Actions -->
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">✏️ ДЕЙСТВИЯ (что может изменять):</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+            <template x-for="action in ownerAllActions" :key="action">
+              <label style="font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer;"
+                     :style="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*') ? 'background: rgba(106,216,255,0.2); color: #6ad8ff; border: 1px solid rgba(106,216,255,0.4);' : 'background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06);'">
+                <input type="checkbox"
+                       :checked="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*')"
+                       :disabled="(perms.edit_actions || []).includes('*')"
+                       @change="ownerToggleRoleAction(role, action, $event.target.checked)"
+                       style="display: none;">
+                <span x-text="action"></span>
+              </label>
+            </template>
+            <span x-show="(perms.edit_actions || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ПОЛЬЗОВАТЕЛИ -->
+  <div class="jarvis-panel" style="padding: 16px;">
+    <div class="panel-title">
+      👥 Авторизованные пользователи <span class="badge-mini" style="margin-left: 8px;" x-text="ownerUsers.length + ' человек'"></span>
+    </div>
+    <div style="max-height: 500px; overflow-y: auto;">
+      <template x-for="u in ownerUsers" :key="u.tg_user_id">
+        <div style="padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: center; gap: 12px;">
+          <img x-show="u.photo_url" :src="u.photo_url" style="width: 32px; height: 32px; border-radius: 50%;" alt="">
+          <div x-show="!u.photo_url" style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; font-size: 14px;" x-text="(u.first_name || u.username || '?')[0]?.toUpperCase()"></div>
+          <div style="flex: 1;">
+            <div style="font-size: 13px; font-weight: 600;" x-text="(u.first_name || '—') + (u.username ? ' (@' + u.username + ')' : '')"></div>
+            <div style="font-size: 10px; color: var(--text-dim);" x-text="'tg_id: ' + u.tg_user_id + (u.last_seen_ts ? ' · last seen: ' + new Date(u.last_seen_ts * 1000).toLocaleString('ru-RU') : '')"></div>
+          </div>
+          <select :value="u.role" @change="ownerSetUserRole(u.username, $event.target.value)"
+                  style="padding: 6px 10px; background: rgba(0,0,0,0.4); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 12px;">
+            <option value="">— без роли —</option>
+            <template x-for="(p, r) in ownerRoles" :key="r">
+              <option :value="r" :selected="u.role === r" x-text="(p.label || r) + ' (' + r + ')'"></option>
+            </template>
+          </select>
+        </div>
+      </template>
+      <div x-show="ownerUsers.length === 0" style="padding: 30px; text-align: center; color: var(--text-dim); font-size: 13px;">
+        Пользователей пока нет — никто не логинился через TG OAuth
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Modal: создание гостевого звонка ===== -->
+<div x-show="callCreateModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeCallCreateModal()">
+  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 480px; width: 100%; padding: 20px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1;">📞 Создать звонок</h3>
+      <button @click="closeCallCreateModal()" style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+    <template x-if="!callCreateResult">
+      <div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">Название (для участников):</div>
+        <input x-model="callCreateName" placeholder="Звонок с клиентом"
+               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; margin-bottom: 14px; box-sizing: border-box; font-size: 14px;">
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">Пароль (оставь пустым — сгенерируется):</div>
+        <input x-model="callCreatePassword" placeholder="(автогенерация)"
+               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; margin-bottom: 14px; box-sizing: border-box; font-family: monospace;">
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(106,216,255,0.08); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px;">
+          ℹ Гости заходят по ссылке + паролю. Видео/аудио/демка. До 10 человек.
+        </div>
+        <button :disabled="callCreateLoading" @click="submitCallCreate()"
+                style="width: 100%; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
+                x-text="callCreateLoading ? '⏳ Создаём…' : '🚀 Создать комнату'"></button>
+      </div>
+    </template>
+    <template x-if="callCreateResult">
+      <div>
+        <div style="padding: 14px; background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; margin-bottom: 14px;">
+          <div style="color: #4ade80; font-weight: 700; margin-bottom: 6px;">✅ Комната создана</div>
+          <div style="font-size: 11px; color: rgba(255,255,255,0.6);" x-text="'Название: ' + callCreateResult.name"></div>
+        </div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">🔗 Ссылка:</div>
+        <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+          <input :value="callCreateResult.url" readonly
+                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; font-size: 12px;">
+          <button class="btn" @click="copyToClipboard(callCreateResult.url)" style="padding: 8px 14px;">📋</button>
+        </div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">🔐 Пароль:</div>
+        <div style="display: flex; gap: 6px; margin-bottom: 14px;">
+          <input :value="callCreateResult.password" readonly
+                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; font-size: 14px; font-weight: 700;">
+          <button class="btn" @click="copyToClipboard(callCreateResult.password)" style="padding: 8px 14px;">📋</button>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <a :href="callCreateResult.url" target="_blank"
+             style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; text-align: center; text-decoration: none;">🎙 Войти в звонок</a>
+          <button @click="closeCallCreateModal()"
+                  style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">Готово</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
 <section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
@@ -6308,6 +6462,19 @@ function jarvis() {
     creditPasswordsInbox: [],  // 💳 КРЕДИТ | Пароли — inbox с заполнением
     creditManagers: [],        // список менеджеров со статистикой
     creditLoading: false,
+    // === OWNER PANEL ===
+    ownerRoles: {},        // {role_name: {label, views, edit_actions}}
+    ownerAllViews: [],     // список всех известных view-ids для UI
+    ownerAllActions: [],   // список всех edit-actions
+    ownerUsers: [],        // [{tg_user_id, username, first_name, role, is_admin, ...}]
+    ownerLoading: false,
+    ownerNewRoleName: '',  // input для создания новой роли
+    // === GUEST CALLS ===
+    callCreateModalOpen: false,
+    callCreateName: '',
+    callCreatePassword: '',
+    callCreateResult: null,  // {room_id, password, url, name}
+    callCreateLoading: false,
     // === KUC (Кружок Удостоверения Клиента) ===
     kucByDroplk: {},           // {droplk_id: {token, status, ...}} — текущий KUC для каждого ЛК
     kucModalOpen: false,
@@ -10436,6 +10603,130 @@ function jarvis() {
         this.kucModalLoading = false;
       }
     },
+    // === OWNER PANEL ===
+    async refreshOwner() {
+      if (this.ownerLoading) return;
+      this.ownerLoading = true;
+      try {
+        const [rolesRes, usersRes] = await Promise.all([
+          fetch('/api/owner/roles', { credentials: 'include' }),
+          fetch('/api/owner/users', { credentials: 'include' }),
+        ]);
+        if (rolesRes.ok) {
+          const j = await rolesRes.json();
+          this.ownerRoles = j.roles || {};
+          this.ownerAllViews = j.all_views || [];
+          this.ownerAllActions = j.all_actions || [];
+        }
+        if (usersRes.ok) {
+          const j = await usersRes.json();
+          this.ownerUsers = j.users || [];
+        }
+      } catch (e) { console.error('refreshOwner', e); }
+      finally { this.ownerLoading = false; }
+    },
+    async ownerSetUserRole(username, newRole) {
+      if (!confirm(`Установить роль «${newRole || '(без роли)'}» для @${username}?`)) return;
+      try {
+        const r = await fetch(`/api/owner/users/${encodeURIComponent(username)}/role`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: newRole }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOwner();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async ownerToggleRoleView(role, view, enable) {
+      const perms = this.ownerRoles[role];
+      if (!perms) return;
+      let views = [...(perms.views || [])];
+      const idx = views.indexOf(view);
+      if (enable && idx < 0) views.push(view);
+      if (!enable && idx >= 0) views.splice(idx, 1);
+      try {
+        await fetch('/api/owner/roles', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role, views }),
+        });
+        await this.refreshOwner();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async ownerToggleRoleAction(role, action, enable) {
+      const perms = this.ownerRoles[role];
+      if (!perms) return;
+      let acts = [...(perms.edit_actions || [])];
+      const idx = acts.indexOf(action);
+      if (enable && idx < 0) acts.push(action);
+      if (!enable && idx >= 0) acts.splice(idx, 1);
+      try {
+        await fetch('/api/owner/roles', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role, edit_actions: acts }),
+        });
+        await this.refreshOwner();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async ownerCreateRole() {
+      const role = (this.ownerNewRoleName || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (!role) { alert('Введи имя роли (только латиница/цифры/подчёркивание)'); return; }
+      if (this.ownerRoles[role]) { alert('Роль уже существует'); return; }
+      try {
+        await fetch('/api/owner/roles', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role, label: role, views: [], edit_actions: [] }),
+        });
+        this.ownerNewRoleName = '';
+        await this.refreshOwner();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async ownerDeleteRole(role) {
+      if (!confirm(`Удалить роль «${role}»? Юзеры с этой ролью останутся, но получат default-доступ.`)) return;
+      try {
+        const r = await fetch(`/api/owner/roles/${role}`, {
+          method: 'DELETE', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOwner();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === GUEST CALLS ===
+    openCallCreateModal() {
+      this.callCreateName = 'Звонок';
+      this.callCreatePassword = '';
+      this.callCreateResult = null;
+      this.callCreateModalOpen = true;
+    },
+    closeCallCreateModal() {
+      this.callCreateModalOpen = false;
+      this.callCreateResult = null;
+    },
+    async submitCallCreate() {
+      this.callCreateLoading = true;
+      try {
+        const r = await fetch('/api/calls/create', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: this.callCreateName,
+            password: this.callCreatePassword,
+            max_participants: 10,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this.callCreateResult = await r.json();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+      finally { this.callCreateLoading = false; }
+    },
+    async copyToClipboard(text) {
+      try { await navigator.clipboard.writeText(text); alert('Скопировано'); }
+      catch (e) { alert('Текст: ' + text); }
+    },
+
     kucStatusBadge(droplk_id) {
       const k = this.kucByDroplk[droplk_id];
       if (!k) return null;

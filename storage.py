@@ -231,6 +231,25 @@ def _default_state() -> dict:
         # Текст разделов welcome (для редактирования без перезаписи кода).
         "invite_jobs_text": "",
 
+        # ==== OWNER PANEL: разрешения по ролям + custom roles ====
+        # Структура: {role_name: {label, views: [view_id, ...], edit_actions: [action_id, ...]}}
+        # views — список вкладок navigation которые видит роль. "*" = все.
+        # edit_actions — список действий (request_kuc, decide_kuc, move_lk_track, и т.д.). "*" = все.
+        # Дефолты создаются в _ensure_default_role_permissions() при первом обращении.
+        "role_permissions": {},
+        # Доп. роли (custom — созданы owner'ом сверх готовых owner/manager/system/accounting/operationist).
+        # Список имён + краткое описание (нужно чтобы UI знал какие роли можно назначать).
+        "custom_roles": [],
+
+        # ==== GUEST CALLS (звонки по одноразовой ссылке — типа Яндекс.Телемост) ====
+        # Структура: {room_id: {
+        #   room_id, password, name (комната), created_by (username),
+        #   created_at, ended_at, max_participants,
+        #   active_participants: [{participant_id, name, joined_at}],
+        # }}
+        # Без TTL — комната живёт пока owner не завершит (или процесс упадёт — тогда state.json restore).
+        "guest_calls": {},
+
         # ==== KUC (Кружок Удостоверения Клиента — KYC через одноразовую ссылку) ====
         # Структура: {token: {
         #   token, droplk_id, work_chat_id, requested_by, request_text,
@@ -3304,6 +3323,171 @@ class Storage:
                 return False
             k["ai_score"] = float(score or 0)
             k["ai_comment"] = comment or ""
+            await self._save_unlocked()
+            return True
+
+    # =====================================================================
+    # OWNER PANEL — роли и разрешения
+    # =====================================================================
+    # Список всех известных view'ов в JARVIS (для UI selector'а в Owner Panel)
+    _ALL_VIEWS = [
+        "office", "chat", "lk", "fin", "crm", "payouts", "discord",
+        "support", "system", "accounting", "operational", "settings", "owner",
+    ]
+    # Список всех известных edit-actions (для UI selector'а)
+    _ALL_EDIT_ACTIONS = [
+        "request_kuc", "decide_kuc", "move_lk_track", "exchange_request",
+        "lk_status_change", "lk_fill", "manager_session_take", "support_reply",
+        "credit_capture_chat",
+    ]
+    # Дефолтные роли + их доступ (создаются при первом обращении)
+    _DEFAULT_ROLE_PERMS = {
+        "owner": {"label": "👑 Owner", "views": ["*"], "edit_actions": ["*"]},
+        "manager": {"label": "👤 Manager",
+                    "views": ["office", "chat", "lk", "crm", "support", "system", "operational"],
+                    "edit_actions": ["request_kuc", "decide_kuc", "move_lk_track",
+                                     "lk_status_change", "lk_fill", "manager_session_take",
+                                     "support_reply", "credit_capture_chat"]},
+        "system": {"label": "⚙️ System",
+                   "views": ["office", "system", "operational"],
+                   "edit_actions": ["request_kuc", "decide_kuc", "lk_fill"]},
+        "accounting": {"label": "💰 Accounting",
+                       "views": ["office", "fin", "payouts", "accounting"],
+                       "edit_actions": ["exchange_request"]},
+        "operationist": {"label": "🛠 Operationist",
+                         "views": ["office", "operational", "lk"],
+                         "edit_actions": ["exchange_request", "lk_status_change"]},
+    }
+
+    def _ensure_default_role_permissions(self):
+        """Заполняет role_permissions дефолтами если пусто."""
+        rp = self.state.setdefault("role_permissions", {})
+        for role_name, perms in self._DEFAULT_ROLE_PERMS.items():
+            if role_name not in rp:
+                rp[role_name] = dict(perms)
+
+    def list_role_permissions(self) -> dict:
+        self._ensure_default_role_permissions()
+        return dict(self.state.get("role_permissions") or {})
+
+    def get_role_permission(self, role: str) -> dict:
+        self._ensure_default_role_permissions()
+        return (self.state.get("role_permissions") or {}).get(role) or {}
+
+    async def set_role_permission(self, role: str, label: str = "",
+                                  views: Optional[list] = None,
+                                  edit_actions: Optional[list] = None) -> dict:
+        """Создаёт/обновляет роль. Возвращает обновлённую запись."""
+        async with _lock:
+            rp = self.state.setdefault("role_permissions", {})
+            existing = rp.get(role) or {}
+            rp[role] = {
+                "label": label or existing.get("label") or role,
+                "views": list(views) if views is not None else (existing.get("views") or []),
+                "edit_actions": list(edit_actions) if edit_actions is not None else (existing.get("edit_actions") or []),
+            }
+            # Если роль — кастомная (не в дефолтах) — добавим в custom_roles для UI
+            if role not in self._DEFAULT_ROLE_PERMS:
+                custom = self.state.setdefault("custom_roles", [])
+                if role not in custom:
+                    custom.append(role)
+            await self._save_unlocked()
+            return rp[role]
+
+    async def delete_role_permission(self, role: str) -> bool:
+        """Удалить кастомную роль. Дефолтные нельзя удалить."""
+        if role in self._DEFAULT_ROLE_PERMS:
+            return False
+        async with _lock:
+            rp = self.state.get("role_permissions") or {}
+            if role in rp:
+                del rp[role]
+            custom = self.state.get("custom_roles") or []
+            if role in custom:
+                custom.remove(role)
+            await self._save_unlocked()
+            return True
+
+    def role_can_view(self, role: str, view_id: str) -> bool:
+        perms = self.get_role_permission(role)
+        views = perms.get("views") or []
+        return ("*" in views) or (view_id in views)
+
+    def role_can_edit(self, role: str, action: str) -> bool:
+        perms = self.get_role_permission(role)
+        acts = perms.get("edit_actions") or []
+        return ("*" in acts) or (action in acts)
+
+    def list_all_known_views(self) -> list:
+        return list(self._ALL_VIEWS)
+
+    def list_all_known_actions(self) -> list:
+        return list(self._ALL_EDIT_ACTIONS)
+
+    # =====================================================================
+    # GUEST CALLS — звонки по одноразовой ссылке (Яндекс.Телемост-стиль)
+    # =====================================================================
+    def list_guest_calls(self, only_active: bool = True) -> dict:
+        gc = self.state.get("guest_calls") or {}
+        if not only_active:
+            return dict(gc)
+        return {k: v for k, v in gc.items() if not v.get("ended_at")}
+
+    def get_guest_call(self, room_id: str) -> Optional[dict]:
+        return (self.state.get("guest_calls") or {}).get(str(room_id))
+
+    async def create_guest_call(self, created_by: str, name: str = "",
+                                password: str = "", max_participants: int = 10) -> dict:
+        """Создаёт комнату для гостевого звонка. Возвращает {room_id, password, ...}."""
+        import uuid as _uuid
+        import secrets as _secrets
+        async with _lock:
+            room_id = _uuid.uuid4().hex[:16]
+            pwd = password or _secrets.token_urlsafe(6)  # короткий читаемый пароль
+            gcs = self.state.setdefault("guest_calls", {})
+            entry = {
+                "room_id": room_id,
+                "password": pwd,
+                "name": name or "Звонок",
+                "created_by": (created_by or "").lstrip("@").lower(),
+                "created_at": time.time(),
+                "ended_at": 0,
+                "max_participants": int(max_participants or 10),
+                "active_participants": [],
+            }
+            gcs[room_id] = entry
+            await self._save_unlocked()
+            return entry
+
+    async def end_guest_call(self, room_id: str, ended_by: str = "") -> bool:
+        async with _lock:
+            gc = (self.state.get("guest_calls") or {}).get(str(room_id))
+            if not gc:
+                return False
+            gc["ended_at"] = time.time()
+            gc["ended_by"] = ended_by or ""
+            await self._save_unlocked()
+            return True
+
+    async def add_guest_participant(self, room_id: str, participant_id: str, name: str = "") -> bool:
+        async with _lock:
+            gc = (self.state.get("guest_calls") or {}).get(str(room_id))
+            if not gc:
+                return False
+            parts = gc.setdefault("active_participants", [])
+            if not any(p.get("participant_id") == participant_id for p in parts):
+                parts.append({"participant_id": participant_id, "name": name or "Гость",
+                              "joined_at": time.time()})
+                await self._save_unlocked()
+            return True
+
+    async def remove_guest_participant(self, room_id: str, participant_id: str) -> bool:
+        async with _lock:
+            gc = (self.state.get("guest_calls") or {}).get(str(room_id))
+            if not gc:
+                return False
+            parts = gc.get("active_participants") or []
+            gc["active_participants"] = [p for p in parts if p.get("participant_id") != participant_id]
             await self._save_unlocked()
             return True
 

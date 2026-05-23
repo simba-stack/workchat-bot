@@ -1829,6 +1829,307 @@ async def kuc_list(_: None = Depends(_auth)):
 
 
 # =====================================================================
+# OWNER PANEL — управление ролями и разрешениями
+# =====================================================================
+# Доступ только для simba_pride_adm (или role == "owner" из worker_roles).
+
+def _require_owner(me: dict):
+    """Пускаем только владельца. Raise HTTPException(403) иначе."""
+    if (me.get("role") or "").lower() != "owner":
+        raise HTTPException(403, "owner only")
+
+
+@app.get("/api/owner/roles")
+async def owner_list_roles(me: dict = Depends(_get_me)):
+    _require_owner(me)
+    if not hasattr(storage, "list_role_permissions"):
+        return {"ok": True, "roles": {}, "all_views": [], "all_actions": []}
+    return {
+        "ok": True,
+        "roles": storage.list_role_permissions(),
+        "all_views": storage.list_all_known_views(),
+        "all_actions": storage.list_all_known_actions(),
+    }
+
+
+@app.post("/api/owner/roles")
+async def owner_set_role(request: Request, me: dict = Depends(_get_me)):
+    """Body: {role: str, label?: str, views?: [str], edit_actions?: [str]}"""
+    _require_owner(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    role = (body.get("role") or "").strip().lower()
+    if not role or not role.replace("_", "").isalnum():
+        raise HTTPException(400, "role must be alphanumeric (or underscore)")
+    label = body.get("label") or ""
+    views = body.get("views")  # None = не менять
+    actions = body.get("edit_actions")
+    entry = await storage.set_role_permission(role, label=label, views=views, edit_actions=actions)
+    return {"ok": True, "role": role, "data": entry}
+
+
+@app.delete("/api/owner/roles/{role}")
+async def owner_delete_role(role: str, me: dict = Depends(_get_me)):
+    _require_owner(me)
+    ok = await storage.delete_role_permission(role)
+    if not ok:
+        raise HTTPException(400, "Default role (cannot delete) or not found")
+    return {"ok": True, "role": role}
+
+
+@app.get("/api/owner/users")
+async def owner_list_users(me: dict = Depends(_get_me)):
+    """Список всех известных юзеров (из tg_user_info) + их роли. Доступно только owner."""
+    _require_owner(me)
+    storage.reload_sync()
+    users = storage.state.get("tg_user_info") or {}
+    roles_map = storage.list_worker_roles() or {}
+    out = []
+    for uid_str, info in users.items():
+        username = (info.get("username") or "").lstrip("@").lower()
+        role_info = roles_map.get(username) if username else None
+        out.append({
+            "tg_user_id": int(uid_str) if str(uid_str).lstrip("-").isdigit() else 0,
+            "username": username,
+            "first_name": info.get("first_name") or "",
+            "last_name": info.get("last_name") or "",
+            "photo_url": info.get("photo_url") or "",
+            "last_seen_ts": info.get("last_seen_ts") or 0,
+            "role": (role_info or {}).get("role") or "",
+            "is_admin": bool((role_info or {}).get("is_admin")),
+        })
+    out.sort(key=lambda x: -(x.get("last_seen_ts") or 0))
+    return {"ok": True, "users": out, "count": len(out)}
+
+
+@app.post("/api/owner/users/{username}/role")
+async def owner_set_user_role(username: str, request: Request, me: dict = Depends(_get_me)):
+    """Body: {role: str, is_admin?: bool}. Доступно только owner."""
+    _require_owner(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    new_role = (body.get("role") or "").strip().lower()
+    is_admin = bool(body.get("is_admin", False))
+    uname = (username or "").lstrip("@").lower()
+    if not uname:
+        raise HTTPException(400, "username required")
+    # Если role пустой — снимаем роль
+    if not new_role:
+        await storage.delete_worker_role(uname) if hasattr(storage, "delete_worker_role") else None
+        return {"ok": True, "username": uname, "role": ""}
+    # Иначе проверим что такая роль существует
+    if not storage.get_role_permission(new_role):
+        raise HTTPException(400, f"Unknown role: {new_role}")
+    await storage.set_worker_role(uname, role=new_role, is_admin=is_admin)
+    return {"ok": True, "username": uname, "role": new_role, "is_admin": is_admin}
+
+
+# =====================================================================
+# GUEST CALLS — звонки по одноразовой ссылке (Яндекс.Телемост-стиль)
+# =====================================================================
+
+@app.post("/api/calls/create")
+async def calls_create(request: Request, me: dict = Depends(_get_me)):
+    """Создаёт комнату для звонка. Любой авторизованный пользователь.
+    Body: {name?: str, password?: str, max_participants?: int}.
+    Возвращает {room_id, password, url}."""
+    if not me.get("username"):
+        raise HTTPException(403, "auth required")
+    body = {}
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        pass
+    name = (body.get("name") or "").strip() or "Звонок"
+    password = (body.get("password") or "").strip()
+    max_participants = int(body.get("max_participants") or 10)
+    entry = await storage.create_guest_call(
+        created_by=me.get("username") or "",
+        name=name, password=password, max_participants=max_participants,
+    )
+    base_url = _os_kuc.environ.get("KUC_BASE_URL") or str(request.base_url).rstrip("/")
+    url = f"{base_url}/call/{entry['room_id']}"
+    return {
+        "ok": True, "room_id": entry["room_id"], "password": entry["password"],
+        "url": url, "name": entry["name"],
+    }
+
+
+@app.get("/api/calls/list")
+async def calls_list(me: dict = Depends(_get_me)):
+    """Список активных звонков. Все авторизованные видят."""
+    if not me.get("username"):
+        raise HTTPException(403, "auth required")
+    items = storage.list_guest_calls(only_active=True) if hasattr(storage, "list_guest_calls") else {}
+    return {"ok": True, "calls": items, "count": len(items)}
+
+
+@app.post("/api/calls/{room_id}/end")
+async def calls_end(room_id: str, me: dict = Depends(_get_me)):
+    """Завершить звонок. Только creator или owner."""
+    gc = storage.get_guest_call(room_id)
+    if not gc:
+        raise HTTPException(404, "room not found")
+    if (me.get("role") or "") != "owner" and gc.get("created_by") != (me.get("username") or ""):
+        raise HTTPException(403, "only creator or owner can end")
+    await storage.end_guest_call(room_id, ended_by=me.get("username") or "")
+    return {"ok": True, "room_id": room_id}
+
+
+@app.get("/call/{room_id}")
+async def guest_call_page(room_id: str):
+    """Отдаёт guest_call.html для гостя. Без auth — публичный по ссылке."""
+    gc = storage.get_guest_call(room_id)
+    if not gc:
+        return HTMLResponse("<h1>Звонок не найден или завершён</h1>", status_code=404)
+    if gc.get("ended_at"):
+        return HTMLResponse("<h1>Звонок завершён</h1>", status_code=410)
+    path = _Path_kuc(__file__).parent / "dashboard" / "guest_call.html"
+    if not path.exists():
+        return HTMLResponse("<h1>Страница не найдена</h1>", status_code=500)
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/calls/{room_id}/info")
+async def calls_info_public(room_id: str):
+    """Публичная инфа о звонке (без password). Для guest-страницы."""
+    gc = storage.get_guest_call(room_id)
+    if not gc or gc.get("ended_at"):
+        raise HTTPException(404, "room not found or ended")
+    return {
+        "ok": True, "room_id": room_id,
+        "name": gc.get("name") or "Звонок",
+        "active_participants": gc.get("active_participants") or [],
+        "created_at": gc.get("created_at") or 0,
+    }
+
+
+@app.post("/api/calls/{room_id}/join")
+async def calls_join(room_id: str, request: Request):
+    """Гость пытается войти в комнату. Body: {name: str, password: str}.
+    Возвращает participant_id для WS-подключения."""
+    gc = storage.get_guest_call(room_id)
+    if not gc or gc.get("ended_at"):
+        raise HTTPException(404, "room not found or ended")
+    body = {}
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        pass
+    name = (body.get("name") or "").strip() or "Гость"
+    password = (body.get("password") or "").strip()
+    if password != gc.get("password"):
+        raise HTTPException(401, "wrong password")
+    # Лимит участников
+    parts = gc.get("active_participants") or []
+    if len(parts) >= int(gc.get("max_participants") or 10):
+        raise HTTPException(429, "Room is full")
+    # Создаём participant_id
+    import uuid as _uuid
+    participant_id = _uuid.uuid4().hex[:12]
+    await storage.add_guest_participant(room_id, participant_id, name=name)
+    return {
+        "ok": True, "participant_id": participant_id, "name": name,
+        "room_id": room_id,
+        "ws_url": f"/ws-guest-call?room_id={room_id}&participant_id={participant_id}",
+        "active_participants": gc.get("active_participants") or [],
+    }
+
+
+# WebSocket signaling для гостей
+_guest_call_sessions = {}  # {participant_id: {ws, room_id, name}}
+
+
+@app.websocket("/ws-guest-call")
+async def guest_call_ws(ws: WebSocket):
+    """WebSocket signaling для гостевых звонков. Параметры query: room_id, participant_id.
+    Протокол похож на /ws-discord:
+      Клиент → Сервер: {type: "signal", target, payload}, {type: "ping"}, {type: "leave"}
+      Сервер → Клиент: {type: "ready", participant_id, peers}, {type: "peer-joined", participant},
+                       {type: "peer-left", participant_id}, {type: "signal", from, payload}
+    """
+    room_id = ws.query_params.get("room_id", "")
+    participant_id = ws.query_params.get("participant_id", "")
+    if not room_id or not participant_id:
+        await ws.close(code=4400)
+        return
+    gc = storage.get_guest_call(room_id)
+    if not gc or gc.get("ended_at"):
+        await ws.close(code=4404)
+        return
+    # Проверим что participant зарегистрирован
+    parts = gc.get("active_participants") or []
+    me_part = next((p for p in parts if p.get("participant_id") == participant_id), None)
+    if not me_part:
+        await ws.close(code=4401)
+        return
+    try:
+        await ws.accept()
+    except Exception:
+        return
+    # Сохраним сессию
+    _guest_call_sessions[participant_id] = {"ws": ws, "room_id": room_id, "name": me_part.get("name", "")}
+    # Список других участников в комнате (для mesh)
+    peers_in_room = [
+        {"participant_id": pid, "name": s.get("name", "")}
+        for pid, s in _guest_call_sessions.items()
+        if s.get("room_id") == room_id and pid != participant_id
+    ]
+    # Шлём ready
+    try:
+        await ws.send_json({"type": "ready", "participant_id": participant_id, "peers": peers_in_room})
+    except Exception:
+        pass
+    # Уведомим остальных peers что этот вошёл
+    for pid, s in list(_guest_call_sessions.items()):
+        if s.get("room_id") == room_id and pid != participant_id:
+            try:
+                await s["ws"].send_json({"type": "peer-joined",
+                                          "participant": {"participant_id": participant_id,
+                                                          "name": me_part.get("name", "")}})
+            except Exception:
+                pass
+    # Loop
+    try:
+        while True:
+            data = await ws.receive_json()
+            mtype = data.get("type", "")
+            if mtype == "ping":
+                try: await ws.send_json({"type": "pong"})
+                except Exception: pass
+                continue
+            if mtype == "leave":
+                break
+            if mtype == "signal":
+                target = data.get("target", "")
+                payload = data.get("payload", {})
+                target_s = _guest_call_sessions.get(target)
+                if target_s and target_s.get("room_id") == room_id:
+                    try:
+                        await target_s["ws"].send_json({
+                            "type": "signal", "from": participant_id, "payload": payload,
+                        })
+                    except Exception:
+                        pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("guest-call ws %s: %s", participant_id, e)
+    finally:
+        # Cleanup
+        _guest_call_sessions.pop(participant_id, None)
+        try:
+            await storage.remove_guest_participant(room_id, participant_id)
+        except Exception:
+            pass
+        # Уведомим остальных
+        for pid, s in list(_guest_call_sessions.items()):
+            if s.get("room_id") == room_id:
+                try:
+                    await s["ws"].send_json({"type": "peer-left", "participant_id": participant_id})
+                except Exception:
+                    pass
+
+
+# =====================================================================
 # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
 # =====================================================================
 

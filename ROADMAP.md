@@ -222,6 +222,38 @@ Regex:
 
 **Что нужно:** ffmpeg в Dockerfile (`apt-get install ffmpeg`), Anthropic Python SDK уже стоит.
 
+### 4.0.C. OWNER PANEL ✅ (роли и разрешения)
+**Storage:** `role_permissions: {role: {label, views, edit_actions}}` + `custom_roles: []` + 5 дефолтных ролей (owner / manager / system / accounting / operationist) с предзаполненными правами. Helpers: `list_role_permissions`, `set_role_permission`, `delete_role_permission`, `role_can_view`, `role_can_edit`, `list_all_known_views/actions`.
+
+**API** (owner-only через `_require_owner(me)`):
+- `GET /api/owner/roles` — все роли + список all_views + all_actions
+- `POST /api/owner/roles` — создать/обновить (body: role, label, views, edit_actions)
+- `DELETE /api/owner/roles/{role}` — удалить custom-роль (дефолтные нельзя)
+- `GET /api/owner/users` — все юзеры из tg_user_info + их роли
+- `POST /api/owner/users/{username}/role` — назначить роль (body: role, is_admin)
+
+**Frontend:** новая вкладка `👑 OWNER` (x-show=role===owner) с двумя панелями:
+- Роли — checkbox-чипы для каждой view/action (зелёный=включено, серый=выкл), кнопка «+ Роль» для создания custom
+- Пользователи — список всех + dropdown ролей + аватары
+
+### 4.0.D. ГОСТЕВЫЕ ЗВОНКИ ✅ (Яндекс.Телемост-стиль)
+**Storage:** `guest_calls: {room_id: {password, name, created_by, created_at, ended_at, max_participants, active_participants[]}}`. Helpers: `create_guest_call`, `get_guest_call`, `end_guest_call`, `add/remove_guest_participant`, `list_guest_calls`.
+
+**API:**
+- `POST /api/calls/create` (любой авторизованный) → `{room_id, password, url}`
+- `GET /api/calls/list` — активные звонки
+- `POST /api/calls/{id}/end` — завершить (creator или owner)
+- `GET /call/{room_id}` (публичный) → отдаёт guest_call.html
+- `GET /api/calls/{id}/info` (публичный) → имя+участники без пароля
+- `POST /api/calls/{id}/join` (публичный) → `{name, password}` → `participant_id`
+- `WebSocket /ws-guest-call?room_id&participant_id` — signaling mesh (peer-joined / peer-left / signal[ice/offer/answer])
+
+**Frontend:**
+- `dashboard/guest_call.html` — новая страница: ввод имени+пароля → getUserMedia → WebRTC mesh с STUN (Google) → видео-tiles, кнопки 🎙/📹/🖥/🚪. Screen share через `getDisplayMedia` + `replaceTrack`.
+- В JARVIS → Owner Panel — кнопка «📞 Создать звонок» (модалка с url+password)
+
+**WebRTC:** P2P mesh без SFU (до 10 человек). STUN: stun.l.google.com. TURN не настроен — может не работать через NAT (тогда добавь TURN сервер в `ICE_SERVERS` в guest_call.html).
+
 ### 4.1. Нумерация в TG-сообщениях бота (Шаг B) ⏳
 - Нужно пройтись по crm_bot.py — найти ~20 мест где формируются сообщения с упоминанием ЛК (accept_drop, post_to_pass_group, post_anketa и т.д.)
 - Добавить `#slot_number/slot_total` в формат
