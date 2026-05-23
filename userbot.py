@@ -1185,6 +1185,14 @@ class UserbotService:
         has_photo = bool(getattr(event.message, "photo", None))
         if not (event.message.text or "").strip() and not has_photo:
             return
+        # === CREDIT chat capture — должно идти ДО takeover ===
+        # «Ассистент возьми этот чат под кредитование - менеджер @ник [как ПАРОЛИ]»
+        # Иначе takeover съест "под" как @-mention. См. ROADMAP > Кредитование.
+        try:
+            if await self._maybe_handle_credit_capture(event, chat_id):
+                return
+        except Exception as e:
+            logger.warning("credit capture handler error: %s", e)
         try:
             if await self._maybe_handle_takeover_command(event, chat_id, chat_info):
                 return
@@ -3501,6 +3509,86 @@ class UserbotService:
         r"(?:\s+этот\s+чат|\s+тут|\s+здесь|\s+отсюда)?\s*$",
         re.I | re.M,
     )
+
+    # CREDIT capture regex — должен срабатывать раньше TAKEOVER
+    # Триггер: "Ассистент возьми этот чат под кредитов*" + опционально "менеджер @ник"
+    _AI_CMD_CREDIT_CAPTURE_RE = re.compile(
+        r"(?i)ассистент.*?(?:возьми|регистри|закрепи|зарегистрируй).*?кредитов\w*",
+    )
+    _AI_CMD_CREDIT_MANAGER_RE = re.compile(
+        r"(?i)менеджер[\s,:\-—]*@?(\w{3,})",
+    )
+
+    async def _maybe_handle_credit_capture(self, event, chat_id) -> bool:
+        """Команда: «Ассистент возьми этот чат под кредитование - менеджер @ник [как ПАРОЛИ]»
+        Регистрирует чат как credit-чат и привязывает менеджера-юриста.
+        Доступно только админам/owner'ам. Возвращает True если обработано.
+        """
+        text = (event.message and event.message.text) or ""
+        if not text or not self._AI_CMD_CREDIT_CAPTURE_RE.search(text):
+            return False
+        # Проверка прав
+        try:
+            sender_id = int(event.sender_id) if event.sender_id else 0
+        except Exception:
+            sender_id = 0
+        try:
+            sender = await event.get_sender()
+        except Exception:
+            sender = None
+        sender_username = (getattr(sender, "username", "") or "").lower()
+        is_admin = sender_id in (storage.get_admins() or [])
+        is_worker = sender_username and sender_username in {
+            w.lower() for w in storage.get_workers()
+        }
+        if not (is_admin or is_worker):
+            return False  # молча игнорим
+        # Извлекаем менеджера
+        m = self._AI_CMD_CREDIT_MANAGER_RE.search(text)
+        if not m:
+            await event.reply(
+                "🤖 Понял про <b>кредитование</b>, но не нашёл <b>@username менеджера</b>.\n\n"
+                "Пример: <code>Ассистент возьми этот чат под кредитование - менеджер @ivan</code>\n"
+                "Опционально: <code>как ПАРОЛИ</code> (по умолчанию ДОСТУПЫ).",
+                parse_mode="html",
+            )
+            return True
+        manager_username = m.group(1).lower()
+        # Тип чата: pwd vs access
+        is_password = bool(re.search(r"(?i)парол", text))
+        is_access = not is_password
+        try:
+            await storage.register_credit_chat(
+                chat_id=chat_id,
+                manager_username=manager_username,
+                is_access=is_access,
+                is_password=is_password,
+                registered_by_owner_id=sender_id,
+            )
+            await storage.register_credit_manager(username=manager_username)
+            logger.info(
+                "CREDIT chat registered via userbot: chat=%s manager=@%s type=%s by_user=%s",
+                chat_id, manager_username,
+                "ПАРОЛИ" if is_password else "ДОСТУПЫ", sender_id,
+            )
+            kind_emoji = "🔐" if is_password else "📥"
+            kind_name = "ПАРОЛИ" if is_password else "ДОСТУПЫ"
+            await event.reply(
+                f"✅ <b>Чат закреплён за КРЕДИТОВАНИЕМ</b>\n\n"
+                f"{kind_emoji} Тип: <b>{kind_name}</b>\n"
+                f"👤 Менеджер-юрист: <b>@{manager_username}</b>\n"
+                f"💬 Чат ID: <code>{chat_id}</code>\n\n"
+                f"Все ЛК/анкеты теперь идут в раздел "
+                f"<b>System → 💳 КРЕДИТ | {kind_name}</b> в JARVIS.",
+                parse_mode="html",
+            )
+        except Exception as e:
+            logger.error("CREDIT capture failed: %s", e, exc_info=True)
+            await event.reply(
+                f"⚠️ Ошибка при регистрации credit-чата: <code>{e}</code>",
+                parse_mode="html",
+            )
+        return True
 
     async def _maybe_handle_takeover_command(
         self, event, chat_id, chat_info: Optional[dict],

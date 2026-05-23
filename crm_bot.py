@@ -242,6 +242,21 @@ def is_owner(user_id: int) -> bool:
     return int(user_id) in CRM_OWNER_IDS
 
 
+def _lk_slot_tag(lk: dict, drop: dict) -> str:
+    """Возвращает «#N/total» где N = порядок ЛК в анкете. Пустая строка если нет данных.
+    Универсально работает и для crm_drops, и для credit_drops."""
+    try:
+        siblings = (drop or {}).get("lk_card_ids") or []
+        total = len(siblings)
+        droplk_id = lk.get("droplk_id") or ""
+        if droplk_id and droplk_id in siblings:
+            n = siblings.index(droplk_id) + 1
+            return f"#{n}/{total}"
+    except Exception:
+        pass
+    return ""
+
+
 def is_pride_registered(user_id: int, username: str = "") -> bool:
     """Проверка: юзер зарегистрирован в экосистеме PRIDE.
 
@@ -1890,8 +1905,10 @@ async def _show_drop_lks(message: Message, drop: dict):
     else:
         for lk in lks.values():
             status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
+            _slot = _lk_slot_tag(lk, drop)
+            _slot_pfx = (f"<code>{_slot}</code> " if _slot else "")
             lines.append(
-                f"{status_e} <b>{lk.get('bank')}</b>\n"
+                f"{status_e} {_slot_pfx}<b>{lk.get('bank')}</b>\n"
                 f"   <code>{(lk.get('value') or '—')[:80]}</code>"
             )
 
@@ -2286,8 +2303,10 @@ async def cb_lkview(call: CallbackQuery):
     drop = crm_storage.get_crm_drop(lk.get("drop_id"))
     await call.answer()
     status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
+    _slot = _lk_slot_tag(lk, drop or {})
+    _slot_pfx = (f"<code>{_slot}</code> " if _slot else "")
     text = (
-        f"{status_e} <b>{lk.get('bank')}</b>\n"
+        f"{status_e} {_slot_pfx}<b>{lk.get('bank')}</b>\n"
         f"клиент: <b>{drop and drop.get('fio') or '—'}</b>\n\n"
         f"<b>Данные ЛК:</b>\n"
     )
@@ -2697,8 +2716,10 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
 
 def _render_password_text(drop: dict, lk: dict) -> str:
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+    _slot = _lk_slot_tag(lk, drop)
+    _slot_pfx = (f"<code>{_slot}</code> " if _slot else "")
     return (
-        f"🔐 <b>ЛК {lk.get('bank')}</b> · {drop.get('fio') or '—'}\n"
+        f"🔐 {_slot_pfx}<b>ЛК {lk.get('bank')}</b> · {drop.get('fio') or '—'}\n"
         f"<i>поставщик: @{owner.get('username') or '—'}</i>\n\n"
         f"<b>Новый логин:</b> <code>{lk.get('new_login') or '—'}</code>\n"
         f"<b>Новый пароль:</b> <code>{lk.get('new_password') or '—'}</code>\n"
