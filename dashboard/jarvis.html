@@ -10387,6 +10387,31 @@ function jarvis() {
       this.kucModalToken = '';
       this.kucModalNote = '';
     },
+    // Найти объект ЛК во всех 4 списках System (для retry)
+    _findLkByDroplkId(droplk_id) {
+      const all = [
+        ...(this.systemPendingLks || []),
+        ...(this.systemPasswordsInbox || []),
+        ...(this.creditPendingLks || []),
+        ...(this.creditPasswordsInbox || []),
+      ];
+      return all.find(x => x.droplk_id === droplk_id) || null;
+    },
+    // Закрывает текущую модалку и открывает request-модалку для повторного запроса
+    retryKucForCurrentModal() {
+      // Берём droplk_id текущего КУЦ
+      const kucs = Object.values(this.kucByDroplk || {});
+      const k = kucs.find(x => x.token === this.kucModalToken);
+      if (!k) { alert('Не нашёл текущий КУЦ'); return; }
+      const lk = this._findLkByDroplkId(k.droplk_id);
+      if (!lk) {
+        alert('Не нашёл ЛК ' + k.droplk_id + ' в списках System.\nПерейди на нужную вкладку и попробуй снова.');
+        return;
+      }
+      // Закрываем view-модалку, открываем запрос
+      this.closeKucModal();
+      this.openKucRequestModal(lk);
+    },
     async decideKuc(decision) {
       if (!this.kucModalToken) return;
       if (!confirm(`Точно ${decision === 'approved' ? 'ОДОБРИТЬ' : 'ОТКЛОНИТЬ'} КУЦ?`)) return;
@@ -11726,6 +11751,16 @@ function jarvis() {
               <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"
                    style="margin-top: 6px; font-style: italic;"
                    x-text="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"></div>
+            </div>
+            <!-- Запросить повторно (для rejected/approved) -->
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
+              <button @click="retryKucForCurrentModal()"
+                      style="width: 100%; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;">
+                🔄 Запросить повторно
+              </button>
+              <div style="font-size: 11px; color: rgba(255,255,255,0.5); text-align: center; margin-top: 6px;">
+                Создаст новый запрос — клиент получит свежую ссылку. Это видео сохранится в истории.
+              </div>
             </div>
           </div>
         </template>
