@@ -1199,6 +1199,11 @@ class UserbotService:
         except Exception as e:
             logger.warning("takeover handler error: %s", e)
         if not chat_info:
+            logger.info(
+                "AI: chat=%s — SKIP: чат не зарегистрирован в managed_chats. "
+                "Чтобы AI отвечал, напиши «Ассистент возьми этот чат под клиента @username»",
+                chat_id,
+            )
             return
 
         # Снимаем silent mode если пришёл сигнал готовности от CRM-бота:
@@ -1268,13 +1273,23 @@ class UserbotService:
             return
 
         if not storage.is_ai_enabled():
+            logger.info("AI: chat=%s — SKIP: ai_enabled=False (включи в JARVIS Settings → AI)", chat_id)
             return
         if not config.ANTHROPIC_API_KEY:
+            logger.warning("AI: chat=%s — SKIP: ANTHROPIC_API_KEY не задан", chat_id)
             return
 
         client_id = chat_info.get("client_id")
+        # Мягкая логика: если sender не совпадает с зарегистрированным client_id, но
+        # это и не worker (уже отфильтрован выше is_worker check) — всё равно отвечаем.
+        # Это лечит случаи когда в work-чате клиент пишет с другого аккаунта /
+        # client_id устарел / в группе несколько клиентов.
         if client_id and sender_id != client_id:
-            return
+            logger.info(
+                "AI: chat=%s — sender=%s != client_id=%s, но не worker — отвечаем "
+                "(soft fallback)",
+                chat_id, sender_id, client_id,
+            )
 
         # AUTO-DETECT метода оплаты из сообщения клиента: страховка на случай
         # если AI забыл вызвать set_payment_method. Срабатывает если метод
