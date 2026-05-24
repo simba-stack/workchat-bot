@@ -272,6 +272,39 @@ Regex:
 - Badges: 🔇 (muted), ⏳ (connecting), 🔄 (disconnected), ⚠ (failed)
 - Speaking indicator (зелёная обводка тайла) — TODO в Этапе B (нужен Web Audio API analyser)
 
+### 4.0.E. АУТСОРС (маркетплейс ЛК для управляющих) — Этап 1 scaffold ✅
+**Идея:** «Лавка PRIDE» — управляющие платят взнос → берут ЛК под управление. Параллельный track к CRM/Кредит.
+
+**Storage:**
+- `outsource_managers` — {username: {tg_user_id, wallet_balance_usdt, paid_total_usdt, stats}}
+- `outsource_chats` — рабочие чаты управляющих
+- `outsource_drops` — анкеты (prefix `odrp`)
+- `outsource_drop_lks` — ЛК (prefix `olk`)
+- Helpers: register/list/get/add/update/delete для всех + `bump_outsource_manager_stat`
+- `move_any_lk_to_outsource(droplk_id, manager_username)` — универсальный перенос из CRM или Credit в Outsource
+- `move_outsource_lk_to_crm(droplk_id, owner_id?)` — обратный перенос
+- Routing-методы `get_drop_any/get_drop_lk_any/update_drop_any/...` РАСШИРЕНЫ для `odrp`/`olk` префиксов
+
+**API:**
+- `GET /api/system/outsource_pending_lk` — Доступы (с slot_number, drop_number, track="outsource")
+- `GET /api/system/outsource_passwords_inbox` — Пароли с filled/filled_creds/filled_dedik
+- `GET /api/system/outsource_managers` — список управляющих + wallet_balance_usdt
+- `POST /api/system/lk/{id}/move_to_outsource` — body {manager_username}
+- `POST /api/system/outsource_lk/{id}/move_to_supplier` — обратный
+
+**Frontend:**
+- 2 новые вкладки в System: `🏢 АУТСОРС | Доступы` и `🏢 АУТСОРС | Пароли` (border-left жёлтый `#f59e0b`)
+- Кнопки **«→ 🏢 АУТСОРС»** во всех 4 существующих вкладках CRM/Кредит (универсально через `moveLkTrack(lk, 'outsource')`)
+- В Аутсорс-вкладках — кнопка обратного переноса «→ 🤝 ПОСТАВЩИК»
+- Сводка управляющих со статистикой и balance USDT
+
+### 4.0.E.B АУТСОРС — Этап 2 (отдельный бот) ⏳
+**Не сделано.** Нужен новый Telegram бот `@PrideOutsource_bot` через BotFather → токен → env `OUTSOURCE_BOT_TOKEN` → новый файл `outsource_bot.py` (по аналогии с crm_bot.py для поставщиков).
+
+### 4.0.E.C АУТСОРС — Этап 3 (оплата / SMS API) ⏳
+- **Оплата:** TRC20 wallet management (есть в `partner_wallets` от Wallet-фичи). При оплате взноса — пополнение `outsource_managers[user].wallet_balance_usdt`.
+- **SMS API:** интегрировать SMS-провайдер (smsregru / sms-activate / smsc.ru). Webhook для входящих SMS с корпоративного номера → парсер находит к какому droplk_id относится (по банку/телефону) → шлёт код тому управляющему чей это ЛК.
+
 ### 4.1. Нумерация в TG-сообщениях бота (Шаг B) ⏳
 - Нужно пройтись по crm_bot.py — найти ~20 мест где формируются сообщения с упоминанием ЛК (accept_drop, post_to_pass_group, post_anketa и т.д.)
 - Добавить `#slot_number/slot_total` в формат

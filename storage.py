@@ -262,6 +262,20 @@ def _default_state() -> dict:
         # Token = uuid4().hex[:24]. Без TTL (живёт пока не approved/rejected).
         "kuc_requests": {},
 
+        # ==== OUTSOURCE (Аутсорс — маркетплейс ЛК для управляющих) ====
+        # Идея: владелец передаёт ЛК в "лавку PRIDE" — управляющие платят взнос
+        # и берут ЛК под управление. Параллельно CRM поставщиков и Кредитования.
+        # В будущем: оплата (TRC20 wallet) + подписка на ЛК + SMS API для входящих кодов.
+        "outsource_managers": {},   # {username_lower: {tg_user_id, first_seen_ts, last_active_ts,
+                                    #   wallet_balance_usdt, paid_total_usdt,
+                                    #   stats: {drops_total, drops_done, lks_total, lks_done}}}
+        "outsource_chats": {},      # {chat_id_norm: {manager_username, is_access, is_password,
+                                    #   registered_at, registered_by_owner_id}}
+        "outsource_drops": {},      # анкеты (зеркало credit_drops), prefix 'odrp'
+        "outsource_drop_lks": {},   # ЛК (зеркало credit_drop_lks), prefix 'olk'
+        "outsource_drops_seq": 0,
+        "outsource_drop_lks_seq": 0,
+        "outsource_fsm": {},
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3815,50 +3829,50 @@ class Storage:
 
     def get_drop_any(self, drop_id) -> Optional[dict]:
         s = str(drop_id or "")
-        if s.startswith("cdrp"):
-            return self.get_credit_drop(s)
+        if s.startswith("odrp"): return self.get_outsource_drop(s)
+        if s.startswith("cdrp"): return self.get_credit_drop(s)
         return self.get_crm_drop(s)
 
     def get_drop_lk_any(self, droplk_id) -> Optional[dict]:
         s = str(droplk_id or "")
-        if s.startswith("clk"):
-            return self.get_credit_drop_lk(s)
+        if s.startswith("olk"): return self.get_outsource_drop_lk(s)
+        if s.startswith("clk"): return self.get_credit_drop_lk(s)
         return self.get_crm_drop_lk(s)
 
     def list_drop_lks_any(self, drop_id=None) -> dict:
         if drop_id is None:
-            # Без фильтра — оба склеенно (для глобальных сводок)
             out = {}
             out.update(self.state.get("crm_drop_lks") or {})
             out.update(self.state.get("credit_drop_lks") or {})
+            out.update(self.state.get("outsource_drop_lks") or {})
             return out
         s = str(drop_id)
-        if s.startswith("cdrp"):
-            return self.list_credit_drop_lks(credit_drop_id=s)
+        if s.startswith("odrp"): return self.list_outsource_drop_lks(outsource_drop_id=s)
+        if s.startswith("cdrp"): return self.list_credit_drop_lks(credit_drop_id=s)
         return self.list_crm_drop_lks(drop_id=s)
 
     async def update_drop_any(self, drop_id, **fields) -> bool:
         s = str(drop_id or "")
-        if s.startswith("cdrp"):
-            return await self.update_credit_drop(s, **fields)
+        if s.startswith("odrp"): return await self.update_outsource_drop(s, **fields)
+        if s.startswith("cdrp"): return await self.update_credit_drop(s, **fields)
         return await self.update_crm_drop(s, **fields)
 
     async def update_drop_lk_any(self, droplk_id, **fields) -> bool:
         s = str(droplk_id or "")
-        if s.startswith("clk"):
-            return await self.update_credit_drop_lk(s, **fields)
+        if s.startswith("olk"): return await self.update_outsource_drop_lk(s, **fields)
+        if s.startswith("clk"): return await self.update_credit_drop_lk(s, **fields)
         return await self.update_crm_drop_lk(s, **fields)
 
     async def delete_drop_lk_any(self, droplk_id) -> bool:
         s = str(droplk_id or "")
-        if s.startswith("clk"):
-            return await self.delete_credit_drop_lk(s)
+        if s.startswith("olk"): return await self.delete_outsource_drop_lk(s)
+        if s.startswith("clk"): return await self.delete_credit_drop_lk(s)
         return await self.delete_crm_drop_lk(s)
 
     async def append_drop_sms_any(self, droplk_id, code, time_str=""):
         s = str(droplk_id or "")
-        if s.startswith("clk"):
-            return await self.append_credit_sms(s, code, time_str)
+        if s.startswith("olk"): return await self.append_outsource_sms(s, code, time_str)
+        if s.startswith("clk"): return await self.append_credit_sms(s, code, time_str)
         return await self.append_crm_sms(s, code, time_str)
 
     def get_drop_lks_for_drop_any(self, drop_id) -> dict:
@@ -3919,6 +3933,328 @@ class Storage:
         return await self.add_crm_drop_lk(
             drop_id=s, owner_id=owner_id, bank=bank, value=value,
         )
+
+    # =====================================================================
+    # OUTSOURCE (Аутсорс — маркетплейс ЛК для управляющих)
+    # =====================================================================
+    def list_outsource_managers(self) -> dict:
+        return self.state.get("outsource_managers") or {}
+
+    def get_outsource_manager(self, username: str) -> Optional[dict]:
+        if not username: return None
+        return (self.state.get("outsource_managers") or {}).get(username.lstrip("@").lower())
+
+    async def register_outsource_manager(self, username: str, tg_user_id: Optional[int] = None) -> dict:
+        if not username: return {}
+        u = username.lstrip("@").lower()
+        async with _lock:
+            mgrs = self.state.setdefault("outsource_managers", {})
+            now = time.time()
+            if u not in mgrs:
+                mgrs[u] = {
+                    "username": u, "tg_user_id": tg_user_id or 0,
+                    "first_seen_ts": now, "last_active_ts": now,
+                    "wallet_balance_usdt": 0.0, "paid_total_usdt": 0.0,
+                    "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
+                }
+            else:
+                mgrs[u]["last_active_ts"] = now
+                if tg_user_id and not mgrs[u].get("tg_user_id"):
+                    mgrs[u]["tg_user_id"] = tg_user_id
+            await self._save_unlocked()
+            return mgrs[u]
+
+    async def bump_outsource_manager_stat(self, username: str, key: str, delta: int = 1):
+        if not username: return
+        u = username.lstrip("@").lower()
+        async with _lock:
+            mgrs = self.state.setdefault("outsource_managers", {})
+            if u not in mgrs:
+                mgrs[u] = {"username": u, "tg_user_id": 0, "first_seen_ts": time.time(),
+                           "last_active_ts": time.time(), "wallet_balance_usdt": 0.0,
+                           "paid_total_usdt": 0.0, "stats": {"drops_total": 0, "drops_done": 0,
+                                                              "lks_total": 0, "lks_done": 0}}
+            stats = mgrs[u].setdefault("stats", {})
+            stats[key] = (stats.get(key) or 0) + delta
+            await self._save_unlocked()
+
+    def list_outsource_chats(self) -> dict:
+        return self.state.get("outsource_chats") or {}
+
+    def get_outsource_chat(self, chat_id) -> Optional[dict]:
+        return (self.state.get("outsource_chats") or {}).get(_norm_chat_id(chat_id))
+
+    async def register_outsource_chat(self, chat_id, manager_username: str,
+                                     is_access: bool = True, is_password: bool = False,
+                                     registered_by_owner_id: Optional[int] = None) -> dict:
+        async with _lock:
+            chats = self.state.setdefault("outsource_chats", {})
+            c = _norm_chat_id(chat_id)
+            entry = chats.get(c) or {}
+            entry.update({
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "is_access": bool(is_access), "is_password": bool(is_password),
+                "registered_at": entry.get("registered_at") or time.time(),
+                "registered_by_owner_id": registered_by_owner_id or entry.get("registered_by_owner_id"),
+            })
+            chats[c] = entry
+            await self._save_unlocked()
+            return entry
+
+    def is_outsource_chat(self, chat_id, kind: str = "any") -> bool:
+        cid_int = None
+        try: cid_int = int(chat_id)
+        except Exception: pass
+        # Из config (если будут хардкоженные ID)
+        try:
+            import config as _cfg
+            access_main = int(getattr(_cfg, "OUTSOURCE_ACCESS_CHAT_ID", 0) or 0)
+            password_main = int(getattr(_cfg, "OUTSOURCE_PASSWORD_CHAT_ID", 0) or 0)
+        except Exception:
+            access_main = password_main = 0
+        if kind in ("any", "access") and cid_int and cid_int == access_main: return True
+        if kind in ("any", "password") and cid_int and cid_int == password_main: return True
+        entry = self.get_outsource_chat(chat_id)
+        if not entry: return False
+        if kind == "any": return bool(entry.get("is_access") or entry.get("is_password"))
+        if kind == "access": return bool(entry.get("is_access"))
+        if kind == "password": return bool(entry.get("is_password"))
+        return False
+
+    def list_outsource_drops(self, manager_username: Optional[str] = None) -> dict:
+        drops = self.state.get("outsource_drops") or {}
+        if manager_username:
+            u = manager_username.lstrip("@").lower()
+            return {k: v for k, v in drops.items() if (v.get("manager_username") or "") == u}
+        return drops
+
+    def get_outsource_drop(self, drop_id) -> Optional[dict]:
+        return (self.state.get("outsource_drops") or {}).get(str(drop_id))
+
+    async def add_outsource_drop(self, chat_id, manager_username: str, fio: str = "",
+                                 about: str = "", scan_file_ids: Optional[list] = None) -> str:
+        async with _lock:
+            seq = (self.state.get("outsource_drops_seq") or 0) + 1
+            self.state["outsource_drops_seq"] = seq
+            drop_id = f"odrp{seq:05d}"
+            self.state.setdefault("outsource_drops", {})[drop_id] = {
+                "drop_id": drop_id, "chat_id": _norm_chat_id(chat_id),
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "fio": fio or "", "about": about or "",
+                "scan_file_ids": list(scan_file_ids or []),
+                "status": "draft", "created_at": time.time(), "lk_card_ids": [],
+            }
+            await self._save_unlocked()
+            await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
+            return drop_id
+
+    async def update_outsource_drop(self, drop_id: str, **fields) -> bool:
+        async with _lock:
+            drop = (self.state.get("outsource_drops") or {}).get(str(drop_id))
+            if not drop: return False
+            for k, v in fields.items(): drop[k] = v
+            drop["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    def list_outsource_drop_lks(self, outsource_drop_id: Optional[str] = None) -> dict:
+        lks = self.state.get("outsource_drop_lks") or {}
+        if outsource_drop_id:
+            return {k: v for k, v in lks.items() if v.get("outsource_drop_id") == outsource_drop_id}
+        return lks
+
+    def get_outsource_drop_lk(self, droplk_id) -> Optional[dict]:
+        return (self.state.get("outsource_drop_lks") or {}).get(str(droplk_id))
+
+    async def add_outsource_drop_lk(self, outsource_drop_id: str, manager_username: str,
+                                     bank: str = "", value: str = "", deal: str = "") -> str:
+        async with _lock:
+            seq = (self.state.get("outsource_drop_lks_seq") or 0) + 1
+            self.state["outsource_drop_lks_seq"] = seq
+            droplk_id = f"olk{seq:05d}"
+            self.state.setdefault("outsource_drop_lks", {})[droplk_id] = {
+                "droplk_id": droplk_id, "outsource_drop_id": outsource_drop_id,
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "bank": bank or "", "value": value or "", "deal": deal or "",
+                "sms_history": [], "sms_stage": "",
+                "new_login": "", "new_password": "", "new_mail": "",
+                "new_number": "", "code_word": "",
+                "ded_ip": "", "ded_login": "Administrator", "ded_pass": "", "ded_location": "",
+                "msgid_pass": 0, "sms_tracker_msg_id": 0,
+                "created_at": time.time(), "updated_at": time.time(),
+            }
+            drop = (self.state.get("outsource_drops") or {}).get(outsource_drop_id)
+            if drop:
+                drop.setdefault("lk_card_ids", []).append(droplk_id)
+            await self._save_unlocked()
+            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
+            return droplk_id
+
+    async def update_outsource_drop_lk(self, droplk_id, **fields) -> bool:
+        async with _lock:
+            lk = (self.state.get("outsource_drop_lks") or {}).get(str(droplk_id))
+            if not lk: return False
+            for k, v in fields.items(): lk[k] = v
+            lk["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    async def delete_outsource_drop_lk(self, droplk_id) -> bool:
+        async with _lock:
+            lks = self.state.get("outsource_drop_lks") or {}
+            if str(droplk_id) in lks:
+                lk = lks[str(droplk_id)]
+                odrop_id = lk.get("outsource_drop_id")
+                if odrop_id:
+                    drop = (self.state.get("outsource_drops") or {}).get(odrop_id)
+                    if drop and droplk_id in (drop.get("lk_card_ids") or []):
+                        try: drop["lk_card_ids"].remove(droplk_id)
+                        except ValueError: pass
+                del lks[str(droplk_id)]
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def append_outsource_sms(self, droplk_id, code, time_str=""):
+        async with _lock:
+            lk = (self.state.get("outsource_drop_lks") or {}).get(str(droplk_id))
+            if not lk: return False
+            lk.setdefault("sms_history", []).append({
+                "code": code, "time": time_str or time.strftime("%d.%m.%Y %H:%M")
+            })
+            await self._save_unlocked()
+            return True
+
+    # --- Перенос ЛК в Аутсорс из любого track ---
+    async def move_any_lk_to_outsource(self, droplk_id: str, manager_username: str) -> Optional[str]:
+        """Универсальный перенос: любой ЛК (lk* / clk*) → outsource (olk*)."""
+        s = str(droplk_id or "")
+        lk = self.get_drop_lk_any(s)
+        if not lk: return None
+        # Определяем источник
+        is_credit = s.startswith("clk")
+        async with _lock:
+            ou_drops = self.state.setdefault("outsource_drops", {})
+            ou_lks = self.state.setdefault("outsource_drop_lks", {})
+            mgr = (manager_username or "").lstrip("@").lower()
+            # Получаем исходный drop для FIO
+            if is_credit:
+                src_drop_id = lk.get("credit_drop_id")
+                src_drops = self.state.get("credit_drops") or {}
+            else:
+                src_drop_id = lk.get("drop_id")
+                src_drops = self.state.get("crm_drops") or {}
+            src_drop = src_drops.get(src_drop_id, {}) if src_drop_id else {}
+            fio = (src_drop.get("fio") or "").strip()
+            # Ищем или создаём outsource_drop по manager+fio
+            existing_odrop_id = None
+            for oid, odrop in ou_drops.items():
+                if (odrop.get("manager_username") or "") == mgr and \
+                   (odrop.get("fio") or "").strip() == fio:
+                    existing_odrop_id = oid; break
+            if existing_odrop_id:
+                odrop_id = existing_odrop_id
+            else:
+                seq = (self.state.get("outsource_drops_seq") or 0) + 1
+                self.state["outsource_drops_seq"] = seq
+                odrop_id = f"odrp{seq:05d}"
+                ou_drops[odrop_id] = {
+                    "drop_id": odrop_id, "chat_id": src_drop.get("chat_id") or src_drop.get("work_chat_id") or "",
+                    "manager_username": mgr, "fio": fio,
+                    "about": src_drop.get("about") or "",
+                    "scan_file_ids": list(src_drop.get("scan_file_ids") or []),
+                    "status": src_drop.get("status") or "draft",
+                    "created_at": time.time(), "lk_card_ids": [],
+                    "_moved_from": ("credit" if is_credit else "crm") + ":" + (src_drop_id or ""),
+                }
+                await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
+            # Создаём outsource_drop_lk
+            seq_lk = (self.state.get("outsource_drop_lks_seq") or 0) + 1
+            self.state["outsource_drop_lks_seq"] = seq_lk
+            new_olk_id = f"olk{seq_lk:05d}"
+            # Берём все поля кроме drop-связей и owner/manager
+            exclude_keys = {"drop_id", "credit_drop_id", "owner_id", "manager_username"}
+            new_lk = {k: v for k, v in lk.items() if k not in exclude_keys}
+            new_lk.update({
+                "droplk_id": new_olk_id, "outsource_drop_id": odrop_id,
+                "manager_username": mgr,
+                "_moved_from": ("credit_lk:" if is_credit else "crm_lk:") + s,
+                "_moved_at": time.time(),
+                "updated_at": time.time(),
+            })
+            ou_lks[new_olk_id] = new_lk
+            ou_drops[odrop_id].setdefault("lk_card_ids", []).append(new_olk_id)
+            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
+            # Удаляем из источника
+            if is_credit:
+                src_lks = self.state.get("credit_drop_lks") or {}
+                if s in src_lks:
+                    del src_lks[s]
+                    if src_drop and s in (src_drop.get("lk_card_ids") or []):
+                        try: src_drop["lk_card_ids"].remove(s)
+                        except ValueError: pass
+                    if src_drop and not src_drop.get("lk_card_ids"):
+                        src_drop["status"] = "moved_to_outsource"
+            else:
+                src_lks = self.state.get("crm_drop_lks") or {}
+                if s in src_lks:
+                    del src_lks[s]
+                    if src_drop and s in (src_drop.get("lk_card_ids") or []):
+                        try: src_drop["lk_card_ids"].remove(s)
+                        except ValueError: pass
+                    if src_drop and not src_drop.get("lk_card_ids"):
+                        src_drop["status"] = "moved_to_outsource"
+            await self._save_unlocked()
+            return new_olk_id
+
+    async def move_outsource_lk_to_crm(self, outsource_droplk_id: str, owner_id: Optional[str] = None) -> Optional[str]:
+        """Обратно из Аутсорса в Поставщики."""
+        async with _lock:
+            ou_lks = self.state.get("outsource_drop_lks") or {}
+            lk = ou_lks.get(str(outsource_droplk_id))
+            if not lk: return None
+            ou_drops = self.state.get("outsource_drops") or {}
+            old_odrop_id = lk.get("outsource_drop_id")
+            old_odrop = ou_drops.get(old_odrop_id, {}) if old_odrop_id else {}
+            crm_drops = self.state.setdefault("crm_drops", {})
+            crm_lks = self.state.setdefault("crm_drop_lks", {})
+            fio = (old_odrop.get("fio") or "").strip()
+            target_drop_id = None
+            for did, drop in crm_drops.items():
+                if owner_id and drop.get("owner_id") != owner_id: continue
+                if (drop.get("fio") or "").strip() == fio:
+                    target_drop_id = did; break
+            if not target_drop_id:
+                seq = (self.state.get("crm_drops_seq") or 0) + 1
+                self.state["crm_drops_seq"] = seq
+                target_drop_id = f"d{seq:04d}"
+                crm_drops[target_drop_id] = {
+                    "drop_id": target_drop_id, "owner_id": owner_id or "",
+                    "chat_id": old_odrop.get("chat_id") or "", "fio": fio,
+                    "about": old_odrop.get("about") or "",
+                    "scan_file_ids": list(old_odrop.get("scan_file_ids") or []),
+                    "status": "draft", "created_at": time.time(), "lk_card_ids": [],
+                    "_moved_from_outsource_drop": old_odrop_id or "",
+                }
+            seq_lk = (self.state.get("crm_drop_lks_seq") or 0) + 1
+            self.state["crm_drop_lks_seq"] = seq_lk
+            new_lk_id = f"lk{seq_lk:05d}"
+            new_lk = {k: v for k, v in lk.items() if k not in ("outsource_drop_id", "manager_username")}
+            new_lk.update({
+                "droplk_id": new_lk_id, "drop_id": target_drop_id, "owner_id": owner_id or "",
+                "_moved_from_outsource_lk": str(outsource_droplk_id),
+                "_moved_at": time.time(), "updated_at": time.time(),
+            })
+            crm_lks[new_lk_id] = new_lk
+            crm_drops[target_drop_id].setdefault("lk_card_ids", []).append(new_lk_id)
+            del ou_lks[str(outsource_droplk_id)]
+            if old_odrop and outsource_droplk_id in (old_odrop.get("lk_card_ids") or []):
+                try: old_odrop["lk_card_ids"].remove(outsource_droplk_id)
+                except ValueError: pass
+            if old_odrop and not old_odrop.get("lk_card_ids"):
+                old_odrop["status"] = "moved_to_supplier"
+            await self._save_unlocked()
+            return new_lk_id
 
     # =====================================================================
     # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)

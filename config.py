@@ -64,6 +64,10 @@ STORAGE_PATH = os.getenv("STORAGE_PATH", "/app/data/state.json")
 CREDIT_ACCESS_CHAT_ID = int(os.getenv("CREDIT_ACCESS_CHAT_ID", "-1003457011118"))
 CREDIT_PASSWORD_CHAT_ID = int(os.getenv("CREDIT_PASSWORD_CHAT_ID", "-1003945639230"))
 
+# === Outsource bot (@PrideOutsource_bot) — лавка PRIDE для управляющих ===
+# Токен от @BotFather. ВАЖНО: НЕ хардкодить в репо — задавать через Railway env.
+OUTSOURCE_BOT_TOKEN = os.getenv("OUTSOURCE_BOT_TOKEN", "")
+
 # === Defaults (used on first run; later editable via /admin) ===
 DEFAULT_WELCOME = (
     "👋 Здравствуйте!\n\n"

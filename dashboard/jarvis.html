@@ -67,7 +67,16 @@
   }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; min-height: 100vh; overflow-x: hidden; }
+  html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
+  /* === Главный shell — фиксированная страница, скроллится только внутреннее содержимое === */
+  /* Только списки и панели имеют свой overflow-y: auto. Глобальный body НЕ скроллится. */
+  main, .central-office, aside, section[x-show] {
+    max-height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* Топ-tabs остаются фиксированными */
+  nav.view-tabs { flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
   body {
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
                  system-ui, "Helvetica Neue", Arial, sans-serif;
@@ -5124,6 +5133,8 @@
     <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'credit_access' ? 'active' : ''" @click="systemSection='credit_access'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Доступы <span x-show="creditPendingLks?.length" class="support-tab-badge" x-text="creditPendingLks?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'credit_password' ? 'active' : ''" @click="systemSection='credit_password'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Пароли <span x-show="creditPasswordsInbox?.length" class="support-tab-badge" x-text="creditPasswordsInbox?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'outsource_access' ? 'active' : ''" @click="systemSection='outsource_access'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Доступы <span x-show="outsourcePendingLks?.length" class="support-tab-badge" x-text="outsourcePendingLks?.length"></span></button>
+    <button class="view-tab" :class="systemSection === 'outsource_password' ? 'active' : ''" @click="systemSection='outsource_password'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Пароли <span x-show="outsourcePasswordsInbox?.length" class="support-tab-badge" x-text="outsourcePasswordsInbox?.length"></span></button>
     <button class="view-tab" :class="systemSection === 'installed' ? 'active' : ''" @click="systemSection='installed'">✅ Установленные ЛК <span x-show="systemInstalledLks?.length" class="support-tab-badge" x-text="systemInstalledLks?.length"></span></button>
   </div>
 
@@ -5154,6 +5165,8 @@
                   x-text="(lk.drop_number || '')"></span>
             <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 в КРЕДИТ</button>
+            <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+                    title="Передать этот ЛК в АУТСОРС (управляющему-аутсорсеру)">→ 🏢 в АУТСОРС</button>
             <!-- KUC button -->
             <template x-if="!kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
@@ -5292,6 +5305,8 @@
           <div style="display: flex; gap: 6px; align-items: center;">
             <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 КРЕДИТ</button>
+            <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+                    title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
             <template x-if="!kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
             </template>
@@ -5396,6 +5411,8 @@
           </span>
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+          <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+                  title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
@@ -5458,6 +5475,109 @@
           </span>
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+          <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+                  title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
+          <template x-if="!kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+          </template>
+          <template x-if="kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                    @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                    x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+          </template>
+          <span x-show="lk.filled" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(40,180,99,0.18); color: #28b463; border-radius: 3px;">✅ заполнено</span>
+        </div>
+        <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; font-size: 11px;">
+          <div><span style="color: var(--text-dim);">login:</span> <code x-text="lk.new_login || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">password:</span> <code x-text="lk.new_password || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">mail:</span> <code x-text="lk.new_mail || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">code:</span> <code x-text="lk.code_word || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded IP:</span> <code x-text="lk.ded_ip || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded login:</span> <code x-text="lk.ded_login || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded pass:</span> <code x-text="lk.ded_pass || '—'"></code></div>
+          <div><span style="color: var(--text-dim);">ded location:</span> <code x-text="lk.ded_location || '—'"></code></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ============= ВКЛАДКА: 🏢 АУТСОРС | ДОСТУПЫ ============= -->
+  <div x-show="systemSection === 'outsource_access'" x-init="refreshOutsource()">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+      <h3 style="margin: 0;">🏢 Аутсорс — Доступы</h3>
+      <span class="badge-mini" x-text="outsourcePendingLks.length + ' анкет'"></span>
+      <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+    <div x-show="outsourcePendingLks.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
+      Пусто. Перенеси ЛК сюда через кнопку «→ 🏢 АУТСОРС» из CRM или Кредита.
+    </div>
+    <template x-for="lk in outsourcePendingLks" :key="lk.droplk_id">
+      <div class="crm-card" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #f59e0b;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span class="lk-slot-badge" x-show="lk.slot_number"
+                :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
+                x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
+          <span style="font-size: 14px;">🏢 <b style="color: #f59e0b;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
+          <span style="font-size: 11px; color: var(--text-dim);">
+            управляющий: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+            <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
+          </span>
+          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+                  title="Вернуть в ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+          <template x-if="!kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+          </template>
+          <template x-if="kucByDroplk[lk.droplk_id]">
+            <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
+                    @click.stop="openKucModal(kucByDroplk[lk.droplk_id].token)"
+                    x-text="kucStatusBadge(lk.droplk_id)?.text"></button>
+          </template>
+          <span x-show="lk.sms_stage" style="margin-left: auto; font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.15); color: #f59e0b; border-radius: 3px;"
+                x-text="systemStageLabel(lk.sms_stage)"></span>
+        </div>
+        <div x-show="lk.value" style="margin-top: 6px; font-size: 11px; color: var(--text-dim);" x-text="'значение: ' + (lk.value || '')"></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ============= ВКЛАДКА: 🏢 АУТСОРС | ПАРОЛИ ============= -->
+  <div x-show="systemSection === 'outsource_password'" x-init="refreshOutsource()">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+      <h3 style="margin: 0;">🏢 Аутсорс — Пароли</h3>
+      <span class="badge-mini" x-text="outsourcePasswordsInbox.length + ' ЛК'"></span>
+      <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+    <div x-show="outsourceManagers.length > 0" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 16px;">
+      <template x-for="m in outsourceManagers" :key="m.username">
+        <div class="jarvis-panel" style="padding: 10px;">
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">@<span x-text="m.username"></span></div>
+          <div style="display: flex; gap: 12px; font-size: 11px;">
+            <span>анкет: <b x-text="m.stats?.drops_total || 0"></b></span>
+            <span>ЛК: <b x-text="m.stats?.lks_total || 0"></b></span>
+            <span>чатов: <b x-text="m.chats_count || 0"></b></span>
+          </div>
+          <div x-show="m.wallet_balance_usdt" style="font-size: 11px; color: #4ade80; margin-top: 4px;">
+            💼 <span x-text="m.wallet_balance_usdt + ' USDT'"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+    <div x-show="outsourcePasswordsInbox.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
+      Нет ЛК на заполнении паролями.
+    </div>
+    <template x-for="lk in outsourcePasswordsInbox" :key="lk.droplk_id">
+      <div class="crm-card password" :class="lk.filled ? 'filled' : ''" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #f59e0b;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span class="lk-slot-badge" x-show="lk.slot_number"
+                :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
+                x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
+          <span style="font-size: 14px;">🔐 <b style="color: #f59e0b;" x-text="lk.bank || '—'"></b> · <span x-text="lk.fio"></span></span>
+          <span style="font-size: 11px; color: var(--text-dim);">
+            управляющий: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
+            <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
+          </span>
+          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+                  title="Вернуть в ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
@@ -6583,6 +6703,11 @@ function jarvis() {
     creditPasswordsInbox: [],  // 💳 КРЕДИТ | Пароли — inbox с заполнением
     creditManagers: [],        // список менеджеров со статистикой
     creditLoading: false,
+    // === АУТСОРС (маркетплейс ЛК для управляющих) ===
+    outsourcePendingLks: [],
+    outsourcePasswordsInbox: [],
+    outsourceManagers: [],
+    outsourceLoading: false,
     // === SETTINGS UI ===
     settingsData: { pricing: {}, ai_enabled: false, ai_model: '', ai_max_tokens: 512,
                     ai_history_limit: 15, ai_typing_delay_min: 3, ai_typing_delay_max: 8,
@@ -10562,63 +10687,78 @@ function jarvis() {
 
     // === Перенос ЛК между отделами (Поставщики ↔ Кредитование) ===
     async moveLkTrack(lk, target) {
-      // target: 'credit' (из CRM в Кредит) | 'supplier' (из Кредита в CRM)
+      // target: 'credit' | 'supplier' | 'outsource'
       const droplk_id = lk.droplk_id;
       const bank = lk.bank || '—';
       const fio = lk.fio || '—';
       let manager_username = '';
       let owner_id = '';
+      const targetLabel = target === 'credit' ? '💳 КРЕДИТОВАНИЕ'
+        : target === 'outsource' ? '🏢 АУТСОРС'
+        : '🤝 ПОСТАВЩИКИ';
+      let listPriceUsdt = 0;
       if (target === 'credit') {
         manager_username = prompt(
-          `Перенос ЛК → 💳 КРЕДИТОВАНИЕ\n\n` +
-          `Карточка: ${bank} / ${fio}\n` +
-          `ID: ${droplk_id}\n\n` +
+          `Перенос ЛК → ${targetLabel}\n\n` +
+          `Карточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
           `Юрист (username без @), к кому перейдёт ЛК:`,
           ''
         );
         if (!manager_username) return;
         manager_username = manager_username.trim().replace(/^@/, '').toLowerCase();
         if (!manager_username) return;
+      } else if (target === 'outsource') {
+        // Аутсорс: ЛК идёт в общий ПУЛ (без конкретного управляющего).
+        // Управляющий потом сам "выкупает" из бота — указываем только цену.
+        const priceStr = prompt(
+          `Перенос ЛК → ${targetLabel}\n\n` +
+          `Карточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
+          `Цена за управление этой карточкой (USDT):\n` +
+          `Управляющий заплатит эту сумму и заберёт ЛК из каталога бота.`,
+          '50'
+        );
+        if (priceStr === null) return;
+        listPriceUsdt = parseFloat(priceStr) || 0;
+        if (listPriceUsdt <= 0) { alert('Цена должна быть > 0'); return; }
       } else if (target === 'supplier') {
         owner_id = prompt(
-          `Перенос ЛК → 🤝 ПОСТАВЩИКИ\n\n` +
-          `Карточка: ${bank} / ${fio}\n` +
-          `ID: ${droplk_id}\n\n` +
-          `ID поставщика (owner_id) — оставь пустым чтобы создать draft:`,
-          ''
+          `Перенос ЛК → ${targetLabel}\n\nКарточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
+          `ID поставщика (owner_id) — пустым = создать draft:`, ''
         );
-        if (owner_id === null) return;  // отмена
+        if (owner_id === null) return;
         owner_id = (owner_id || '').trim();
       }
-      const confirmText = target === 'credit'
-        ? `Точно переносим ЛК ${bank}/${fio} в КРЕДИТ к @${manager_username}?\n\nИсходная карточка будет удалена.`
-        : `Точно переносим ЛК ${bank}/${fio} в ПОСТАВЩИКИ?\n\nИсходная карточка будет удалена.`;
-      if (!confirm(confirmText)) return;
+      const confirmMsg = target === 'outsource'
+        ? `Переносим ЛК ${bank}/${fio} в АУТСОРС-каталог за ${listPriceUsdt} USDT?\n\nУправляющий заберёт через бота.`
+        : `Точно переносим ЛК ${bank}/${fio} в ${targetLabel}?\nИсходная карточка будет удалена.`;
+      if (!confirm(confirmMsg)) return;
       try {
-        const url = target === 'credit'
-          ? `/api/system/lk/${droplk_id}/move_to_credit`
-          : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
-        const body = target === 'credit' ? { manager_username } : { owner_id };
+        let url, body;
+        if (target === 'credit') {
+          url = `/api/system/lk/${droplk_id}/move_to_credit`; body = { manager_username };
+        } else if (target === 'outsource') {
+          url = `/api/system/lk/${droplk_id}/move_to_outsource`;
+          body = { list_price_usdt: listPriceUsdt };  // пул, manager пустой
+        } else if (target === 'supplier') {
+          // Откуда мы? Если outsource — используем outsource endpoint, иначе credit
+          url = droplk_id.startsWith('olk')
+            ? `/api/system/outsource_lk/${droplk_id}/move_to_supplier`
+            : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
+          body = { owner_id };
+        }
         const r = await fetch(url, {
-          method: 'POST',
-          credentials: 'include',
+          method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!r.ok) {
-          const txt = await r.text();
-          alert('Ошибка переноса: ' + txt);
-          return;
-        }
+        if (!r.ok) { alert('Ошибка переноса: ' + await r.text()); return; }
         const j = await r.json();
-        const newId = j.new_credit_droplk_id || j.new_droplk_id || '?';
+        const newId = j.new_outsource_droplk_id || j.new_credit_droplk_id || j.new_droplk_id || '?';
         alert(`✅ Перенесено.\nНовый ID: ${newId}`);
-        // Обновляем оба источника
         if (this.refreshSystem) await this.refreshSystem();
         if (this.refreshCredit) await this.refreshCredit();
-      } catch (e) {
-        alert('Ошибка: ' + e.message);
-      }
+        if (this.refreshOutsource) await this.refreshOutsource();
+      } catch (e) { alert('Ошибка: ' + e.message); }
     },
 
     // === KUC (Кружок Удостоверения Клиента) ===
@@ -11022,6 +11162,24 @@ function jarvis() {
       if (s === 'approved') return { text: '✅ КУЦ одобрен', color: '#22c55e' };
       if (s === 'rejected') return { text: '❌ КУЦ отклонён', color: '#ef4444' };
       return null;
+    },
+
+    // === АУТСОРС ===
+    async refreshOutsource() {
+      if (this.outsourceLoading) return;
+      this.outsourceLoading = true;
+      try {
+        const [pendingRes, pwdRes, mgrsRes] = await Promise.all([
+          fetch('/api/system/outsource_pending_lk', { credentials: 'include' }),
+          fetch('/api/system/outsource_passwords_inbox', { credentials: 'include' }),
+          fetch('/api/system/outsource_managers', { credentials: 'include' }),
+        ]);
+        if (pendingRes.ok) { const j = await pendingRes.json(); this.outsourcePendingLks = j.items || []; }
+        if (pwdRes.ok) { const j = await pwdRes.json(); this.outsourcePasswordsInbox = j.items || []; }
+        if (mgrsRes.ok) { const j = await mgrsRes.json(); this.outsourceManagers = j.items || []; }
+      } catch (e) { console.error('refreshOutsource', e); }
+      finally { this.outsourceLoading = false; }
+      try { await this.refreshKuc(); } catch (e) {}
     },
 
     // === Кредитование: загрузка данных параллельно с CRM-поставщиками ===

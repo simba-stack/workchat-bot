@@ -2283,6 +2283,160 @@ async def guest_call_ws(ws: WebSocket):
 
 
 # =====================================================================
+# OUTSOURCE (Аутсорс — маркетплейс ЛК для управляющих)
+# =====================================================================
+
+@app.get("/api/system/outsource_pending_lk")
+async def api_system_outsource_pending_lk(_: None = Depends(_auth)):
+    storage.reload_sync()
+    lks_raw = storage.list_outsource_drop_lks() if hasattr(storage, "list_outsource_drop_lks") else {}
+    drops_raw = storage.list_outsource_drops() if hasattr(storage, "list_outsource_drops") else {}
+    out = []
+    stage_order = {"": 0, "ready_asked": 1, "ready_confirmed": 2, "login_asked": 3,
+                   "login_received": 4, "perevyaz_asked": 5, "perevyaz_received": 6, "done": 99}
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        if stage == "done": continue
+        drop = drops_raw.get(lk.get("outsource_drop_id"), {}) if drops_raw else {}
+        manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
+        out.append({
+            "droplk_id": lkid, "outsource_drop_id": lk.get("outsource_drop_id"),
+            "bank": lk.get("bank") or "", "fio": drop.get("fio") or "—",
+            "manager": manager, "value": lk.get("value") or "",
+            "new_login": lk.get("new_login") or "", "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "", "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "", "ded_pass": lk.get("ded_pass") or "",
+            "ded_password": lk.get("ded_pass") or "",
+            "ded_ip": lk.get("ded_ip") or "", "ded_location": lk.get("ded_location") or "",
+            "sms_stage": stage, "_stage_order": stage_order.get(stage, 50),
+            "created_at": lk.get("created_at") or 0, "updated_at": lk.get("updated_at") or 0,
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "outsource", "drop_number": drop.get("drop_id") or "",
+        })
+    out.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"ok": True, "items": out, "lks": out, "count": len(out)}
+
+
+@app.get("/api/system/outsource_passwords_inbox")
+async def api_system_outsource_passwords_inbox(_: None = Depends(_auth)):
+    storage.reload_sync()
+    lks_raw = storage.list_outsource_drop_lks() if hasattr(storage, "list_outsource_drop_lks") else {}
+    drops_raw = storage.list_outsource_drops() if hasattr(storage, "list_outsource_drops") else {}
+    out = []
+    for lkid, lk in lks_raw.items():
+        stage = (lk.get("sms_stage") or "").strip()
+        if stage not in ("perevyaz_received", "done", "login_received", "perevyaz_asked"):
+            continue
+        drop = drops_raw.get(lk.get("outsource_drop_id"), {}) if drops_raw else {}
+        manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
+        filled_creds = bool((lk.get("new_login") or "").strip() and (lk.get("new_password") or "").strip())
+        filled_dedik = bool((lk.get("ded_ip") or "").strip() and (lk.get("ded_pass") or "").strip())
+        out.append({
+            "droplk_id": lkid, "outsource_drop_id": lk.get("outsource_drop_id"),
+            "bank": lk.get("bank") or "", "fio": drop.get("fio") or "—",
+            "manager": manager,
+            "new_login": lk.get("new_login") or "", "new_password": lk.get("new_password") or "",
+            "new_mail": lk.get("new_mail") or "", "new_number": lk.get("new_number") or "",
+            "code_word": lk.get("code_word") or "",
+            "ded_login": lk.get("ded_login") or "Administrator", "ded_pass": lk.get("ded_pass") or "",
+            "ded_password": lk.get("ded_pass") or "",
+            "ded_ip": lk.get("ded_ip") or "", "ded_location": lk.get("ded_location") or "",
+            "sms_stage": stage, "filled_creds": filled_creds, "filled_dedik": filled_dedik,
+            "filled": filled_creds and filled_dedik,
+            "updated_at": lk.get("updated_at") or 0, "created_at": lk.get("created_at") or 0,
+            "slot_number": _compute_lk_slot(drop, lkid)[0],
+            "slot_total": _compute_lk_slot(drop, lkid)[1],
+            "track": "outsource", "drop_number": drop.get("drop_id") or "",
+        })
+    out.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"ok": True, "items": out, "count": len(out)}
+
+
+@app.get("/api/system/outsource_managers")
+async def api_system_outsource_managers(_: None = Depends(_auth)):
+    storage.reload_sync()
+    mgrs = storage.list_outsource_managers() if hasattr(storage, "list_outsource_managers") else {}
+    chats = storage.list_outsource_chats() if hasattr(storage, "list_outsource_chats") else {}
+    chats_per_manager = {}
+    for chat_entry in chats.values():
+        u = chat_entry.get("manager_username") or ""
+        if u: chats_per_manager[u] = chats_per_manager.get(u, 0) + 1
+    out = []
+    for u, m in mgrs.items():
+        out.append({
+            "username": u, "tg_user_id": m.get("tg_user_id") or 0,
+            "first_seen_ts": m.get("first_seen_ts") or 0,
+            "last_active_ts": m.get("last_active_ts") or 0,
+            "stats": m.get("stats") or {}, "chats_count": chats_per_manager.get(u, 0),
+            "wallet_balance_usdt": m.get("wallet_balance_usdt") or 0.0,
+            "paid_total_usdt": m.get("paid_total_usdt") or 0.0,
+        })
+    out.sort(key=lambda x: -(x.get("last_active_ts") or 0))
+    return {"ok": True, "items": out, "count": len(out)}
+
+
+@app.post("/api/system/lk/{droplk_id}/move_to_outsource")
+async def api_system_lk_move_to_outsource(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Перенос в АУТСОРС-КАТАЛОГ (общий пул).
+    Body: {list_price_usdt: float, manager_username?: str (опц.)}
+    Если manager_username не указан — ЛК идёт в пул каталога без владельца.
+    Управляющий потом сам "выкупает" из бота."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    manager_username = (body.get("manager_username") or "").strip().lstrip("@").lower()
+    list_price_usdt = float(body.get("list_price_usdt") or 0)
+    if not hasattr(storage, "move_any_lk_to_outsource"):
+        raise HTTPException(500, "move_any_lk_to_outsource not available")
+    try:
+        if manager_username:
+            await storage.register_outsource_manager(username=manager_username)
+        new_id = await storage.move_any_lk_to_outsource(droplk_id, manager_username=manager_username)
+        if not new_id:
+            raise HTTPException(404, f"ЛК {droplk_id} не найден")
+        # Сохраняем цену каталога
+        if list_price_usdt > 0:
+            await storage.update_outsource_drop_lk(new_id,
+                list_price_usdt=list_price_usdt,
+                listed_at=__import__("time").time(),
+                listed_by=me.get("username") or "",
+                # pool-флаг для бота: если manager_username пуст — в каталог
+                in_pool=(not manager_username),
+            )
+        try:
+            event_bus.emit_event("lk-moved-to-outsource", {
+                "from_droplk_id": droplk_id, "to_outsource_droplk_id": new_id,
+                "manager": manager_username, "moved_by": me.get("username") or "",
+            }, severity="info")
+        except Exception: pass
+        return {"ok": True, "new_outsource_droplk_id": new_id, "manager": manager_username}
+    except HTTPException: raise
+    except Exception as e:
+        logger.exception("move_to_outsource failed: %s", e)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/system/outsource_lk/{outsource_droplk_id}/move_to_supplier")
+async def api_system_outsource_lk_move_to_supplier(outsource_droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    owner_id = (body.get("owner_id") or "").strip() or None
+    if not hasattr(storage, "move_outsource_lk_to_crm"):
+        raise HTTPException(500, "move_outsource_lk_to_crm not available")
+    try:
+        new_id = await storage.move_outsource_lk_to_crm(outsource_droplk_id, owner_id=owner_id)
+        if not new_id:
+            raise HTTPException(404, f"ЛК {outsource_droplk_id} не найден")
+        return {"ok": True, "new_droplk_id": new_id, "owner_id": owner_id or ""}
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# =====================================================================
 # MOVE LK BETWEEN TRACKS (Поставщики ↔ Кредитование)
 # =====================================================================
 

@@ -658,6 +658,15 @@ async def main():
     except Exception as e:
         logger.warning("CRM bot module load failed: %s", e)
 
+    # === Outsource bot (@PrideOutsource_bot — лавка PRIDE для управляющих) ===
+    outsource_task = None
+    try:
+        from outsource_bot import run_outsource_bot  # noqa: F401
+        outsource_task = asyncio.create_task(_safe_outsource_task())
+        logger.info("Outsource bot task created")
+    except Exception as e:
+        logger.warning("Outsource bot module load failed: %s", e)
+
     # === HEALTHCHECK на старте ===
     # Прогоняем все системы и шлём отчёт в HEALTH_CHAT_ID (если задан).
     # Делается в фоне чтобы не блокировать запуск polling.
@@ -671,6 +680,8 @@ async def main():
             dashboard_task.cancel()
         if crm_task and not crm_task.done():
             crm_task.cancel()
+        if outsource_task and not outsource_task.done():
+            outsource_task.cancel()
         try:
             await userbot.stop()
         except Exception as e:
@@ -712,6 +723,14 @@ async def _safe_crm_task():
         await run_crm_bot()
     except Exception as e:
         logger.error("CRM bot crashed: %s — main bot continues", e)
+
+
+async def _safe_outsource_task():
+    try:
+        from outsource_bot import run_outsource_bot
+        await run_outsource_bot()
+    except Exception as e:
+        logger.error("Outsource bot crashed: %s — main bot continues", e)
 
 
 async def _start_dashboard_api():
