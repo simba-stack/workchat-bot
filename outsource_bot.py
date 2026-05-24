@@ -132,29 +132,54 @@ async def cmd_help(message: Message):
 
 
 # ════════════════════════════════════════════════════════════════
-# 📋 КАТАЛОГ
+# 📋 КАТАЛОГ — главное меню с подразделами Одиночки/Связки
 # ════════════════════════════════════════════════════════════════
 @router.message(F.text == "🪪 Каталог")
 @router.message(Command("catalog"))
 async def cmd_catalog(message: Message):
+    # Считаем что в каждом подразделе
+    all_lks = storage.list_outsource_drop_lks() or {}
+    bundles = storage.list_outsource_bundles() if hasattr(storage, "list_outsource_bundles") else {}
+    singles_cnt = sum(
+        1 for lk in all_lks.values()
+        if lk.get("in_pool") and not lk.get("bundle_id")
+    )
+    bundles_cnt = sum(1 for b in bundles.values() if b.get("in_pool"))
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_ibtn(text=f"🎴 Одиночки ({singles_cnt})", callback_data="cat:singles", style="primary")],
+        [_ibtn(text=f"🔗 Связки ({bundles_cnt})", callback_data="cat:bundles", style="success")],
+    ])
+    await message.reply(
+        "📋 <b>Каталог лавки PRIDE</b>\n\n"
+        f"🎴 <b>Одиночки</b> — отдельные ЛК ({singles_cnt})\n"
+        f"🔗 <b>Связки</b> — пакеты ЛК со скидкой ({bundles_cnt})\n\n"
+        "<i>Выберите раздел.</i>",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "cat:singles")
+async def cb_catalog_singles(call: CallbackQuery):
+    await call.answer()
     pool_lks = []
     all_lks = storage.list_outsource_drop_lks() or {}
     all_drops = storage.list_outsource_drops() or {}
     for lkid, lk in all_lks.items():
-        if not lk.get("in_pool"):
+        # Только одиночки: в пуле и не в связке
+        if not lk.get("in_pool") or lk.get("bundle_id"):
             continue
         drop = all_drops.get(lk.get("outsource_drop_id"), {})
         pool_lks.append((lkid, lk, drop))
     pool_lks.sort(key=lambda x: -(x[1].get("listed_at") or 0))
 
     if not pool_lks:
-        await message.reply(
-            "📋 <b>Каталог пуст</b>\n\nПока нет доступных ЛК для управления. Загляните позже!",
-            reply_markup=MAIN_MENU,
+        await call.message.reply(
+            "🎴 <b>Одиночки — пусто</b>\n\nПока нет отдельных ЛК. Загляните в 🔗 Связки или позже.",
         )
         return
 
-    lines = [f"📋 <b>Каталог — {len(pool_lks)} ЛК</b>\n"]
+    lines = [f"🎴 <b>Одиночки — {len(pool_lks)} ЛК</b>\n"]
     rows = []
     for lkid, lk, drop in pool_lks[:20]:
         bank = lk.get("bank") or "—"
@@ -168,9 +193,126 @@ async def cmd_catalog(message: Message):
         )])
     if len(pool_lks) > 20:
         lines.append(f"\n<i>... и ещё {len(pool_lks) - 20}</i>")
-    await message.reply(
+    await call.message.reply(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "cat:bundles")
+async def cb_catalog_bundles(call: CallbackQuery):
+    await call.answer()
+    bundles = storage.list_outsource_bundles() if hasattr(storage, "list_outsource_bundles") else {}
+    all_lks = storage.list_outsource_drop_lks() or {}
+    all_drops = storage.list_outsource_drops() or {}
+    active = []
+    for bid, b in bundles.items():
+        if not b.get("in_pool"):
+            continue
+        active.append((bid, b))
+    active.sort(key=lambda x: -(x[1].get("created_at") or 0))
+
+    if not active:
+        await call.message.reply(
+            "🔗 <b>Связки — пусто</b>\n\nПока нет доступных связок. Загляните в 🎴 Одиночки или позже.",
+        )
+        return
+
+    rows = []
+    for bid, b in active[:15]:
+        name = b.get("name") or f"Связка #{bid.replace('obnd','')}"
+        price = float(b.get("list_price_usdt") or 0)
+        # Сводка банков
+        banks = []
+        for lkid in b.get("lk_ids", [])[:5]:
+            lk = all_lks.get(str(lkid)) or {}
+            banks.append(lk.get("bank") or "?")
+        banks_str = " + ".join(banks)
+        if len(b.get("lk_ids", [])) > 5:
+            banks_str += f" +{len(b['lk_ids']) - 5}"
+        rows.append([_ibtn(
+            text=f"🔗 {name} · {banks_str[:30]} — {price:.0f} USDT",
+            callback_data=f"vbnd:{bid}",
+            style="success",
+        )])
+    await call.message.reply(
+        f"🔗 <b>Связки — {len(active)}</b>\n\n"
+        "<i>Тапни на связку чтобы увидеть состав и забрать пакет целиком.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("vbnd:"))
+async def cb_view_bundle(call: CallbackQuery):
+    await call.answer()
+    bundle_id = call.data.split(":", 1)[1]
+    b = storage.get_outsource_bundle(bundle_id) if hasattr(storage, "get_outsource_bundle") else None
+    if not b:
+        await call.message.reply("Связка не найдена")
+        return
+    if not b.get("in_pool"):
+        await call.message.reply("Связка уже куплена")
+        return
+    all_lks = storage.list_outsource_drop_lks() or {}
+    all_drops = storage.list_outsource_drops() or {}
+    name = b.get("name") or f"Связка #{bundle_id.replace('obnd','')}"
+    price = float(b.get("list_price_usdt") or 0)
+    lines = [f"🔗 <b>{name}</b>\n"]
+    lines.append(f"📦 ЛК в пакете: <b>{len(b.get('lk_ids', []))}</b>")
+    lines.append(f"💰 Цена за пакет: <b>{price:.0f} USDT</b>\n")
+    lines.append("<b>Состав:</b>")
+    for i, lkid in enumerate(b.get("lk_ids", []), 1):
+        lk = all_lks.get(str(lkid)) or {}
+        drop = all_drops.get(lk.get("outsource_drop_id")) or {}
+        bank = lk.get("bank") or "—"
+        fio = drop.get("fio") or "—"
+        lines.append(f"  {i}. <b>{bank}</b> · {fio}")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_ibtn(text=f"💎 Забрать связку — {price:.0f} USDT", callback_data=f"buybnd:{bundle_id}", style="success")],
+        [_ibtn(text="◀ Назад к связкам", callback_data="cat:bundles", style="primary")],
+    ])
+    await call.message.reply("\n".join(lines), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("buybnd:"))
+async def cb_buy_bundle(call: CallbackQuery):
+    bundle_id = call.data.split(":", 1)[1]
+    username = _username(call)
+    if not username:
+        await call.answer("Нужен @username в Telegram", show_alert=True)
+        return
+    b = storage.get_outsource_bundle(bundle_id) if hasattr(storage, "get_outsource_bundle") else None
+    if not b:
+        await call.answer("Связка не найдена", show_alert=True)
+        return
+    if not b.get("in_pool"):
+        await call.answer("Связка уже куплена другим управляющим", show_alert=True)
+        return
+    price = float(b.get("list_price_usdt") or 0)
+    await storage.register_outsource_manager(username=username, tg_user_id=call.from_user.id)
+    mgr = storage.get_outsource_manager(username) or {}
+    balance = float(mgr.get("wallet_balance_usdt") or 0)
+    if balance < price:
+        await call.answer(
+            f"Недостаточно средств. Баланс: {balance:.2f} USDT, нужно: {price:.2f} USDT",
+            show_alert=True,
+        )
+        return
+    # Атомарная покупка
+    result = await storage.buy_outsource_bundle(bundle_id, username) if hasattr(storage, "buy_outsource_bundle") else None
+    if not result:
+        await call.answer("Не удалось купить (возможно уже забрана)", show_alert=True)
+        return
+    new_balance = balance - price
+    name = b.get("name") or f"Связка #{bundle_id.replace('obnd','')}"
+    cnt = len(b.get("lk_ids", []))
+    await call.answer(f"✅ Связка забрана! Списано {price:.0f} USDT", show_alert=True)
+    await call.message.edit_text(
+        f"✅ <b>{name} — взята под управление</b>\n\n"
+        f"📦 ЛК в пакете: <b>{cnt}</b>\n"
+        f"💸 Списано: <b>{price:.0f} USDT</b>\n"
+        f"💼 Остаток: <b>{new_balance:.2f} USDT</b>\n\n"
+        f"Все карточки уже в разделе «🧾 Мои заказы».",
     )
 
 

@@ -276,6 +276,12 @@ def _default_state() -> dict:
         "outsource_drops_seq": 0,
         "outsource_drop_lks_seq": 0,
         "outsource_fsm": {},
+        # ==== СВЯЗКИ ЛК (bundle) — продаются одним пакетом ====
+        # {bundle_id: {id, name, list_price_usdt, lk_ids[], in_pool, manager_username,
+        #              bought_at, created_at, created_by}}
+        # Покупка bundle = списываем list_price_usdt + всем ЛК ставим manager + in_pool=False
+        "outsource_bundles": {},
+        "outsource_bundles_seq": 0,
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3483,6 +3489,136 @@ class Storage:
             sms.append({"code": str(code), "time_str": time_str, "ts": time.time()})
             await self._save_unlocked()
             return True
+
+    # ════════════════════════════════════════════════════════════
+    # OUTSOURCE BUNDLES — связки ЛК (продаются одним пакетом)
+    # ════════════════════════════════════════════════════════════
+    def list_outsource_bundles(self) -> dict:
+        return dict(self.state.get("outsource_bundles") or {})
+
+    def get_outsource_bundle(self, bundle_id) -> Optional[dict]:
+        if not bundle_id:
+            return None
+        return (self.state.get("outsource_bundles") or {}).get(str(bundle_id))
+
+    async def create_outsource_bundle(
+        self, lk_ids: list, list_price_usdt: float,
+        name: str = "", created_by: str = "",
+    ) -> Optional[str]:
+        """Создаёт связку из >=2 ЛК.
+
+        Все ЛК должны быть в пуле outsource (in_pool=True, manager_username пустой,
+        не в другой связке). Возвращает bundle_id или None если что-то не так.
+        """
+        ids = [str(x) for x in (lk_ids or []) if x]
+        if len(ids) < 2:
+            return None
+        try:
+            price = float(list_price_usdt or 0)
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            return None
+        async with _lock:
+            lks = self.state.get("outsource_drop_lks") or {}
+            # Валидация всех ЛК
+            for lkid in ids:
+                lk = lks.get(lkid)
+                if not lk:
+                    return None
+                if not lk.get("in_pool"):
+                    return None
+                if lk.get("manager_username"):
+                    return None
+                if lk.get("bundle_id"):
+                    return None
+            # OK, создаём связку
+            self.state["outsource_bundles_seq"] = int(self.state.get("outsource_bundles_seq") or 0) + 1
+            bundle_id = f"obnd{self.state['outsource_bundles_seq']}"
+            bundles = self.state.setdefault("outsource_bundles", {})
+            now = time.time()
+            bundles[bundle_id] = {
+                "id": bundle_id,
+                "name": (name or "").strip(),
+                "list_price_usdt": price,
+                "lk_ids": ids,
+                "in_pool": True,
+                "manager_username": "",
+                "bought_at": 0,
+                "created_at": now,
+                "created_by": (created_by or "").lstrip("@").lower(),
+            }
+            # Помечаем каждый ЛК что он в связке (но in_pool остаётся True для bundle учёта)
+            for lkid in ids:
+                lks[lkid]["bundle_id"] = bundle_id
+            await self._save_unlocked()
+            return bundle_id
+
+    async def dissolve_outsource_bundle(self, bundle_id) -> bool:
+        """Расформировывает связку — ЛК возвращаются в общий пул как одиночки.
+        Доступно только пока bundle.in_pool=True (не куплен).
+        """
+        if not bundle_id:
+            return False
+        async with _lock:
+            bundles = self.state.get("outsource_bundles") or {}
+            bundle = bundles.get(str(bundle_id))
+            if not bundle:
+                return False
+            if not bundle.get("in_pool"):
+                return False  # уже куплен, нельзя
+            lks = self.state.get("outsource_drop_lks") or {}
+            for lkid in bundle.get("lk_ids", []):
+                lk = lks.get(str(lkid))
+                if lk and lk.get("bundle_id") == str(bundle_id):
+                    lk.pop("bundle_id", None)
+            del bundles[str(bundle_id)]
+            await self._save_unlocked()
+            return True
+
+    async def buy_outsource_bundle(
+        self, bundle_id, username: str,
+    ) -> Optional[dict]:
+        """Атомарно покупает связку: списывает баланс, помечает bundle и все ЛК.
+        Возвращает обновлённый bundle dict или None если ошибка.
+        Не проверяет баланс — это делает caller заранее (для UX alert).
+        """
+        username = (username or "").lstrip("@").lower()
+        if not bundle_id or not username:
+            return None
+        async with _lock:
+            bundles = self.state.get("outsource_bundles") or {}
+            bundle = bundles.get(str(bundle_id))
+            if not bundle:
+                return None
+            if not bundle.get("in_pool"):
+                return None  # уже куплен
+            price = float(bundle.get("list_price_usdt") or 0)
+            mgr = (self.state.get("outsource_managers") or {}).get(username)
+            if not mgr:
+                return None
+            balance = float(mgr.get("wallet_balance_usdt") or 0)
+            if balance < price:
+                return None
+            # Списываем + помечаем
+            mgr["wallet_balance_usdt"] = balance - price
+            mgr["paid_total_usdt"] = float(mgr.get("paid_total_usdt") or 0) + price
+            mgr["last_active_ts"] = time.time()
+            bundle["in_pool"] = False
+            bundle["manager_username"] = username
+            bundle["bought_at"] = time.time()
+            lks = self.state.get("outsource_drop_lks") or {}
+            now = time.time()
+            for lkid in bundle.get("lk_ids", []):
+                lk = lks.get(str(lkid))
+                if lk:
+                    lk["manager_username"] = username
+                    lk["in_pool"] = False
+                    lk["bought_at"] = now
+                    lk["bought_by"] = username
+                    lk["bought_as_bundle"] = str(bundle_id)
+            await self._save_unlocked()
+            return bundle
 
     # =====================================================================
     # OWNER PANEL — роли и разрешения

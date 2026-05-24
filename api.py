@@ -2418,6 +2418,94 @@ async def api_system_lk_move_to_outsource(droplk_id: str, request: Request, me: 
         raise HTTPException(500, str(e))
 
 
+# ═══════════════════════════════════════════════════════════════
+# СВЯЗКИ ЛК (bundles) — продаются одним пакетом через @marketplace_PRIDE_BOT
+# ═══════════════════════════════════════════════════════════════
+@app.get("/api/system/outsource/bundles")
+async def api_outsource_bundles_list(me: dict = Depends(_get_me)):
+    """Список всех связок outsource (с обогащёнными данными ЛК)."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    bundles = storage.list_outsource_bundles() if hasattr(storage, "list_outsource_bundles") else {}
+    all_lks = storage.list_outsource_drop_lks() if hasattr(storage, "list_outsource_drop_lks") else {}
+    all_drops = storage.list_outsource_drops() if hasattr(storage, "list_outsource_drops") else {}
+    items = []
+    for bid, b in bundles.items():
+        lks_info = []
+        for lkid in b.get("lk_ids", []):
+            lk = all_lks.get(str(lkid)) or {}
+            drop = all_drops.get(lk.get("outsource_drop_id")) or {}
+            lks_info.append({
+                "droplk_id": lkid,
+                "bank": lk.get("bank") or "—",
+                "fio": drop.get("fio") or "—",
+            })
+        items.append({
+            "bundle_id": bid,
+            "name": b.get("name") or "",
+            "list_price_usdt": float(b.get("list_price_usdt") or 0),
+            "in_pool": bool(b.get("in_pool")),
+            "manager_username": b.get("manager_username") or "",
+            "created_at": b.get("created_at") or 0,
+            "bought_at": b.get("bought_at") or 0,
+            "lks": lks_info,
+            "lk_count": len(lks_info),
+        })
+    items.sort(key=lambda x: -(x["created_at"] or 0))
+    return {"items": items}
+
+
+@app.post("/api/system/outsource/bundles/create")
+async def api_outsource_bundle_create(request: Request, me: dict = Depends(_get_me)):
+    """Body: {lk_ids: [...], list_price_usdt: float, name?: str}
+    Все ЛК должны быть в пуле outsource (in_pool=True, без manager, не в связке).
+    """
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    lk_ids = body.get("lk_ids") or []
+    list_price_usdt = float(body.get("list_price_usdt") or 0)
+    name = (body.get("name") or "").strip()
+    if not isinstance(lk_ids, list) or len(lk_ids) < 2:
+        raise HTTPException(400, "Нужно >= 2 ЛК")
+    if list_price_usdt <= 0:
+        raise HTTPException(400, "Цена должна быть > 0")
+    if not hasattr(storage, "create_outsource_bundle"):
+        raise HTTPException(500, "create_outsource_bundle not available")
+    bid = await storage.create_outsource_bundle(
+        lk_ids=lk_ids, list_price_usdt=list_price_usdt,
+        name=name, created_by=me.get("username") or "",
+    )
+    if not bid:
+        raise HTTPException(400, "Не удалось создать связку (проверьте что все ЛК свободны)")
+    try:
+        await _log_event("outsource_bundle_created", {
+            "bundle_id": bid, "lk_count": len(lk_ids),
+            "list_price_usdt": list_price_usdt,
+            "created_by": me.get("username") or "",
+        }, severity="info")
+    except Exception: pass
+    return {"ok": True, "bundle_id": bid}
+
+
+@app.post("/api/system/outsource/bundles/{bundle_id}/dissolve")
+async def api_outsource_bundle_dissolve(bundle_id: str, me: dict = Depends(_get_me)):
+    """Расформировать связку (только пока не куплена). ЛК вернутся в одиночки."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    if not hasattr(storage, "dissolve_outsource_bundle"):
+        raise HTTPException(500, "dissolve_outsource_bundle not available")
+    ok = await storage.dissolve_outsource_bundle(bundle_id)
+    if not ok:
+        raise HTTPException(400, "Не удалось расформировать (возможно уже куплена)")
+    try:
+        await _log_event("outsource_bundle_dissolved", {
+            "bundle_id": bundle_id, "by": me.get("username") or "",
+        }, severity="info")
+    except Exception: pass
+    return {"ok": True}
+
+
 @app.post("/api/system/outsource_lk/{outsource_droplk_id}/move_to_supplier")
 async def api_system_outsource_lk_move_to_supplier(outsource_droplk_id: str, request: Request, me: dict = Depends(_get_me)):
     if me.get("role") not in ("owner", "manager"):

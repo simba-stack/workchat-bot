@@ -5503,17 +5503,68 @@
 
   <!-- ============= ВКЛАДКА: 🏢 АУТСОРС | ДОСТУПЫ ============= -->
   <div x-show="systemSection === 'outsource_access'" x-init="refreshOutsource()">
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">🏢 Аутсорс — Доступы</h3>
       <span class="badge-mini" x-text="outsourcePendingLks.length + ' анкет'"></span>
+      <button class="btn" @click="bundlesViewOpen = !bundlesViewOpen" :style="bundlesViewOpen ? 'background:rgba(34,197,94,0.18);border-color:rgba(34,197,94,0.4);' : ''"
+              x-text="bundlesViewOpen ? '🔗 Связки (открыто)' : ('🔗 Связки (' + (outsourceBundles?.length || 0) + ')')"></button>
       <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
     </div>
+
+    <!-- Toolbar выбора (показывается когда что-то отмечено) -->
+    <div x-show="selectedOutsourceLkIds.length > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px;">
+      <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + selectedOutsourceLkIds.length"></span>
+      <button class="btn" style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;"
+              @click="openCreateBundleModal()" :disabled="selectedOutsourceLkIds.length < 2">
+        🔗 Объединить в связку
+      </button>
+      <button class="btn" @click="clearOutsourceSelection()">Сбросить</button>
+    </div>
+
+    <!-- Список связок (раскрывается по кнопке) -->
+    <div x-show="bundlesViewOpen" x-cloak style="margin-bottom: 14px; padding: 12px; background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.25); border-radius: 8px;">
+      <div style="font-weight: 700; margin-bottom: 8px; color: #22c55e;">🔗 Активные связки</div>
+      <div x-show="!outsourceBundles || outsourceBundles.length === 0" style="font-size: 12px; color: var(--text-dim);">
+        Связок пока нет. Отметь чекбоксами 2+ ЛК и нажми «🔗 Объединить в связку».
+      </div>
+      <template x-for="b in outsourceBundles" :key="b.bundle_id">
+        <div style="margin-bottom: 6px; padding: 10px; background: rgba(0,0,0,0.2); border-left: 3px solid #22c55e; border-radius: 6px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span style="font-weight: 700;" x-text="b.name || ('Связка #' + b.bundle_id.replace('obnd',''))"></span>
+            <span class="badge-mini" x-text="b.lk_count + ' ЛК'"></span>
+            <span style="color: #22c55e; font-weight: 600;" x-text="b.list_price_usdt + ' USDT'"></span>
+            <span x-show="!b.in_pool" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 3px;">✅ КУПЛЕНА · @<span x-text="b.manager_username"></span></span>
+            <span x-show="b.in_pool" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.18); color:#22c55e; border-radius: 3px;">⏳ В пуле</span>
+            <button x-show="b.in_pool" class="btn-move-track to-supplier" @click.stop="dissolveBundle(b.bundle_id)"
+                    style="margin-left: auto; background: rgba(239,68,68,0.15); color:#ef4444; border-color: rgba(239,68,68,0.35);">💔 Расформировать</button>
+          </div>
+          <div style="margin-top: 4px; font-size: 11px; color: var(--text-dim);">
+            <template x-for="lkInfo in b.lks" :key="lkInfo.droplk_id">
+              <span style="margin-right: 8px;">• <b x-text="lkInfo.bank"></b> · <span x-text="lkInfo.fio"></span></span>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <div x-show="outsourcePendingLks.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
       Пусто. Перенеси ЛК сюда через кнопку «→ 🏢 АУТСОРС» из CRM или Кредита.
     </div>
     <template x-for="lk in outsourcePendingLks" :key="lk.droplk_id">
-      <div class="crm-card" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #f59e0b;">
+      <div class="crm-card" style="margin-bottom: 8px; padding: 12px;"
+           :style="bundleIdForLk(lk.droplk_id) ? 'border-left: 3px solid #22c55e;' : 'border-left: 3px solid #f59e0b;'">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <!-- Checkbox: только для LK не в связке и не купленных -->
+          <template x-if="!bundleIdForLk(lk.droplk_id)">
+            <input type="checkbox" :checked="isLkSelected(lk.droplk_id)" @change="toggleOutsourceLkSelect(lk.droplk_id)"
+                   title="Выбрать для связки"
+                   style="width: 18px; height: 18px; cursor: pointer; accent-color: #22c55e;">
+          </template>
+          <template x-if="bundleIdForLk(lk.droplk_id)">
+            <span style="font-size: 10px; padding: 2px 6px; background: rgba(34,197,94,0.18); color:#22c55e; border-radius: 3px; font-weight: 700;"
+                  :title="'В связке ' + bundleIdForLk(lk.droplk_id)" x-text="'🔗 ' + bundleIdForLk(lk.droplk_id)"></span>
+          </template>
           <span class="lk-slot-badge" x-show="lk.slot_number"
                 :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
                 x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5523,7 +5574,9 @@
             <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
           <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
-                  title="Вернуть в ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
+                  :disabled="bundleIdForLk(lk.droplk_id)"
+                  :title="bundleIdForLk(lk.droplk_id) ? 'Сначала расформируй связку' : 'Вернуть в ПОСТАВЩИКИ'"
+                  :style="bundleIdForLk(lk.droplk_id) ? 'opacity:0.4;cursor:not-allowed;' : ''">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
@@ -6705,6 +6758,15 @@ function jarvis() {
     creditLoading: false,
     // === АУТСОРС (маркетплейс ЛК для управляющих) ===
     outsourcePendingLks: [],
+    // Чекбокс-выбор для объединения в связку (только free LKs)
+    selectedOutsourceLkIds: [],
+    // Связки
+    outsourceBundles: [],            // [{bundle_id, name, list_price_usdt, in_pool, lks: [...], lk_count}]
+    bundlesViewOpen: false,          // показывать панель Связки в выгрузке
+    createBundleModalOpen: false,
+    createBundleName: '',
+    createBundlePrice: 100,
+    createBundleLoading: false,
     outsourcePasswordsInbox: [],
     outsourceManagers: [],
     outsourceLoading: false,
@@ -11164,17 +11226,78 @@ function jarvis() {
       if (this.outsourceLoading) return;
       this.outsourceLoading = true;
       try {
-        const [pendingRes, pwdRes, mgrsRes] = await Promise.all([
+        const [pendingRes, pwdRes, mgrsRes, bundlesRes] = await Promise.all([
           fetch('/api/system/outsource_pending_lk', { credentials: 'include' }),
           fetch('/api/system/outsource_passwords_inbox', { credentials: 'include' }),
           fetch('/api/system/outsource_managers', { credentials: 'include' }),
+          fetch('/api/system/outsource/bundles', { credentials: 'include' }),
         ]);
         if (pendingRes.ok) { const j = await pendingRes.json(); this.outsourcePendingLks = j.items || []; }
         if (pwdRes.ok) { const j = await pwdRes.json(); this.outsourcePasswordsInbox = j.items || []; }
         if (mgrsRes.ok) { const j = await mgrsRes.json(); this.outsourceManagers = j.items || []; }
+        if (bundlesRes.ok) { const j = await bundlesRes.json(); this.outsourceBundles = j.items || []; }
       } catch (e) { console.error('refreshOutsource', e); }
       finally { this.outsourceLoading = false; }
       try { await this.refreshKuc(); } catch (e) {}
+    },
+
+    // === АУТСОРС — связки (bundles) ===
+    isLkSelected(lkid) { return this.selectedOutsourceLkIds.includes(lkid); },
+    toggleOutsourceLkSelect(lkid) {
+      const i = this.selectedOutsourceLkIds.indexOf(lkid);
+      if (i >= 0) this.selectedOutsourceLkIds.splice(i, 1);
+      else this.selectedOutsourceLkIds.push(lkid);
+    },
+    clearOutsourceSelection() { this.selectedOutsourceLkIds = []; },
+    bundleIdForLk(lkid) {
+      for (const b of (this.outsourceBundles || [])) {
+        if ((b.lks || []).some(x => x.droplk_id === lkid)) return b.bundle_id;
+      }
+      return null;
+    },
+    openCreateBundleModal() {
+      if (this.selectedOutsourceLkIds.length < 2) { alert('Выберите минимум 2 ЛК для связки'); return; }
+      this.createBundleName = '';
+      this.createBundlePrice = 100;
+      this.createBundleModalOpen = true;
+    },
+    closeCreateBundleModal() {
+      this.createBundleModalOpen = false;
+      this.createBundleLoading = false;
+    },
+    async submitCreateBundle() {
+      const lk_ids = [...this.selectedOutsourceLkIds];
+      const list_price_usdt = parseFloat(this.createBundlePrice) || 0;
+      if (lk_ids.length < 2) { alert('Минимум 2 ЛК'); return; }
+      if (list_price_usdt <= 0) { alert('Цена должна быть > 0'); return; }
+      this.createBundleLoading = true;
+      try {
+        const r = await fetch('/api/system/outsource/bundles/create', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lk_ids, list_price_usdt, name: this.createBundleName }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        const j = await r.json();
+        alert(`✅ Связка создана: ${j.bundle_id}\n${lk_ids.length} ЛК · ${list_price_usdt} USDT`);
+        this.clearOutsourceSelection();
+        this.closeCreateBundleModal();
+        await this.refreshOutsource();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.createBundleLoading = false;
+      }
+    },
+    async dissolveBundle(bundle_id) {
+      if (!confirm(`Расформировать связку ${bundle_id}? ЛК вернутся в общий пул как одиночки.`)) return;
+      try {
+        const r = await fetch(`/api/system/outsource/bundles/${bundle_id}/dissolve`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOutsource();
+      } catch (e) { alert('Ошибка: ' + e.message); }
     },
 
     // === Кредитование: загрузка данных параллельно с CRM-поставщиками ===
@@ -12392,6 +12515,38 @@ function jarvis() {
       </button>
       <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
       <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CREATE BUNDLE MODAL (объединить выбранные ЛК в связку) ===== -->
+<div x-show="createBundleModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeCreateBundleModal()">
+  <div style="background: #14182c; border: 1px solid rgba(34,197,94,0.35); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1; color: #22c55e;">🔗 Создать связку</h3>
+      <button @click="closeCreateBundleModal()" :disabled="createBundleLoading"
+              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+    <div style="padding: 10px; background: rgba(34,197,94,0.08); border-radius: 6px; margin-bottom: 14px; font-size: 12px;">
+      <b style="color:#22c55e;" x-text="selectedOutsourceLkIds.length + ' ЛК будут объединены в один пакет.'"></b><br>
+      <span style="color: var(--text-dim);">Управляющий сможет купить ТОЛЬКО всю связку целиком за указанную цену. По отдельности эти ЛК будут недоступны.</span>
+    </div>
+    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Название (опционально):</div>
+    <input type="text" x-model="createBundleName" :disabled="createBundleLoading"
+           placeholder="например: «Топ-3 банка для Москвы»"
+           style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Цена за весь пакет (USDT):</div>
+    <input type="number" min="1" step="1" x-model.number="createBundlePrice" :disabled="createBundleLoading"
+           placeholder="100"
+           style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+    <div style="display: flex; gap: 8px;">
+      <button :disabled="createBundleLoading" @click="submitCreateBundle()"
+              style="flex: 1; padding: 12px; background: linear-gradient(135deg, #22c55e, #16a34a); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
+              x-text="createBundleLoading ? '⏳ Создаю…' : '🔗 Создать связку'"></button>
+      <button :disabled="createBundleLoading" @click="closeCreateBundleModal()"
+              style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
     </div>
   </div>
 </div>
