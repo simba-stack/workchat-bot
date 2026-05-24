@@ -299,7 +299,7 @@ Regex:
 - Сводка управляющих со статистикой и balance USDT
 
 ### 4.0.E.B АУТСОРС — Этап 2 (отдельный бот) ⏳
-**Не сделано.** Нужен новый Telegram бот `@PrideOutsource_bot` через BotFather → токен → env `OUTSOURCE_BOT_TOKEN` → новый файл `outsource_bot.py` (по аналогии с crm_bot.py для поставщиков).
+**Не сделано.** Нужен новый Telegram бот `@marketplace_PRIDE_BOT` через BotFather → токен → env `OUTSOURCE_BOT_TOKEN` → новый файл `outsource_bot.py` (по аналогии с crm_bot.py для поставщиков).
 
 ### 4.0.E.C АУТСОРС — Этап 3 (оплата / SMS API) ⏳
 - **Оплата:** TRC20 wallet management (есть в `partner_wallets` от Wallet-фичи). При оплате взноса — пополнение `outsource_managers[user].wallet_balance_usdt`.
