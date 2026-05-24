@@ -100,6 +100,58 @@ def _username(message_or_call):
 
 
 # ════════════════════════════════════════════════════════════════
+# ПРИВАТНОСТЬ — маскировка ФИО до покупки
+# Полное ФИО видно только после покупки (в Мои заказы и в сообщении об успехе).
+# ════════════════════════════════════════════════════════════════
+def _detect_gender(fio: str) -> str:
+    """Определяет пол по русскому ФИО. Возвращает 'женщина', 'мужчина' или '?'.
+
+    Самый надёжный признак — окончание отчества (-овна/-евна = ж, -ович/-евич = м).
+    Fallback — окончание фамилии.
+    """
+    parts = (fio or "").strip().split()
+    if not parts:
+        return "?"
+    # 1. Отчество (если есть, 3-я часть)
+    if len(parts) >= 3:
+        pat = parts[2].lower()
+        if pat.endswith(("овна", "евна", "ична", "инична", "ьична")):
+            return "женщина"
+        if pat.endswith(("ович", "евич", "ич", "ьич")) and len(pat) > 3:
+            return "мужчина"
+    # 2. Фамилия (1-я часть)
+    s = parts[0].lower()
+    if s.endswith(("ова", "ева", "ёва", "ина", "ская", "цкая", "ыхая", "яя")):
+        return "женщина"
+    if s.endswith(("ский", "цкий", "ой", "ый", "ий")):
+        return "мужчина"
+    if s.endswith(("ов", "ев", "ин", "ёв")) and not s.endswith(("ова", "ева", "ина", "ёва")):
+        return "мужчина"
+    # 3. Имя (2-я часть) как последний шанс
+    if len(parts) >= 2:
+        n = parts[1].lower()
+        if n.endswith(("а", "я")) and n not in ("никита", "илья", "савва", "кузьма", "фома"):
+            return "женщина"
+    return "?"
+
+
+def _mask_fio(fio: str) -> str:
+    """Возвращает 'женщина, Б. О. А.' из 'Бархатова Олеся Алексеевна'.
+
+    Если пол не распознан — просто инициалы 'Б. О. А.'.
+    Если ФИО пустое — '?'.
+    """
+    parts = (fio or "").strip().split()
+    if not parts:
+        return "?"
+    initials = " ".join(p[0].upper() + "." for p in parts[:3] if p)
+    gender = _detect_gender(fio)
+    if gender == "?":
+        return initials
+    return f"{gender}, {initials}"
+
+
+# ════════════════════════════════════════════════════════════════
 # /start
 # ════════════════════════════════════════════════════════════════
 @router.message(CommandStart())
@@ -160,12 +212,13 @@ async def cb_catalog_singles(call: CallbackQuery):
     rows = []
     for lkid, lk, drop in pool_lks[:20]:
         bank = lk.get("bank") or "—"
-        fio = drop.get("fio") or "—"
+        fio_full = drop.get("fio") or "—"
+        fio_masked = _mask_fio(fio_full)  # «женщина, Б. О. А.» — без полного имени
         price = float(lk.get("list_price_usdt") or 0)
-        lines.append(f"\n💼 <b>{bank}</b> · {fio} — <b>{price:.0f} USDT</b>")
+        lines.append(f"\n💼 <b>{bank}</b> · {fio_masked} — <b>{price:.0f} USDT</b>")
         # show_terms_first → отдельный callback который потом ведёт на реальную покупку
         rows.append([_ibtn(
-            text=f"💼 {bank} · {fio[:20]} — {price:.0f} USDT",
+            text=f"💼 {bank} · {fio_masked[:24]} — {price:.0f} USDT",
             callback_data=f"buyask:{lkid}",
             style="success",
         )])
@@ -226,8 +279,8 @@ async def cb_view_bundle(call: CallbackQuery):
         lk = all_lks.get(str(lkid)) or {}
         drop = all_drops.get(lk.get("outsource_drop_id")) or {}
         bank = lk.get("bank") or "—"
-        fio = drop.get("fio") or "—"
-        lines.append(f"  {i}. <b>{bank}</b> · {fio}")
+        fio_masked = _mask_fio(drop.get("fio") or "—")  # до покупки видны только инициалы+пол
+        lines.append(f"  {i}. <b>{bank}</b> · {fio_masked}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_ibtn(text=f"💎 Забрать связку — {price:.0f} USDT", callback_data=f"bndask:{bundle_id}", style="success")],
         [_ibtn(text="◀ Назад к связкам", callback_data="cat:bundles", style="primary")],
