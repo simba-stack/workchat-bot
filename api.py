@@ -1868,7 +1868,76 @@ async def settings_get_all(me: dict = Depends(_get_me)):
         # Default triggers + workers (для базовых настроек)
         "trigger_phrases": list(storage.state.get("trigger_phrases") or []),
         "cooldown_minutes": int(storage.state.get("cooldown_minutes") or 60),
+        # Outsource payment (USDT TRC20)
+        "outsource_corp_wallet_trc20": storage.get_outsource_corp_wallet() if hasattr(storage, "get_outsource_corp_wallet") else "",
     }
+
+
+# --- Outsource Payment (USDT TRC20) ---
+@app.post("/api/settings/outsource_payment/set_wallet")
+async def settings_set_outsource_wallet(request: Request, me: dict = Depends(_get_me)):
+    """Body: {address: str}. TRC20 адрес (начинается с T, 34 символа)."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    address = (body.get("address") or "").strip()
+    if not hasattr(storage, "set_outsource_corp_wallet"):
+        raise HTTPException(500, "set_outsource_corp_wallet not available")
+    ok = await storage.set_outsource_corp_wallet(address)
+    if not ok:
+        raise HTTPException(400, "Неверный TRC20 адрес (должен начинаться с T и быть 34 символа)")
+    return {"ok": True, "address": address}
+
+
+@app.get("/api/system/outsource/topups")
+async def api_outsource_topups_list(me: dict = Depends(_get_me)):
+    """Список всех top-up requests (pending + history)."""
+    _require_owner_or_manager(me)
+    reqs = storage.list_outsource_topup_requests() if hasattr(storage, "list_outsource_topup_requests") else {}
+    items = []
+    for rid, r in reqs.items():
+        items.append({
+            "id": rid,
+            "username": r.get("username") or "",
+            "base_amount": float(r.get("base_amount") or 0),
+            "unique_amount": float(r.get("unique_amount") or 0),
+            "status": r.get("status") or "",
+            "txid": r.get("txid") or "",
+            "created_at": r.get("created_at") or 0,
+            "expires_at": r.get("expires_at") or 0,
+            "credited_at": r.get("credited_at") or 0,
+        })
+    items.sort(key=lambda x: -(x["created_at"] or 0))
+    return {"items": items}
+
+
+@app.post("/api/system/outsource/topups/{request_id}/credit")
+async def api_outsource_topup_manual_credit(request_id: str, me: dict = Depends(_get_me)):
+    """Ручное зачисление (admin override) — если auto-monitor не сработал."""
+    _require_owner_or_manager(me)
+    if not hasattr(storage, "credit_outsource_topup"):
+        raise HTTPException(500, "credit_outsource_topup not available")
+    result = await storage.credit_outsource_topup(
+        request_id=request_id, txid="manual", manual_by=me.get("username") or "",
+    )
+    if not result:
+        raise HTTPException(400, "Не удалось зачислить (возможно уже обработано)")
+    try:
+        await _log_event("outsource_topup_credited_manual", {
+            "request_id": request_id, "by": me.get("username") or "",
+        }, severity="info")
+    except Exception: pass
+    return {"ok": True}
+
+
+@app.post("/api/system/outsource/topups/{request_id}/reject")
+async def api_outsource_topup_reject(request_id: str, me: dict = Depends(_get_me)):
+    _require_owner_or_manager(me)
+    if not hasattr(storage, "reject_outsource_topup"):
+        raise HTTPException(500, "reject_outsource_topup not available")
+    ok = await storage.reject_outsource_topup(request_id, manual_by=me.get("username") or "")
+    if not ok:
+        raise HTTPException(400, "Не удалось отклонить (возможно уже обработано)")
+    return {"ok": True}
 
 
 # --- Прайс ЛК ---

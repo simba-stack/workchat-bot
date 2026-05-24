@@ -658,7 +658,7 @@ async def main():
     except Exception as e:
         logger.warning("CRM bot module load failed: %s", e)
 
-    # === Outsource bot (@PrideOutsource_bot — лавка PRIDE для управляющих) ===
+    # === Outsource bot (@marketplace_PRIDE_BOT — лавка PRIDE для управляющих) ===
     outsource_task = None
     try:
         from outsource_bot import run_outsource_bot  # noqa: F401
@@ -666,6 +666,14 @@ async def main():
         logger.info("Outsource bot task created")
     except Exception as e:
         logger.warning("Outsource bot module load failed: %s", e)
+
+    # === Tron monitor (auto-credit USDT TRC20 пополнений) ===
+    tron_monitor_task = None
+    try:
+        tron_monitor_task = asyncio.create_task(_safe_tron_monitor_task())
+        logger.info("Tron monitor task created")
+    except Exception as e:
+        logger.warning("Tron monitor load failed: %s", e)
 
     # === HEALTHCHECK на старте ===
     # Прогоняем все системы и шлём отчёт в HEALTH_CHAT_ID (если задан).
@@ -682,6 +690,8 @@ async def main():
             crm_task.cancel()
         if outsource_task and not outsource_task.done():
             outsource_task.cancel()
+        if tron_monitor_task and not tron_monitor_task.done():
+            tron_monitor_task.cancel()
         try:
             await userbot.stop()
         except Exception as e:
@@ -731,6 +741,23 @@ async def _safe_outsource_task():
         await run_outsource_bot()
     except Exception as e:
         logger.error("Outsource bot crashed: %s — main bot continues", e)
+
+
+async def _safe_tron_monitor_task():
+    """Auto-credit USDT TRC20 пополнений для @marketplace_PRIDE_BOT.
+
+    Ждём пока outsource_bot инициализируется и регистрирует свой Bot instance,
+    потом передаём его в монитор для отправки уведомлений юзерам.
+    """
+    try:
+        # Даём боту время инициализироваться (получить инстанс)
+        await asyncio.sleep(8)
+        from outsource_bot import get_outsource_bot
+        from tron_monitor import run_tron_monitor
+        bot = get_outsource_bot()
+        await run_tron_monitor(bot=bot)
+    except Exception as e:
+        logger.error("Tron monitor crashed: %s — main bot continues", e)
 
 
 async def _start_dashboard_api():

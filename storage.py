@@ -282,6 +282,17 @@ def _default_state() -> dict:
         # Покупка bundle = списываем list_price_usdt + всем ЛК ставим manager + in_pool=False
         "outsource_bundles": {},
         "outsource_bundles_seq": 0,
+        # ==== ОПЛАТА (TRC20 USDT) ====
+        # Корп-кошелёк куда юзеры шлют USDT TRC20. Задаётся через JARVIS Settings.
+        "outsource_corp_wallet_trc20": "",
+        # last_processed_block_ts — timestamp последней обработанной транзакции (ms)
+        # чтобы не перебирать всю историю кошелька с начала.
+        "outsource_tron_last_ts_ms": 0,
+        # {request_id: {username, base_amount, unique_amount, status, created_at,
+        #               expires_at, txid, credited_at, credited_block_ts}}
+        # status: 'pending' | 'credited' | 'expired' | 'rejected'
+        "outsource_topup_requests": {},
+        "outsource_topup_seq": 0,
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3575,6 +3586,174 @@ class Storage:
             del bundles[str(bundle_id)]
             await self._save_unlocked()
             return True
+
+    # ════════════════════════════════════════════════════════════
+    # OUTSOURCE ОПЛАТА (TRC20 USDT) — корп-кошелёк + top-up requests
+    # ════════════════════════════════════════════════════════════
+    def get_outsource_corp_wallet(self) -> str:
+        return (self.state.get("outsource_corp_wallet_trc20") or "").strip()
+
+    async def set_outsource_corp_wallet(self, address: str) -> bool:
+        address = (address or "").strip()
+        # Минимальная валидация TRC20 (начинается с T, длина 34)
+        if address and (not address.startswith("T") or len(address) != 34):
+            return False
+        async with _lock:
+            self.state["outsource_corp_wallet_trc20"] = address
+            await self._save_unlocked()
+            return True
+
+    def get_outsource_tron_last_ts(self) -> int:
+        return int(self.state.get("outsource_tron_last_ts_ms") or 0)
+
+    async def set_outsource_tron_last_ts(self, ts_ms: int) -> None:
+        async with _lock:
+            self.state["outsource_tron_last_ts_ms"] = int(ts_ms or 0)
+            await self._save_unlocked()
+
+    async def create_outsource_topup_request(
+        self, username: str, base_amount: float, ttl_seconds: int = 1800,
+    ) -> Optional[dict]:
+        """Создаёт запрос на пополнение с уникальной суммой (base + рандом 0.0001..0.9999).
+
+        Returns dict с request_id, unique_amount, expires_at — или None если что-то не так.
+        """
+        username = (username or "").lstrip("@").lower()
+        if not username:
+            return None
+        try:
+            base = float(base_amount)
+        except Exception:
+            return None
+        if base <= 0:
+            return None
+        async with _lock:
+            # Генерим уникальную сумму — гарантируем что её ещё нет в pending
+            # Точность 4 знака (=0.0001 USDT), диапазон 0.0001..0.9999 → 9999 уникальных значений
+            existing_pending_amounts = set()
+            now = time.time()
+            for r in (self.state.get("outsource_topup_requests") or {}).values():
+                if r.get("status") == "pending" and r.get("expires_at", 0) > now:
+                    existing_pending_amounts.add(round(float(r.get("unique_amount") or 0), 4))
+            # Пытаемся 50 раз найти свободную сумму
+            unique_amount = None
+            for _ in range(50):
+                tail = secrets.randbelow(9999) + 1  # 1..9999
+                cand = round(base + tail / 10000.0, 4)
+                if cand not in existing_pending_amounts:
+                    unique_amount = cand
+                    break
+            if unique_amount is None:
+                return None  # Слишком много pending одновременно — крайне редко
+            self.state["outsource_topup_seq"] = int(self.state.get("outsource_topup_seq") or 0) + 1
+            request_id = f"otop{self.state['outsource_topup_seq']}"
+            req = {
+                "id": request_id,
+                "username": username,
+                "base_amount": base,
+                "unique_amount": unique_amount,
+                "status": "pending",
+                "created_at": now,
+                "expires_at": now + ttl_seconds,
+                "txid": "",
+                "credited_at": 0,
+            }
+            self.state.setdefault("outsource_topup_requests", {})[request_id] = req
+            await self._save_unlocked()
+            return req
+
+    def list_outsource_topup_requests(self) -> dict:
+        return dict(self.state.get("outsource_topup_requests") or {})
+
+    def get_outsource_topup_request(self, request_id) -> Optional[dict]:
+        if not request_id:
+            return None
+        return (self.state.get("outsource_topup_requests") or {}).get(str(request_id))
+
+    def find_pending_topup_by_amount(self, amount: float, tolerance: float = 0.00005):
+        """Ищет pending top-up с точным совпадением unique_amount (учётом expires_at)."""
+        try:
+            amt = float(amount)
+        except Exception:
+            return None
+        now = time.time()
+        reqs = self.state.get("outsource_topup_requests") or {}
+        for req in reqs.values():
+            if req.get("status") != "pending":
+                continue
+            if req.get("expires_at", 0) < now:
+                continue
+            try:
+                if abs(float(req.get("unique_amount") or 0) - amt) <= tolerance:
+                    return req
+            except Exception:
+                continue
+        return None
+
+    async def credit_outsource_topup(
+        self, request_id: str, txid: str = "", credited_block_ts: int = 0,
+        manual_by: str = "",
+    ) -> Optional[dict]:
+        """Зачисляет pending top-up: помечает credited + увеличивает баланс юзера.
+        Возвращает обновлённый request или None если ошибка.
+        """
+        async with _lock:
+            reqs = self.state.get("outsource_topup_requests") or {}
+            req = reqs.get(str(request_id))
+            if not req:
+                return None
+            if req.get("status") != "pending":
+                return None  # уже обработан
+            username = (req.get("username") or "").lower()
+            mgr = (self.state.get("outsource_managers") or {}).get(username)
+            if not mgr:
+                # Юзера нет? Странно — но не падаем, создадим минимальную запись
+                mgrs = self.state.setdefault("outsource_managers", {})
+                mgrs[username] = {
+                    "tg_user_id": 0, "first_seen_ts": time.time(),
+                    "wallet_balance_usdt": 0.0, "paid_total_usdt": 0.0,
+                    "stats": {"drops_total": 0, "lks_total": 0, "lks_done": 0},
+                }
+                mgr = mgrs[username]
+            base = float(req.get("base_amount") or 0)
+            mgr["wallet_balance_usdt"] = float(mgr.get("wallet_balance_usdt") or 0) + base
+            mgr["last_active_ts"] = time.time()
+            req["status"] = "credited"
+            req["txid"] = txid or req.get("txid") or ""
+            req["credited_at"] = time.time()
+            req["credited_block_ts"] = int(credited_block_ts or 0)
+            if manual_by:
+                req["credited_manual_by"] = manual_by
+            await self._save_unlocked()
+            return req
+
+    async def reject_outsource_topup(self, request_id: str, manual_by: str = "") -> bool:
+        async with _lock:
+            req = (self.state.get("outsource_topup_requests") or {}).get(str(request_id))
+            if not req:
+                return False
+            if req.get("status") != "pending":
+                return False
+            req["status"] = "rejected"
+            req["rejected_at"] = time.time()
+            if manual_by:
+                req["rejected_by"] = manual_by
+            await self._save_unlocked()
+            return True
+
+    async def expire_old_outsource_topups(self) -> int:
+        """Помечает все pending с истёкшим expires_at как 'expired'. Возвращает кол-во."""
+        async with _lock:
+            now = time.time()
+            reqs = self.state.get("outsource_topup_requests") or {}
+            n = 0
+            for req in reqs.values():
+                if req.get("status") == "pending" and req.get("expires_at", 0) < now:
+                    req["status"] = "expired"
+                    n += 1
+            if n:
+                await self._save_unlocked()
+            return n
 
     async def buy_outsource_bundle(
         self, bundle_id, username: str,

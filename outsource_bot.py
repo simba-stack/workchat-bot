@@ -394,15 +394,86 @@ async def cmd_balance(message: Message):
     )
 
 
+class TopUpFSM(StatesGroup):
+    waiting_amount = State()
+
+
 @router.callback_query(F.data == "topup")
-async def cb_topup(call: CallbackQuery):
+async def cb_topup(call: CallbackQuery, state: FSMContext):
     await call.answer()
+    wallet = storage.get_outsource_corp_wallet() if hasattr(storage, "get_outsource_corp_wallet") else ""
+    if not wallet:
+        await call.message.reply(
+            "⚠️ <b>Пополнение временно недоступно</b>\n\n"
+            "Корп-кошелёк не настроен. Напишите @SIMBA_PRIDE_ADM.",
+        )
+        return
+    await state.set_state(TopUpFSM.waiting_amount)
     await call.message.reply(
-        "➕ <b>Пополнение баланса</b>\n\n"
-        "Чтобы пополнить — переведите USDT TRC20 на адрес администратора и "
-        "пришлите ему скриншот / hash транзакции:\n\n"
-        "👤 <b>@SIMBA_PRIDE_ADM</b>\n\n"
-        "<i>После подтверждения админом баланс пополнится автоматически.</i>",
+        "➕ <b>Пополнение баланса (USDT TRC20)</b>\n\n"
+        "Введите сумму которую хотите пополнить (USDT, минимум 10):\n\n"
+        "<i>Например: <code>100</code> или <code>250</code></i>\n\n"
+        "Для отмены — /cancel",
+    )
+
+
+@router.message(TopUpFSM.waiting_amount, Command("cancel"))
+async def cmd_topup_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.reply("Пополнение отменено.", reply_markup=MAIN_MENU)
+
+
+@router.message(TopUpFSM.waiting_amount, F.text)
+async def msg_topup_amount(message: Message, state: FSMContext):
+    text = (message.text or "").strip().replace(",", ".")
+    # Игнорируем нажатия кнопок меню — выходим
+    if text in ("🪪 Каталог", "💲 Баланс", "🧾 Мои заказы", "🎒 Профиль"):
+        await state.clear()
+        return  # дальше обработают другие хендлеры
+    try:
+        base = float(text)
+    except Exception:
+        await message.reply("Введите число. Например: <code>100</code>")
+        return
+    if base < 10:
+        await message.reply("Минимальная сумма пополнения — <b>10 USDT</b>. Попробуйте ещё раз:")
+        return
+    if base > 100000:
+        await message.reply("Максимум <b>100 000 USDT</b> за раз. Попробуйте ещё раз:")
+        return
+    username = _username(message)
+    if not username:
+        await message.reply("Нужен @username в Telegram.")
+        await state.clear()
+        return
+    # Регистрируем юзера если ещё не
+    await storage.register_outsource_manager(username=username, tg_user_id=message.from_user.id)
+    # Создаём запрос с уникальной суммой
+    req = await storage.create_outsource_topup_request(
+        username=username, base_amount=base, ttl_seconds=1800,  # 30 мин
+    )
+    if not req:
+        await message.reply("⚠️ Не удалось создать запрос. Попробуйте позже.")
+        await state.clear()
+        return
+    await state.clear()
+    wallet = storage.get_outsource_corp_wallet()
+    unique = float(req.get("unique_amount") or 0)
+    expires_in = 30  # min
+    await message.reply(
+        f"💰 <b>Заявка на пополнение #{req['id']}</b>\n\n"
+        f"Отправьте РОВНО эту сумму:\n"
+        f"💎 <b>{unique:.4f} USDT</b>\n\n"
+        f"На адрес (USDT TRC20):\n"
+        f"<code>{wallet}</code>\n\n"
+        f"<b>ВАЖНО:</b>\n"
+        f"• Сеть: <b>TRC20</b> (не ERC20!)\n"
+        f"• Сумма должна совпадать ДО 4 знаков после запятой\n"
+        f"• Зачислится база — <b>{base:.2f} USDT</b>\n"
+        f"• Зачисление автоматическое (~30-60 сек после подтверждения сети)\n"
+        f"• Срок действия: <b>{expires_in} мин</b>\n\n"
+        f"<i>Я пришлю уведомление как только увижу транзакцию.</i>",
+        reply_markup=MAIN_MENU,
     )
 
 
@@ -501,8 +572,18 @@ async def cmd_profile(message: Message):
 # ════════════════════════════════════════════════════════════════
 # Запуск
 # ════════════════════════════════════════════════════════════════
+# Глобальный экземпляр (для tron_monitor чтобы слать уведомления юзерам)
+_outsource_bot_instance: "Bot | None" = None
+
+
+def get_outsource_bot():
+    """Возвращает текущий экземпляр @marketplace_PRIDE_BOT (или None если не запущен)."""
+    return _outsource_bot_instance
+
+
 async def run_outsource_bot():
     """Запускается из bot.py параллельно с основными ботами."""
+    global _outsource_bot_instance
     if not config.OUTSOURCE_BOT_TOKEN:
         logger.warning("OUTSOURCE_BOT_TOKEN не задан — outsource_bot не запущен")
         return
@@ -510,6 +591,7 @@ async def run_outsource_bot():
         token=config.OUTSOURCE_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    _outsource_bot_instance = bot
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     logger.info("Outsource bot starting (long polling)...")

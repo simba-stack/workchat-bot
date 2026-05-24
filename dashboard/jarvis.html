@@ -6109,6 +6109,14 @@
     </div>
 
     <!-- ====== ВНЕШНИЙ ВИД ====== -->
+    <div class="settings-card" @click="settingsActiveSection = 'payment'; loadSettings(); loadOutsourceTopups();" :class="settingsActiveSection === 'payment' ? 'active' : ''">
+      <div class="settings-card-icon">💎</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Оплата (USDT TRC20)</div>
+        <div class="settings-card-sub">Корп-кошелёк + история пополнений @marketplace_PRIDE_BOT</div>
+      </div>
+    </div>
+
     <div class="settings-card" @click="settingsActiveSection = 'appearance'" :class="settingsActiveSection === 'appearance' ? 'active' : ''">
       <div class="settings-card-icon">🎨</div>
       <div class="settings-card-body">
@@ -6441,6 +6449,69 @@
         </div>
         <button class="btn success" @click="saveSettingsInvite()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
                 x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить Invite-настройки'"></button>
+      </div>
+    </div>
+
+    <!-- PAYMENT (USDT TRC20) -->
+    <div x-show="settingsActiveSection === 'payment'" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💎 Оплата (USDT TRC20)</h3>
+
+      <div style="margin-bottom: 24px;">
+        <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px;">
+          Корп-кошелёк (адрес USDT TRC20) — куда управляющие @marketplace_PRIDE_BOT шлют пополнения.
+          Бот мониторит этот адрес через TronGrid каждые 60 сек и автоматически кредитует балансы при совпадении точной суммы.
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <input type="text" x-model="settingsPayment.address"
+                 placeholder="Txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                 maxlength="34"
+                 style="flex: 1; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: monospace; font-size: 13px;">
+          <button class="btn" @click="savePaymentWallet()" :disabled="settingsPaymentLoading"
+                  style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">
+            💾 Сохранить
+          </button>
+        </div>
+        <div x-show="settingsPayment.currentAddress" style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">
+          Текущий: <code x-text="settingsPayment.currentAddress"></code>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <h4 style="margin: 0;">📊 Заявки на пополнение</h4>
+          <span class="badge-mini" x-text="(outsourceTopups || []).length"></span>
+          <button class="btn" @click="loadOutsourceTopups()" :disabled="outsourceTopupsLoading"
+                  style="margin-left: auto; font-size: 12px;">↻ Обновить</button>
+        </div>
+
+        <div x-show="!outsourceTopups || outsourceTopups.length === 0" style="padding: 20px; text-align: center; color: var(--text-dim); font-size: 13px;">
+          Пока нет заявок.
+        </div>
+
+        <template x-for="r in (outsourceTopups || [])" :key="r.id">
+          <div style="margin-bottom: 6px; padding: 10px; background: rgba(0,0,0,0.2); border-left: 3px solid #6ad8ff; border-radius: 6px;"
+               :style="r.status === 'credited' ? 'border-left-color: #22c55e;' : (r.status === 'pending' ? 'border-left-color: #f59e0b;' : 'border-left-color: #6b7280;')">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <code style="font-size: 11px; color: var(--text-dim);" x-text="r.id"></code>
+              <span>@<b x-text="r.username"></b></span>
+              <span x-text="r.base_amount + ' USDT'" style="font-weight: 700;"></span>
+              <span style="font-size: 11px; color: var(--text-dim);">точно: <code x-text="r.unique_amount"></code></span>
+              <span x-show="r.status === 'pending'" style="font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.18); color:#f59e0b; border-radius: 3px;">⏳ pending</span>
+              <span x-show="r.status === 'credited'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color:#22c55e; border-radius: 3px;">✅ credited</span>
+              <span x-show="r.status === 'expired'" style="font-size: 10px; padding: 2px 8px; background: rgba(107,114,128,0.18); color:#9ca3af; border-radius: 3px;">⌛ expired</span>
+              <span x-show="r.status === 'rejected'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color:#ef4444; border-radius: 3px;">❌ rejected</span>
+              <span x-show="r.status === 'pending'" style="margin-left: auto; display: flex; gap: 6px;">
+                <button class="btn" @click="manualCreditTopup(r.id)" style="font-size: 11px; padding: 4px 10px; background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">✅ Зачислить</button>
+                <button class="btn" @click="rejectTopup(r.id)" style="font-size: 11px; padding: 4px 10px;">❌ Отклонить</button>
+              </span>
+              <span x-show="r.status !== 'pending'" style="margin-left: auto; font-size: 11px; color: var(--text-dim);"
+                    x-text="r.credited_at ? new Date(r.credited_at * 1000).toLocaleString('ru-RU') : new Date(r.created_at * 1000).toLocaleString('ru-RU')"></span>
+            </div>
+            <div x-show="r.txid" style="margin-top: 4px; font-size: 10px; color: var(--text-dim);">
+              TXID: <code x-text="r.txid"></code>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -6938,6 +7009,11 @@ function jarvis() {
     healthcheckLoading: false,
     healthcheckSummary: null,
     healthcheckText: '',
+    // Payment (USDT TRC20)
+    settingsPayment: { address: '', currentAddress: '' },
+    settingsPaymentLoading: false,
+    outsourceTopups: [],
+    outsourceTopupsLoading: false,
     // Discord-чат уведомления (toggle + popup)
     dcChatNotifyEnabled: localStorage.getItem('jarvis-dc-notify') !== '0',
     dcChatNotifyPopups: localStorage.getItem('jarvis-dc-popups') !== '0',
@@ -11041,8 +11117,66 @@ function jarvis() {
         this.settingsData.invite_jobs_text = j.invite_jobs_text || '';
         this.settingsData.cooldown_minutes = j.cooldown_minutes || 60;
         this.settingsTriggersText = (j.trigger_phrases || []).join('\n');
+        // Payment wallet
+        this.settingsPayment.currentAddress = j.outsource_corp_wallet_trc20 || '';
+        if (!this.settingsPayment.address) this.settingsPayment.address = this.settingsPayment.currentAddress;
         this.settingsLoaded = true;
       } catch (e) { alert('Ошибка загрузки: ' + e.message); }
+    },
+
+    async savePaymentWallet() {
+      const addr = (this.settingsPayment.address || '').trim();
+      if (addr && (!addr.startsWith('T') || addr.length !== 34)) {
+        alert('TRC20 адрес должен начинаться с T и быть 34 символа.');
+        return;
+      }
+      this.settingsPaymentLoading = true;
+      try {
+        const r = await fetch('/api/settings/outsource_payment/set_wallet', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this.settingsPayment.currentAddress = addr;
+        alert('✅ Корп-кошелёк сохранён.');
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.settingsPaymentLoading = false;
+      }
+    },
+
+    async loadOutsourceTopups() {
+      if (this.outsourceTopupsLoading) return;
+      this.outsourceTopupsLoading = true;
+      try {
+        const r = await fetch('/api/system/outsource/topups', { credentials: 'include' });
+        if (r.ok) { const j = await r.json(); this.outsourceTopups = j.items || []; }
+      } catch (e) { console.error('loadOutsourceTopups', e); }
+      finally { this.outsourceTopupsLoading = false; }
+    },
+
+    async manualCreditTopup(id) {
+      if (!confirm('Зачислить вручную? Только если auto-monitor пропустил транзакцию.')) return;
+      try {
+        const r = await fetch(`/api/system/outsource/topups/${id}/credit`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutsourceTopups();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    async rejectTopup(id) {
+      if (!confirm('Отклонить заявку?')) return;
+      try {
+        const r = await fetch(`/api/system/outsource/topups/${id}/reject`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutsourceTopups();
+      } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async saveSettingsChats() {
       this.settingsSaving = true;
