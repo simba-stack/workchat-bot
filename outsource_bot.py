@@ -1,4 +1,4 @@
-"""Outsource bot (@PrideOutsource_bot) — лавка PRIDE для управляющих-аутсорсеров.
+"""Outsource bot (@marketplace_PRIDE_BOT) — лавка PRIDE для управляющих-аутсорсеров.
 
 Управляющие платят взнос и берут ЛК банков под управление.
 Основной flow:
@@ -38,13 +38,43 @@ from storage import storage
 logger = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════════
-# Главное меню (Reply Keyboard — Telegram сам красит на современных клиентах)
+# Главное меню (Reply Keyboard с цветами — Bot API 9.4+, aiogram 3.26+)
+# style: "primary" (синий), "success" (зелёный), "danger" (красный)
+# Старые клиенты увидят серые кнопки — graceful degradation.
 # ════════════════════════════════════════════════════════════════
+def _btn(text: str, style: str = "primary") -> KeyboardButton:
+    """KeyboardButton с цветом. Если aiogram не знает style — пробуем через extra."""
+    try:
+        return KeyboardButton(text=text, style=style)
+    except Exception:
+        kb = KeyboardButton(text=text)
+        try:
+            kb.__pydantic_extra__ = (kb.__pydantic_extra__ or {})
+            kb.__pydantic_extra__["style"] = style
+        except Exception:
+            pass
+        return kb
+
+
+def _ibtn(text: str, style: str = "primary", **kwargs) -> InlineKeyboardButton:
+    """InlineKeyboardButton с цветом (Bot API 9.4+)."""
+    try:
+        return InlineKeyboardButton(text=text, style=style, **kwargs)
+    except Exception:
+        kb = InlineKeyboardButton(text=text, **kwargs)
+        try:
+            kb.__pydantic_extra__ = (kb.__pydantic_extra__ or {})
+            kb.__pydantic_extra__["style"] = style
+        except Exception:
+            pass
+        return kb
+
+
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🪪 Каталог")],
-        [KeyboardButton(text="💲 Баланс")],
-        [KeyboardButton(text="🧾 Мои заказы"), KeyboardButton(text="🎒 Профиль")],
+        [_btn("🪪 Каталог", "primary")],
+        [_btn("💲 Баланс", "success")],
+        [_btn("🧾 Мои заказы", "primary"), _btn("🎒 Профиль", "primary")],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -131,9 +161,10 @@ async def cmd_catalog(message: Message):
         fio = drop.get("fio") or "—"
         price = float(lk.get("list_price_usdt") or 0)
         lines.append(f"\n💼 <b>{bank}</b> · {fio} — <b>{price:.0f} USDT</b>")
-        rows.append([InlineKeyboardButton(
+        rows.append([_ibtn(
             text=f"💼 {bank} · {fio[:20]} — {price:.0f} USDT",
             callback_data=f"buy:{lkid}",
+            style="success",
         )])
     if len(pool_lks) > 20:
         lines.append(f"\n<i>... и ещё {len(pool_lks) - 20}</i>")
@@ -210,9 +241,9 @@ async def cmd_balance(message: Message):
     balance = float(mgr.get("wallet_balance_usdt") or 0)
     paid = float(mgr.get("paid_total_usdt") or 0)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Пополнить (USDT TRC20)", callback_data="topup")],
-        [InlineKeyboardButton(text="📤 Запросить вывод", callback_data="withdraw")],
-        [InlineKeyboardButton(text="📜 История операций", callback_data="history")],
+        [_ibtn(text="➕ Пополнить (USDT TRC20)", callback_data="topup", style="success")],
+        [_ibtn(text="📤 Запросить вывод", callback_data="withdraw", style="danger")],
+        [_ibtn(text="📜 История операций", callback_data="history", style="primary")],
     ])
     await message.reply(
         f"💼 <b>Ваш баланс</b>\n\n"
