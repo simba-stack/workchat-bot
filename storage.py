@@ -293,6 +293,10 @@ def _default_state() -> dict:
         # status: 'pending' | 'credited' | 'expired' | 'rejected'
         "outsource_topup_requests": {},
         "outsource_topup_seq": 0,
+        # ==== Редактируемые тексты @marketplace_PRIDE_BOT ====
+        # {key: value} — override дефолтов из outsource_bot_texts.DEFAULT_TEXTS
+        # Если key отсутствует — используется дефолт.
+        "outsource_bot_texts": {},
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3739,6 +3743,63 @@ class Storage:
             if manual_by:
                 req["rejected_by"] = manual_by
             await self._save_unlocked()
+            return True
+
+    # ════════════════════════════════════════════════════════════
+    # OUTSOURCE BOT TEXTS — редактируемые тексты бота из JARVIS
+    # ════════════════════════════════════════════════════════════
+    def get_outsource_text(self, key: str, default: str = "") -> str:
+        """Возвращает override или дефолт из outsource_bot_texts.DEFAULT_TEXTS."""
+        overrides = self.state.get("outsource_bot_texts") or {}
+        if key in overrides and overrides[key] != "":
+            return overrides[key]
+        if default:
+            return default
+        try:
+            from outsource_bot_texts import DEFAULT_TEXTS
+            return DEFAULT_TEXTS.get(key, "")
+        except Exception:
+            return ""
+
+    def list_outsource_texts(self) -> dict:
+        """Возвращает {key: {default, current, is_overridden}} для UI."""
+        try:
+            from outsource_bot_texts import DEFAULT_TEXTS
+        except Exception:
+            DEFAULT_TEXTS = {}
+        overrides = self.state.get("outsource_bot_texts") or {}
+        result = {}
+        all_keys = set(DEFAULT_TEXTS.keys()) | set(overrides.keys())
+        for k in all_keys:
+            default = DEFAULT_TEXTS.get(k, "")
+            override = overrides.get(k, "")
+            current = override if override != "" else default
+            result[k] = {
+                "default": default,
+                "current": current,
+                "is_overridden": bool(override and override != default),
+            }
+        return result
+
+    async def set_outsource_text(self, key: str, value: str) -> bool:
+        if not key:
+            return False
+        async with _lock:
+            texts = self.state.setdefault("outsource_bot_texts", {})
+            # Пустая строка = удалить override → вернуть к дефолту
+            if not value:
+                texts.pop(key, None)
+            else:
+                texts[key] = value
+            await self._save_unlocked()
+            return True
+
+    async def reset_outsource_text(self, key: str) -> bool:
+        async with _lock:
+            texts = self.state.setdefault("outsource_bot_texts", {})
+            if key in texts:
+                texts.pop(key)
+                await self._save_unlocked()
             return True
 
     async def expire_old_outsource_topups(self) -> int:

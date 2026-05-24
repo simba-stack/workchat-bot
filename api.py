@@ -1940,6 +1940,113 @@ async def api_outsource_topup_reject(request_id: str, me: dict = Depends(_get_me
     return {"ok": True}
 
 
+# ═══════════════════════════════════════════════════════════════
+# OUTSOURCE BOT TEXTS — редактируемые тексты @marketplace_PRIDE_BOT
+# ═══════════════════════════════════════════════════════════════
+# Группировка ключей для UI (порядок и сворачивание)
+_OUTSOURCE_TEXT_GROUPS = [
+    {
+        "id": "buttons", "label": "🎛 Кнопки главного меню",
+        "keys": ["btn_catalog", "btn_balance", "btn_myorders", "btn_profile", "btn_terms"],
+    },
+    {
+        "id": "start", "label": "🚀 /start и общие",
+        "keys": ["start_welcome", "no_username", "help"],
+    },
+    {
+        "id": "catalog", "label": "📋 Каталог",
+        "keys": ["catalog_header", "catalog_singles_header", "catalog_singles_empty",
+                 "catalog_bundles_header", "catalog_bundles_empty"],
+    },
+    {
+        "id": "balance", "label": "💲 Баланс и пополнение",
+        "keys": ["balance_header", "topup_no_wallet", "topup_ask_amount",
+                 "topup_amount_too_small", "topup_amount_too_large",
+                 "topup_amount_invalid", "topup_create_failed",
+                 "topup_instructions", "topup_credited_notify",
+                 "withdraw_message", "history_coming"],
+    },
+    {
+        "id": "orders", "label": "🧾 Мои заказы и профиль",
+        "keys": ["myorders_empty", "myorders_header", "profile_text"],
+    },
+    {
+        "id": "buy", "label": "💼 Покупка ЛК и связки",
+        "keys": ["buy_not_found", "buy_taken", "buy_no_funds_alert",
+                 "buy_success_alert", "buy_success_message",
+                 "bundle_not_found", "bundle_taken", "bundle_view_text",
+                 "bundle_buy_success_alert", "bundle_buy_success_message"],
+    },
+    {
+        "id": "terms", "label": "📋 Условия (показываются перед покупкой/оплатой)",
+        "keys": ["terms_menu", "terms_purchase", "terms_payment",
+                 "terms_agree_btn", "terms_decline_btn", "terms_declined"],
+    },
+]
+
+
+@app.get("/api/system/outsource/bot_texts")
+async def api_outsource_bot_texts(me: dict = Depends(_get_me)):
+    """Возвращает все ключи бота с дефолтами + текущими значениями + группировкой."""
+    _require_owner_or_manager(me)
+    if not hasattr(storage, "list_outsource_texts"):
+        return {"groups": [], "items": {}}
+    items = storage.list_outsource_texts() or {}
+    # Описания переменных доступных в каждом ключе (для UI hint)
+    placeholders = {
+        "start_welcome": ["name"],
+        "catalog_header": ["singles_cnt", "bundles_cnt"],
+        "catalog_singles_header": ["count"],
+        "catalog_bundles_header": ["count"],
+        "balance_header": ["balance", "paid"],
+        "topup_instructions": ["id", "unique", "wallet", "base", "expires_min"],
+        "topup_credited_notify": ["base", "new_bal", "txid"],
+        "myorders_header": ["count"],
+        "profile_text": ["username", "tg_id", "days", "balance", "paid",
+                         "drops_total", "lks_total", "lks_done"],
+        "buy_no_funds_alert": ["balance", "price"],
+        "buy_success_alert": ["price"],
+        "buy_success_message": ["bank", "fio", "price", "new_balance"],
+        "bundle_view_text": ["name", "count", "price"],
+        "bundle_buy_success_alert": ["price"],
+        "bundle_buy_success_message": ["name", "count", "price", "new_balance"],
+    }
+    return {
+        "groups": _OUTSOURCE_TEXT_GROUPS,
+        "items": items,
+        "placeholders": placeholders,
+    }
+
+
+@app.post("/api/system/outsource/bot_texts/set")
+async def api_outsource_bot_texts_set(request: Request, me: dict = Depends(_get_me)):
+    """Body: {key: str, value: str}. Пустой value = сбросить к дефолту."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    key = (body.get("key") or "").strip()
+    value = body.get("value") if body.get("value") is not None else ""
+    if not key:
+        raise HTTPException(400, "key required")
+    if not hasattr(storage, "set_outsource_text"):
+        raise HTTPException(500, "set_outsource_text not available")
+    await storage.set_outsource_text(key, value)
+    return {"ok": True}
+
+
+@app.post("/api/system/outsource/bot_texts/reset")
+async def api_outsource_bot_texts_reset(request: Request, me: dict = Depends(_get_me)):
+    """Body: {key: str}. Удаляет override → возвращает дефолт."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        raise HTTPException(400, "key required")
+    if not hasattr(storage, "reset_outsource_text"):
+        raise HTTPException(500, "reset_outsource_text not available")
+    await storage.reset_outsource_text(key)
+    return {"ok": True}
+
+
 # --- Прайс ЛК ---
 @app.post("/api/settings/pricing/set")
 async def settings_set_pricing(request: Request, me: dict = Depends(_get_me)):

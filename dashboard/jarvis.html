@@ -6453,8 +6453,8 @@
     </div>
 
     <!-- PAYMENT (USDT TRC20) -->
-    <div x-show="settingsActiveSection === 'payment'" class="jarvis-panel" style="padding: 20px;">
-      <h3 style="margin: 0 0 16px 0;">💎 Оплата (USDT TRC20)</h3>
+    <div x-show="settingsActiveSection === 'payment'" x-init="loadBotTexts()" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💎 Оплата (USDT TRC20) + Тексты бота</h3>
 
       <div style="margin-bottom: 24px;">
         <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px;">
@@ -6512,6 +6512,71 @@
             </div>
           </div>
         </template>
+      </div>
+
+      <!-- ═══ ТЕКСТЫ БОТА @marketplace_PRIDE_BOT ═══ -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; margin-top: 24px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+          <h4 style="margin: 0;">💬 Тексты бота @marketplace_PRIDE_BOT</h4>
+          <button class="btn" @click="loadBotTexts()" :disabled="botTextsLoading"
+                  style="margin-left: auto; font-size: 12px;">↻ Перезагрузить</button>
+        </div>
+        <div style="padding: 10px; background: rgba(106,216,255,0.06); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px; margin-bottom: 16px; font-size: 12px;">
+          ℹ Все тексты бота можно редактировать здесь — изменения применяются мгновенно без рестарта.
+          Используйте HTML-теги (<code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>).
+          Переменные в фигурных скобках типа <code>{bank}</code>, <code>{price}</code> подставляются автоматически — не трогайте их имена.
+          Пустое поле = вернуть к дефолту.
+        </div>
+
+        <template x-for="g in botTextsGroups" :key="g.id">
+          <div style="margin-bottom: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; overflow: hidden;">
+            <!-- Group header -->
+            <div style="display: flex; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none;"
+                 @click="toggleBotTextsGroup(g.id)">
+              <span style="font-weight: 600;" x-text="g.label"></span>
+              <span class="badge-mini" style="margin-left: 8px;" x-text="g.keys.length + ' текстов'"></span>
+              <span style="margin-left: auto; opacity: 0.5;" x-text="botTextsExpanded[g.id] ? '▼' : '▶'"></span>
+            </div>
+            <!-- Group items -->
+            <div x-show="botTextsExpanded[g.id]" x-cloak style="padding: 0 14px 14px;">
+              <template x-for="key in g.keys" :key="key">
+                <div style="margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                    <code style="font-size: 11px; color: var(--text-dim);" x-text="key"></code>
+                    <span x-show="botTextsItems[key]?.is_overridden"
+                          style="font-size: 9px; padding: 1px 6px; background: rgba(245,158,11,0.2); color: #f59e0b; border-radius: 3px;">⚙ изменён</span>
+                    <span x-show="botTextsPlaceholders[key]?.length"
+                          style="font-size: 10px; color: var(--text-dim);">
+                      переменные: <code x-text="(botTextsPlaceholders[key] || []).map(p => '{' + p + '}').join(', ')"></code>
+                    </span>
+                    <span style="margin-left: auto; display: flex; gap: 6px;">
+                      <button class="btn" @click="saveBotText(key)"
+                              :disabled="!textIsDirty(key) || botTextsSavingKey === key"
+                              :style="textIsDirty(key) ? 'background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight:700;' : ''"
+                              style="font-size: 11px; padding: 3px 10px;">💾 Сохранить</button>
+                      <button class="btn" @click="resetBotText(key)"
+                              :disabled="!botTextsItems[key]?.is_overridden || botTextsSavingKey === key"
+                              style="font-size: 11px; padding: 3px 10px;"
+                              title="Сбросить к дефолту">⟲</button>
+                    </span>
+                  </div>
+                  <textarea
+                    :value="textCurrentValue(key)"
+                    @input="onTextEdit(key, $event.target.value)"
+                    :disabled="botTextsSavingKey === key"
+                    :style="(g.id === 'buttons' ? 'min-height: 36px;' : 'min-height: 80px;') +
+                            (textIsDirty(key) ? 'border-color: #22c55e;' : '')"
+                    style="width: 100%; padding: 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 12px; line-height: 1.5; resize: vertical; box-sizing: border-box;"></textarea>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <div x-show="!botTextsGroups || botTextsGroups.length === 0" style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 13px;">
+          <span x-show="botTextsLoading">⏳ Загрузка…</span>
+          <span x-show="!botTextsLoading">Не удалось загрузить тексты. Проверь что api.py обновился.</span>
+        </div>
       </div>
     </div>
 
@@ -7014,6 +7079,14 @@ function jarvis() {
     settingsPaymentLoading: false,
     outsourceTopups: [],
     outsourceTopupsLoading: false,
+    // Outsource bot texts editor
+    botTextsGroups: [],
+    botTextsItems: {},           // {key: {default, current, is_overridden}}
+    botTextsPlaceholders: {},    // {key: ["bank", "fio", ...]}
+    botTextsExpanded: {},        // {groupId: true/false}
+    botTextsDraft: {},           // {key: pending edit value}
+    botTextsLoading: false,
+    botTextsSavingKey: '',       // key currently saving
     // Discord-чат уведомления (toggle + popup)
     dcChatNotifyEnabled: localStorage.getItem('jarvis-dc-notify') !== '0',
     dcChatNotifyPopups: localStorage.getItem('jarvis-dc-popups') !== '0',
@@ -11177,6 +11250,79 @@ function jarvis() {
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.loadOutsourceTopups();
       } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === Тексты бота @marketplace_PRIDE_BOT ===
+    async loadBotTexts() {
+      if (this.botTextsLoading) return;
+      this.botTextsLoading = true;
+      try {
+        const r = await fetch('/api/system/outsource/bot_texts', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          this.botTextsGroups = j.groups || [];
+          this.botTextsItems = j.items || {};
+          this.botTextsPlaceholders = j.placeholders || {};
+          // По умолчанию раскрываем только Кнопки и Условия
+          if (Object.keys(this.botTextsExpanded).length === 0) {
+            this.botTextsExpanded = { buttons: true, terms: true };
+          }
+        }
+      } catch (e) { console.error('loadBotTexts', e); }
+      finally { this.botTextsLoading = false; }
+    },
+    textCurrentValue(key) {
+      if (key in this.botTextsDraft) return this.botTextsDraft[key];
+      return (this.botTextsItems[key] || {}).current || '';
+    },
+    textIsDirty(key) {
+      if (!(key in this.botTextsDraft)) return false;
+      const original = (this.botTextsItems[key] || {}).current || '';
+      return this.botTextsDraft[key] !== original;
+    },
+    onTextEdit(key, value) {
+      this.botTextsDraft[key] = value;
+    },
+    async saveBotText(key) {
+      if (!(key in this.botTextsDraft)) return;
+      const value = this.botTextsDraft[key];
+      this.botTextsSavingKey = key;
+      try {
+        const r = await fetch('/api/system/outsource/bot_texts/set', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, value }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        delete this.botTextsDraft[key];
+        await this.loadBotTexts();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.botTextsSavingKey = '';
+      }
+    },
+    async resetBotText(key) {
+      if (!confirm('Сбросить к дефолтному значению?')) return;
+      this.botTextsSavingKey = key;
+      try {
+        const r = await fetch('/api/system/outsource/bot_texts/reset', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        delete this.botTextsDraft[key];
+        await this.loadBotTexts();
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.botTextsSavingKey = '';
+      }
+    },
+    toggleBotTextsGroup(groupId) {
+      this.botTextsExpanded[groupId] = !this.botTextsExpanded[groupId];
+    },
     },
     async saveSettingsChats() {
       this.settingsSaving = true;
