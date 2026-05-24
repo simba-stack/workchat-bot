@@ -198,23 +198,21 @@ async def cb_buy_lk(call: CallbackQuery):
         )
         return
     # Списываем + забираем из пула
-    new_balance = balance - price
     await storage.register_outsource_manager(username=username, tg_user_id=call.from_user.id)
-    # Обновляем баланс
-    async with __import__("asyncio").Lock():
-        m = storage.state.get("outsource_managers", {}).get(username)
-        if m:
-            m["wallet_balance_usdt"] = new_balance
-            m["paid_total_usdt"] = (m.get("paid_total_usdt") or 0) + price
-    # Забираем ЛК
+    # Атомарно обновляем баланс через helper
+    updated = await storage.update_outsource_manager_balance(
+        username=username, delta=-price, paid_delta=price,
+    )
+    new_balance = float((updated or {}).get("wallet_balance_usdt") or 0)
+    # Забираем ЛК из пула
+    import time as _time
     await storage.update_outsource_drop_lk(
         droplk_id,
         manager_username=username,
         in_pool=False,
-        bought_at=__import__("time").time(),
+        bought_at=_time.time(),
         bought_by=username,
     )
-    await storage.save()
     await call.answer(f"✅ ЛК забран! Списано {price:.2f} USDT", show_alert=True)
     drop = storage.get_outsource_drop(lk.get("outsource_drop_id")) or {}
     bank = lk.get("bank") or "—"

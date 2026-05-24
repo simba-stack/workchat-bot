@@ -3352,6 +3352,138 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # ════════════════════════════════════════════════════════════
+    # OUTSOURCE — лавка PRIDE (@marketplace_PRIDE_BOT)
+    # ════════════════════════════════════════════════════════════
+    async def register_outsource_manager(self, username: str, tg_user_id: int) -> None:
+        """Регистрирует управляющего при первом /start. Идемпотентна."""
+        username = (username or "").lstrip("@").lower()
+        if not username:
+            return
+        async with _lock:
+            mgrs = self.state.setdefault("outsource_managers", {})
+            now = time.time()
+            existing = mgrs.get(username)
+            if existing:
+                existing["last_active_ts"] = now
+                if tg_user_id and not existing.get("tg_user_id"):
+                    existing["tg_user_id"] = int(tg_user_id)
+            else:
+                mgrs[username] = {
+                    "tg_user_id": int(tg_user_id or 0),
+                    "first_seen_ts": now,
+                    "last_active_ts": now,
+                    "wallet_balance_usdt": 0.0,
+                    "paid_total_usdt": 0.0,
+                    "stats": {"drops_total": 0, "lks_total": 0, "lks_done": 0},
+                }
+            await self._save_unlocked()
+
+    def get_outsource_manager(self, username: str) -> Optional[dict]:
+        username = (username or "").lstrip("@").lower()
+        return (self.state.get("outsource_managers") or {}).get(username)
+
+    def list_outsource_managers(self) -> dict:
+        return dict(self.state.get("outsource_managers") or {})
+
+    def list_outsource_drops(self) -> dict:
+        return dict(self.state.get("outsource_drops") or {})
+
+    def list_outsource_drop_lks(self) -> dict:
+        return dict(self.state.get("outsource_drop_lks") or {})
+
+    def get_outsource_drop(self, drop_id) -> Optional[dict]:
+        if not drop_id:
+            return None
+        return (self.state.get("outsource_drops") or {}).get(str(drop_id))
+
+    def get_outsource_drop_lk(self, droplk_id) -> Optional[dict]:
+        if not droplk_id:
+            return None
+        return (self.state.get("outsource_drop_lks") or {}).get(str(droplk_id))
+
+    async def update_outsource_drop_lk(self, droplk_id, **fields) -> bool:
+        if not droplk_id:
+            return False
+        async with _lock:
+            lks = self.state.get("outsource_drop_lks") or {}
+            lk = lks.get(str(droplk_id))
+            if not lk:
+                return False
+            for k, v in fields.items():
+                lk[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def update_outsource_drop(self, drop_id, **fields) -> bool:
+        if not drop_id:
+            return False
+        async with _lock:
+            drops = self.state.get("outsource_drops") or {}
+            drop = drops.get(str(drop_id))
+            if not drop:
+                return False
+            for k, v in fields.items():
+                drop[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def add_outsource_drop(self, **fields) -> str:
+        """Создаёт анкету в outsource. id с префиксом 'odrp'."""
+        async with _lock:
+            self.state["outsource_drops_seq"] = int(self.state.get("outsource_drops_seq") or 0) + 1
+            new_id = f"odrp{self.state['outsource_drops_seq']}"
+            drops = self.state.setdefault("outsource_drops", {})
+            drops[new_id] = {"id": new_id, "created_at": time.time(), **fields}
+            await self._save_unlocked()
+            return new_id
+
+    async def add_outsource_drop_lk(self, drop_id: str, **fields) -> str:
+        """Создаёт ЛК в outsource. id с префиксом 'olk'."""
+        async with _lock:
+            self.state["outsource_drop_lks_seq"] = int(self.state.get("outsource_drop_lks_seq") or 0) + 1
+            new_id = f"olk{self.state['outsource_drop_lks_seq']}"
+            lks = self.state.setdefault("outsource_drop_lks", {})
+            lks[new_id] = {
+                "id": new_id,
+                "outsource_drop_id": drop_id,
+                "created_at": time.time(),
+                **fields,
+            }
+            await self._save_unlocked()
+            return new_id
+
+    async def update_outsource_manager_balance(
+        self, username: str, delta: float = 0.0, paid_delta: float = 0.0,
+    ) -> Optional[dict]:
+        """Атомарно меняет баланс управляющего. Возвращает обновлённую запись."""
+        username = (username or "").lstrip("@").lower()
+        if not username:
+            return None
+        async with _lock:
+            mgr = (self.state.get("outsource_managers") or {}).get(username)
+            if not mgr:
+                return None
+            mgr["wallet_balance_usdt"] = float(mgr.get("wallet_balance_usdt") or 0) + float(delta)
+            if paid_delta:
+                mgr["paid_total_usdt"] = float(mgr.get("paid_total_usdt") or 0) + float(paid_delta)
+            mgr["last_active_ts"] = time.time()
+            await self._save_unlocked()
+            return mgr
+
+    async def append_outsource_sms(self, droplk_id, code, time_str: str = "") -> bool:
+        """Добавить SMS-код в historу ЛК (для outsource SMS API)."""
+        if not droplk_id:
+            return False
+        async with _lock:
+            lk = (self.state.get("outsource_drop_lks") or {}).get(str(droplk_id))
+            if not lk:
+                return False
+            sms = lk.setdefault("sms_history", [])
+            sms.append({"code": str(code), "time_str": time_str, "ts": time.time()})
+            await self._save_unlocked()
+            return True
+
     # =====================================================================
     # OWNER PANEL — роли и разрешения
     # =====================================================================
