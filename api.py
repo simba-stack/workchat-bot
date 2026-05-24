@@ -996,9 +996,8 @@ async def api_system_pending_lk(
     }
     for lkid, lk in lks_raw.items():
         stage = (lk.get("sms_stage") or "").strip()
-        # Пропускаем только завершённые (done). Пустые = новые анкеты — показываем!
-        if stage == "done":
-            continue
+        # ЛК со стадией "done" (успешно перевязаны) ОСТАЮТСЯ в Доступах
+        # с флагом completed=True. UI рисует «✅ Успешно перевязано».
         drop = drops_raw.get(lk.get("drop_id"), {}) if drops_raw else {}
         # Резолв supplier: из drop.supplier / owner_id → owner.username
         supplier = (drop.get("supplier") or "").lstrip("@")
@@ -1074,6 +1073,7 @@ async def api_system_pending_lk(
             "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
             "_stage_order": stage_order.get(stage, 50),
+            "completed": stage == "done",
             "tg_access_link": tg_access_link,
             "tg_pass_link": tg_pass_link,
             "sms_login_code": lk.get("sms_login_code") or "",
@@ -1462,8 +1462,7 @@ async def api_system_credit_pending_lk(_: None = Depends(_auth)):
     }
     for lkid, lk in lks_raw.items():
         stage = (lk.get("sms_stage") or "").strip()
-        if stage == "done":
-            continue
+        # done ЛК остаются с флагом completed=True (см. CRM pending выше)
         drop = drops_raw.get(lk.get("credit_drop_id"), {}) if drops_raw else {}
         manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
         out.append({
@@ -1486,6 +1485,7 @@ async def api_system_credit_pending_lk(_: None = Depends(_auth)):
             "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage,
             "_stage_order": stage_order.get(stage, 50),
+            "completed": stage == "done",
             "sms_login_code": lk.get("sms_login_code") or "",
             "sms_perevyaz_code": lk.get("sms_perevyaz_code") or "",
             "created_at": lk.get("created_at") or 0,
@@ -2296,7 +2296,7 @@ async def api_system_outsource_pending_lk(_: None = Depends(_auth)):
                    "login_received": 4, "perevyaz_asked": 5, "perevyaz_received": 6, "done": 99}
     for lkid, lk in lks_raw.items():
         stage = (lk.get("sms_stage") or "").strip()
-        if stage == "done": continue
+        # done ЛК остаются — с completed=True (см. CRM pending выше)
         drop = drops_raw.get(lk.get("outsource_drop_id"), {}) if drops_raw else {}
         manager = (lk.get("manager_username") or drop.get("manager_username") or "").lstrip("@")
         out.append({
@@ -2310,6 +2310,7 @@ async def api_system_outsource_pending_lk(_: None = Depends(_auth)):
             "ded_password": lk.get("ded_pass") or "",
             "ded_ip": lk.get("ded_ip") or "", "ded_location": lk.get("ded_location") or "",
             "sms_stage": stage, "_stage_order": stage_order.get(stage, 50),
+            "completed": stage == "done",
             "created_at": lk.get("created_at") or 0, "updated_at": lk.get("updated_at") or 0,
             "slot_number": _compute_lk_slot(drop, lkid)[0],
             "slot_total": _compute_lk_slot(drop, lkid)[1],

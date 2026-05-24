@@ -5153,11 +5153,23 @@
 
   <!-- ============= ВКЛАДКА 1: CRM | ДОСТУПЫ ============= -->
   <div x-show="systemSection === 'access'">
+    <!-- Toolbar выбора -->
+    <div x-show="sysSelCount('crm_access') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(106,216,255,0.10); border: 1px solid rgba(106,216,255,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: var(--hud-primary);" x-text="'Выбрано: ' + sysSelCount('crm_access')"></span>
+      <button class="btn" @click="openBulkMoveModal('crm_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('crm_access')">Сбросить</button>
+    </div>
     <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
-      <div class="crm-card access">
+      <div class="crm-card access" :style="lk.completed ? 'opacity:0.85;' : ''">
         <!-- Шапка с фото-индикатором + supplier -->
         <div class="crm-card-head">
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <input type="checkbox" :checked="isLkSel('crm_access', lk.droplk_id)"
+                   @change="toggleLkSel('crm_access', lk.droplk_id)"
+                   title="Выбрать"
+                   style="width: 18px; height: 18px; cursor: pointer; accent-color: #6ad8ff;">
+            <span x-show="lk.completed" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color:#22c55e; border-radius: 3px; font-weight: 700;">✅ Успешно перевязано</span>
             <span class="lk-slot-badge" x-show="lk.slot_number"
                   :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
                   x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5286,11 +5298,22 @@
 
   <!-- ============= ВКЛАДКА 2: CRM | ПАРОЛИ ============= -->
   <div x-show="systemSection === 'password'">
+    <!-- Toolbar выбора -->
+    <div x-show="sysSelCount('crm_password') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(106,216,255,0.10); border: 1px solid rgba(106,216,255,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: var(--hud-primary);" x-text="'Выбрано: ' + sysSelCount('crm_password')"></span>
+      <button class="btn" @click="openBulkMoveModal('crm_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('crm_password')">Сбросить</button>
+    </div>
     <template x-for="lk in systemPasswordsInbox" :key="lk.droplk_id">
       <div class="crm-card password" :class="lk.filled ? 'filled' : ''">
         <div class="crm-card-head">
           <div>
             <span style="display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+              <input type="checkbox" :checked="isLkSel('crm_password', lk.droplk_id)"
+                     @change="toggleLkSel('crm_password', lk.droplk_id)"
+                     title="Выбрать"
+                     style="width: 18px; height: 18px; cursor: pointer; accent-color: #6ad8ff;">
               <span class="lk-slot-badge" x-show="lk.slot_number"
                     :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
                     x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5390,17 +5413,32 @@
 
   <!-- ============= ВКЛАДКА: 💳 КРЕДИТ | ДОСТУПЫ ============= -->
   <div x-show="systemSection === 'credit_access'" x-init="refreshCredit()">
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💳 Кредитование — Доступы</h3>
       <span class="badge-mini" x-text="creditPendingLks.length + ' анкет'"></span>
       <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
     </div>
+
+    <!-- Toolbar выбора -->
+    <div x-show="sysSelCount('credit_access') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(99,102,241,0.10); border: 1px solid rgba(99,102,241,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: #818cf8;" x-text="'Выбрано: ' + sysSelCount('credit_access')"></span>
+      <button class="btn" @click="openBulkMoveModal('credit_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('credit_access')">Сбросить</button>
+    </div>
+
     <div x-show="creditPendingLks.length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
       Пока пусто. Зарегистрируй кредитный чат через <code>«Ассистент возьми этот чат под кредитование - менеджер @ник»</code> в TG.
     </div>
     <template x-for="lk in creditPendingLks" :key="lk.droplk_id">
-      <div class="crm-card" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
+      <div class="crm-card" style="margin-bottom: 8px; padding: 12px;"
+           :style="lk.completed ? 'border-left: 3px solid #22c55e; opacity: 0.85;' : 'border-left: 3px solid #6366f1;'">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <input type="checkbox" :checked="isLkSel('credit_access', lk.droplk_id)"
+                 @change="toggleLkSel('credit_access', lk.droplk_id)"
+                 title="Выбрать"
+                 style="width: 18px; height: 18px; cursor: pointer; accent-color: #6366f1;">
+          <span x-show="lk.completed" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color:#22c55e; border-radius: 3px; font-weight: 700;">✅ Успешно перевязано</span>
           <span class="lk-slot-badge credit" x-show="lk.slot_number"
                 :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
                 x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5439,10 +5477,18 @@
 
   <!-- ============= ВКЛАДКА: 💳 КРЕДИТ | ПАРОЛИ ============= -->
   <div x-show="systemSection === 'credit_password'" x-init="refreshCredit()">
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💳 Кредитование — Пароли</h3>
       <span class="badge-mini" x-text="creditPasswordsInbox.length + ' ЛК'"></span>
       <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+
+    <!-- Toolbar выбора -->
+    <div x-show="sysSelCount('credit_password') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(99,102,241,0.10); border: 1px solid rgba(99,102,241,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: #818cf8;" x-text="'Выбрано: ' + sysSelCount('credit_password')"></span>
+      <button class="btn" @click="openBulkMoveModal('credit_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('credit_password')">Сбросить</button>
     </div>
 
     <!-- Сводка менеджеров -->
@@ -5465,6 +5511,10 @@
     <template x-for="lk in creditPasswordsInbox" :key="lk.droplk_id">
       <div class="crm-card password" :class="lk.filled ? 'filled' : ''" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #6366f1;">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <input type="checkbox" :checked="isLkSel('credit_password', lk.droplk_id)"
+                 @change="toggleLkSel('credit_password', lk.droplk_id)"
+                 title="Выбрать"
+                 style="width: 18px; height: 18px; cursor: pointer; accent-color: #6366f1;">
           <span class="lk-slot-badge credit" x-show="lk.slot_number"
                 :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total + ' в анкете ' + (lk.drop_number || '')"
                 x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5512,14 +5562,15 @@
     </div>
 
     <!-- Toolbar выбора (показывается когда что-то отмечено) -->
-    <div x-show="selectedOutsourceLkIds.length > 0" x-cloak
-         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px;">
-      <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + selectedOutsourceLkIds.length"></span>
+    <div x-show="sysSelCount('outsource_access') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + sysSelCount('outsource_access')"></span>
       <button class="btn" style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;"
-              @click="openCreateBundleModal()" :disabled="selectedOutsourceLkIds.length < 2">
-        🔗 Объединить в связку
-      </button>
-      <button class="btn" @click="clearOutsourceSelection()">Сбросить</button>
+              @click="openCreateBundleModal()" :disabled="sysSelCount('outsource_access') < 2"
+              title="Объединить ≥2 ЛК в один пакет для продажи">🔗 Объединить в связку</button>
+      <button class="btn" @click="openBulkMoveModal('outsource_access')"
+              title="Передать все выбранные ЛК в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('outsource_access')">Сбросить</button>
     </div>
 
     <!-- Список связок (раскрывается по кнопке) -->
@@ -5553,18 +5604,20 @@
     </div>
     <template x-for="lk in outsourcePendingLks" :key="lk.droplk_id">
       <div class="crm-card" style="margin-bottom: 8px; padding: 12px;"
-           :style="bundleIdForLk(lk.droplk_id) ? 'border-left: 3px solid #22c55e;' : 'border-left: 3px solid #f59e0b;'">
+           :style="lk.completed ? 'border-left: 3px solid #22c55e; opacity: 0.85;' : (bundleIdForLk(lk.droplk_id) ? 'border-left: 3px solid #22c55e;' : 'border-left: 3px solid #f59e0b;')">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <!-- Checkbox: только для LK не в связке и не купленных -->
+          <!-- Checkbox: только для LK не в связке -->
           <template x-if="!bundleIdForLk(lk.droplk_id)">
-            <input type="checkbox" :checked="isLkSelected(lk.droplk_id)" @change="toggleOutsourceLkSelect(lk.droplk_id)"
-                   title="Выбрать для связки"
+            <input type="checkbox" :checked="isLkSel('outsource_access', lk.droplk_id)" @change="toggleLkSel('outsource_access', lk.droplk_id)"
+                   title="Выбрать"
                    style="width: 18px; height: 18px; cursor: pointer; accent-color: #22c55e;">
           </template>
           <template x-if="bundleIdForLk(lk.droplk_id)">
             <span style="font-size: 10px; padding: 2px 6px; background: rgba(34,197,94,0.18); color:#22c55e; border-radius: 3px; font-weight: 700;"
                   :title="'В связке ' + bundleIdForLk(lk.droplk_id)" x-text="'🔗 ' + bundleIdForLk(lk.droplk_id)"></span>
           </template>
+          <!-- ✅ badge для успешно перевязанных -->
+          <span x-show="lk.completed" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color:#22c55e; border-radius: 3px; font-weight: 700;">✅ Успешно перевязано</span>
           <span class="lk-slot-badge" x-show="lk.slot_number"
                 :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
                 x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -5595,10 +5648,18 @@
 
   <!-- ============= ВКЛАДКА: 🏢 АУТСОРС | ПАРОЛИ ============= -->
   <div x-show="systemSection === 'outsource_password'" x-init="refreshOutsource()">
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">🏢 Аутсорс — Пароли</h3>
       <span class="badge-mini" x-text="outsourcePasswordsInbox.length + ' ЛК'"></span>
       <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+
+    <!-- Toolbar выбора (показывается когда что-то отмечено) -->
+    <div x-show="sysSelCount('outsource_password') > 0" x-cloak
+         style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px; flex-wrap: wrap;">
+      <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + sysSelCount('outsource_password')"></span>
+      <button class="btn" @click="openBulkMoveModal('outsource_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button class="btn" @click="clearSysSel('outsource_password')">Сбросить</button>
     </div>
     <div x-show="outsourceManagers.length > 0" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 16px;">
       <template x-for="m in outsourceManagers" :key="m.username">
@@ -5621,6 +5682,10 @@
     <template x-for="lk in outsourcePasswordsInbox" :key="lk.droplk_id">
       <div class="crm-card password" :class="lk.filled ? 'filled' : ''" style="margin-bottom: 8px; padding: 12px; border-left: 3px solid #f59e0b;">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <input type="checkbox" :checked="isLkSel('outsource_password', lk.droplk_id)"
+                 @change="toggleLkSel('outsource_password', lk.droplk_id)"
+                 title="Выбрать"
+                 style="width: 18px; height: 18px; cursor: pointer; accent-color: #22c55e;">
           <span class="lk-slot-badge" x-show="lk.slot_number"
                 :title="'ЛК #' + lk.slot_number + ' из ' + lk.slot_total"
                 x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
@@ -6758,8 +6823,25 @@ function jarvis() {
     creditLoading: false,
     // === АУТСОРС (маркетплейс ЛК для управляющих) ===
     outsourcePendingLks: [],
-    // Чекбокс-выбор для объединения в связку (только free LKs)
-    selectedOutsourceLkIds: [],
+    // Универсальный выбор ЛК per-section (для bulk-действий и связок)
+    // { crm_access: [...], crm_password: [...], credit_access: [...], credit_password: [...],
+    //   outsource_access: [...], outsource_password: [...] }
+    selectedSysIds: {
+      crm_access: [], crm_password: [],
+      credit_access: [], credit_password: [],
+      outsource_access: [], outsource_password: [],
+    },
+    // BACKCOMPAT: старое поле — теперь геттер для outsource_access
+    get selectedOutsourceLkIds() { return this.selectedSysIds.outsource_access || []; },
+    // Bulk-перенос модалка
+    bulkMoveModalOpen: false,
+    bulkMoveSection: '',           // sectionKey откуда берём IDs
+    bulkMoveTarget: 'credit',      // куда: credit | outsource | supplier
+    bulkMoveUsername: '',          // для credit (юрист) — если массово, тот же для всех
+    bulkMoveOwnerId: '',           // для supplier (опционально)
+    bulkMovePrice: 50,             // для outsource (цена за каждую) если переносим в общий пул
+    bulkMoveLoading: false,
+    bulkMoveProgress: { done: 0, total: 0, errors: [] },
     // Связки
     outsourceBundles: [],            // [{bundle_id, name, list_price_usdt, in_pool, lks: [...], lk_count}]
     bundlesViewOpen: false,          // показывать панель Связки в выгрузке
@@ -11241,14 +11323,97 @@ function jarvis() {
       try { await this.refreshKuc(); } catch (e) {}
     },
 
-    // === АУТСОРС — связки (bundles) ===
-    isLkSelected(lkid) { return this.selectedOutsourceLkIds.includes(lkid); },
-    toggleOutsourceLkSelect(lkid) {
-      const i = this.selectedOutsourceLkIds.indexOf(lkid);
-      if (i >= 0) this.selectedOutsourceLkIds.splice(i, 1);
-      else this.selectedOutsourceLkIds.push(lkid);
+    // === УНИВЕРСАЛЬНЫЙ ВЫБОР ЛК per-section ===
+    sysSel(section) { return this.selectedSysIds[section] || (this.selectedSysIds[section] = []); },
+    isLkSel(section, lkid) { return this.sysSel(section).includes(lkid); },
+    toggleLkSel(section, lkid) {
+      const arr = this.sysSel(section);
+      const i = arr.indexOf(lkid);
+      if (i >= 0) arr.splice(i, 1);
+      else arr.push(lkid);
     },
-    clearOutsourceSelection() { this.selectedOutsourceLkIds = []; },
+    clearSysSel(section) { this.selectedSysIds[section] = []; },
+    sysSelCount(section) { return (this.selectedSysIds[section] || []).length; },
+    // BACKCOMPAT для старых вызовов
+    isLkSelected(lkid) { return this.isLkSel('outsource_access', lkid); },
+    toggleOutsourceLkSelect(lkid) { this.toggleLkSel('outsource_access', lkid); },
+    clearOutsourceSelection() { this.clearSysSel('outsource_access'); },
+
+    // === Bulk-перенос ЛК (массовый перевод в другой департамент) ===
+    openBulkMoveModal(section) {
+      if (this.sysSelCount(section) < 1) { alert('Сначала выбери ЛК чекбоксами'); return; }
+      this.bulkMoveSection = section;
+      // Дефолтный target: из CRM → credit, из credit → supplier, из outsource → supplier
+      if (section.startsWith('crm')) this.bulkMoveTarget = 'credit';
+      else if (section.startsWith('credit')) this.bulkMoveTarget = 'supplier';
+      else this.bulkMoveTarget = 'supplier';
+      this.bulkMoveUsername = '';
+      this.bulkMoveOwnerId = '';
+      this.bulkMovePrice = 50;
+      this.bulkMoveProgress = { done: 0, total: 0, errors: [] };
+      this.bulkMoveModalOpen = true;
+    },
+    closeBulkMoveModal() {
+      this.bulkMoveModalOpen = false;
+      this.bulkMoveLoading = false;
+    },
+    async submitBulkMove() {
+      const section = this.bulkMoveSection;
+      const target = this.bulkMoveTarget;
+      const ids = [...this.sysSel(section)];
+      if (ids.length === 0) { this.closeBulkMoveModal(); return; }
+      // Валидация
+      if (target === 'credit') {
+        const u = (this.bulkMoveUsername || '').trim().replace(/^@/, '').toLowerCase();
+        if (!u) { alert('Введи username юриста'); return; }
+        this.bulkMoveUsername = u;
+      }
+      if (target === 'outsource') {
+        const p = parseFloat(this.bulkMovePrice);
+        if (!p || p <= 0) { alert('Цена должна быть > 0'); return; }
+      }
+      this.bulkMoveLoading = true;
+      this.bulkMoveProgress = { done: 0, total: ids.length, errors: [] };
+      const username = this.bulkMoveUsername;
+      const price = parseFloat(this.bulkMovePrice) || 0;
+      const ownerId = (this.bulkMoveOwnerId || '').trim();
+      for (const droplk_id of ids) {
+        let url = '', body = {};
+        if (target === 'credit') {
+          url = `/api/system/lk/${droplk_id}/move_to_credit`;
+          body = { manager_username: username };
+        } else if (target === 'outsource') {
+          url = `/api/system/lk/${droplk_id}/move_to_outsource`;
+          body = { list_price_usdt: price };
+        } else if (target === 'supplier') {
+          url = droplk_id.startsWith('olk')
+            ? `/api/system/outsource_lk/${droplk_id}/move_to_supplier`
+            : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
+          body = { owner_id: ownerId };
+        }
+        try {
+          const r = await fetch(url, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (r.ok) this.bulkMoveProgress.done += 1;
+          else this.bulkMoveProgress.errors.push(droplk_id + ': ' + await r.text());
+        } catch (e) {
+          this.bulkMoveProgress.errors.push(droplk_id + ': ' + e.message);
+        }
+      }
+      this.bulkMoveLoading = false;
+      const ok = this.bulkMoveProgress.done;
+      const err = this.bulkMoveProgress.errors.length;
+      alert(`✅ Перенесено: ${ok} / ${ids.length}` + (err ? `\n❌ Ошибок: ${err}\n${this.bulkMoveProgress.errors.slice(0,5).join('\n')}` : ''));
+      this.clearSysSel(section);
+      this.closeBulkMoveModal();
+      // Перезагружаем все разделы (источник и назначение)
+      if (this.refreshSystem) await this.refreshSystem();
+      if (this.refreshCredit) await this.refreshCredit();
+      if (this.refreshOutsource) await this.refreshOutsource();
+    },
     bundleIdForLk(lkid) {
       for (const b of (this.outsourceBundles || [])) {
         if ((b.lks || []).some(x => x.droplk_id === lkid)) return b.bundle_id;
@@ -12515,6 +12680,74 @@ function jarvis() {
       </button>
       <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
       <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== BULK MOVE MODAL (массовый перенос выбранных ЛК в другой отдел) ===== -->
+<div x-show="bulkMoveModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeBulkMoveModal()">
+  <div style="background: #14182c; border: 1px solid rgba(106,216,255,0.35); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1; color: var(--hud-primary);">📤 Массовый перенос</h3>
+      <button @click="closeBulkMoveModal()" :disabled="bulkMoveLoading"
+              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+    <div style="padding: 10px; background: rgba(106,216,255,0.08); border-radius: 6px; margin-bottom: 14px; font-size: 12px;">
+      <b style="color: var(--hud-primary);" x-text="sysSelCount(bulkMoveSection) + ' ЛК будут перенесены.'"></b><br>
+      <span style="color: var(--text-dim);">Каждая карточка отправится поочерёдно. Результат покажу после.</span>
+    </div>
+
+    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Куда переносим:</div>
+    <select x-model="bulkMoveTarget" :disabled="bulkMoveLoading"
+            style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px;">
+      <option value="credit">💳 КРЕДИТОВАНИЕ (нужен username юриста)</option>
+      <option value="outsource">🏢 АУТСОРС (общий пул бота, указать цену)</option>
+      <option value="supplier">🤝 ПОСТАВЩИКИ (вернуть в CRM)</option>
+    </select>
+
+    <template x-if="bulkMoveTarget === 'credit'">
+      <div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Юрист (username без @), один на все:</div>
+        <input type="text" x-model="bulkMoveUsername" :disabled="bulkMoveLoading"
+               placeholder="ivan_lawyer"
+               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+      </div>
+    </template>
+
+    <template x-if="bulkMoveTarget === 'outsource'">
+      <div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Цена за каждую ЛК (USDT) в пуле бота:</div>
+        <input type="number" min="1" step="1" x-model.number="bulkMovePrice" :disabled="bulkMoveLoading"
+               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+      </div>
+    </template>
+
+    <template x-if="bulkMoveTarget === 'supplier'">
+      <div>
+        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">ID поставщика (owner_id) — пустым = создать draft:</div>
+        <input type="text" x-model="bulkMoveOwnerId" :disabled="bulkMoveLoading"
+               placeholder="(пусто)"
+               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+      </div>
+    </template>
+
+    <!-- Прогресс -->
+    <div x-show="bulkMoveLoading || bulkMoveProgress.done > 0" x-cloak
+         style="margin-bottom: 14px; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; font-size: 12px;">
+      <div>Прогресс: <b x-text="bulkMoveProgress.done + ' / ' + bulkMoveProgress.total"></b></div>
+      <div x-show="bulkMoveProgress.errors.length > 0" style="color: #ef4444; margin-top: 4px;">
+        Ошибок: <span x-text="bulkMoveProgress.errors.length"></span>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 8px;">
+      <button :disabled="bulkMoveLoading" @click="submitBulkMove()"
+              style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
+              x-text="bulkMoveLoading ? '⏳ Переношу…' : ('📤 Перенести ' + sysSelCount(bulkMoveSection) + ' ЛК')"></button>
+      <button :disabled="bulkMoveLoading" @click="closeBulkMoveModal()"
+              style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
     </div>
   </div>
 </div>
