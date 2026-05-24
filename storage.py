@@ -59,7 +59,7 @@ def _default_state() -> dict:
         "client_idle_minutes": 5,
         "source_stats": {},
         "user_sources": {},
-        "ai_enabled": False,
+        "ai_enabled": True,  # дефолт включён — иначе бот тупо молчит на новой инсталляции
         "ai_model": "",
         "ai_stats": {
             "replies_total": 0,
