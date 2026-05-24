@@ -6744,6 +6744,14 @@ function jarvis() {
     kucReqModalLk: null,
     kucReqModalText: '',
     kucReqModalLoading: false,
+    // Модалка переноса ЛК между отделами (CRM↔Credit↔Outsource), prompt не работает в Electron
+    moveLkModalOpen: false,
+    moveLkModalLk: null,
+    moveLkModalTarget: '',     // 'credit' | 'outsource' | 'supplier'
+    moveLkModalUsername: '',   // для credit/supplier
+    moveLkModalPrice: 50,      // для outsource
+    moveLkModalOwnerId: '',    // для supplier
+    moveLkModalLoading: false,
     systemInstalledLks: [],  // УСТАНОВЛЕННЫЕ ЛК (done + creds + dedik)
     systemPwdEdit: {},  // droplk_id -> editable copy of fields
     systemPeriod: 'all',  // all | day | week | month
@@ -10685,67 +10693,49 @@ function jarvis() {
       try { await this.refreshKuc(); } catch (e) {}
     },
 
-    // === Перенос ЛК между отделами (Поставщики ↔ Кредитование) ===
-    async moveLkTrack(lk, target) {
-      // target: 'credit' | 'supplier' | 'outsource'
+    // === Перенос ЛК между отделами (CRM ↔ Кредитование ↔ Аутсорс) ===
+    // Открывает HTML-модалку (prompt/confirm не работают в Electron)
+    moveLkTrack(lk, target) {
+      this.moveLkModalLk = lk;
+      this.moveLkModalTarget = target;  // 'credit' | 'outsource' | 'supplier'
+      this.moveLkModalUsername = '';
+      this.moveLkModalPrice = 50;
+      this.moveLkModalOwnerId = '';
+      this.moveLkModalOpen = true;
+    },
+    closeMoveLkModal() {
+      this.moveLkModalOpen = false;
+      this.moveLkModalLk = null;
+      this.moveLkModalTarget = '';
+      this.moveLkModalUsername = '';
+      this.moveLkModalPrice = 50;
+      this.moveLkModalOwnerId = '';
+      this.moveLkModalLoading = false;
+    },
+    async submitMoveLk() {
+      const lk = this.moveLkModalLk;
+      const target = this.moveLkModalTarget;
+      if (!lk || !target) { this.closeMoveLkModal(); return; }
       const droplk_id = lk.droplk_id;
-      const bank = lk.bank || '—';
-      const fio = lk.fio || '—';
-      let manager_username = '';
-      let owner_id = '';
-      const targetLabel = target === 'credit' ? '💳 КРЕДИТОВАНИЕ'
-        : target === 'outsource' ? '🏢 АУТСОРС'
-        : '🤝 ПОСТАВЩИКИ';
-      let listPriceUsdt = 0;
+      let url = '', body = {};
       if (target === 'credit') {
-        manager_username = prompt(
-          `Перенос ЛК → ${targetLabel}\n\n` +
-          `Карточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
-          `Юрист (username без @), к кому перейдёт ЛК:`,
-          ''
-        );
-        if (!manager_username) return;
-        manager_username = manager_username.trim().replace(/^@/, '').toLowerCase();
-        if (!manager_username) return;
+        const u = (this.moveLkModalUsername || '').trim().replace(/^@/, '').toLowerCase();
+        if (!u) { alert('Введите username юриста'); return; }
+        url = `/api/system/lk/${droplk_id}/move_to_credit`;
+        body = { manager_username: u };
       } else if (target === 'outsource') {
-        // Аутсорс: ЛК идёт в общий ПУЛ (без конкретного управляющего).
-        // Управляющий потом сам "выкупает" из бота — указываем только цену.
-        const priceStr = prompt(
-          `Перенос ЛК → ${targetLabel}\n\n` +
-          `Карточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
-          `Цена за управление этой карточкой (USDT):\n` +
-          `Управляющий заплатит эту сумму и заберёт ЛК из каталога бота.`,
-          '50'
-        );
-        if (priceStr === null) return;
-        listPriceUsdt = parseFloat(priceStr) || 0;
-        if (listPriceUsdt <= 0) { alert('Цена должна быть > 0'); return; }
+        const p = parseFloat(this.moveLkModalPrice);
+        if (!p || p <= 0) { alert('Цена должна быть > 0'); return; }
+        url = `/api/system/lk/${droplk_id}/move_to_outsource`;
+        body = { list_price_usdt: p };
       } else if (target === 'supplier') {
-        owner_id = prompt(
-          `Перенос ЛК → ${targetLabel}\n\nКарточка: ${bank} / ${fio}\nID: ${droplk_id}\n\n` +
-          `ID поставщика (owner_id) — пустым = создать draft:`, ''
-        );
-        if (owner_id === null) return;
-        owner_id = (owner_id || '').trim();
+        url = droplk_id.startsWith('olk')
+          ? `/api/system/outsource_lk/${droplk_id}/move_to_supplier`
+          : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
+        body = { owner_id: (this.moveLkModalOwnerId || '').trim() };
       }
-      const confirmMsg = target === 'outsource'
-        ? `Переносим ЛК ${bank}/${fio} в АУТСОРС-каталог за ${listPriceUsdt} USDT?\n\nУправляющий заберёт через бота.`
-        : `Точно переносим ЛК ${bank}/${fio} в ${targetLabel}?\nИсходная карточка будет удалена.`;
-      if (!confirm(confirmMsg)) return;
+      this.moveLkModalLoading = true;
       try {
-        let url, body;
-        if (target === 'credit') {
-          url = `/api/system/lk/${droplk_id}/move_to_credit`; body = { manager_username };
-        } else if (target === 'outsource') {
-          url = `/api/system/lk/${droplk_id}/move_to_outsource`;
-          body = { list_price_usdt: listPriceUsdt };  // пул, manager пустой
-        } else if (target === 'supplier') {
-          // Откуда мы? Если outsource — используем outsource endpoint, иначе credit
-          url = droplk_id.startsWith('olk')
-            ? `/api/system/outsource_lk/${droplk_id}/move_to_supplier`
-            : `/api/system/credit_lk/${droplk_id}/move_to_supplier`;
-          body = { owner_id };
-        }
         const r = await fetch(url, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -10755,10 +10745,15 @@ function jarvis() {
         const j = await r.json();
         const newId = j.new_outsource_droplk_id || j.new_credit_droplk_id || j.new_droplk_id || '?';
         alert(`✅ Перенесено.\nНовый ID: ${newId}`);
+        this.closeMoveLkModal();
         if (this.refreshSystem) await this.refreshSystem();
         if (this.refreshCredit) await this.refreshCredit();
         if (this.refreshOutsource) await this.refreshOutsource();
-      } catch (e) { alert('Ошибка: ' + e.message); }
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+      } finally {
+        this.moveLkModalLoading = false;
+      }
     },
 
     // === KUC (Кружок Удостоверения Клиента) ===
@@ -12398,6 +12393,75 @@ function jarvis() {
       <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
       <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== MOVE LK MODAL (перенос ЛК между отделами CRM↔Credit↔Outsource, замена prompt) ===== -->
+<div x-show="moveLkModalOpen" x-cloak
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
+     @click.self="closeMoveLkModal()">
+  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 480px; width: 100%; padding: 18px;">
+    <div style="display: flex; align-items: center; margin-bottom: 14px;">
+      <h3 style="margin: 0; flex: 1;"
+          x-text="moveLkModalTarget === 'credit' ? '💳 Перенос в КРЕДИТОВАНИЕ' : moveLkModalTarget === 'outsource' ? '🏢 Перенос в АУТСОРС' : '🤝 Возврат в ПОСТАВЩИКИ'"></h3>
+      <button @click="closeMoveLkModal()" :disabled="moveLkModalLoading"
+              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
+    </div>
+    <template x-if="moveLkModalLk">
+      <div>
+        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-bottom: 14px; padding: 10px; background: rgba(255,255,255,0.04); border-radius: 6px;">
+          ЛК: <b style="color: var(--hud-primary);" x-text="(moveLkModalLk.bank || '—').toUpperCase()"></b>
+          / <span x-text="moveLkModalLk.fio || '—'"></span>
+          <br>
+          <code style="font-size: 10px; color: rgba(255,255,255,0.4);" x-text="moveLkModalLk.droplk_id"></code>
+        </div>
+
+        <!-- CREDIT: username юриста -->
+        <template x-if="moveLkModalTarget === 'credit'">
+          <div>
+            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Юрист (username без @):</div>
+            <input type="text" x-model="moveLkModalUsername" :disabled="moveLkModalLoading"
+                   placeholder="например: ivan_lawyer"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+          </div>
+        </template>
+
+        <!-- OUTSOURCE: цена -->
+        <template x-if="moveLkModalTarget === 'outsource'">
+          <div>
+            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
+              Цена за управление (USDT):
+            </div>
+            <input type="number" min="1" step="1" x-model.number="moveLkModalPrice" :disabled="moveLkModalLoading"
+                   placeholder="50"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.2); border-radius: 6px;">
+              ℹ ЛК пойдёт в общий пул @marketplace_PRIDE_BOT. Управляющий заплатит эту сумму и заберёт его из каталога бота.
+            </div>
+          </div>
+        </template>
+
+        <!-- SUPPLIER: owner_id (опционально) -->
+        <template x-if="moveLkModalTarget === 'supplier'">
+          <div>
+            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
+              ID поставщика (owner_id) — пустым = создать draft:
+            </div>
+            <input type="text" x-model="moveLkModalOwnerId" :disabled="moveLkModalLoading"
+                   placeholder="оставьте пустым"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
+          </div>
+        </template>
+
+        <div style="display: flex; gap: 8px;">
+          <button :disabled="moveLkModalLoading" @click="submitMoveLk()"
+                  style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
+                  x-text="moveLkModalLoading ? '⏳ Переношу…' : '➡️ Перенести'"></button>
+          <button :disabled="moveLkModalLoading" @click="closeMoveLkModal()"
+                  style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
+        </div>
+      </div>
+    </template>
   </div>
 </div>
 
