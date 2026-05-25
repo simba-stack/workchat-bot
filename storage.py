@@ -3863,34 +3863,168 @@ class Storage:
     # =====================================================================
     # OWNER PANEL — роли и разрешения
     # =====================================================================
-    # Список всех известных view'ов в JARVIS (для UI selector'а в Owner Panel)
+    # Список всех 13 главных view'ов в JARVIS
     _ALL_VIEWS = [
         "office", "chat", "lk", "fin", "crm", "payouts", "discord",
         "support", "system", "accounting", "operational", "settings", "owner",
     ]
-    # Список всех известных edit-actions (для UI selector'а)
+    # Подвкладки внутри views — для гранулярного доступа.
+    # Если роли не выдан конкретный subview, эта вкладка не показывается.
+    # Если для view нет записи в `subviews` perms — доступны ВСЕ подвкладки (default).
+    _ALL_SUBVIEWS = {
+        "system": [
+            "access", "password",
+            "credit_access", "credit_password",
+            "outsource_access", "outsource_password",
+            "installed",
+        ],
+        "settings": [
+            "profile", "workers", "chats", "ai", "pricing",
+            "invite", "payment", "appearance", "system",
+        ],
+        "lk": ["all", "to_top_up", "to_pay", "to_release"],
+        "support": ["managers", "system", "accounting", "all"],
+    }
+    # Полный список edit-actions (~70). Группируется по разделу для UI.
     _ALL_EDIT_ACTIONS = [
-        "request_kuc", "decide_kuc", "move_lk_track", "exchange_request",
-        "lk_status_change", "lk_fill", "manager_session_take", "support_reply",
+        # === ЛК / Operations ===
+        "lk_status_change", "lk_update", "lk_delete",
+        "lk_fill", "lk_sms_action",
+        "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
+        # === System / KUC / Bundles ===
+        "request_kuc", "decide_kuc",
+        "bundle_create", "bundle_dissolve",
+        # === Outsource bot management ===
+        "topup_credit", "topup_reject",
+        "bot_text_set", "bot_text_reset",
+        # === Payouts ===
+        "payout_usdt_paid", "payout_released",
+        "payout_deal_funded", "payout_set_deal_id",
+        # === Accounting ===
+        "accounting_entry_add", "accounting_entry_delete",
+        "accounting_payout_note",
+        # === Support ===
+        "support_take", "support_reply",
+        "support_transfer", "support_close",
+        "tg_session_connect", "tg_session_verify", "tg_session_disconnect",
+        # === CRM Партнёры ===
+        "crm_ban", "crm_unban", "crm_warn",
+        # === Discord / Hub ===
+        "discord_channel_create", "discord_channel_delete",
+        "discord_message_send", "discord_message_delete",
+        "discord_reaction_add", "discord_reaction_remove",
+        "discord_pin", "discord_unpin",
+        "call_create", "call_end", "call_join",
+        # === Operational ===
+        "exchange_request",
+        # === Settings ===
+        "settings_tg_chats", "settings_ai", "settings_invite",
+        "settings_pricing_set", "settings_pricing_delete",
+        "settings_payment_wallet", "admin_worker_role",
+        # === Owner ===
+        "owner_role_create_update", "owner_role_delete", "owner_user_role",
+        # === Shared / контроль ===
+        "ai_toggle", "sync_lk_request",
+        # === Outreach ===
+        "outreach_bot_auth_start", "outreach_bot_auth_confirm", "outreach_bot_delete",
+        "outreach_campaign_create", "outreach_campaign_update", "outreach_campaign_delete",
+        "outreach_campaign_start", "outreach_campaign_pause", "outreach_campaign_stop",
+        "outreach_response_handle",
+        # === LEO ===
+        "leo_ask", "leo_voice_command", "leo_realtime_session",
+        "leo_note_create", "leo_note_delete", "leo_note_move",
+        "leo_notes_archive",
+        # === CRM-бот (через Telegram, не API) ===
         "credit_capture_chat",
     ]
-    # Дефолтные роли + их доступ (создаются при первом обращении)
+    # Дефолтные роли + их доступ. Каждая роль может иметь:
+    # - views[]              — список доступных топ-views (или ["*"] = все)
+    # - view_readonly[]      — views в режиме «только просмотр» (все mutations блокируются)
+    # - subviews{view: []}   — фильтр доступных подвкладок (по умолчанию все)
+    # - subview_readonly{view: {sub: True}} — конкретные subviews только просмотр
+    # - edit_actions[]       — разрешённые мутации (или ["*"] = все)
     _DEFAULT_ROLE_PERMS = {
-        "owner": {"label": "👑 Owner", "views": ["*"], "edit_actions": ["*"]},
-        "manager": {"label": "👤 Manager",
-                    "views": ["office", "chat", "lk", "crm", "support", "system", "operational"],
-                    "edit_actions": ["request_kuc", "decide_kuc", "move_lk_track",
-                                     "lk_status_change", "lk_fill", "manager_session_take",
-                                     "support_reply", "credit_capture_chat"]},
-        "system": {"label": "⚙️ System",
-                   "views": ["office", "system", "operational"],
-                   "edit_actions": ["request_kuc", "decide_kuc", "lk_fill"]},
-        "accounting": {"label": "💰 Accounting",
-                       "views": ["office", "fin", "payouts", "accounting"],
-                       "edit_actions": ["exchange_request"]},
-        "operationist": {"label": "🛠 Operationist",
-                         "views": ["office", "operational", "lk"],
-                         "edit_actions": ["exchange_request", "lk_status_change"]},
+        "owner": {
+            "label": "👑 Owner",
+            "views": ["*"], "edit_actions": ["*"],
+        },
+        "manager": {
+            "label": "👤 Manager",
+            "views": ["office", "chat", "lk", "crm", "support", "system", "operational"],
+            "edit_actions": [
+                "request_kuc", "decide_kuc", "lk_sms_action", "lk_fill",
+                "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
+                "lk_status_change",
+                "support_take", "support_reply", "support_transfer", "support_close",
+                "credit_capture_chat",
+            ],
+        },
+        "system_dept": {
+            "label": "⚙️ System",
+            "views": ["office", "system", "operational"],
+            "edit_actions": [
+                "request_kuc", "decide_kuc", "lk_fill", "lk_sms_action",
+            ],
+        },
+        "accounting": {
+            "label": "💰 Accounting",
+            "views": ["office", "fin", "payouts", "accounting"],
+            "edit_actions": [
+                "exchange_request",
+                "payout_usdt_paid", "payout_released",
+                "payout_deal_funded", "payout_set_deal_id",
+                "accounting_entry_add", "accounting_entry_delete",
+                "accounting_payout_note",
+            ],
+        },
+        "operationist": {
+            "label": "🛠 Operationist",
+            "views": ["office", "operational", "lk"],
+            "edit_actions": [
+                "exchange_request", "lk_status_change",
+            ],
+        },
+        # === Роль 1: Менеджер чатов Доступы (от SIMBA) ===
+        "chat_access_manager": {
+            "label": "👤 Менеджер чатов Доступы",
+            "views": [
+                "office",      # просмотр + LEO голос
+                "crm",         # просмотр
+                "discord",     # full
+                "support",     # full
+                "system",      # только Доступы вкладки
+                "settings",    # ограниченные подразделы
+            ],
+            "view_readonly": ["office", "crm"],  # только просмотр
+            "subviews": {
+                "system": ["access", "credit_access", "outsource_access"],  # без password / installed
+                "settings": ["profile", "workers", "pricing", "appearance"],
+            },
+            "subview_readonly": {
+                "settings": {"workers": True},  # работники — только просмотр
+            },
+            "edit_actions": [
+                # 🟣 ХАБ — полный доступ
+                "discord_channel_create", "discord_channel_delete",
+                "discord_message_send", "discord_message_delete",
+                "discord_reaction_add", "discord_reaction_remove",
+                "discord_pin", "discord_unpin",
+                "call_create", "call_end", "call_join",
+                # 🛟 Поддержка — полный
+                "support_take", "support_reply", "support_transfer", "support_close",
+                "tg_session_connect", "tg_session_verify", "tg_session_disconnect",
+                # ⚙ SYSTEM Доступы — full mutation для вкладок Доступы
+                "request_kuc", "decide_kuc",
+                "lk_sms_action", "lk_fill",
+                "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
+                "bundle_create", "bundle_dissolve",
+                # ⚙️ Настройки — Прайс ЛК полный
+                "settings_pricing_set", "settings_pricing_delete",
+                # 🧠 LEO голос (whitelist вопросов на стороне prompt-фильтра)
+                "leo_ask", "leo_voice_command", "leo_realtime_session",
+                "leo_note_create",
+            ],
+        },
     }
 
     def _ensure_default_role_permissions(self):
@@ -3908,10 +4042,15 @@ class Storage:
         self._ensure_default_role_permissions()
         return (self.state.get("role_permissions") or {}).get(role) or {}
 
-    async def set_role_permission(self, role: str, label: str = "",
-                                  views: Optional[list] = None,
-                                  edit_actions: Optional[list] = None) -> dict:
-        """Создаёт/обновляет роль. Возвращает обновлённую запись."""
+    async def set_role_permission(
+        self, role: str, label: str = "",
+        views: Optional[list] = None,
+        edit_actions: Optional[list] = None,
+        view_readonly: Optional[list] = None,
+        subviews: Optional[dict] = None,
+        subview_readonly: Optional[dict] = None,
+    ) -> dict:
+        """Создаёт/обновляет роль. Поддерживает subviews + readonly."""
         async with _lock:
             rp = self.state.setdefault("role_permissions", {})
             existing = rp.get(role) or {}
@@ -3919,8 +4058,10 @@ class Storage:
                 "label": label or existing.get("label") or role,
                 "views": list(views) if views is not None else (existing.get("views") or []),
                 "edit_actions": list(edit_actions) if edit_actions is not None else (existing.get("edit_actions") or []),
+                "view_readonly": list(view_readonly) if view_readonly is not None else (existing.get("view_readonly") or []),
+                "subviews": dict(subviews) if subviews is not None else (existing.get("subviews") or {}),
+                "subview_readonly": dict(subview_readonly) if subview_readonly is not None else (existing.get("subview_readonly") or {}),
             }
-            # Если роль — кастомная (не в дефолтах) — добавим в custom_roles для UI
             if role not in self._DEFAULT_ROLE_PERMS:
                 custom = self.state.setdefault("custom_roles", [])
                 if role not in custom:
@@ -3952,11 +4093,58 @@ class Storage:
         acts = perms.get("edit_actions") or []
         return ("*" in acts) or (action in acts)
 
+    def role_can_subview(self, role: str, view_id: str, subview_id: str) -> bool:
+        """Можно ли роли видеть конкретную подвкладку.
+
+        Если в perms.subviews нет записи для view_id — доступны ВСЕ подвкладки (default open).
+        Если есть запись со списком — доступны только перечисленные.
+        Если "*" в списке — все.
+        """
+        perms = self.get_role_permission(role)
+        # Owner-wildcard: если views=['*'] — всё доступно
+        if "*" in (perms.get("views") or []):
+            return True
+        subs = perms.get("subviews") or {}
+        if view_id not in subs:
+            return True  # нет ограничения = всё открыто
+        allowed = subs[view_id] or []
+        return ("*" in allowed) or (subview_id in allowed)
+
+    def role_view_readonly(self, role: str, view_id: str) -> bool:
+        """View в режиме только-просмотр (мутации блокируются)."""
+        perms = self.get_role_permission(role)
+        return view_id in (perms.get("view_readonly") or [])
+
+    def role_subview_readonly(self, role: str, view_id: str, subview_id: str) -> bool:
+        perms = self.get_role_permission(role)
+        sro = perms.get("subview_readonly") or {}
+        view_map = sro.get(view_id) or {}
+        return bool(view_map.get(subview_id))
+
+    def effective_permissions(self, role: str) -> dict:
+        """Возвращает полный снимок прав роли для frontend.
+
+        Используется в /api/me — UI скрывает недоступные кнопки/вкладки.
+        """
+        perms = self.get_role_permission(role)
+        return {
+            "role": role,
+            "label": perms.get("label") or role,
+            "views": list(perms.get("views") or []),
+            "view_readonly": list(perms.get("view_readonly") or []),
+            "subviews": dict(perms.get("subviews") or {}),
+            "subview_readonly": dict(perms.get("subview_readonly") or {}),
+            "edit_actions": list(perms.get("edit_actions") or []),
+        }
+
     def list_all_known_views(self) -> list:
         return list(self._ALL_VIEWS)
 
     def list_all_known_actions(self) -> list:
         return list(self._ALL_EDIT_ACTIONS)
+
+    def list_all_known_subviews(self) -> dict:
+        return dict(self._ALL_SUBVIEWS)
 
     # =====================================================================
     # GUEST CALLS — звонки по одноразовой ссылке (Яндекс.Телемост-стиль)

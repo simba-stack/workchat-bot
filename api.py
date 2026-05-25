@@ -466,6 +466,13 @@ async def api_me(request: Request, _: None = Depends(_auth)):
         "admin_workers": role == "owner",
         "all_views": role == "owner",
     }
+    # Полный effective_permissions для frontend (фильтрация views/subviews/actions)
+    eff_perms = {}
+    try:
+        if hasattr(storage, "effective_permissions"):
+            eff_perms = storage.effective_permissions(role) or {}
+    except Exception as e:
+        logger.warning("effective_permissions(%s) failed: %s", role, e)
     return {
         "ok": True,
         "uid": uid,
@@ -478,8 +485,40 @@ async def api_me(request: Request, _: None = Depends(_auth)):
         "phone": sess.get("phone") or "",
         # Telethon-сессия для отправки от своего имени — ОТДЕЛЬНАЯ привязка
         "tg_session_connected": bool(sess.get("string_session")),
-        "permissions": can_see,
+        "permissions": can_see,  # backward-compat
+        # Новая система ролей с subviews + readonly
+        "perms": {
+            "views": eff_perms.get("views", []),
+            "view_readonly": eff_perms.get("view_readonly", []),
+            "subviews": eff_perms.get("subviews", {}),
+            "subview_readonly": eff_perms.get("subview_readonly", {}),
+            "edit_actions": eff_perms.get("edit_actions", []),
+            "label": eff_perms.get("label", role),
+        },
     }
+
+
+# === Permission dependency для mutation endpoints ===
+def require_action(action: str):
+    """Создаёт FastAPI dependency которая проверяет что у юзера есть это действие.
+
+    Использование:
+        @app.post("/api/x")
+        async def x(_perm = Depends(require_action("settings_pricing_set"))):
+            ...
+    """
+    async def _check(request: Request, me: dict = Depends(_get_me)):
+        role = (me or {}).get("role") or ""
+        # Owner = всё разрешено
+        if role == "owner":
+            return True
+        try:
+            if storage.role_can_edit(role, action):
+                return True
+        except Exception:
+            pass
+        raise HTTPException(403, f"Forbidden: action '{action}' not allowed for role '{role}'")
+    return _check
 
 
 @app.get("/api/admin/workers")
@@ -2178,21 +2217,27 @@ async def owner_list_roles(me: dict = Depends(_get_me)):
         "roles": storage.list_role_permissions(),
         "all_views": storage.list_all_known_views(),
         "all_actions": storage.list_all_known_actions(),
+        "all_subviews": storage.list_all_known_subviews() if hasattr(storage, "list_all_known_subviews") else {},
     }
 
 
 @app.post("/api/owner/roles")
 async def owner_set_role(request: Request, me: dict = Depends(_get_me)):
-    """Body: {role: str, label?: str, views?: [str], edit_actions?: [str]}"""
+    """Body: {role, label?, views?, edit_actions?, view_readonly?, subviews?, subview_readonly?}"""
     _require_owner(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
     role = (body.get("role") or "").strip().lower()
     if not role or not role.replace("_", "").isalnum():
         raise HTTPException(400, "role must be alphanumeric (or underscore)")
-    label = body.get("label") or ""
-    views = body.get("views")  # None = не менять
-    actions = body.get("edit_actions")
-    entry = await storage.set_role_permission(role, label=label, views=views, edit_actions=actions)
+    entry = await storage.set_role_permission(
+        role,
+        label=body.get("label") or "",
+        views=body.get("views"),
+        edit_actions=body.get("edit_actions"),
+        view_readonly=body.get("view_readonly"),
+        subviews=body.get("subviews"),
+        subview_readonly=body.get("subview_readonly"),
+    )
     return {"ok": True, "role": role, "data": entry}
 
 

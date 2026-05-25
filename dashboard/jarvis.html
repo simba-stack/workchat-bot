@@ -2943,35 +2943,35 @@
   </div>
 </div>
 
-<!-- TABS -->
+<!-- TABS — фильтруются через canView() из новой системы ролей -->
 <nav class="view-tabs">
-  <button class="view-tab" :class="currentView === 'office' ? 'active' : ''" @click="goToView('office')">🏢 Главная</button>
-  <button class="view-tab" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Беседы</button>
-  <button class="view-tab" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 ЛК Отдел</button>
-  <button class="view-tab" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Финансы</button>
-  <button class="view-tab" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
-  <button class="view-tab" :class="currentView === 'payouts' ? 'active' : ''" @click="goToView('payouts')">💰 Выплаты</button>
-  <button class="view-tab" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
-  <button class="view-tab" :class="currentView === 'support' ? 'active' : ''" @click="goToView('support')">
+  <button class="view-tab" x-show="canView('office')" :class="currentView === 'office' ? 'active' : ''" @click="goToView('office')">🏢 Главная</button>
+  <button class="view-tab" x-show="canView('chat')" :class="currentView === 'chat' ? 'active' : ''" @click="goToView('chat')">💬 Беседы</button>
+  <button class="view-tab" x-show="canView('lk')" :class="currentView === 'lk' ? 'active' : ''" @click="goToView('lk')">📋 ЛК Отдел</button>
+  <button class="view-tab" x-show="canView('fin')" :class="currentView === 'fin' ? 'active' : ''" @click="goToView('fin')">📒 Финансы</button>
+  <button class="view-tab" x-show="canView('crm')" :class="currentView === 'crm' ? 'active' : ''" @click="goToView('crm')">🤝 Партнёры</button>
+  <button class="view-tab" x-show="canView('payouts')" :class="currentView === 'payouts' ? 'active' : ''" @click="goToView('payouts')">💰 Выплаты</button>
+  <button class="view-tab" x-show="canView('discord')" :class="currentView === 'discord' ? 'active' : ''" @click="goToView('discord')">🟣 Хаб</button>
+  <button class="view-tab" x-show="canView('support')" :class="currentView === 'support' ? 'active' : ''" @click="goToView('support')">
     📞 Поддержка
     <span x-show="(supportInbox?.length || 0) > 0" class="support-tab-badge" x-text="supportInbox?.length || 0"></span>
   </button>
-  <button class="view-tab" :class="currentView === 'system' ? 'active' : ''" @click="goToView('system')">
+  <button class="view-tab" x-show="canView('system')" :class="currentView === 'system' ? 'active' : ''" @click="goToView('system')">
     ⚙️ System
     <span x-show="(systemPendingLks?.length || 0) > 0" class="support-tab-badge" x-text="systemPendingLks?.length || 0"></span>
   </button>
-  <button class="view-tab" :class="currentView === 'accounting' ? 'active' : ''" @click="goToView('accounting')">📒 Бухгалтерия</button>
+  <button class="view-tab" x-show="canView('accounting')" :class="currentView === 'accounting' ? 'active' : ''" @click="goToView('accounting')">📒 Бухгалтерия</button>
   <button class="view-tab"
-          x-show="['owner','manager','operationist'].includes(dashMe?.role)"
+          x-show="canView('operational')"
           :class="currentView === 'operational' ? 'active' : ''"
           @click="goToView('operational')">🛠 Операционная
     <span x-show="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.length || 0) > 0"
           class="support-tab-badge"
           x-text="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.reduce((a,c)=>a+c.size,0) || 0)"></span>
   </button>
-  <button class="view-tab" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
+  <button class="view-tab" x-show="canView('settings')" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
   <!-- 👑 OWNER PANEL — только для owner-роли -->
-  <button class="view-tab" x-show="(dashMe?.role || '') === 'owner'"
+  <button class="view-tab" x-show="canView('owner')"
           :class="currentView === 'owner' ? 'active' : ''"
           @click="goToView('owner'); refreshOwner && refreshOwner()">👑 OWNER</button>
 
@@ -5129,13 +5129,13 @@
 
   <!-- Sub-tabs: 2 -->
   <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06);">
-    <button class="view-tab" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📥 CRM | Доступы <span x-show="systemPendingLks?.length" class="support-tab-badge" x-text="systemPendingLks?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'credit_access' ? 'active' : ''" @click="systemSection='credit_access'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Доступы <span x-show="creditPendingLks?.length" class="support-tab-badge" x-text="creditPendingLks?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'credit_password' ? 'active' : ''" @click="systemSection='credit_password'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Пароли <span x-show="creditPasswordsInbox?.length" class="support-tab-badge" x-text="creditPasswordsInbox?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'outsource_access' ? 'active' : ''" @click="systemSection='outsource_access'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Доступы <span x-show="outsourcePendingLks?.length" class="support-tab-badge" x-text="outsourcePendingLks?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'outsource_password' ? 'active' : ''" @click="systemSection='outsource_password'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Пароли <span x-show="outsourcePasswordsInbox?.length" class="support-tab-badge" x-text="outsourcePasswordsInbox?.length"></span></button>
-    <button class="view-tab" :class="systemSection === 'installed' ? 'active' : ''" @click="systemSection='installed'">✅ Установленные ЛК <span x-show="systemInstalledLks?.length" class="support-tab-badge" x-text="systemInstalledLks?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'access')" :class="systemSection === 'access' ? 'active' : ''" @click="systemSection='access'">📥 CRM | Доступы <span x-show="systemPendingLks?.length" class="support-tab-badge" x-text="systemPendingLks?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'password')" :class="systemSection === 'password' ? 'active' : ''" @click="systemSection='password'">🔐 CRM | Пароли <span x-show="systemPasswordsInbox?.length" class="support-tab-badge" x-text="systemPasswordsInbox?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'credit_access')" :class="systemSection === 'credit_access' ? 'active' : ''" @click="systemSection='credit_access'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Доступы <span x-show="creditPendingLks?.length" class="support-tab-badge" x-text="creditPendingLks?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'credit_password')" :class="systemSection === 'credit_password' ? 'active' : ''" @click="systemSection='credit_password'; refreshCredit && refreshCredit()">💳 КРЕДИТ | Пароли <span x-show="creditPasswordsInbox?.length" class="support-tab-badge" x-text="creditPasswordsInbox?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'outsource_access')" :class="systemSection === 'outsource_access' ? 'active' : ''" @click="systemSection='outsource_access'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Доступы <span x-show="outsourcePendingLks?.length" class="support-tab-badge" x-text="outsourcePendingLks?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'outsource_password')" :class="systemSection === 'outsource_password' ? 'active' : ''" @click="systemSection='outsource_password'; refreshOutsource && refreshOutsource()">🏢 АУТСОРС | Пароли <span x-show="outsourcePasswordsInbox?.length" class="support-tab-badge" x-text="outsourcePasswordsInbox?.length"></span></button>
+    <button class="view-tab" x-show="canSubview('system', 'installed')" :class="systemSection === 'installed' ? 'active' : ''" @click="systemSection='installed'">✅ Установленные ЛК <span x-show="systemInstalledLks?.length" class="support-tab-badge" x-text="systemInstalledLks?.length"></span></button>
   </div>
 
   <!-- Период фильтр -->
@@ -6055,7 +6055,7 @@
   <div class="settings-grid">
 
     <!-- ====== ПРОФИЛЬ & ДОСТУП ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'profile'" :class="settingsActiveSection === 'profile' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'profile')" @click="settingsActiveSection = 'profile'" :class="settingsActiveSection === 'profile' ? 'active' : ''">
       <div class="settings-card-icon">👤</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Профиль и доступ</div>
@@ -6064,16 +6064,18 @@
     </div>
 
     <!-- ====== РАБОТНИКИ & РОЛИ ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'workers'; if (dashMe?.role === 'owner') loadWorkers();" :class="settingsActiveSection === 'workers' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'workers')" @click="settingsActiveSection = 'workers'; if (dashMe?.role === 'owner') loadWorkers();" :class="settingsActiveSection === 'workers' ? 'active' : ''">
       <div class="settings-card-icon">🎭</div>
       <div class="settings-card-body">
-        <div class="settings-card-title">Работники и роли</div>
+        <div class="settings-card-title">Работники и роли
+          <span x-show="isSubviewReadonly('settings', 'workers')" style="font-size: 9px; padding: 1px 5px; background: rgba(245,158,11,0.18); color: #f59e0b; border-radius: 3px; margin-left: 4px;">👁 read-only</span>
+        </div>
         <div class="settings-card-sub">Список работников, их ранги, права</div>
       </div>
     </div>
 
     <!-- ====== TG-ЧАТЫ ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'chats'; loadSettings()" :class="settingsActiveSection === 'chats' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'chats')" @click="settingsActiveSection = 'chats'; loadSettings()" :class="settingsActiveSection === 'chats' ? 'active' : ''">
       <div class="settings-card-icon">💬</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Telegram-чаты</div>
@@ -6082,7 +6084,7 @@
     </div>
 
     <!-- ====== AI ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'ai'; loadSettings()" :class="settingsActiveSection === 'ai' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'ai')" @click="settingsActiveSection = 'ai'; loadSettings()" :class="settingsActiveSection === 'ai' ? 'active' : ''">
       <div class="settings-card-icon">🤖</div>
       <div class="settings-card-body">
         <div class="settings-card-title">AI-модель</div>
@@ -6091,7 +6093,7 @@
     </div>
 
     <!-- ====== ПРАЙС ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'pricing'; loadSettings()" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'pricing')" @click="settingsActiveSection = 'pricing'; loadSettings()" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
       <div class="settings-card-icon">💸</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Прайс ЛК</div>
@@ -6100,7 +6102,7 @@
     </div>
 
     <!-- ====== INVITE / WELCOME ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'invite')" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
       <div class="settings-card-icon">📨</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Invite-бот</div>
@@ -6108,8 +6110,8 @@
       </div>
     </div>
 
-    <!-- ====== ВНЕШНИЙ ВИД ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'payment'; loadSettings(); loadOutsourceTopups();" :class="settingsActiveSection === 'payment' ? 'active' : ''">
+    <!-- ====== ОПЛАТА ====== -->
+    <div class="settings-card" x-show="canSubview('settings', 'payment')" @click="settingsActiveSection = 'payment'; loadSettings(); loadOutsourceTopups();" :class="settingsActiveSection === 'payment' ? 'active' : ''">
       <div class="settings-card-icon">💎</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Оплата (USDT TRC20)</div>
@@ -6117,7 +6119,8 @@
       </div>
     </div>
 
-    <div class="settings-card" @click="settingsActiveSection = 'appearance'" :class="settingsActiveSection === 'appearance' ? 'active' : ''">
+    <!-- ====== ВНЕШНИЙ ВИД ====== -->
+    <div class="settings-card" x-show="canSubview('settings', 'appearance')" @click="settingsActiveSection = 'appearance'" :class="settingsActiveSection === 'appearance' ? 'active' : ''">
       <div class="settings-card-icon">🎨</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Внешний вид</div>
@@ -6126,7 +6129,7 @@
     </div>
 
     <!-- ====== СИСТЕМА ====== -->
-    <div class="settings-card" @click="settingsActiveSection = 'system'" :class="settingsActiveSection === 'system' ? 'active' : ''">
+    <div class="settings-card" x-show="canSubview('settings', 'system')" @click="settingsActiveSection = 'system'" :class="settingsActiveSection === 'system' ? 'active' : ''">
       <div class="settings-card-icon">🏥</div>
       <div class="settings-card-body">
         <div class="settings-card-title">Состояние системы</div>
@@ -10612,8 +10615,64 @@ function jarvis() {
         if (r.ok) {
           this.dashMe = await r.json();
           if (this.dashMe?.role) this.supportViewerRole = this.dashMe.role;
+          // Если текущий view недоступен этой роли — переключаем на первый доступный
+          try {
+            if (this.currentView && !this.canView(this.currentView)) {
+              const allViews = ['office','chat','lk','fin','crm','payouts','discord','support','system','accounting','operational','settings','owner'];
+              const fallback = allViews.find(v => this.canView(v));
+              if (fallback) this.goToView(fallback);
+            }
+            // То же для settingsActiveSection
+            if (this.currentView === 'settings' && this.settingsActiveSection && !this.canSubview('settings', this.settingsActiveSection)) {
+              const subs = ['profile','workers','chats','ai','pricing','invite','payment','appearance','system'];
+              const fb = subs.find(s => this.canSubview('settings', s));
+              if (fb) this.settingsActiveSection = fb;
+            }
+            // То же для systemSection
+            if (this.currentView === 'system' && this.systemSection && !this.canSubview('system', this.systemSection)) {
+              const subs = ['access','password','credit_access','credit_password','outsource_access','outsource_password','installed'];
+              const fb = subs.find(s => this.canSubview('system', s));
+              if (fb) this.systemSection = fb;
+            }
+          } catch (e) { console.warn('perms-redirect failed:', e); }
         }
       } catch (e) { console.warn('loadMe', e); }
+    },
+    // === Permission helpers (новая система ролей) ===
+    // Используют dashMe.perms = {views, view_readonly, subviews, subview_readonly, edit_actions}
+    canView(viewId) {
+      const r = this.dashMe?.role;
+      if (r === 'owner') return true;
+      const views = this.dashMe?.perms?.views || [];
+      return views.includes('*') || views.includes(viewId);
+    },
+    canSubview(viewId, subviewId) {
+      const r = this.dashMe?.role;
+      if (r === 'owner') return true;
+      // Если у роли нет ограничения по subviews для этого view — открыто всё
+      const subs = this.dashMe?.perms?.subviews || {};
+      if (!(viewId in subs)) return true;
+      const allowed = subs[viewId] || [];
+      return allowed.includes('*') || allowed.includes(subviewId);
+    },
+    isViewReadonly(viewId) {
+      const r = this.dashMe?.role;
+      if (r === 'owner') return false;
+      const ro = this.dashMe?.perms?.view_readonly || [];
+      return ro.includes(viewId);
+    },
+    isSubviewReadonly(viewId, subviewId) {
+      const r = this.dashMe?.role;
+      if (r === 'owner') return false;
+      const sro = this.dashMe?.perms?.subview_readonly || {};
+      const m = sro[viewId] || {};
+      return !!m[subviewId];
+    },
+    canAct(action) {
+      const r = this.dashMe?.role;
+      if (r === 'owner') return true;
+      const acts = this.dashMe?.perms?.edit_actions || [];
+      return acts.includes('*') || acts.includes(action);
     },
     async loadWorkers() {
       if (this.workersLoading) return;
