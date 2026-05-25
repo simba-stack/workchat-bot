@@ -61,8 +61,56 @@ from aiogram.types import (
     Message,
     CallbackQuery,
     InlineKeyboardMarkup,
-    InlineKeyboardButton,
+    InlineKeyboardButton as _OrigInlineKeyboardButton,
 )
+
+
+# ════════════════════════════════════════════════════════════════
+# ЦВЕТНЫЕ КНОПКИ (Bot API 9.4+, aiogram 3.26+)
+# Враппер вокруг InlineKeyboardButton который автоматически подбирает
+# style на основе текста кнопки. Все 120+ существующих вызовов
+# InlineKeyboardButton(...) в этом файле получают цвет БЕЗ изменений
+# в самих вызовах — мы просто перехватываем класс.
+# ════════════════════════════════════════════════════════════════
+def _crm_btn_style(text: str) -> str:
+    """Возвращает 'primary'|'success'|'danger' по тексту кнопки."""
+    if not text:
+        return "primary"
+    t = text.lower()
+    # DANGER (красный) — отказ, блок, отмена, удаление, брак
+    DANGER_MARKERS = (
+        "блок", "брак", "отказ", "отмен", "удал", "стоп", "запрет",
+        "❌", "🚫", "🛑", "⛔", "💀", "🚷", "🔥", "❗",
+    )
+    if any(m in t for m in DANGER_MARKERS):
+        return "danger"
+    # SUCCESS (зелёный) — оплачено, одобрено, отработано, готово, выплата
+    SUCCESS_MARKERS = (
+        "одобр", "подтвер", "оплач", "оплат", "успех", "отработ", "готов",
+        "выплат", "отпуст", "приня", "пополн", "зачисл", "завершен",
+        "✅", "✔️", "🟢", "💰", "💸", "💎", "🎉", "💚", "🤝",
+    )
+    if any(m in t for m in SUCCESS_MARKERS):
+        return "success"
+    # Все остальные — синий
+    return "primary"
+
+
+def InlineKeyboardButton(*args, **kwargs):  # noqa: N802 (имитируем оригинальное имя)
+    """Враппер: если style не задан явно — подбирает по тексту.
+
+    Старые клиенты Telegram (до Bot API 9.4) просто игнорируют поле style
+    и отображают серую кнопку как раньше — graceful degradation.
+    """
+    text = kwargs.get("text") or (args[0] if args else "")
+    if "style" not in kwargs:
+        kwargs["style"] = _crm_btn_style(str(text))
+    try:
+        return _OrigInlineKeyboardButton(*args, **kwargs)
+    except Exception:
+        # Если aiogram-схема не приняла style (старая версия) — пробуем без него
+        kwargs.pop("style", None)
+        return _OrigInlineKeyboardButton(*args, **kwargs)
 
 # Используем ОБЩИЙ storage с main-ботом (через тот же state.json).
 # Это даёт мгновенную интеграцию: дроп создан в CRM → его сразу видит
