@@ -3383,6 +3383,38 @@ def _client_lk_anketa(drop: dict, lk: dict) -> str:
     return "\n".join(lines)
 
 
+def _explain_send_error(exc, owner: dict = None) -> str:
+    """Превращает сырое исключение Telegram в понятное сообщение для алерта (<200 символов).
+
+    Главные кейсы:
+    - CHAT_RESTRICTED → бота кикнули / отняли права postit messages
+    - CHAT_WRITE_FORBIDDEN → у бота нет прав писать (анонимка/topics/админ-онли)
+    - PEER_ID_INVALID / chat not found → work_chat_id неверный
+    - USER_IS_BLOCKED → клиент заблокировал бота
+    - bot is not a member → бот не в чате
+    """
+    s = str(exc or "").lower()
+    chat_id = (owner or {}).get("work_chat_id") or "?"
+    username = (owner or {}).get("username") or ""
+    suffix = f"\n\nЧат: {chat_id}" + (f" (@{username})" if username else "")
+    if "chat_restricted" in s:
+        return ("🚫 Чат ограничен.\n\nБот @PrideCONTROLE_bot не может писать в чат клиента. "
+                "Сделай его админом ИЛИ убери ограничения «отправка сообщений» в правах группы." + suffix)
+    if "chat_write_forbidden" in s or "have no rights to send" in s:
+        return ("🚫 Нет прав на отправку.\n\nДобавь бота @PrideCONTROLE_bot в чат клиента как админа "
+                "с правом «отправлять сообщения»." + suffix)
+    if "peer_id_invalid" in s or "chat not found" in s:
+        return ("❓ Чат не найден.\n\nWork_chat_id поставщика битый или чат удалён. "
+                "Перепривяжи группу командой «Ассистент возьми этот чат под клиента @ник»." + suffix)
+    if "user_is_blocked" in s or "bot was blocked" in s:
+        return ("🚷 Клиент заблокировал бота.\n\nПопроси клиента разблокировать @PrideCONTROLE_bot." + suffix)
+    if "bot is not a member" in s or "kicked" in s:
+        return ("👋 Бот не в чате.\n\nДобавь @PrideCONTROLE_bot в чат клиента (как админа)." + suffix)
+    # Fallback
+    short = str(exc)[:140]
+    return f"❌ Ошибка отправки:\n{short}{suffix}"
+
+
 @router.callback_query(F.data.startswith("smsadv:"))
 async def cb_smsadv(call: CallbackQuery, state: FSMContext):
     """Менеджер прокликивает SMS-flow в админ-чате. Коды клиент сам жмёт
@@ -3414,7 +3446,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             await call.answer("📩 Запрос отправлен клиенту")
         except Exception as e:
-            await call.answer(f"Ошибка отправки: {e}", show_alert=True)
+            await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "ready_confirmed":
         # Шаг 2: менеджер жмёт «Запросить СМС вход» → клиенту запрос кода
@@ -3434,7 +3466,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             await call.answer("📩 Запрошен код входа")
         except Exception as e:
-            await call.answer(f"Ошибка: {e}", show_alert=True)
+            await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "login_received":
         # Шаг 3: менеджер жмёт «Запросить перевяз» → клиенту запрос кода перевязки
@@ -3454,7 +3486,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             await call.answer("📩 Запрошен код перевязки")
         except Exception as e:
-            await call.answer(f"Ошибка: {e}", show_alert=True)
+            await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "perevyaz_received":
         # Шаг 4: финал — карточка ЛК создаётся ТОЛЬКО ТЕПЕРЬ (после перевязки)
