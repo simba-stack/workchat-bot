@@ -4950,7 +4950,29 @@ async def _post_payout_buttons(bot, card: dict) -> Optional[int]:
         )
         return sent.message_id
     except Exception as e:
-        logger.warning("post_payout_buttons #%s failed: %s", card_id, e)
+        err = str(e).lower()
+        # При перманентных ошибках (нет чата / нет прав / бот не в группе) —
+        # помечаем карточку чтобы цикл не ретраил каждую минуту. Это специальное
+        # значение -1 в payout_buttons_msg_id (loop пропускает любое truthy).
+        permanent = any(m in err for m in (
+            "chat not found", "chat_restricted", "chat_write_forbidden",
+            "peer_id_invalid", "user_is_blocked", "bot is not a member",
+            "kicked", "have no rights",
+        ))
+        if permanent:
+            try:
+                await crm_storage.update_lk_card(
+                    card_id, payout_buttons_msg_id=-1,
+                    payout_buttons_error=str(e)[:200],
+                )
+                logger.warning(
+                    "post_payout_buttons #%s — перманентная ошибка, помечено -1: %s",
+                    card_id, e,
+                )
+            except Exception:
+                logger.warning("post_payout_buttons #%s failed (mark error): %s", card_id, e)
+        else:
+            logger.warning("post_payout_buttons #%s failed: %s", card_id, e)
         return None
 
 
