@@ -2331,10 +2331,19 @@ async def handle_lk_mail(message: Message, state: FSMContext):
         s = (v or "").strip()
         return "" if s == "-" else s
 
-    # Создаём droplk с пустым value (заполняем поля напрямую через update)
+    # Создаём droplk с пустым value (заполняем поля напрямую через update).
+    # ВАЖНО: для credit-drop'а нет owner_id (есть manager_username) — routing-метод
+    # сам подхватит правильное поле из drop'а если owner_id не передан.
+    is_credit = str(drop_id or "").startswith("cdrp")
     droplk_id = await crm_storage.add_drop_lk_for_drop(
-        drop_id=drop_id, owner_id=drop["owner_id"], bank=bank, value="",
+        drop_id=drop_id,
+        owner_id=(None if is_credit else drop.get("owner_id")),
+        bank=bank, value="",
     )
+    if not droplk_id:
+        await message.reply("❌ Не удалось создать ЛК (storage routing вернул пусто). Проверь логи.")
+        await state.clear()
+        return
     saved = await crm_storage.update_drop_lk_any(
         droplk_id,
         new_login=_clean(nlk.get("login")),
@@ -3418,6 +3427,27 @@ def _client_lk_anketa(drop: dict, lk: dict) -> str:
     return "\n".join(lines)
 
 
+def _resolve_work_chat(drop: dict = None, lk: dict = None, owner: dict = None) -> int:
+    """Резолвит актуальный work_chat_id для клиента.
+
+    Приоритет: drop.work_chat_id → lk.work_chat_id → owner.work_chat_id.
+    Если drop/lk имеет свежий chat_id (созданный позже owner) — используем его,
+    т.к. owner.work_chat_id может быть STALE после миграции группы в супергруппу
+    (chat_id меняется при апгрейде, а в storage остался старый).
+    Возвращает int или 0.
+    """
+    for src in (drop, lk, owner):
+        if not src:
+            continue
+        wc = src.get("work_chat_id") if isinstance(src, dict) else None
+        if wc:
+            try:
+                return int(wc)
+            except Exception:
+                continue
+    return 0
+
+
 def _explain_send_error(exc, owner: dict = None) -> str:
     """Превращает сырое исключение Telegram в понятное сообщение для алерта (<200 символов).
 
@@ -3477,10 +3507,17 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
         ]])
         try:
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            target_chat = _resolve_work_chat(drop, lk, owner)
+            await bot.send_message(target_chat, text, reply_markup=kb)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             await call.answer("📩 Запрос отправлен клиенту")
         except Exception as e:
+            # Если упало с CHAT_RESTRICTED — кладём в очередь авто-починки
+            try:
+                err_low = str(e).lower()
+                if any(m in err_low for m in ("chat_restricted", "chat_write_forbidden", "chat not found", "kicked")):
+                    await crm_storage.add_chat_fix_request(_resolve_work_chat(drop, lk, owner), reason=f"smsadv ready: {str(e)[:80]}")
+            except Exception: pass
             await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "ready_confirmed":
@@ -3497,10 +3534,16 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             ),
         ]])
         try:
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            target_chat = _resolve_work_chat(drop, lk, owner)
+            await bot.send_message(target_chat, text, reply_markup=kb)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             await call.answer("📩 Запрошен код входа")
         except Exception as e:
+            try:
+                err_low = str(e).lower()
+                if any(m in err_low for m in ("chat_restricted", "chat_write_forbidden", "chat not found", "kicked")):
+                    await crm_storage.add_chat_fix_request(_resolve_work_chat(drop, lk, owner), reason=f"smsadv login: {str(e)[:80]}")
+            except Exception: pass
             await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "login_received":
@@ -3517,10 +3560,16 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             ),
         ]])
         try:
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            target_chat = _resolve_work_chat(drop, lk, owner)
+            await bot.send_message(target_chat, text, reply_markup=kb)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             await call.answer("📩 Запрошен код перевязки")
         except Exception as e:
+            try:
+                err_low = str(e).lower()
+                if any(m in err_low for m in ("chat_restricted", "chat_write_forbidden", "chat not found", "kicked")):
+                    await crm_storage.add_chat_fix_request(_resolve_work_chat(drop, lk, owner), reason=f"smsadv perevyaz: {str(e)[:80]}")
+            except Exception: pass
             await call.answer(_explain_send_error(e, owner), show_alert=True)
 
     elif stage == "perevyaz_received":

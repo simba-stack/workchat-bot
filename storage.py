@@ -297,6 +297,14 @@ def _default_state() -> dict:
         # {key: value} — override дефолтов из outsource_bot_texts.DEFAULT_TEXTS
         # Если key отсутствует — используется дефолт.
         "outsource_bot_texts": {},
+        # ==== ОЧЕРЕДЬ АВТО-ПОЧИНКИ ПРАВ В ЧАТАХ ====
+        # CRM-бот добавляет chat_id когда падает с CHAT_RESTRICTED / kicked.
+        # Userbot-воркер (см. userbot.py) подбирает и пробует:
+        # 1. Пригласить CRM-бота в чат
+        # 2. Сделать его админом с правами posting+pin+delete
+        # 3. При успехе — удаляет из очереди
+        # {chat_id_str: {reason, added_at, attempts, last_error, last_attempt_at}}
+        "pending_chat_fixes": {},
         # ==== ОТКУПЫ — обмен RUB → USDT TRC20 ====
         # Клиенты в payments_chat_id пишут «дай 100К СБП», бот ловит, считает,
         # форвардит в outkup_team_chat_id. Откупщики выдают реквизиты вручную.
@@ -3763,6 +3771,54 @@ class Storage:
                 req["rejected_by"] = manual_by
             await self._save_unlocked()
             return True
+
+    # ════════════════════════════════════════════════════════════
+    # PENDING CHAT FIXES — авто-починка прав CRM-бота в чатах
+    # ════════════════════════════════════════════════════════════
+    async def add_chat_fix_request(self, chat_id, reason: str = "") -> None:
+        """CRM-бот вызывает это когда падает с CHAT_RESTRICTED / kicked.
+        Userbot-воркер потом подберёт и попробует исправить.
+        Идемпотентно — если запрос уже в очереди, обновляем reason."""
+        if not chat_id:
+            return
+        async with _lock:
+            q = self.state.setdefault("pending_chat_fixes", {})
+            key = str(chat_id)
+            existing = q.get(key) or {}
+            q[key] = {
+                "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
+                "reason": reason or existing.get("reason") or "",
+                "added_at": existing.get("added_at") or time.time(),
+                "attempts": int(existing.get("attempts") or 0),
+                "last_error": existing.get("last_error") or "",
+                "last_attempt_at": existing.get("last_attempt_at") or 0,
+            }
+            await self._save_unlocked()
+
+    def list_chat_fix_requests(self) -> dict:
+        return dict(self.state.get("pending_chat_fixes") or {})
+
+    async def remove_chat_fix_request(self, chat_id) -> bool:
+        async with _lock:
+            q = self.state.get("pending_chat_fixes") or {}
+            key = str(chat_id)
+            if key in q:
+                del q[key]
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def bump_chat_fix_attempt(self, chat_id, last_error: str = "") -> None:
+        async with _lock:
+            q = self.state.get("pending_chat_fixes") or {}
+            e = q.get(str(chat_id))
+            if not e:
+                return
+            e["attempts"] = int(e.get("attempts") or 0) + 1
+            e["last_attempt_at"] = time.time()
+            if last_error:
+                e["last_error"] = last_error[:200]
+            await self._save_unlocked()
 
     # ════════════════════════════════════════════════════════════
     # ОТКУПЫ — RUB → USDT TRC20 обмен через ручных Откупщиков
