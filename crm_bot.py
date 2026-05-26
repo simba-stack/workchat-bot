@@ -1393,7 +1393,12 @@ async def _show_credit_clients(message: Message, manager_username: str):
     kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
     text = f"💳 <b>Кредитные анкеты юриста @{manager_username}:</b>"
     markup = InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    await message.reply(text, reply_markup=markup)
+    # ВАЖНО: НЕ используем message.reply() — оригинальное /clients было удалено
+    # в cmd_clients через _safe_delete, и reply на удалённое падает с ошибкой.
+    try:
+        await message.bot.send_message(message.chat.id, text, reply_markup=markup)
+    except Exception as e:
+        logger.error("_show_credit_clients send failed chat=%s: %s", message.chat.id, e)
 
 
 async def _show_clients(message: Message, owner: dict, edit_msg_id: Optional[int] = None):
