@@ -1548,12 +1548,44 @@ async def cb_credit_newdrop(call: CallbackQuery, state: FSMContext):
         await call.message.reply("Введите ФИО клиента (кредит):")
 
 
+@router.message(DropForm.waiting_fio, Command("cancel"))
+@router.message(DropForm.waiting_fio, F.text.in_({"отмена", "Отмена", "ОТМЕНА", "cancel"}))
+async def handle_fio_cancel(message: Message, state: FSMContext):
+    """Явный выход из режима ожидания ФИО."""
+    await state.clear()
+    await ephemeral(message, "✅ Отменено. Создание анкеты прервано.")
+
+
 @router.message(DropForm.waiting_fio, F.text & ~F.text.startswith("/"))
 async def handle_fio(message: Message, state: FSMContext):
     data = await state.get_data()
     fio = (message.text or "").strip()
+    # === ЗАЩИТА от случайного попадания сообщения в FSM ===
+    # Если сообщение НЕ похоже на ФИО — не съедаем, выходим из FSM и оставляем
+    # сообщение в чате (юрист сможет написать клиенту нормально).
+    import re as _re
+    # FIO должно быть 2-4 слова из букв (кириллица/латиница), без цифр/знаков
+    fio_pat = _re.compile(r"^[А-ЯЁA-Z][а-яёa-z\-']{1,}(?:\s+[А-ЯЁA-Z][а-яёa-z\-']{1,}){1,3}$")
+    looks_like_fio = bool(fio_pat.match(fio)) or bool(_re.match(
+        r"^[а-яёa-z\-'\s]{5,80}$", fio.lower()
+    )) and len(fio.split()) in (2, 3, 4)
+    if not looks_like_fio:
+        # Не ФИО — выходим из FSM, не удаляем сообщение
+        await state.clear()
+        await ephemeral(
+            message,
+            "ℹ Создание анкеты отменено (сообщение не похоже на ФИО).\n"
+            "Чтобы создать анкету — снова нажми «➕ Новая анкета» в /clients."
+        )
+        return
     if len(fio) < 5 or len(fio) > 100:
         await ephemeral(message, "❌ ФИО слишком короткое или длинное (5-100 символов)")
+        return
+    # Также: автоматическая отмена если прошло > 5 минут с момента старта FSM
+    started_at = float(data.get("started_at") or 0)
+    if started_at and (asyncio.get_event_loop().time() - started_at) > 300:
+        await state.clear()
+        await ephemeral(message, "⏰ Сессия создания анкеты истекла (5 мин). Начни заново.")
         return
     track = data.get("track", "crm")  # 'crm' (default) | 'credit'
     owner_id = data.get("owner_id")
