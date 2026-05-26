@@ -1565,32 +1565,30 @@ async def handle_fio_cancel(message: Message, state: FSMContext):
 async def handle_fio(message: Message, state: FSMContext):
     data = await state.get_data()
     fio = (message.text or "").strip()
-    # === ЗАЩИТА от случайного попадания сообщения в FSM ===
-    # Если сообщение НЕ похоже на ФИО — не съедаем, выходим из FSM и оставляем
-    # сообщение в чате (юрист сможет написать клиенту нормально).
+    # === Простая, НЕ строгая валидация ФИО ===
+    # Условия (любое нарушение → НЕ ФИО, но FSM не сбрасываем, даём ещё попытку):
+    # - длина 5-100 символов
+    # - 2-5 слов
+    # - каждое слово только из букв (кириллица/латиница), дефисы и апострофы разрешены
+    # - нет цифр, не одно слово
     import re as _re
-    # FIO должно быть 2-4 слова из букв (кириллица/латиница), без цифр/знаков
-    fio_pat = _re.compile(r"^[А-ЯЁA-Z][а-яёa-z\-']{1,}(?:\s+[А-ЯЁA-Z][а-яёa-z\-']{1,}){1,3}$")
-    looks_like_fio = bool(fio_pat.match(fio)) or bool(_re.match(
-        r"^[а-яёa-z\-'\s]{5,80}$", fio.lower()
-    )) and len(fio.split()) in (2, 3, 4)
-    if not looks_like_fio:
-        # Не ФИО — выходим из FSM, не удаляем сообщение
-        await state.clear()
+    parts = fio.split()
+    word_pat = _re.compile(r"^[А-ЯЁA-Zа-яёa-z][а-яёa-zА-ЯЁA-Z\-']*$")
+    is_fio = (
+        2 <= len(parts) <= 5
+        and 5 <= len(fio) <= 100
+        and all(word_pat.match(p) for p in parts)
+        and not any(ch.isdigit() for ch in fio)
+    )
+    if not is_fio:
+        # НЕ выходим из FSM. Оставляем юзера в режиме ожидания ФИО,
+        # просто говорим что введённое — не ФИО. Кнопка ◀ Отмена выше его выведет.
         await ephemeral(
             message,
-            "ℹ Создание анкеты отменено (сообщение не похоже на ФИО).\n"
-            "Чтобы создать анкету — снова нажми «➕ Новая анкета» в /clients."
+            "❌ Это не похоже на ФИО. Нужно 2-5 слов из букв (например "
+            "<b>Иванов Иван Иванович</b>).\n\nЧтобы выйти — нажми ◀ <b>Отмена</b> "
+            "или напиши /cancel."
         )
-        return
-    if len(fio) < 5 or len(fio) > 100:
-        await ephemeral(message, "❌ ФИО слишком короткое или длинное (5-100 символов)")
-        return
-    # Также: автоматическая отмена если прошло > 5 минут с момента старта FSM
-    started_at = float(data.get("started_at") or 0)
-    if started_at and (asyncio.get_event_loop().time() - started_at) > 300:
-        await state.clear()
-        await ephemeral(message, "⏰ Сессия создания анкеты истекла (5 мин). Начни заново.")
         return
     track = data.get("track", "crm")  # 'crm' (default) | 'credit'
     owner_id = data.get("owner_id")
