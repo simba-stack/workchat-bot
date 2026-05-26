@@ -526,6 +526,13 @@ git push origin v2.0.3
 - Сообщения юриста съедались DropForm.waiting_fio — добавлена нестрогая валидация (2-5 слов, только буквы, без цифр) + FSM НЕ сбрасывается при невалидном (даёт ещё попытку)
 - CRM-бот не приглашался в credit-чаты автоматически — добавлено в `_maybe_handle_credit_capture`
 - Дубли работников по case (TimonSkupCL и timonskupcl) — добавлен дедуп по lowercase
+- AI выдавал «meta-молчание» вместо ответа клиенту — усилен system prompt + safety-net фильтр в `brain.py` (`_filter_meta_silence`)
+- userbot выдавал себе `add_admins=False` → не мог промотить @PrideCONTROLE_bot и других через «Ассистент выдай админку» — теперь `add_admins=True`
+- post_payout_buttons спамил логи при chat not found — теперь карточки помечаются `payout_buttons_msg_id=-1` после permanent error
+- CRM шлёт на stale `owner.work_chat_id` — резолв через `_resolve_work_chat(drop, lk, owner)` берёт самый свежий ID
+- email-шаг (5/5) в LKForm не создавал ЛК для credit-drop'ов — `drop["owner_id"]` падал т.к. в credit-drop'ах нет owner_id, заменено на `owner_id=None if is_credit else drop.get("owner_id")` + явный error-fallback
+- Префиксы у не-admin работников (SIMBA/ТИМОН/M1) не появлялись — Telegram отвергает `EditAdminRequest` с `ChatAdminRights(все=False)`, поэтому даже non-admin'ам теперь даётся `invite_users=True` (минимальное безвредное право) + rank default «Менеджер» если в storage пусто
+- Очередь авто-починки `pending_chat_fixes` в storage — CRM при CHAT_RESTRICTED кладёт chat_id, ждёт фоновой обработки userbot'ом (воркер не написан, инфраструктура готова)
 
 ### Незавершённое:
 - Operational редизайн (Коммит #2)

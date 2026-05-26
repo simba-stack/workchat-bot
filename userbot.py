@@ -519,6 +519,9 @@ class UserbotService:
                 # Выдаём админку ВСЕМ работникам (даже без is_admin — для отображения rank/префикса
                 # в чате. В Telegram custom title видно только у админов).
                 # Объём прав зависит от is_admin: полные если True, минимальные если False.
+                # ВАЖНО: Telegram НЕ ПРИНИМАЕТ promote с ChatAdminRights где ВСЕ поля False —
+                # запрос молча фейлится. Поэтому для non-admin даём минимум invite_users=True
+                # (безвредно — этот юзер сможет только приглашать других в чат).
                 try:
                     if is_admin:
                         # Полная админка
@@ -529,18 +532,24 @@ class UserbotService:
                             manage_call=True,
                         )
                     else:
-                        # Минимальная админка — только чтобы видеть rank/префикс
+                        # Минимальная админка — только чтобы виден был rank/префикс.
+                        # invite_users=True — единственное безвредное право, нужно
+                        # потому что Telegram отвергает ChatAdminRights со всеми False.
                         rights = ChatAdminRights(
                             change_info=False, post_messages=False, edit_messages=False,
-                            delete_messages=False, ban_users=False, invite_users=False,
+                            delete_messages=False, ban_users=False, invite_users=True,
                             pin_messages=False, add_admins=False, anonymous=False,
                             manage_call=False,
                         )
+                    # Если role_str пустой — ставим хотя бы "—" чтобы был визуальный префикс
+                    rank_to_use = (role_str or "").strip() or ("Менеджер" if not is_admin else "Admin")
+                    # Telegram ограничивает rank 16 символов
+                    rank_to_use = rank_to_use[:16]
                     await self.client(EditAdminRequest(
                         channel=channel, user_id=user,
-                        admin_rights=rights, rank=role_str or "",
+                        admin_rights=rights, rank=rank_to_use,
                     ))
-                    role_suffix = f" ({role_str})" if role_str else ""
+                    role_suffix = f" ({rank_to_use})"
                     if is_admin:
                         statuses[uname] = f"{current_status} + админка{role_suffix}"
                     else:
