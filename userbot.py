@@ -1235,6 +1235,29 @@ class UserbotService:
                 return
         except Exception as e:
             logger.warning("takeover handler error: %s", e)
+        # === CREDIT-чат: если зарегистрирован для кредитования, AI всё равно отвечает ===
+        # Кредитные чаты живут отдельно от managed_chats. Создаём синтетический chat_info
+        # чтобы стандартный AI-flow ниже мог отработать. client_id=0 = «любой пользователь
+        # может писать клиенту» (т.к. в credit-чате могут быть несколько участников).
+        if not chat_info:
+            try:
+                if storage.is_credit_chat(chat_id):
+                    cc = storage.get_credit_chat(chat_id) if hasattr(storage, "get_credit_chat") else {}
+                    chat_info = {
+                        "chat_id": chat_id,
+                        "client_id": 0,
+                        "client_name": (cc or {}).get("manager_username") or "credit_client",
+                        "client_username": "",
+                        "welcome_sent": True,
+                        "is_credit_chat": True,
+                    }
+                    logger.info(
+                        "AI: chat=%s — credit-чат, использую синтетический chat_info "
+                        "(manager=@%s)",
+                        chat_id, (cc or {}).get("manager_username") or "?",
+                    )
+            except Exception as e:
+                logger.warning("credit chat synthetic chat_info failed: %s", e)
         if not chat_info:
             logger.info(
                 "AI: chat=%s — SKIP: чат не зарегистрирован в managed_chats. "
@@ -1320,12 +1343,13 @@ class UserbotService:
         # Мягкая логика: если sender не совпадает с зарегистрированным client_id, но
         # это и не worker (уже отфильтрован выше is_worker check) — всё равно отвечаем.
         # Это лечит случаи когда в work-чате клиент пишет с другого аккаунта /
-        # client_id устарел / в группе несколько клиентов.
+        # client_id устарел / в группе несколько клиентов / credit-чат с client_id=0.
         if client_id and sender_id != client_id:
             logger.info(
                 "AI: chat=%s — sender=%s != client_id=%s, но не worker — отвечаем "
-                "(soft fallback)",
+                "(soft fallback%s)",
                 chat_id, sender_id, client_id,
+                ", credit-chat" if chat_info.get("is_credit_chat") else "",
             )
 
         # AUTO-DETECT метода оплаты из сообщения клиента: страховка на случай
@@ -3623,6 +3647,46 @@ class UserbotService:
                 chat_id, manager_username,
                 "ПАРОЛИ" if is_password else "ДОСТУПЫ", sender_id,
             )
+            # === АВТО-ПРИГЛАШЕНИЕ CRM-бота @PrideCONTROLE_bot ===
+            # Без него /clients и кнопки в этом чате не работают.
+            crm_invite_status = ""
+            try:
+                from telethon.tl.functions.channels import InviteToChannelRequest, EditAdminRequest
+                from telethon.tl.types import ChatAdminRights
+                crm_bot_username = "PrideCONTROLE_bot"
+                try:
+                    crm_bot_entity = await self.client.get_entity(crm_bot_username)
+                    channel_entity = await event.get_chat()
+                    await self.client(InviteToChannelRequest(channel_entity, [crm_bot_entity]))
+                    crm_invite_status = "\n🤖 CRM-бот @PrideCONTROLE_bot добавлен в чат."
+                    logger.info("CRM-bot invited to credit chat %s", chat_id)
+                    # Делаем CRM-бота админом с правами на сообщения / pin / delete
+                    try:
+                        rights = ChatAdminRights(
+                            change_info=False, post_messages=True, edit_messages=True,
+                            delete_messages=True, ban_users=False, invite_users=True,
+                            pin_messages=True, add_admins=False, anonymous=False,
+                            manage_call=False,
+                        )
+                        await self.client(EditAdminRequest(
+                            channel=channel_entity, user_id=crm_bot_entity,
+                            admin_rights=rights, rank="CRM",
+                        ))
+                        crm_invite_status += " Сделан админом (CRM)."
+                    except Exception as e2:
+                        crm_invite_status += f" Но админка не выдалась: {e2}"
+                        logger.warning("CRM-bot admin grant failed in %s: %s", chat_id, e2)
+                except Exception as e:
+                    # Часто: уже в чате — это OK
+                    if "USER_ALREADY_PARTICIPANT" in str(e) or "already" in str(e).lower():
+                        crm_invite_status = "\n🤖 CRM-бот @PrideCONTROLE_bot уже в чате."
+                    else:
+                        crm_invite_status = f"\n⚠️ Не получилось добавить @PrideCONTROLE_bot: {e}.\nДобавь вручную и сделай админом."
+                        logger.warning("CRM-bot invite to %s failed: %s", chat_id, e)
+            except Exception as e:
+                logger.warning("CRM-bot auto-invite block error: %s", e)
+                crm_invite_status = "\n⚠️ Не смог пригласить CRM-бота автоматически — добавь @PrideCONTROLE_bot в чат вручную."
+
             kind_emoji = "🔐" if is_password else "📥"
             kind_name = "ПАРОЛИ" if is_password else "ДОСТУПЫ"
             await event.reply(
@@ -3631,7 +3695,8 @@ class UserbotService:
                 f"👤 Менеджер-юрист: <b>@{manager_username}</b>\n"
                 f"💬 Чат ID: <code>{chat_id}</code>\n\n"
                 f"Все ЛК/анкеты теперь идут в раздел "
-                f"<b>System → 💳 КРЕДИТ | {kind_name}</b> в JARVIS.",
+                f"<b>System → 💳 КРЕДИТ | {kind_name}</b> в JARVIS."
+                f"{crm_invite_status}",
                 parse_mode="html",
             )
         except Exception as e:
