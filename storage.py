@@ -297,6 +297,25 @@ def _default_state() -> dict:
         # {key: value} — override дефолтов из outsource_bot_texts.DEFAULT_TEXTS
         # Если key отсутствует — используется дефолт.
         "outsource_bot_texts": {},
+        # ==== ОТКУПЫ — обмен RUB → USDT TRC20 ====
+        # Клиенты в payments_chat_id пишут «дай 100К СБП», бот ловит, считает,
+        # форвардит в outkup_team_chat_id. Откупщики выдают реквизиты вручную.
+        "outkup_settings": {
+            "rate_rub_per_usdt": 100.0,        # 100 рублей за 1 USDT (старт)
+            "payments_chat_id": 0,             # чат куда пишут клиенты
+            "outkup_team_chat_id": 0,          # чат откупщиков (заявки приходят сюда)
+            "min_amount_rub": 5000,            # минимальная сумма заявки
+            "max_amount_rub": 5000000,         # максимум
+            "enabled": True,                   # глобальный тумблер модуля
+        },
+        # {order_id: {client_chat_id, client_user_id, client_username,
+        #             client_msg_id, amount_rub, method, calculated_usdt, rate,
+        #             status, created_at, assigned_to, assigned_at,
+        #             paid_at, completed_at, cancelled_at, txid, notes}}
+        # status: pending_confirm | awaiting_payment | paid | completed | cancelled
+        # method: sbp | card | full
+        "outkup_orders": {},
+        "outkup_orders_seq": 0,
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -3746,6 +3765,172 @@ class Storage:
             return True
 
     # ════════════════════════════════════════════════════════════
+    # ОТКУПЫ — RUB → USDT TRC20 обмен через ручных Откупщиков
+    # ════════════════════════════════════════════════════════════
+    def get_outkup_settings(self) -> dict:
+        s = self.state.get("outkup_settings") or {}
+        return {
+            "rate_rub_per_usdt": float(s.get("rate_rub_per_usdt") or 100.0),
+            "payments_chat_id": int(s.get("payments_chat_id") or 0),
+            "outkup_team_chat_id": int(s.get("outkup_team_chat_id") or 0),
+            "min_amount_rub": int(s.get("min_amount_rub") or 5000),
+            "max_amount_rub": int(s.get("max_amount_rub") or 5000000),
+            "enabled": bool(s.get("enabled", True)),
+        }
+
+    async def update_outkup_settings(self, **fields) -> dict:
+        async with _lock:
+            s = self.state.setdefault("outkup_settings", {})
+            for k, v in fields.items():
+                if k == "rate_rub_per_usdt":
+                    s[k] = float(v or 0)
+                elif k in ("payments_chat_id", "outkup_team_chat_id",
+                           "min_amount_rub", "max_amount_rub"):
+                    s[k] = int(v or 0)
+                elif k == "enabled":
+                    s[k] = bool(v)
+                else:
+                    s[k] = v
+            await self._save_unlocked()
+            return self.get_outkup_settings()
+
+    def list_outkup_orders(self) -> dict:
+        return dict(self.state.get("outkup_orders") or {})
+
+    def get_outkup_order(self, order_id) -> Optional[dict]:
+        if not order_id:
+            return None
+        return (self.state.get("outkup_orders") or {}).get(str(order_id))
+
+    async def create_outkup_order(
+        self, client_chat_id: int, client_user_id: int,
+        client_username: str, client_msg_id: int,
+        amount_rub: float, method: str,
+    ) -> Optional[dict]:
+        """Создаёт заявку в статусе pending_confirm. Bot уже посчитал USDT."""
+        settings = self.get_outkup_settings()
+        rate = settings["rate_rub_per_usdt"]
+        if rate <= 0:
+            return None
+        try:
+            amount = float(amount_rub or 0)
+        except Exception:
+            return None
+        if amount < settings["min_amount_rub"] or amount > settings["max_amount_rub"]:
+            return None
+        usdt = round(amount / rate, 2)
+        async with _lock:
+            self.state["outkup_orders_seq"] = int(self.state.get("outkup_orders_seq") or 0) + 1
+            oid = f"outk{self.state['outkup_orders_seq']}"
+            now = time.time()
+            order = {
+                "id": oid,
+                "client_chat_id": int(client_chat_id or 0),
+                "client_user_id": int(client_user_id or 0),
+                "client_username": (client_username or "").lstrip("@").lower(),
+                "client_msg_id": int(client_msg_id or 0),
+                "amount_rub": amount,
+                "method": (method or "sbp").lower(),
+                "calculated_usdt": usdt,
+                "rate": rate,
+                "status": "pending_confirm",
+                "created_at": now,
+                "confirmed_at": 0,
+                "assigned_to": "",
+                "assigned_at": 0,
+                "paid_at": 0,
+                "completed_at": 0,
+                "cancelled_at": 0,
+                "txid": "",
+                "notes": "",
+            }
+            (self.state.setdefault("outkup_orders", {}))[oid] = order
+            await self._save_unlocked()
+            return order
+
+    async def update_outkup_order(self, order_id, **fields) -> Optional[dict]:
+        async with _lock:
+            orders = self.state.get("outkup_orders") or {}
+            o = orders.get(str(order_id))
+            if not o:
+                return None
+            for k, v in fields.items():
+                o[k] = v
+            await self._save_unlocked()
+            return o
+
+    async def confirm_outkup_order(self, order_id) -> Optional[dict]:
+        """Клиент подтвердил расчёт → меняем статус и форвардим в чат Откупщиков."""
+        async with _lock:
+            o = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not o or o.get("status") != "pending_confirm":
+                return None
+            o["status"] = "awaiting_payment"
+            o["confirmed_at"] = time.time()
+            await self._save_unlocked()
+            return o
+
+    async def take_outkup_order(self, order_id, username: str) -> Optional[dict]:
+        """Откупщик берёт заявку в работу."""
+        username = (username or "").lstrip("@").lower()
+        async with _lock:
+            o = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not o or o.get("status") not in ("awaiting_payment", "pending_confirm"):
+                return None
+            o["assigned_to"] = username
+            o["assigned_at"] = time.time()
+            if o["status"] == "pending_confirm":
+                o["status"] = "awaiting_payment"
+            await self._save_unlocked()
+            return o
+
+    async def mark_outkup_paid(self, order_id, by: str = "") -> Optional[dict]:
+        """Откупщик подтвердил что клиент заплатил (получил рубли)."""
+        async with _lock:
+            o = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not o or o.get("status") not in ("awaiting_payment",):
+                return None
+            o["status"] = "paid"
+            o["paid_at"] = time.time()
+            if by:
+                o["paid_by"] = (by or "").lstrip("@").lower()
+            await self._save_unlocked()
+            return o
+
+    async def complete_outkup_order(
+        self, order_id, txid: str = "", by: str = "",
+    ) -> Optional[dict]:
+        """Откупщик отправил USDT → завершено."""
+        async with _lock:
+            o = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not o or o.get("status") not in ("paid", "awaiting_payment"):
+                return None
+            o["status"] = "completed"
+            o["completed_at"] = time.time()
+            o["txid"] = txid or o.get("txid") or ""
+            if by:
+                o["completed_by"] = (by or "").lstrip("@").lower()
+            await self._save_unlocked()
+            return o
+
+    async def cancel_outkup_order(
+        self, order_id, reason: str = "", by: str = "",
+    ) -> Optional[dict]:
+        async with _lock:
+            o = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not o:
+                return None
+            if o.get("status") in ("completed", "cancelled"):
+                return None
+            o["status"] = "cancelled"
+            o["cancelled_at"] = time.time()
+            o["cancel_reason"] = reason or ""
+            if by:
+                o["cancelled_by"] = (by or "").lstrip("@").lower()
+            await self._save_unlocked()
+            return o
+
+    # ════════════════════════════════════════════════════════════
     # OUTSOURCE BOT TEXTS — редактируемые тексты бота из JARVIS
     # ════════════════════════════════════════════════════════════
     def get_outsource_text(self, key: str, default: str = "") -> str:
@@ -3863,10 +4048,11 @@ class Storage:
     # =====================================================================
     # OWNER PANEL — роли и разрешения
     # =====================================================================
-    # Список всех 13 главных view'ов в JARVIS
+    # Список всех 14 главных view'ов в JARVIS
     _ALL_VIEWS = [
         "office", "chat", "lk", "fin", "crm", "payouts", "discord",
-        "support", "system", "accounting", "operational", "settings", "owner",
+        "support", "system", "accounting", "operational", "outkup",
+        "settings", "owner",
     ]
     # Подвкладки внутри views — для гранулярного доступа.
     # Если роли не выдан конкретный subview, эта вкладка не показывается.
@@ -3936,6 +4122,9 @@ class Storage:
         "leo_notes_archive",
         # === CRM-бот (через Telegram, не API) ===
         "credit_capture_chat",
+        # === ОТКУПЫ (RUB → USDT обмен) ===
+        "outkup_take", "outkup_mark_paid", "outkup_complete",
+        "outkup_cancel", "outkup_settings_update",
     ]
     # Дефолтные роли + их доступ. Каждая роль может иметь:
     # - views[]              — список доступных топ-views (или ["*"] = все)
@@ -3982,6 +4171,16 @@ class Storage:
             "views": ["office", "operational", "lk"],
             "edit_actions": [
                 "exchange_request", "lk_status_change",
+            ],
+        },
+        # === Роль: ОТКУПЫ (RUB → USDT обмен) ===
+        "outkup_specialist": {
+            "label": "💱 Откупщик",
+            "views": ["office", "outkup"],
+            "view_readonly": ["office"],
+            "edit_actions": [
+                "outkup_take", "outkup_mark_paid", "outkup_complete",
+                "outkup_cancel",
             ],
         },
         # === Роль 1: Менеджер чатов Доступы (от SIMBA) ===

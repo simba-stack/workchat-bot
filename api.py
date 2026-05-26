@@ -553,7 +553,7 @@ async def api_admin_workers(request: Request, _: None = Depends(_auth)):
 
 
 @app.post("/api/admin/workers/{username}/role")
-async def api_admin_set_role(username: str, request: Request, _: None = Depends(_auth)):
+async def api_admin_set_role(username: str, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("admin_worker_role"))):
     """Установить роль работника. Только owner."""
     uid = _try_session_auth(request) or 0
     if _resolve_user_role(uid or 0) != "owner":
@@ -666,7 +666,7 @@ async def api_support_chat_info(chat_id: int, _: None = Depends(_auth)):
 
 
 @app.post("/api/support/chat/{chat_id}/take")
-async def api_support_take(chat_id: int, request: Request, _: None = Depends(_auth)):
+async def api_support_take(chat_id: int, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("support_take"))):
     """Менеджер берёт чат на себя — клиенту шлём 'X присоединился к чату'."""
     manager_uid = _try_session_auth(request) or 0
     if not manager_uid:
@@ -711,7 +711,7 @@ async def api_support_take(chat_id: int, request: Request, _: None = Depends(_au
 
 
 @app.post("/api/support/chat/{chat_id}/reply")
-async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_auth)):
+async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("support_reply"))):
     """Отправка ответа менеджера в work_chat клиента.
     Body: { text: str, as_assistant: bool (default false) }
       as_assistant=True → шлём через PRIDE ASSISTANT
@@ -739,7 +739,7 @@ async def api_support_reply(chat_id: int, request: Request, _: None = Depends(_a
 
 
 @app.post("/api/support/chat/{chat_id}/transfer")
-async def api_support_transfer(chat_id: int, request: Request, _: None = Depends(_auth)):
+async def api_support_transfer(chat_id: int, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("support_transfer"))):
     """Передать чат в другое подразделение + уведомить клиента."""
     manager_uid = _try_session_auth(request) or 0
     data = await request.json()
@@ -773,7 +773,7 @@ async def api_support_transfer(chat_id: int, request: Request, _: None = Depends
 
 
 @app.post("/api/support/chat/{chat_id}/close")
-async def api_support_close(chat_id: int, request: Request, _: None = Depends(_auth)):
+async def api_support_close(chat_id: int, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("support_close"))):
     """Закрыть саппорт-сессию + теги (купил_РС/отказался/молчит/передал_дальше)."""
     data = await request.json() if request.headers.get("content-type") == "application/json" else {}
     rating = int(data.get("rating") or 0)
@@ -900,7 +900,7 @@ async def api_manager_session_status(request: Request, _: None = Depends(_auth))
 
 
 @app.post("/api/support/me/session/connect")
-async def api_manager_session_connect(request: Request, _: None = Depends(_auth)):
+async def api_manager_session_connect(request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("tg_session_connect"))):
     """Старт TG-логина: получаем телефон, отправляем код."""
     manager_uid = _try_session_auth(request) or 0
     if not manager_uid:
@@ -928,7 +928,7 @@ async def api_manager_session_connect(request: Request, _: None = Depends(_auth)
 
 
 @app.post("/api/support/me/session/verify")
-async def api_manager_session_verify(request: Request, _: None = Depends(_auth)):
+async def api_manager_session_verify(request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("tg_session_verify"))):
     """Завершение TG-логина: код + опциональный 2FA-пароль."""
     manager_uid = _try_session_auth(request) or 0
     if not manager_uid:
@@ -971,7 +971,7 @@ async def api_manager_session_verify(request: Request, _: None = Depends(_auth))
 
 
 @app.post("/api/support/me/session/disconnect")
-async def api_manager_session_disconnect(request: Request, _: None = Depends(_auth)):
+async def api_manager_session_disconnect(request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("tg_session_disconnect"))):
     """Удалить сохранённую TG-сессию менеджера."""
     manager_uid = _try_session_auth(request) or 0
     if not manager_uid:
@@ -1158,7 +1158,7 @@ async def api_system_lk_full(droplk_id: str, _: None = Depends(_auth)):
 
 
 @app.post("/api/system/lk/{droplk_id}/fill")
-async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends(_auth)):
+async def api_system_lk_fill(droplk_id: str, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("lk_fill"))):
     """Заполнение credentials/дедика для ЛК. Принимает любые поля:
     new_login, new_password, new_mail, new_number, code_word,
     ded_login, ded_password, ded_ip, ded_location, sms_code (вручную).
@@ -1642,7 +1642,7 @@ def _kuc_base_url(request: Request) -> str:
 
 
 @app.post("/api/system/lk/{droplk_id}/kuc/request")
-async def api_system_lk_kuc_request(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+async def api_system_lk_kuc_request(droplk_id: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("request_kuc"))):
     """Работник создаёт KUC-запрос для ЛК. Body: {message: str}.
     Возвращает токен + ссылку. Userbot затем отправит её клиенту в work_chat."""
     if me.get("role") not in ("owner", "manager", "system"):
@@ -1794,7 +1794,7 @@ async def kuc_get_video(token: str, _: None = Depends(_auth)):
 
 
 @app.post("/api/system/kuc/{token}/decide")
-async def kuc_decide(token: str, request: Request, me: dict = Depends(_get_me)):
+async def kuc_decide(token: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("decide_kuc"))):
     """Работник одобряет/отклоняет КУЦ. Body: {decision: 'approved'|'rejected', note?: str}."""
     if me.get("role") not in ("owner", "manager", "system"):
         raise HTTPException(403, "forbidden")
@@ -1914,7 +1914,7 @@ async def settings_get_all(me: dict = Depends(_get_me)):
 
 # --- Outsource Payment (USDT TRC20) ---
 @app.post("/api/settings/outsource_payment/set_wallet")
-async def settings_set_outsource_wallet(request: Request, me: dict = Depends(_get_me)):
+async def settings_set_outsource_wallet(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_payment_wallet"))):
     """Body: {address: str}. TRC20 адрес (начинается с T, 34 символа)."""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -1950,7 +1950,7 @@ async def api_outsource_topups_list(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/system/outsource/topups/{request_id}/credit")
-async def api_outsource_topup_manual_credit(request_id: str, me: dict = Depends(_get_me)):
+async def api_outsource_topup_manual_credit(request_id: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("topup_credit"))):
     """Ручное зачисление (admin override) — если auto-monitor не сработал."""
     _require_owner_or_manager(me)
     if not hasattr(storage, "credit_outsource_topup"):
@@ -1969,7 +1969,7 @@ async def api_outsource_topup_manual_credit(request_id: str, me: dict = Depends(
 
 
 @app.post("/api/system/outsource/topups/{request_id}/reject")
-async def api_outsource_topup_reject(request_id: str, me: dict = Depends(_get_me)):
+async def api_outsource_topup_reject(request_id: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("topup_reject"))):
     _require_owner_or_manager(me)
     if not hasattr(storage, "reject_outsource_topup"):
         raise HTTPException(500, "reject_outsource_topup not available")
@@ -2058,7 +2058,7 @@ async def api_outsource_bot_texts(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/system/outsource/bot_texts/set")
-async def api_outsource_bot_texts_set(request: Request, me: dict = Depends(_get_me)):
+async def api_outsource_bot_texts_set(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("bot_text_set"))):
     """Body: {key: str, value: str}. Пустой value = сбросить к дефолту."""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2073,7 +2073,7 @@ async def api_outsource_bot_texts_set(request: Request, me: dict = Depends(_get_
 
 
 @app.post("/api/system/outsource/bot_texts/reset")
-async def api_outsource_bot_texts_reset(request: Request, me: dict = Depends(_get_me)):
+async def api_outsource_bot_texts_reset(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("bot_text_reset"))):
     """Body: {key: str}. Удаляет override → возвращает дефолт."""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2086,9 +2086,105 @@ async def api_outsource_bot_texts_reset(request: Request, me: dict = Depends(_ge
     return {"ok": True}
 
 
+# ═══════════════════════════════════════════════════════════════
+# ОТКУПЫ — обмен RUB → USDT TRC20 через ручных Откупщиков
+# ═══════════════════════════════════════════════════════════════
+@app.get("/api/outkup/orders")
+async def api_outkup_orders(
+    status: Optional[str] = None,
+    me: dict = Depends(_get_me),
+):
+    """Список всех заявок Откупов с опциональным фильтром по статусу."""
+    if me.get("role") not in ("owner", "manager") and not storage.role_can_view(me.get("role") or "", "outkup"):
+        raise HTTPException(403, "forbidden")
+    orders = storage.list_outkup_orders() if hasattr(storage, "list_outkup_orders") else {}
+    items = list(orders.values())
+    if status:
+        items = [o for o in items if (o.get("status") or "") == status]
+    items.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/api/settings/outkup")
+async def api_outkup_settings_get(me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager") and not storage.role_can_view(me.get("role") or "", "outkup"):
+        raise HTTPException(403, "forbidden")
+    return storage.get_outkup_settings() if hasattr(storage, "get_outkup_settings") else {}
+
+
+@app.post("/api/settings/outkup")
+async def api_outkup_settings_update(
+    request: Request,
+    me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("outkup_settings_update")),
+):
+    """Body: {rate_rub_per_usdt?, payments_chat_id?, outkup_team_chat_id?,
+              min_amount_rub?, max_amount_rub?, enabled?}"""
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    if not hasattr(storage, "update_outkup_settings"):
+        raise HTTPException(500, "outkup not available")
+    allowed = ("rate_rub_per_usdt", "payments_chat_id", "outkup_team_chat_id",
+               "min_amount_rub", "max_amount_rub", "enabled")
+    fields = {k: body[k] for k in allowed if k in body}
+    s = await storage.update_outkup_settings(**fields)
+    return {"ok": True, "settings": s}
+
+
+@app.post("/api/outkup/orders/{order_id}/take")
+async def api_outkup_take(
+    order_id: str,
+    me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("outkup_take")),
+):
+    o = await storage.take_outkup_order(order_id, username=me.get("username") or "")
+    if not o:
+        raise HTTPException(400, "Не удалось взять заявку (возможно уже закрыта)")
+    return {"ok": True, "order": o}
+
+
+@app.post("/api/outkup/orders/{order_id}/mark_paid")
+async def api_outkup_mark_paid(
+    order_id: str,
+    me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("outkup_mark_paid")),
+):
+    o = await storage.mark_outkup_paid(order_id, by=me.get("username") or "")
+    if not o:
+        raise HTTPException(400, "Не удалось пометить (status mismatch)")
+    return {"ok": True, "order": o}
+
+
+@app.post("/api/outkup/orders/{order_id}/complete")
+async def api_outkup_complete(
+    order_id: str, request: Request,
+    me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("outkup_complete")),
+):
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    txid = (body.get("txid") or "").strip()
+    o = await storage.complete_outkup_order(order_id, txid=txid, by=me.get("username") or "")
+    if not o:
+        raise HTTPException(400, "Не удалось завершить")
+    return {"ok": True, "order": o}
+
+
+@app.post("/api/outkup/orders/{order_id}/cancel")
+async def api_outkup_cancel(
+    order_id: str, request: Request,
+    me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("outkup_cancel")),
+):
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    reason = (body.get("reason") or "").strip()
+    o = await storage.cancel_outkup_order(order_id, reason=reason, by=me.get("username") or "")
+    if not o:
+        raise HTTPException(400, "Не удалось отменить")
+    return {"ok": True, "order": o}
+
+
 # --- Прайс ЛК ---
 @app.post("/api/settings/pricing/set")
-async def settings_set_pricing(request: Request, me: dict = Depends(_get_me)):
+async def settings_set_pricing(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_pricing_set"))):
     """Body: {bank: str, price: number}. Удалить — price=0."""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2101,7 +2197,7 @@ async def settings_set_pricing(request: Request, me: dict = Depends(_get_me)):
 
 
 @app.post("/api/settings/pricing/delete")
-async def settings_delete_pricing(request: Request, me: dict = Depends(_get_me)):
+async def settings_delete_pricing(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_pricing_delete"))):
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
     bank = (body.get("bank") or "").strip().upper()
@@ -2116,7 +2212,7 @@ async def settings_delete_pricing(request: Request, me: dict = Depends(_get_me))
 
 # --- AI настройки ---
 @app.post("/api/settings/ai/update")
-async def settings_update_ai(request: Request, me: dict = Depends(_get_me)):
+async def settings_update_ai(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_ai"))):
     """Body: {ai_enabled?, ai_model?, ai_max_tokens?, ai_history_limit?,
              ai_typing_delay_min?, ai_typing_delay_max?, client_idle_minutes?}"""
     _require_owner_or_manager(me)
@@ -2142,7 +2238,7 @@ async def settings_update_ai(request: Request, me: dict = Depends(_get_me)):
 
 # --- Telegram чаты ---
 @app.post("/api/settings/tg_chats/update")
-async def settings_update_tg_chats(request: Request, me: dict = Depends(_get_me)):
+async def settings_update_tg_chats(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_tg_chats"))):
     """Body: {brain_chat_id?, lk_group_id?, coordination_chat_id?, ideas_chat_id?, accounting_group_id?}"""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2177,7 +2273,7 @@ async def settings_update_tg_chats(request: Request, me: dict = Depends(_get_me)
 
 # --- Invite-бот ---
 @app.post("/api/settings/invite/update")
-async def settings_update_invite(request: Request, me: dict = Depends(_get_me)):
+async def settings_update_invite(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_invite"))):
     """Body: {welcome_message?, invite_jobs_text?, invite_welcome_gif_id?, trigger_phrases?, cooldown_minutes?}"""
     _require_owner_or_manager(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2222,7 +2318,7 @@ async def owner_list_roles(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/owner/roles")
-async def owner_set_role(request: Request, me: dict = Depends(_get_me)):
+async def owner_set_role(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("owner_role_create_update"))):
     """Body: {role, label?, views?, edit_actions?, view_readonly?, subviews?, subview_readonly?}"""
     _require_owner(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2242,7 +2338,7 @@ async def owner_set_role(request: Request, me: dict = Depends(_get_me)):
 
 
 @app.delete("/api/owner/roles/{role}")
-async def owner_delete_role(role: str, me: dict = Depends(_get_me)):
+async def owner_delete_role(role: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("owner_role_delete"))):
     _require_owner(me)
     ok = await storage.delete_role_permission(role)
     if not ok:
@@ -2276,7 +2372,7 @@ async def owner_list_users(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/owner/users/{username}/role")
-async def owner_set_user_role(username: str, request: Request, me: dict = Depends(_get_me)):
+async def owner_set_user_role(username: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("owner_user_role"))):
     """Body: {role: str, is_admin?: bool}. Доступно только owner."""
     _require_owner(me)
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2301,7 +2397,7 @@ async def owner_set_user_role(username: str, request: Request, me: dict = Depend
 # =====================================================================
 
 @app.post("/api/calls/create")
-async def calls_create(request: Request, me: dict = Depends(_get_me)):
+async def calls_create(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("call_create"))):
     """Создаёт комнату для звонка. Любой авторизованный пользователь.
     Body: {name?: str, password?: str, max_participants?: int}.
     Возвращает {room_id, password, url}."""
@@ -2337,7 +2433,7 @@ async def calls_list(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/calls/{room_id}/end")
-async def calls_end(room_id: str, me: dict = Depends(_get_me)):
+async def calls_end(room_id: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("call_end"))):
     """Завершить звонок. Только creator или owner."""
     gc = storage.get_guest_call(room_id)
     if not gc:
@@ -2377,7 +2473,7 @@ async def calls_info_public(room_id: str):
 
 
 @app.post("/api/calls/{room_id}/join")
-async def calls_join(room_id: str, request: Request):
+async def calls_join(room_id: str, request: Request, _perm: bool = Depends(require_action("call_join"))):
     """Гость пытается войти в комнату. Body: {name: str, password: str}.
     Возвращает participant_id для WS-подключения."""
     gc = storage.get_guest_call(room_id)
@@ -2600,7 +2696,7 @@ async def api_system_outsource_managers(_: None = Depends(_auth)):
 
 
 @app.post("/api/system/lk/{droplk_id}/move_to_outsource")
-async def api_system_lk_move_to_outsource(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+async def api_system_lk_move_to_outsource(droplk_id: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("move_lk_to_outsource"))):
     """Перенос в АУТСОРС-КАТАЛОГ (общий пул).
     Body: {list_price_usdt: float, manager_username?: str (опц.)}
     Если manager_username не указан — ЛК идёт в пул каталога без владельца.
@@ -2678,7 +2774,7 @@ async def api_outsource_bundles_list(me: dict = Depends(_get_me)):
 
 
 @app.post("/api/system/outsource/bundles/create")
-async def api_outsource_bundle_create(request: Request, me: dict = Depends(_get_me)):
+async def api_outsource_bundle_create(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("bundle_create"))):
     """Body: {lk_ids: [...], list_price_usdt: float, name?: str}
     Все ЛК должны быть в пуле outsource (in_pool=True, без manager, не в связке).
     """
@@ -2711,7 +2807,7 @@ async def api_outsource_bundle_create(request: Request, me: dict = Depends(_get_
 
 
 @app.post("/api/system/outsource/bundles/{bundle_id}/dissolve")
-async def api_outsource_bundle_dissolve(bundle_id: str, me: dict = Depends(_get_me)):
+async def api_outsource_bundle_dissolve(bundle_id: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("bundle_dissolve"))):
     """Расформировать связку (только пока не куплена). ЛК вернутся в одиночки."""
     if me.get("role") not in ("owner", "manager"):
         raise HTTPException(403, "forbidden")
@@ -2729,7 +2825,7 @@ async def api_outsource_bundle_dissolve(bundle_id: str, me: dict = Depends(_get_
 
 
 @app.post("/api/system/outsource_lk/{outsource_droplk_id}/move_to_supplier")
-async def api_system_outsource_lk_move_to_supplier(outsource_droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+async def api_system_outsource_lk_move_to_supplier(outsource_droplk_id: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("move_lk_to_supplier"))):
     if me.get("role") not in ("owner", "manager"):
         raise HTTPException(403, "forbidden")
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2751,7 +2847,7 @@ async def api_system_outsource_lk_move_to_supplier(outsource_droplk_id: str, req
 # =====================================================================
 
 @app.post("/api/system/lk/{droplk_id}/move_to_credit")
-async def api_system_lk_move_to_credit(droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+async def api_system_lk_move_to_credit(droplk_id: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("move_lk_to_credit"))):
     """Переносит ЛК поставщика в КРЕДИТОВАНИЕ.
     Body: { "manager_username": "ivan" } — менеджер-юрист, к кому перейдёт ЛК.
     Доступно только owner/manager роли."""
@@ -2788,7 +2884,7 @@ async def api_system_lk_move_to_credit(droplk_id: str, request: Request, me: dic
 
 
 @app.post("/api/system/credit_lk/{credit_droplk_id}/move_to_supplier")
-async def api_system_credit_lk_move_to_supplier(credit_droplk_id: str, request: Request, me: dict = Depends(_get_me)):
+async def api_system_credit_lk_move_to_supplier(credit_droplk_id: str, request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("move_lk_to_supplier"))):
     """Переносит ЛК из КРЕДИТОВАНИЯ обратно в crm_drop_lks (к поставщику).
     Body (опционально): { "owner_id": "owner-uuid" }. Если не указано — создастся draft."""
     if me.get("role") not in ("owner", "manager"):
@@ -2820,7 +2916,7 @@ async def api_system_credit_lk_move_to_supplier(credit_droplk_id: str, request: 
 
 
 @app.post("/api/system/lk/{droplk_id}/sms_action")
-async def api_system_sms_action(droplk_id: str, request: Request, _: None = Depends(_auth)):
+async def api_system_sms_action(droplk_id: str, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("lk_sms_action"))):
     """Триггерит SMS-stage переход через очередь команд CRM-боту.
     Эквивалент кнопки smsadv в TG-группе ЛК."""
     data = await request.json() if request.headers.get("content-type") == "application/json" else {}
@@ -2939,6 +3035,7 @@ async def api_accounting_payouts_full(_: None = Depends(_auth)):
 @app.post("/api/accounting/payouts/{queue}/{payout_id}/note")
 async def api_accounting_add_note(
     queue: str, payout_id: int, request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("accounting_payout_note")),
 ):
     """Добавить заметку бухгалтера к payout-записи."""
     if queue not in ("usdt", "release", "fund_release"):
@@ -3814,6 +3911,7 @@ class ExchangeRequestPayload(BaseModel):
 async def api_op_create_exchange_request(
     payload: ExchangeRequestPayload,
     me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("exchange_request")),
 ):
     if me.get("role") not in ("owner", "manager", "operationist"):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -4223,6 +4321,7 @@ class AccountingEntryPayload(BaseModel):
 async def api_acc_add(
     payload: AccountingEntryPayload,
     me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("accounting_entry_add")),
 ):
     cat = (payload.category or "").lower()
     if cat not in ACCOUNTING_CATEGORIES:
@@ -4241,7 +4340,7 @@ async def api_acc_add(
 
 
 @app.delete("/api/accounting/entry/{entry_id}")
-async def api_acc_delete(entry_id: str, me: dict = Depends(_get_me)):
+async def api_acc_delete(entry_id: str, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("accounting_entry_delete"))):
     if not _has_role(me.get("role") or "", "manager"):
         raise HTTPException(status_code=403, detail="forbidden")
     ok = await storage.delete_accounting_entry(entry_id)
@@ -4478,6 +4577,7 @@ async def api_discord_channels(_: None = Depends(_auth)):
 @app.post("/api/discord/channels")
 async def api_discord_create_channel(
     req: DiscordChannelReq, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_channel_create")),
 ):
     storage.reload_sync()
     cid = await storage.add_discord_channel(
@@ -4495,7 +4595,7 @@ async def api_discord_create_channel(
 
 
 @app.delete("/api/discord/channels/{channel_id}")
-async def api_discord_delete_channel(channel_id: str, _: None = Depends(_auth)):
+async def api_discord_delete_channel(channel_id: str, _: None = Depends(_auth), _perm: bool = Depends(require_action("discord_channel_delete"))):
     storage.reload_sync()
     ok = await storage.delete_discord_channel(channel_id)
     if not ok:
@@ -4548,6 +4648,7 @@ async def api_discord_messages(
 @app.post("/api/discord/messages")
 async def api_discord_send_message(
     req: DiscordMessageReq, request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_message_send")),
 ):
     storage.reload_sync()
     if not req.channel_id:
@@ -4597,6 +4698,7 @@ async def api_discord_send_message(
 @app.delete("/api/discord/messages/{message_id}")
 async def api_discord_delete_message(
     message_id: str, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_message_delete")),
 ):
     storage.reload_sync()
     ok = await storage.delete_discord_message(message_id)
@@ -4665,6 +4767,7 @@ class DiscordReactionReq(BaseModel):
 async def api_discord_add_reaction(
     message_id: str, req: DiscordReactionReq,
     request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_reaction_add")),
 ):
     user = _resolve_discord_user(request)
     reacts = await storage.add_discord_reaction(message_id, req.emoji, user)
@@ -4683,6 +4786,7 @@ async def api_discord_add_reaction(
 async def api_discord_remove_reaction(
     message_id: str, emoji: str,
     request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_reaction_remove")),
 ):
     user = _resolve_discord_user(request)
     reacts = await storage.remove_discord_reaction(message_id, emoji, user)
@@ -4700,6 +4804,7 @@ async def api_discord_remove_reaction(
 @app.post("/api/discord/messages/{message_id}/pin")
 async def api_discord_pin(
     message_id: str, request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_pin")),
 ):
     # Найдём channel_id сообщения
     msgs = storage.state.get("discord_messages") or []
@@ -4713,6 +4818,7 @@ async def api_discord_pin(
 @app.post("/api/discord/messages/{message_id}/unpin")
 async def api_discord_unpin(
     message_id: str, request: Request, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("discord_unpin")),
 ):
     msgs = storage.state.get("discord_messages") or []
     m = next((x for x in msgs if x.get("id") == message_id), None)
@@ -5133,7 +5239,7 @@ async def api_payouts(_: None = Depends(_auth)):
 
 
 @app.post("/api/payouts/usdt_paid")
-async def api_payouts_usdt_paid(req: Request, _: None = Depends(_auth)):
+async def api_payouts_usdt_paid(req: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("payout_usdt_paid"))):
     """Менеджер ввёл TronScan хеш для USDT-выплаты.
     body: {card_id, tx_hash}"""
     data = await req.json()
@@ -5152,7 +5258,7 @@ async def api_payouts_usdt_paid(req: Request, _: None = Depends(_auth)):
 
 
 @app.post("/api/payouts/deal_funded")
-async def api_payouts_deal_funded(req: Request, _: None = Depends(_auth)):
+async def api_payouts_deal_funded(req: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("payout_deal_funded"))):
     """Менеджер: сделка пополнена. body: {deal_id, amount}"""
     data = await req.json()
     deal_id = (str(data.get("deal_id") or "")).lstrip("#").strip()
@@ -5173,7 +5279,7 @@ async def api_payouts_deal_funded(req: Request, _: None = Depends(_auth)):
 
 
 @app.post("/api/payouts/released")
-async def api_payouts_released(req: Request, _: None = Depends(_auth)):
+async def api_payouts_released(req: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("payout_released"))):
     """Менеджер отпустил гарант-сделку. body: {card_id} или {deal_id}"""
     data = await req.json()
     card_id = (data.get("card_id") or "").lower().lstrip("#")
@@ -5192,7 +5298,7 @@ async def api_payouts_released(req: Request, _: None = Depends(_auth)):
 
 
 @app.post("/api/payouts/set_deal_id")
-async def api_payouts_set_deal_id(req: Request, _: None = Depends(_auth)):
+async def api_payouts_set_deal_id(req: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("payout_set_deal_id"))):
     """Менеджер ввёл номер сделки от клиента в fund_release очередь.
     Также синхронизирует deal_id на саму карточку ЛК (чтобы анкета в TG-группе
     тоже отразила номер сделки).
@@ -5498,6 +5604,7 @@ async def api_crm_owner_ban(
     owner_id: str,
     days: int = 7,
     _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("crm_ban")),
 ):
     """Бан партнёра до now+days."""
     storage.reload_sync()
@@ -5519,7 +5626,7 @@ async def api_crm_owner_ban(
 
 
 @app.post("/api/crm/owners/{owner_id}/unban")
-async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth)):
+async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth), _perm: bool = Depends(require_action("crm_unban"))):
     """Снять бан."""
     storage.reload_sync()
     if not hasattr(storage, "get_crm_owner"):
@@ -5535,7 +5642,7 @@ async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth)):
 
 
 @app.post("/api/crm/owners/{owner_id}/warn")
-async def api_crm_owner_warn(owner_id: str, _: None = Depends(_auth)):
+async def api_crm_owner_warn(owner_id: str, _: None = Depends(_auth), _perm: bool = Depends(require_action("crm_warn"))):
     """+1 предупреждение."""
     storage.reload_sync()
     if not hasattr(storage, "get_crm_owner"):
@@ -5665,7 +5772,7 @@ class LKUpdateReq(BaseModel):
 
 
 @app.post("/api/control/ai_toggle")
-async def control_ai_toggle(req: AIToggleReq, _: None = Depends(_auth)):
+async def control_ai_toggle(req: AIToggleReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("ai_toggle"))):
     """Включить/выключить AI глобально."""
     storage.reload_sync()
     try:
@@ -5687,6 +5794,7 @@ async def control_ai_toggle(req: AIToggleReq, _: None = Depends(_auth)):
 @app.post("/api/control/lk/{card_id}/status")
 async def control_lk_status(
     card_id: str, req: LKStatusReq, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("lk_status_change")),
 ):
     """Сменить статус карточки ЛК."""
     storage.reload_sync()
@@ -5823,6 +5931,7 @@ async def api_lk_card_detail(card_id: str, _: None = Depends(_auth)):
 @app.post("/api/control/lk/{card_id}/update")
 async def control_lk_update(
     card_id: str, req: LKUpdateReq, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("lk_update")),
 ):
     """Обновить редактируемые поля карточки ЛК (банк, ФИО, цена,
     метод, deal_id, usdt_address, supplier, …).
@@ -5882,7 +5991,7 @@ async def control_lk_update(
 
 
 @app.post("/api/control/lk/{card_id}/delete")
-async def control_lk_delete(card_id: str, _: None = Depends(_auth)):
+async def control_lk_delete(card_id: str, _: None = Depends(_auth), _perm: bool = Depends(require_action("lk_delete"))):
     """Удалить карточку ЛК."""
     storage.reload_sync()
     card_id = card_id.lower().lstrip("#")
@@ -5910,7 +6019,7 @@ class LeoAskReq(BaseModel):
 
 
 @app.post("/api/leo/realtime_session")
-async def leo_realtime_session(request: Request, _: None = Depends(_auth)):
+async def leo_realtime_session(request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_realtime_session"))):
     """Выдаёт ephemeral client token от OpenAI Realtime API.
     Каждый админ получает СВОЮ независимую сессию — не конфликтуют между собой.
 
@@ -6109,7 +6218,7 @@ class LeoNoteReq(BaseModel):
 
 
 @app.post("/api/leo/note")
-async def leo_save_note(req: LeoNoteReq, _: None = Depends(_auth)):
+async def leo_save_note(req: LeoNoteReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_note_create"))):
     """Принимает заметку от LEO (через голос или текстом из консоли),
     сохраняет в storage.leo_notes + при необходимости коммитит в knowledge graph
     (knowledge/leo_brain.md) через memory.commit_to_knowledge.
@@ -6182,7 +6291,7 @@ async def leo_list_notes(
 
 
 @app.delete("/api/leo/note/{note_id}")
-async def leo_delete_note(note_id: int, _: None = Depends(_auth)):
+async def leo_delete_note(note_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_note_delete"))):
     ok = await storage.delete_leo_note(note_id)
     if not ok:
         raise HTTPException(status_code=404, detail="note not found")
@@ -6218,7 +6327,7 @@ class MoveNoteReq(BaseModel):
 
 
 @app.post("/api/leo/note/{note_id}/move")
-async def leo_move_note(note_id: int, req: MoveNoteReq, _: None = Depends(_auth)):
+async def leo_move_note(note_id: int, req: MoveNoteReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_note_move"))):
     """Переносит заметку в конкретный knowledge-файл (rules.md / pricing.md и т.п.).
     Из leo_brain.md заметка НЕ удаляется — только добавляется ссылка."""
     storage.reload_sync()
@@ -6275,7 +6384,7 @@ async def leo_move_note(note_id: int, req: MoveNoteReq, _: None = Depends(_auth)
 
 
 @app.post("/api/leo/notes/archive_old")
-async def leo_archive_old(days: int = 30, _: None = Depends(_auth)):
+async def leo_archive_old(days: int = 30, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_notes_archive"))):
     """Архивирует заметки старше N дней: переносит в knowledge/leo_archive.md
     и удаляет из storage. Возвращает количество перенесённых."""
     storage.reload_sync()
@@ -6319,7 +6428,7 @@ class OutreachAuthConfirmReq(BaseModel):
 
 
 @app.post("/api/outreach/bots/auth/start")
-async def outreach_auth_start(req: OutreachAuthStartReq, _: None = Depends(_auth)):
+async def outreach_auth_start(req: OutreachAuthStartReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_bot_auth_start"))):
     """Шаг 1: запросить SMS-код для нового юзербота."""
     import outreach
     res = await outreach.manager.start_auth(req.phone)
@@ -6327,7 +6436,7 @@ async def outreach_auth_start(req: OutreachAuthStartReq, _: None = Depends(_auth
 
 
 @app.post("/api/outreach/bots/auth/confirm")
-async def outreach_auth_confirm(req: OutreachAuthConfirmReq, _: None = Depends(_auth)):
+async def outreach_auth_confirm(req: OutreachAuthConfirmReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_bot_auth_confirm"))):
     """Шаг 2: подтвердить SMS-код (+ password если 2FA)."""
     import outreach
     res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
@@ -6344,7 +6453,7 @@ async def outreach_list_bots(_: None = Depends(_auth)):
 
 
 @app.delete("/api/outreach/bots/{bot_id}")
-async def outreach_delete_bot(bot_id: int, _: None = Depends(_auth)):
+async def outreach_delete_bot(bot_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_bot_delete"))):
     import outreach
     await outreach.manager.disconnect_bot(bot_id)
     ok = await storage.delete_outreach_bot(bot_id)
@@ -6384,7 +6493,7 @@ async def outreach_list_campaigns(_: None = Depends(_auth)):
 
 
 @app.post("/api/outreach/campaigns")
-async def outreach_create_campaign(req: CampaignReq, _: None = Depends(_auth)):
+async def outreach_create_campaign(req: CampaignReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_campaign_create"))):
     entry = await storage.add_outreach_campaign(**req.dict())
     return {"ok": True, "campaign": entry}
 
@@ -6392,6 +6501,7 @@ async def outreach_create_campaign(req: CampaignReq, _: None = Depends(_auth)):
 @app.patch("/api/outreach/campaigns/{campaign_id}")
 async def outreach_patch_campaign(
     campaign_id: int, req: CampaignPatchReq, _: None = Depends(_auth),
+    _perm: bool = Depends(require_action("outreach_campaign_update")),
 ):
     fields = {k: v for k, v in req.dict().items() if v is not None}
     ok = await storage.update_outreach_campaign(campaign_id, **fields)
@@ -6401,7 +6511,7 @@ async def outreach_patch_campaign(
 
 
 @app.delete("/api/outreach/campaigns/{campaign_id}")
-async def outreach_delete_campaign(campaign_id: int, _: None = Depends(_auth)):
+async def outreach_delete_campaign(campaign_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_campaign_delete"))):
     import outreach
     await outreach.manager.stop_campaign(campaign_id)
     ok = await storage.delete_outreach_campaign(campaign_id)
@@ -6411,7 +6521,7 @@ async def outreach_delete_campaign(campaign_id: int, _: None = Depends(_auth)):
 
 
 @app.post("/api/outreach/campaigns/{campaign_id}/start")
-async def outreach_start(campaign_id: int, _: None = Depends(_auth)):
+async def outreach_start(campaign_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_campaign_start"))):
     import outreach
     ok = await outreach.manager.start_campaign(campaign_id)
     if not ok:
@@ -6420,14 +6530,14 @@ async def outreach_start(campaign_id: int, _: None = Depends(_auth)):
 
 
 @app.post("/api/outreach/campaigns/{campaign_id}/pause")
-async def outreach_pause(campaign_id: int, _: None = Depends(_auth)):
+async def outreach_pause(campaign_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_campaign_pause"))):
     import outreach
     await outreach.manager.pause_campaign(campaign_id)
     return {"ok": True}
 
 
 @app.post("/api/outreach/campaigns/{campaign_id}/stop")
-async def outreach_stop(campaign_id: int, _: None = Depends(_auth)):
+async def outreach_stop(campaign_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_campaign_stop"))):
     import outreach
     await outreach.manager.stop_campaign(campaign_id)
     return {"ok": True}
@@ -6454,7 +6564,7 @@ async def outreach_responses(
 
 
 @app.post("/api/outreach/responses/{resp_id}/handle")
-async def outreach_handle_response(resp_id: int, _: None = Depends(_auth)):
+async def outreach_handle_response(resp_id: int, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_response_handle"))):
     """Пометить ответ как обработанный вручную."""
     ok = await storage.mark_outreach_response(resp_id, handled=True)
     if not ok:
@@ -6463,7 +6573,7 @@ async def outreach_handle_response(resp_id: int, _: None = Depends(_auth)):
 
 
 @app.post("/api/leo/voice_command")
-async def leo_voice_command(req: CommandReq, _: None = Depends(_auth)):
+async def leo_voice_command(req: CommandReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_voice_command"))):
     """Принимает команду от голосового Льва (через OpenAI tool-call) —
     ставит её в очередь userbot."""
     text = (req.text or "").strip()
@@ -6482,7 +6592,7 @@ async def leo_voice_command(req: CommandReq, _: None = Depends(_auth)):
 
 
 @app.post("/api/leo/ask")
-async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth)):
+async def api_leo_ask(req: LeoAskReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("leo_ask"))):
     """LEO — умный AI агент. Принимает свободный текст, отвечает + при
     необходимости автоматически ставит команды в очередь userbot для
     выполнения."""

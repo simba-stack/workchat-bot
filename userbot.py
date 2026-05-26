@@ -432,6 +432,17 @@ class UserbotService:
             workers_list = []
         if not workers_list:
             workers_list = list(getattr(config, "DEFAULT_WORKERS", []) or [])
+        # Дедуп по lowercase: TimonSkupCL и timonskupcl → один работник
+        # Сохраняем оригинальный case (берём первое вхождение).
+        _seen_lc = set()
+        _deduped = []
+        for u in workers_list:
+            ulc = (u or "").lstrip("@").strip().lower()
+            if not ulc or ulc in _seen_lc:
+                continue
+            _seen_lc.add(ulc)
+            _deduped.append((u or "").lstrip("@").strip())
+        workers_list = _deduped
         for username in workers_list:
             uname = (username or "").lstrip("@").strip()
             if not uname:
@@ -502,27 +513,41 @@ class UserbotService:
                     role_str = (role_data.get("role")
                                 or role_data.get("rank") or "").strip()
                     is_admin = bool(role_data.get("is_admin"))
-                if not is_admin:
-                    # Работник без флага админки — оставляем как обычный участник.
-                    if role_str:
-                        statuses[uname] = f"{current_status} ({role_str}, без админки)"
-                    continue
+                # Выдаём админку ВСЕМ работникам (даже без is_admin — для отображения rank/префикса
+                # в чате. В Telegram custom title видно только у админов).
+                # Объём прав зависит от is_admin: полные если True, минимальные если False.
                 try:
-                    rights = ChatAdminRights(
-                        change_info=False, post_messages=True, edit_messages=True,
-                        delete_messages=True, ban_users=False, invite_users=True,
-                        pin_messages=True, add_admins=False, anonymous=False,
-                        manage_call=True,
-                    )
+                    if is_admin:
+                        # Полная админка
+                        rights = ChatAdminRights(
+                            change_info=False, post_messages=True, edit_messages=True,
+                            delete_messages=True, ban_users=False, invite_users=True,
+                            pin_messages=True, add_admins=False, anonymous=False,
+                            manage_call=True,
+                        )
+                    else:
+                        # Минимальная админка — только чтобы видеть rank/префикс
+                        rights = ChatAdminRights(
+                            change_info=False, post_messages=False, edit_messages=False,
+                            delete_messages=False, ban_users=False, invite_users=False,
+                            pin_messages=False, add_admins=False, anonymous=False,
+                            manage_call=False,
+                        )
                     await self.client(EditAdminRequest(
                         channel=channel, user_id=user,
                         admin_rights=rights, rank=role_str or "",
                     ))
                     role_suffix = f" ({role_str})" if role_str else ""
-                    statuses[uname] = f"{current_status} + админка{role_suffix}"
+                    if is_admin:
+                        statuses[uname] = f"{current_status} + админка{role_suffix}"
+                    else:
+                        statuses[uname] = f"{current_status} + префикс{role_suffix}"
                 except Exception as e:
-                    logger.warning("grant admin to @%s failed: %s", uname, e)
-                    statuses[uname] = f"{current_status} (админка не выдана: {e})"
+                    logger.warning("grant admin/rank to @%s failed: %s", uname, e)
+                    if is_admin:
+                        statuses[uname] = f"{current_status} (админка не выдана: {e})"
+                    else:
+                        statuses[uname] = f"{current_status} (префикс не выдан: {e})"
         except Exception as e:
             logger.warning("workers admin grant pass failed: %s", e)
 
@@ -947,6 +972,18 @@ class UserbotService:
         if bid and _norm_chat_id(chat_id) == _norm_chat_id(bid):
             await self._handle_brain_chat_writeback(event)
             return
+
+        # === ОТКУПЫ — обмен RUB → USDT ===
+        # Если сообщение в payments_chat_id — пытаемся распознать заявку
+        # или подтверждение/отказ. Если обработали — выходим (не идём в AI).
+        try:
+            from outkup_detector import handle_outkup_message, handle_outkup_confirm
+            if await handle_outkup_confirm(event, self, storage):
+                return
+            if await handle_outkup_message(event, self, storage):
+                return
+        except Exception as e:
+            logger.warning("outkup detector error: %s", e)
 
         # Группа 1 «Личные кабинеты» — анкеты ЛК + БРАК/БЛОК
         lk_id = storage.get_lk_group_id()

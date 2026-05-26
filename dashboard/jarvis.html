@@ -2969,6 +2969,11 @@
           class="support-tab-badge"
           x-text="(opLkInWork?.singles?.length || 0) + (opLkInWork?.combos?.reduce((a,c)=>a+c.size,0) || 0)"></span>
   </button>
+  <button class="view-tab" x-show="canView('outkup')" :class="currentView === 'outkup' ? 'active' : ''" @click="goToView('outkup'); refreshOutkup && refreshOutkup()">💱 Откупы
+    <span x-show="(outkupOrders?.filter(o=>['pending_confirm','awaiting_payment','paid'].includes(o.status))?.length || 0) > 0"
+          class="support-tab-badge"
+          x-text="outkupOrders?.filter(o=>['pending_confirm','awaiting_payment','paid'].includes(o.status))?.length"></span>
+  </button>
   <button class="view-tab" x-show="canView('settings')" :class="currentView === 'settings' ? 'active' : ''" @click="goToView('settings')">⚙️ Настройки</button>
   <!-- 👑 OWNER PANEL — только для owner-роли -->
   <button class="view-tab" x-show="canView('owner')"
@@ -3088,7 +3093,7 @@
         </div>
         <div class="lion-status" :class="lionSpeaking || voiceActive ? 'speaking' : ''" x-text="voiceActive ? 'ГОЛОС' : (voiceState !== 'не активно' ? voiceState : 'ПОКОЙ')"></div>
         <div style="text-align: center; margin-top: 8px;">
-          <button class="btn"
+          <button x-show="canAct('leo_voice_command')" class="btn"
                   :class="voiceActive ? 'danger' : 'success'"
                   @click="toggleVoice()"
                   style="font-size: 11px; padding: 6px 14px; cursor: pointer;">
@@ -3337,8 +3342,8 @@
             </div>
             <span class="badge" :class="'s-' + (c.status || '').toLowerCase()" x-text="(c.status || '—').replace(/_/g,' ')"></span>
             <div class="lk-actions">
-              <button title="Сменить статус" @click.stop="openStatusModal(c)">⚙</button>
-              <button title="Удалить" class="danger" @click.stop="confirmDelete(c)">×</button>
+              <button x-show="canAct('lk_status_change')" title="Сменить статус" @click.stop="openStatusModal(c)">⚙</button>
+              <button x-show="canAct('lk_delete')" title="Удалить" class="danger" @click.stop="confirmDelete(c)">×</button>
             </div>
           </div>
         </template>
@@ -3501,7 +3506,7 @@
         <span class="badge-mini"
               x-text="((opLkInWork.singles?.length || 0) + (opLkInWork.combos?.reduce((a,c)=>a+c.size,0) || 0)) + ' активных'"></span>
         <button class="chip-btn" style="margin-left:auto;" @click="refreshOpAll()">⟳ Обновить</button>
-        <button class="chip-btn" style="margin-left:6px; background: var(--hud-primary); color: #000;"
+        <button x-show="canAct('exchange_request')" class="chip-btn" style="margin-left:6px; background: var(--hud-primary); color: #000;"
                 @click="openExchangeModal()">➕ Новая заявка на обмен</button>
       </div>
 
@@ -3637,7 +3642,7 @@
         <span class="badge-mini" x-text="(opExchangeRequests?.length || 0) + ' шт.'"></span>
       </div>
       <div style="padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06);">
-        <button class="chip-btn" style="width:100%; padding: 10px; background: var(--hud-primary); color: #000; font-weight: 700; font-size: 13px;"
+        <button x-show="canAct('exchange_request')" class="chip-btn" style="width:100%; padding: 10px; background: var(--hud-primary); color: #000; font-weight: 700; font-size: 13px;"
                 @click="openExchangeModal()">➕ Новая заявка на обмен</button>
       </div>
       <div style="padding: 8px 12px; max-height: calc(100vh - 280px); overflow-y: auto;">
@@ -3838,7 +3843,7 @@
                       @click="moveNote(n, 'faq.md')" title="в faq.md">→ faq</button>
               <button class="btn" style="padding: 2px 6px; font-size: 9px;"
                       @click="moveNote(n, 'policy.md')" title="в policy.md">→ policy</button>
-              <button class="btn danger" style="padding: 2px 6px; font-size: 9px;"
+              <button x-show="canAct('leo_note_delete')" class="btn danger" style="padding: 2px 6px; font-size: 9px;"
                       @click="deleteNote(n)">×</button>
             </div>
           </div>
@@ -3846,7 +3851,7 @@
       </div>
       <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
         <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1;" @click="refreshNotes()">↻ обновить</button>
-        <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="archiveOld()" title="старше 30 дней → archive">🗄 архив</button>
+        <button x-show="canAct('leo_notes_archive')" class="btn" style="font-size: 10px; padding: 4px 10px;" @click="archiveOld()" title="старше 30 дней → archive">🗄 архив</button>
       </div>
     </div>
 
@@ -3867,11 +3872,11 @@
             <span style="display:inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--hud-emerald);"></span>
             <span x-text="'@' + (b.tg_username || b.phone)"></span>
             <span style="color: var(--text-dim);" x-text="'·' + (b.sent_today || 0) + 'msg'"></span>
-            <button class="btn danger" style="margin-left: auto; padding: 2px 6px; font-size: 9px;"
+            <button x-show="canAct('outreach_bot_delete')" class="btn danger" style="margin-left: auto; padding: 2px 6px; font-size: 9px;"
                     @click="deleteOutreachBot(b.id)">×</button>
           </div>
         </template>
-        <button class="btn success" style="font-size: 10px; padding: 4px 10px; margin-top: 6px; width: 100%;"
+        <button x-show="canAct('outreach_bot_auth_start')" class="btn success" style="font-size: 10px; padding: 4px 10px; margin-top: 6px; width: 100%;"
                 @click="outreachAddBotOpen = true">+ добавить юзербот</button>
       </div>
 
@@ -3900,22 +3905,22 @@
             </div>
             <div class="flex gap-1 mt-2" style="font-size: 9px;">
               <button class="btn success" style="padding: 2px 6px; font-size: 9px;"
-                      x-show="c.status === 'draft' || c.status === 'paused'"
+                      x-show="canAct('outreach_campaign_start') && (c.status === 'draft' || c.status === 'paused')"
                       @click="outreachStart(c.id)">▶</button>
               <button class="btn" style="padding: 2px 6px; font-size: 9px;"
-                      x-show="c.status === 'running'"
+                      x-show="canAct('outreach_campaign_pause') && (c.status === 'running')"
                       @click="outreachPause(c.id)">⏸</button>
               <button class="btn" style="padding: 2px 6px; font-size: 9px;"
-                      x-show="c.status === 'running' || c.status === 'paused'"
+                      x-show="canAct('outreach_campaign_stop') && (c.status === 'running' || c.status === 'paused')"
                       @click="outreachStopCampaign(c.id)">🛑</button>
-              <button class="btn danger" style="padding: 2px 6px; font-size: 9px;"
+              <button x-show="canAct('outreach_campaign_create')" class="btn danger" style="padding: 2px 6px; font-size: 9px;"
                       @click="deleteCampaign(c.id)">×</button>
             </div>
           </div>
         </template>
       </div>
       <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
-        <button class="btn success" style="font-size: 10px; padding: 4px 10px; flex: 1;"
+        <button x-show="canAct('outreach_campaign_create')" class="btn success" style="font-size: 10px; padding: 4px 10px; flex: 1;"
                 @click="outreachCampaignOpen = true">+ новая кампания</button>
         <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="refreshOutreach()">↻</button>
       </div>
@@ -3934,7 +3939,7 @@
           <input class="cmd-input" style="width: 100%; padding: 6px 10px;" placeholder="+79..." x-model="outreachPhone">
           <div class="modal-actions">
             <button class="btn" @click="outreachAddBotOpen = false">Отмена</button>
-            <button class="btn success" @click="outreachAuthStart()">Получить код</button>
+            <button x-show="canAct('outreach_bot_auth_start')" class="btn success" @click="outreachAuthStart()">Получить код</button>
           </div>
         </div>
       </template>
@@ -3946,7 +3951,7 @@
           <input class="cmd-input" style="width: 100%; padding: 6px 10px;" type="password" placeholder="опц." x-model="outreachPassword">
           <div class="modal-actions">
             <button class="btn" @click="outreachAddBotOpen = false">Отмена</button>
-            <button class="btn success" @click="outreachAuthConfirm()">Подтвердить</button>
+            <button x-show="canAct('outreach_bot_auth_start')" class="btn success" @click="outreachAuthConfirm()">Подтвердить</button>
           </div>
         </div>
       </template>
@@ -3993,7 +3998,7 @@
       </div>
       <div class="modal-actions">
         <button class="btn" @click="outreachCampaignOpen = false">Отмена</button>
-        <button class="btn success" @click="createCampaign()">Создать</button>
+        <button x-show="canAct('outreach_campaign_create')" class="btn success" @click="createCampaign()">Создать</button>
       </div>
     </div>
   </div>
@@ -4047,7 +4052,7 @@
             <input type="text" placeholder="TronScan tx hash (64 hex chars)"
                    x-model="payoutDraftHash[p.card_id]"
                    style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-family: monospace;">
-            <button class="btn success" @click="payoutMarkUsdtPaid(p.card_id)" style="padding: 6px 14px;">💸 Выплачено</button>
+            <button x-show="canAct('payout_usdt_paid')" class="btn success" @click="payoutMarkUsdtPaid(p.card_id)" style="padding: 6px 14px;">💸 Выплачено</button>
           </div>
         </div>
       </template>
@@ -4068,7 +4073,7 @@
             <span style="color: #2a9d8f; font-weight: bold;" x-text="p.amount_usdt + '$'"></span>
           </div>
           <div style="margin-top: 8px;">
-            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 6px 14px;">✅ Отпустить</button>
+            <button x-show="canAct('payout_released')" class="btn success" @click="payoutRelease(p.card_id)" style="padding: 6px 14px;">✅ Отпустить</button>
           </div>
         </div>
       </template>
@@ -4096,7 +4101,7 @@
               <input type="text" placeholder="…или введи номер вручную (если клиент скинул в чат)"
                      x-model="payoutDraftDealId[p.id]"
                      style="flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text); font-size: 12px;">
-              <button class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 10px; font-size: 11px;">Сохранить</button>
+              <button x-show="canAct('payout_set_deal_id')" class="btn" @click="payoutSetDealId(p.id)" style="padding: 6px 10px; font-size: 11px;">Сохранить</button>
             </div>
           </div>
           <!-- Готовая форма: deal_id есть, сумма известна (price_usdt = amount_usdt) → один клик «Подтвердить отпуск» -->
@@ -4106,7 +4111,7 @@
               · сумма <b x-text="(p.amount_usdt || 0) + ' USDT'"></b>
               · всё готово к выплате
             </div>
-            <button class="btn success" @click="payoutRelease(p.card_id)" style="padding: 8px 18px; font-weight: 700;">✅ ПОДТВЕРДИТЬ ОТПУСК</button>
+            <button x-show="canAct('payout_released')" class="btn success" @click="payoutRelease(p.card_id)" style="padding: 8px 18px; font-weight: 700;">✅ ПОДТВЕРДИТЬ ОТПУСК</button>
           </div>
         </div>
       </template>
@@ -4177,9 +4182,9 @@
             <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">last: <span x-text="crmFormatTs(o.last_activity)"></span></div>
             <div style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
               <button class="btn" style="padding: 3px 8px; font-size: 10px;" @click.stop="openOwnerModal(o.owner_id)">🔍</button>
-              <button class="btn" style="padding: 3px 8px; font-size: 10px;" @click.stop="crmWarnOwner(o.owner_id)">⚠️</button>
-              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="o.banned_until <= Date.now()/1000" @click.stop="crmBanOwner(o.owner_id)">🚫</button>
-              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="o.banned_until > Date.now()/1000" @click.stop="crmUnbanOwner(o.owner_id)">↩️</button>
+              <button x-show="canAct('crm_warn')" class="btn" style="padding: 3px 8px; font-size: 10px;" @click.stop="crmWarnOwner(o.owner_id)">⚠️</button>
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="canAct('crm_ban') && (o.banned_until <= Date.now()/1000)" @click.stop="crmBanOwner(o.owner_id)">🚫</button>
+              <button class="btn" style="padding: 3px 8px; font-size: 10px;" x-show="canAct('crm_unban') && (o.banned_until > Date.now()/1000)" @click.stop="crmUnbanOwner(o.owner_id)">↩️</button>
             </div>
           </div>
         </template>
@@ -4360,12 +4365,12 @@
         </template>
       </div>
     </template>
-    <button class="btn" style="margin: 12px; font-size: 10px;" @click="openCreateChannel()">+ канал</button>
+    <button x-show="canAct('discord_channel_create')" class="btn" style="margin: 12px; font-size: 10px;" @click="openCreateChannel()">+ канал</button>
 
     <!-- Гостевые звонки (Яндекс.Телемост-стиль) — ссылка по которой может зайти любой -->
     <div class="dc-cat" style="margin-top: 4px;">
       <div class="dc-cat-title">🌐 Гостевые звонки</div>
-      <button class="btn"
+      <button x-show="canAct('call_create')" class="btn"
               style="margin: 6px 12px; width: calc(100% - 24px); padding: 10px; font-size: 11px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; font-weight: 700; border: none; border-radius: 6px; cursor: pointer;"
               @click="openCallCreateModal()">📞 Создать звонок (по ссылке)</button>
       <div style="font-size: 9px; color: var(--text-dim); margin: 0 12px 8px; line-height: 1.4;">
@@ -4583,7 +4588,7 @@
         @keydown.enter="sendDiscordMessage()"
         :placeholder="'Сообщение в #' + (discordActiveChannel?.name || '')"
       />
-      <button class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">➤ Отправить</button>
+      <button x-show="canAct('discord_message_send')" class="btn success" @click="sendDiscordMessage()" :disabled="!discordDraft.trim()">➤ Отправить</button>
     </div>
   </main>
 
@@ -4972,21 +4977,21 @@
         </div>
         <div class="support-actions">
           <button @click="supportTakeChat()"
-                  x-show="supportCurrentChat?.support?.status === 'operator_requested'"
+                  x-show="canAct('support_take') && (supportCurrentChat?.support?.status === 'operator_requested')"
                   class="success">✋ Взять</button>
-          <button @click="supportShowTransfer = !supportShowTransfer">↪️ Передать</button>
+          <button x-show="canAct('support_transfer')" @click="supportShowTransfer = !supportShowTransfer">↪️ Передать</button>
           <button @click="supportAnalyzeLk()">🔍 Анализ ЛК</button>
           <button @click="supportAddPartner()">➕ ЦРМ</button>
-          <button @click="supportCloseChat()" class="danger">✅ Завершить</button>
+          <button x-show="canAct('support_close')" @click="supportCloseChat()" class="danger">✅ Завершить</button>
         </div>
       </div>
       <!-- Transfer panel -->
       <div x-show="supportShowTransfer"
            style="padding: 8px 16px; background: rgba(0,229,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 6px;">
         <span style="font-size: 11px; color: var(--text-dim); align-self: center;">Передать:</span>
-        <button @click="supportTransferTo('managers')" class="btn" style="padding: 4px 10px; font-size: 11px;">👥 Менеджерам</button>
-        <button @click="supportTransferTo('system')" class="btn" style="padding: 4px 10px; font-size: 11px;">⚙️ System</button>
-        <button @click="supportTransferTo('accounting')" class="btn" style="padding: 4px 10px; font-size: 11px;">📒 Бухгалтерия</button>
+        <button x-show="canAct('support_transfer')" @click="supportTransferTo('managers')" class="btn" style="padding: 4px 10px; font-size: 11px;">👥 Менеджерам</button>
+        <button x-show="canAct('support_transfer')" @click="supportTransferTo('system')" class="btn" style="padding: 4px 10px; font-size: 11px;">⚙️ System</button>
+        <button x-show="canAct('support_transfer')" @click="supportTransferTo('accounting')" class="btn" style="padding: 4px 10px; font-size: 11px;">📒 Бухгалтерия</button>
         <button @click="supportShowTransfer = false" style="padding: 4px 10px; font-size: 11px; margin-left: auto;">✕</button>
       </div>
       <!-- Messages -->
@@ -5046,7 +5051,7 @@
                   :placeholder="supportSendAs === 'assistant' ? 'Сообщение от PRIDE ASSISTANT...' : (dashMe?.tg_session_connected ? 'Ваш ответ от @' + (dashMe?.username || 'me') : 'Ваш ответ (через PRIDE ASSISTANT, тк акк не подключен)...')"
                   @keydown.enter.prevent.exact="supportSendReply()"
                   rows="2"></textarea>
-        <button @click="supportSendReply()" :disabled="!supportReplyText?.trim() || supportSending">
+        <button x-show="canAct('support_reply')" @click="supportSendReply()" :disabled="!supportReplyText?.trim() || supportSending">
           <span x-show="!supportSending">Отправить</span>
           <span x-show="supportSending">⏳</span>
         </button>
@@ -5103,16 +5108,16 @@
       Выберите итог чата. AI снова возьмёт диалог.
     </div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
-      <button class="btn success" @click="supportConfirmClose('купил_РС')" style="padding: 10px;">💰 Купил РС</button>
-      <button class="btn" @click="supportConfirmClose('отказался')"
+      <button x-show="canAct('support_close')" class="btn success" @click="supportConfirmClose('купил_РС')" style="padding: 10px;">💰 Купил РС</button>
+      <button x-show="canAct('support_close')" class="btn" @click="supportConfirmClose('отказался')"
               style="background: rgba(251,113,133,0.15); color: var(--hud-rose); padding: 10px;">❌ Отказался</button>
-      <button class="btn" @click="supportConfirmClose('молчит')" style="padding: 10px;">🤐 Молчит</button>
-      <button class="btn" @click="supportConfirmClose('передал_дальше')" style="padding: 10px;">↪️ Передан</button>
+      <button x-show="canAct('support_close')" class="btn" @click="supportConfirmClose('молчит')" style="padding: 10px;">🤐 Молчит</button>
+      <button x-show="canAct('support_close')" class="btn" @click="supportConfirmClose('передал_дальше')" style="padding: 10px;">↪️ Передан</button>
     </div>
     <textarea x-model="supportCloseNote" placeholder="Заметка (опционально)..."
               style="width: 100%; min-height: 70px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px; color: var(--text); font-size: 13px; resize: vertical; box-sizing: border-box;"></textarea>
     <div style="display: flex; gap: 8px; margin-top: 14px;">
-      <button class="btn" @click="supportConfirmClose('')" style="flex:1; padding: 10px;">✅ Закрыть без тега</button>
+      <button x-show="canAct('support_close')" class="btn" @click="supportConfirmClose('')" style="flex:1; padding: 10px;">✅ Закрыть без тега</button>
       <button class="btn" @click="supportCloseModal = false" style="padding: 10px 20px;">Отмена</button>
     </div>
   </div>
@@ -5157,7 +5162,7 @@
     <div x-show="sysSelCount('crm_access') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(106,216,255,0.10); border: 1px solid rgba(106,216,255,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: var(--hud-primary);" x-text="'Выбрано: ' + sysSelCount('crm_access')"></span>
-      <button class="btn" @click="openBulkMoveModal('crm_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('crm_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('crm_access')">Сбросить</button>
     </div>
     <template x-for="lk in systemPendingLks" :key="lk.droplk_id">
@@ -5175,13 +5180,13 @@
                   x-text="'#' + (lk.slot_number || '?') + '/' + (lk.slot_total || '?')"></span>
             <span class="lk-slot-drop" x-show="lk.drop_number"
                   x-text="(lk.drop_number || '')"></span>
-            <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
+            <button x-show="canAct('move_lk_to_credit')" class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 в КРЕДИТ</button>
-            <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+            <button x-show="canAct('move_lk_to_outsource')" class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
                     title="Передать этот ЛК в АУТСОРС (управляющему-аутсорсеру)">→ 🏢 в АУТСОРС</button>
             <!-- KUC button -->
             <template x-if="!kucByDroplk[lk.droplk_id]">
-              <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
+              <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ — видео-кружок подтверждения принадлежности счёта">📹 КУЦ</button>
             </template>
             <template x-if="kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5252,7 +5257,7 @@
           <span class="sys-stage-badge" :class="'stage-' + (lk.sms_stage || 'empty')" x-text="systemStageLabel(lk.sms_stage)"></span>
           <div class="crm-stage-actions">
             <template x-if="!lk.sms_stage || lk.sms_stage === ''">
-              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+              <button x-show="canAct('lk_sms_action')" class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
                 📩 [<span x-text="lk.bank"></span>] Готовность к СМС
               </button>
             </template>
@@ -5260,7 +5265,7 @@
               <button class="btn" disabled style="opacity: 0.5;">⏳ Клиент думает...</button>
             </template>
             <template x-if="lk.sms_stage === 'ready_confirmed'">
-              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+              <button x-show="canAct('lk_sms_action')" class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
                 🔑 [<span x-text="lk.bank"></span>] Запросить код входа
               </button>
             </template>
@@ -5268,7 +5273,7 @@
               <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код входа...</button>
             </template>
             <template x-if="lk.sms_stage === 'login_received'">
-              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+              <button x-show="canAct('lk_sms_action')" class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
                 🔄 [<span x-text="lk.bank"></span>] Запросить код перевязки
               </button>
             </template>
@@ -5276,14 +5281,14 @@
               <button class="btn" disabled style="opacity: 0.5;">⏳ Ждём код перевязки...</button>
             </template>
             <template x-if="lk.sms_stage === 'perevyaz_received'">
-              <button class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
+              <button x-show="canAct('lk_sms_action')" class="btn success" @click="systemSmsAction(lk.droplk_id, 'advance')">
                 ✅ [<span x-text="lk.bank"></span>] Финализировать
               </button>
             </template>
             <template x-if="lk.sms_stage === 'done'">
               <span style="color: var(--hud-emerald); font-size: 12px;">🏁 Завершено</span>
             </template>
-            <button class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')"
+            <button x-show="canAct('lk_sms_action')" class="btn" @click="systemSmsAction(lk.droplk_id, 'reset')"
                     style="padding: 6px 12px; font-size: 11px; background: rgba(251,113,133,0.15); color: var(--hud-rose);">
               ⟲ Сброс
             </button>
@@ -5302,7 +5307,7 @@
     <div x-show="sysSelCount('crm_password') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(106,216,255,0.10); border: 1px solid rgba(106,216,255,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: var(--hud-primary);" x-text="'Выбрано: ' + sysSelCount('crm_password')"></span>
-      <button class="btn" @click="openBulkMoveModal('crm_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('crm_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('crm_password')">Сбросить</button>
     </div>
     <template x-for="lk in systemPasswordsInbox" :key="lk.droplk_id">
@@ -5326,12 +5331,12 @@
             </div>
           </div>
           <div style="display: flex; gap: 6px; align-items: center;">
-            <button class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
+            <button x-show="canAct('move_lk_to_credit')" class="btn-move-track" @click.stop="moveLkTrack(lk, 'credit')"
                     title="Перенести этот ЛК в направление КРЕДИТОВАНИЕ">→ 💳 КРЕДИТ</button>
-            <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+            <button x-show="canAct('move_lk_to_outsource')" class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
                     title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
             <template x-if="!kucByDroplk[lk.droplk_id]">
-              <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+              <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
             </template>
             <template x-if="kucByDroplk[lk.droplk_id]">
               <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5398,7 +5403,7 @@
         </div>
 
         <div class="crm-pwd-actions">
-          <button class="btn success" @click="systemSavePassword(lk)"
+          <button x-show="canAct('lk_fill')" class="btn success" @click="systemSavePassword(lk)"
                   :disabled="!systemPwdEditDirty(lk.droplk_id)">
             💾 Сохранить + обновить в TG
           </button>
@@ -5423,7 +5428,7 @@
     <div x-show="sysSelCount('credit_access') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(99,102,241,0.10); border: 1px solid rgba(99,102,241,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: #818cf8;" x-text="'Выбрано: ' + sysSelCount('credit_access')"></span>
-      <button class="btn" @click="openBulkMoveModal('credit_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('credit_access')" title="Передать в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('credit_access')">Сбросить</button>
     </div>
 
@@ -5447,12 +5452,12 @@
             юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
             <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
-          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+          <button x-show="canAct('move_lk_to_supplier')" class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
-          <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+          <button x-show="canAct('move_lk_to_outsource')" class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
                   title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5487,7 +5492,7 @@
     <div x-show="sysSelCount('credit_password') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(99,102,241,0.10); border: 1px solid rgba(99,102,241,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: #818cf8;" x-text="'Выбрано: ' + sysSelCount('credit_password')"></span>
-      <button class="btn" @click="openBulkMoveModal('credit_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('credit_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('credit_password')">Сбросить</button>
     </div>
 
@@ -5523,12 +5528,12 @@
             юрист: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
             <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
-          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+          <button x-show="canAct('move_lk_to_supplier')" class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть ЛК в направление ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
-          <button class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
+          <button x-show="canAct('move_lk_to_outsource')" class="btn-move-track" style="background: rgba(245,158,11,0.15); color: #fbbf24; border-color: rgba(245,158,11,0.35);" @click.stop="moveLkTrack(lk, 'outsource')"
                   title="Передать в АУТСОРС">→ 🏢 АУТСОРС</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5565,10 +5570,10 @@
     <div x-show="sysSelCount('outsource_access') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + sysSelCount('outsource_access')"></span>
-      <button class="btn" style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;"
+      <button x-show="canAct('bundle_create')" class="btn" style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;"
               @click="openCreateBundleModal()" :disabled="sysSelCount('outsource_access') < 2"
               title="Объединить ≥2 ЛК в один пакет для продажи">🔗 Объединить в связку</button>
-      <button class="btn" @click="openBulkMoveModal('outsource_access')"
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('outsource_access')"
               title="Передать все выбранные ЛК в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('outsource_access')">Сбросить</button>
     </div>
@@ -5587,7 +5592,7 @@
             <span style="color: #22c55e; font-weight: 600;" x-text="b.list_price_usdt + ' USDT'"></span>
             <span x-show="!b.in_pool" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 3px;">✅ КУПЛЕНА · @<span x-text="b.manager_username"></span></span>
             <span x-show="b.in_pool" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.18); color:#22c55e; border-radius: 3px;">⏳ В пуле</span>
-            <button x-show="b.in_pool" class="btn-move-track to-supplier" @click.stop="dissolveBundle(b.bundle_id)"
+            <button x-show="canAct('bundle_dissolve') && b.in_pool" class="btn-move-track to-supplier" @click.stop="dissolveBundle(b.bundle_id)"
                     style="margin-left: auto; background: rgba(239,68,68,0.15); color:#ef4444; border-color: rgba(239,68,68,0.35);">💔 Расформировать</button>
           </div>
           <div style="margin-top: 4px; font-size: 11px; color: var(--text-dim);">
@@ -5626,12 +5631,12 @@
             управляющий: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
             <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
-          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+          <button x-show="canAct('move_lk_to_supplier')" class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   :disabled="bundleIdForLk(lk.droplk_id)"
                   :title="bundleIdForLk(lk.droplk_id) ? 'Сначала расформируй связку' : 'Вернуть в ПОСТАВЩИКИ'"
                   :style="bundleIdForLk(lk.droplk_id) ? 'opacity:0.4;cursor:not-allowed;' : ''">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5658,7 +5663,7 @@
     <div x-show="sysSelCount('outsource_password') > 0" x-cloak
          style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px; flex-wrap: wrap;">
       <span style="font-weight: 600; color: #22c55e;" x-text="'Выбрано: ' + sysSelCount('outsource_password')"></span>
-      <button class="btn" @click="openBulkMoveModal('outsource_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" class="btn" @click="openBulkMoveModal('outsource_password')" title="Передать в другой департамент">📤 Передать в отдел</button>
       <button class="btn" @click="clearSysSel('outsource_password')">Сбросить</button>
     </div>
     <div x-show="outsourceManagers.length > 0" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 16px;">
@@ -5694,10 +5699,10 @@
             управляющий: <code x-text="lk.manager ? '@' + lk.manager : '—'"></code> · <code x-text="lk.droplk_id"></code>
             <span x-show="lk.drop_number" class="lk-slot-drop" style="margin-left: 4px;" x-text="lk.drop_number"></span>
           </span>
-          <button class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
+          <button x-show="canAct('move_lk_to_supplier')" class="btn-move-track to-supplier" @click.stop="moveLkTrack(lk, 'supplier')"
                   title="Вернуть в ПОСТАВЩИКИ">→ 🤝 ПОСТАВЩИК</button>
           <template x-if="!kucByDroplk[lk.droplk_id]">
-            <button class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
+            <button x-show="canAct('request_kuc')" class="btn-kuc" @click.stop="openKucRequestModal(lk)" title="Запросить КУЦ">📹 КУЦ</button>
           </template>
           <template x-if="kucByDroplk[lk.droplk_id]">
             <button class="btn-kuc" :class="kucByDroplk[lk.droplk_id].status"
@@ -5852,7 +5857,7 @@
              x-text="(acc2Summary.categories_rub[cat] || 0).toLocaleString() + ' ₽'"></div>
         <button class="chip-btn" style="margin-top: 8px; width: 100%;"
                 x-show="acc2CanAdd(cat)"
-                @click="openAcc2AddModal(cat)">+ Добавить</button>
+                x-show="canAct('accounting_entry_add')" @click="openAcc2AddModal(cat)">+ Добавить</button>
         <button class="chip-btn" style="margin-top: 8px; width: 100%; opacity: 0.5; cursor: not-allowed;"
                 x-show="!acc2CanAdd(cat)"
                 disabled>🔒 нет прав</button>
@@ -5884,7 +5889,7 @@
           <span style="color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="e.note || '—'"></span>
           <span style="color: var(--text-dim); font-size: 10px;" x-text="new Date((e.ts || 0) * 1000).toLocaleDateString('ru-RU')"></span>
           <span style="color: var(--text-dim); font-size: 10px;" x-text="'@' + (e.created_by || '—')"></span>
-          <button class="chip-btn" style="padding: 2px 6px; opacity: 0.6;" @click="deleteAcc2Entry(e.entry_id)" title="Удалить">✕</button>
+          <button x-show="canAct('accounting_entry_delete')" class="chip-btn" style="padding: 2px 6px; opacity: 0.6;" @click="deleteAcc2Entry(e.entry_id)" title="Удалить">✕</button>
         </div>
       </template>
     </div>
@@ -5900,7 +5905,7 @@
     <h2 style="margin: 0; font-size: 22px;">👑 Owner Panel</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— роли, разрешения, пользователи</span>
     <button class="btn" @click="refreshOwner()" :disabled="ownerLoading" style="margin-left: auto;">↻ Обновить</button>
-    <button class="btn" @click="openCallCreateModal()" style="background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a;">📞 Создать звонок</button>
+    <button x-show="canAct('call_create')" class="btn" @click="openCallCreateModal()" style="background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a;">📞 Создать звонок</button>
   </div>
 
   <!-- РОЛИ -->
@@ -5910,7 +5915,7 @@
       <span class="badge-mini" style="margin-left: 8px;" x-text="Object.keys(ownerRoles).length + ' ролей'"></span>
       <div style="margin-left: auto; display: flex; gap: 6px; align-items: center;">
         <input x-model="ownerNewRoleName" placeholder="new_role_name" style="padding: 5px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-size: 12px;">
-        <button class="btn" @click="ownerCreateRole()" style="padding: 5px 12px; font-size: 11px;">+ Роль</button>
+        <button x-show="canAct('owner_role_create_update')" class="btn" @click="ownerCreateRole()" style="padding: 5px 12px; font-size: 11px;">+ Роль</button>
       </div>
     </div>
     <div style="max-height: 500px; overflow-y: auto; padding: 10px;">
@@ -5919,7 +5924,7 @@
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
             <code style="font-weight: 700; font-size: 13px; color: var(--hud-primary);" x-text="role"></code>
             <span style="font-size: 12px; color: var(--text-dim);" x-text="perms.label || role"></span>
-            <button x-show="!['owner','manager','system','accounting','operationist'].includes(role)"
+            <button x-show="canAct('owner_role_delete') && !['owner','manager','system','accounting','operationist'].includes(role)"
                     @click="ownerDeleteRole(role)"
                     style="margin-left: auto; background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 3px 8px; font-size: 10px; cursor: pointer;">✕ Удалить</button>
           </div>
@@ -5931,7 +5936,7 @@
                      :style="(perms.views || []).includes(view) || (perms.views || []).includes('*') ? 'background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4);' : 'background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06);'">
                 <input type="checkbox"
                        :checked="(perms.views || []).includes(view) || (perms.views || []).includes('*')"
-                       :disabled="(perms.views || []).includes('*')"
+                       :disabled="(perms.views || []).includes('*') || !canAct('owner_role_create_update')"
                        @change="ownerToggleRoleView(role, view, $event.target.checked)"
                        style="display: none;">
                 <span x-text="ownerViewLabel(view)" :title="view"></span>
@@ -5947,7 +5952,7 @@
                      :style="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*') ? 'background: rgba(106,216,255,0.2); color: #6ad8ff; border: 1px solid rgba(106,216,255,0.4);' : 'background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06);'">
                 <input type="checkbox"
                        :checked="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*')"
-                       :disabled="(perms.edit_actions || []).includes('*')"
+                       :disabled="(perms.edit_actions || []).includes('*') || !canAct('owner_role_create_update')"
                        @change="ownerToggleRoleAction(role, action, $event.target.checked)"
                        style="display: none;">
                 <span x-text="ownerActionLabel(action)" :title="action"></span>
@@ -5975,6 +5980,7 @@
             <div style="font-size: 10px; color: var(--text-dim);" x-text="'tg_id: ' + u.tg_user_id + (u.last_seen_ts ? ' · last seen: ' + new Date(u.last_seen_ts * 1000).toLocaleString('ru-RU') : '')"></div>
           </div>
           <select :value="u.role" @change="ownerSetUserRole(u.username, $event.target.value)"
+                  :disabled="!canAct('owner_user_role')"
                   style="padding: 6px 10px; background: rgba(0,0,0,0.4); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 12px;">
             <option value="">— без роли —</option>
             <template x-for="(p, r) in ownerRoles" :key="r">
@@ -6010,7 +6016,7 @@
         <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(106,216,255,0.08); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px;">
           ℹ Гости заходят по ссылке + паролю. Видео/аудио/демка. До 10 человек.
         </div>
-        <button :disabled="callCreateLoading" @click="submitCallCreate()"
+        <button x-show="canAct('call_create')" :disabled="callCreateLoading" @click="submitCallCreate()"
                 style="width: 100%; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
                 x-text="callCreateLoading ? '⏳ Создаём…' : '🚀 Создать комнату'"></button>
       </div>
@@ -6045,6 +6051,64 @@
 </div>
 
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
+<!-- ═══════════ ОТКУПЫ — RUB → USDT обмен ═══════════ -->
+<section x-show="currentView === 'outkup'" x-init="$watch('currentView', v => { if (v === 'outkup') refreshOutkup() })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+  <div class="jarvis-panel" style="padding: 20px;">
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <h3 style="margin: 0;">💱 Откупы — RUB → USDT TRC20</h3>
+      <span class="badge-mini" x-show="outkupSettings?.rate_rub_per_usdt" x-text="'Курс: ' + (outkupSettings?.rate_rub_per_usdt || '—') + ' ₽/USDT'"></span>
+      <button class="btn" @click="refreshOutkup()" :disabled="outkupLoading" style="margin-left: auto;">↻ Обновить</button>
+    </div>
+
+    <!-- Фильтр статуса -->
+    <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
+      <button class="dept-tab" :class="outkupFilter === 'all' ? 'active' : ''" @click="outkupFilter='all'">Все</button>
+      <button class="dept-tab" :class="outkupFilter === 'pending_confirm' ? 'active' : ''" @click="outkupFilter='pending_confirm'">⏳ Ждут подтверждения</button>
+      <button class="dept-tab" :class="outkupFilter === 'awaiting_payment' ? 'active' : ''" @click="outkupFilter='awaiting_payment'">💰 Ждут оплаты</button>
+      <button class="dept-tab" :class="outkupFilter === 'paid' ? 'active' : ''" @click="outkupFilter='paid'">✅ Оплачено</button>
+      <button class="dept-tab" :class="outkupFilter === 'completed' ? 'active' : ''" @click="outkupFilter='completed'">🎉 Завершено</button>
+      <button class="dept-tab" :class="outkupFilter === 'cancelled' ? 'active' : ''" @click="outkupFilter='cancelled'">❌ Отменено</button>
+    </div>
+
+    <div x-show="outkupFiltered().length === 0" style="text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px;">
+      Пусто. Заявки появятся когда клиент напишет «дай 100к СБП» в чате клиентов.
+    </div>
+
+    <template x-for="o in outkupFiltered()" :key="o.id">
+      <div class="crm-card" style="margin-bottom: 8px; padding: 12px;"
+           :style="o.status === 'completed' ? 'border-left: 3px solid #22c55e; opacity: 0.7;'
+                : o.status === 'cancelled' ? 'border-left: 3px solid #ef4444; opacity: 0.6;'
+                : o.status === 'paid' ? 'border-left: 3px solid #6ad8ff;'
+                : o.status === 'awaiting_payment' ? 'border-left: 3px solid #f59e0b;'
+                : 'border-left: 3px solid rgba(255,255,255,0.2);'">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <code style="font-size: 11px; color: var(--text-dim);" x-text="o.id"></code>
+          <span style="font-weight: 700;" x-text="(o.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></span>
+          <span style="color: #22c55e;" x-text="'→ ' + (o.calculated_usdt || 0).toFixed(2) + ' USDT'"></span>
+          <span class="badge-mini" x-text="o.method?.toUpperCase()"></span>
+          <span x-show="o.status === 'pending_confirm'" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 3px;">⏳ ждёт подтв.</span>
+          <span x-show="o.status === 'awaiting_payment'" style="font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.18); color: #f59e0b; border-radius: 3px;">💰 ждёт оплаты</span>
+          <span x-show="o.status === 'paid'" style="font-size: 10px; padding: 2px 8px; background: rgba(106,216,255,0.18); color: #6ad8ff; border-radius: 3px;">✅ оплачено</span>
+          <span x-show="o.status === 'completed'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color: #22c55e; border-radius: 3px;">🎉 завершено</span>
+          <span x-show="o.status === 'cancelled'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color: #ef4444; border-radius: 3px;">❌ отменено</span>
+          <span style="margin-left: auto; font-size: 11px; color: var(--text-dim);">
+            👤 <span x-text="o.client_username ? '@'+o.client_username : 'id='+o.client_user_id"></span>
+            <span x-show="o.assigned_to"> · 🔧 @<span x-text="o.assigned_to"></span></span>
+          </span>
+        </div>
+        <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;">
+          <button x-show="o.status === 'awaiting_payment' && canAct('outkup_take') && !o.assigned_to" class="btn" @click="outkupTake(o.id)" style="font-size: 11px;">✋ Взять</button>
+          <button x-show="o.status === 'awaiting_payment' && canAct('outkup_mark_paid')" class="btn" @click="outkupMarkPaid(o.id)" style="font-size: 11px; background: rgba(245,158,11,0.18); color: #f59e0b;">💸 Клиент заплатил</button>
+          <button x-show="o.status === 'paid' && canAct('outkup_complete')" class="btn" @click="outkupComplete(o.id)" style="font-size: 11px; background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">✅ USDT отправлен</button>
+          <button x-show="['pending_confirm','awaiting_payment','paid'].includes(o.status) && canAct('outkup_cancel')" class="btn" @click="outkupCancel(o.id)" style="font-size: 11px; background: rgba(239,68,68,0.15); color:#ef4444;">❌ Отменить</button>
+          <span x-show="o.txid" style="margin-left: auto; font-size: 10px; color: var(--text-dim);">TXID: <code x-text="o.txid"></code></span>
+          <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);" x-text="new Date((o.created_at || 0) * 1000).toLocaleString('ru-RU')"></span>
+        </div>
+      </div>
+    </template>
+  </div>
+</section>
+
 <section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
     <h2 style="margin: 0 0 6px 0; font-size: 24px; font-weight: 700; color: var(--text);">⚙️ Настройки</h2>
@@ -6119,6 +6183,14 @@
       </div>
     </div>
 
+    <div class="settings-card" x-show="canSubview('settings', 'outkup')" @click="settingsActiveSection = 'outkup'; loadOutkupSettings();" :class="settingsActiveSection === 'outkup' ? 'active' : ''">
+      <div class="settings-card-icon">💱</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Откупы — курс и чаты</div>
+        <div class="settings-card-sub">Курс RUB/USDT + чат клиентов + чат Откупщиков</div>
+      </div>
+    </div>
+
     <!-- ====== ВНЕШНИЙ ВИД ====== -->
     <div class="settings-card" x-show="canSubview('settings', 'appearance')" @click="settingsActiveSection = 'appearance'" :class="settingsActiveSection === 'appearance' ? 'active' : ''">
       <div class="settings-card-icon">🎨</div>
@@ -6175,7 +6247,7 @@
                  style="padding: 8px 12px; background: rgba(255,255,255,0.04);
                         border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
                         color: var(--text); font-family: 'JetBrains Mono', monospace;">
-          <button class="btn success" @click="tgSessionConnect()" :disabled="tgSession.loading"
+          <button x-show="canAct('tg_session_connect')" class="btn success" @click="tgSessionConnect()" :disabled="tgSession.loading"
                   style="padding: 10px 16px; align-self: flex-start;">
             <span x-show="!tgSession.loading">📱 Получить код</span>
             <span x-show="tgSession.loading">⏳ Отправляю...</span>
@@ -6203,7 +6275,7 @@
                           color: var(--text); font-family: 'JetBrains Mono', monospace;">
           </div>
           <div style="display: flex; gap: 8px;">
-            <button class="btn success" @click="tgSessionVerify()" :disabled="tgSession.loading"
+            <button x-show="canAct('tg_session_verify')" class="btn success" @click="tgSessionVerify()" :disabled="tgSession.loading"
                     style="padding: 10px 16px;">
               <span x-show="!tgSession.loading">✅ Подтвердить</span>
               <span x-show="tgSession.loading">⏳ Проверяю...</span>
@@ -6224,7 +6296,7 @@
           <div style="font-size: 11px; color: var(--text-dim);">
             Ваши ответы в Поддержке отправляются с вашего TG-аккаунта.
           </div>
-          <button class="btn" @click="tgSessionDisconnect()" :disabled="tgSession.loading"
+          <button x-show="canAct('tg_session_disconnect')" class="btn" @click="tgSessionDisconnect()" :disabled="tgSession.loading"
                   style="padding: 8px 14px; align-self: flex-start;
                          background: rgba(251,113,133,0.15); color: var(--hud-rose);">
             🔌 Отключить
@@ -6284,7 +6356,7 @@
                     </select>
                   </td>
                   <td style="padding: 8px;">
-                    <button class="btn success" @click="saveWorkerRole(w)"
+                    <button x-show="canAct('admin_worker_role')" class="btn success" @click="saveWorkerRole(w)"
                             :disabled="w._newRole === w.role"
                             style="padding: 4px 12px; font-size: 11px;">💾</button>
                   </td>
@@ -6327,7 +6399,7 @@
             <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 3px;" x-text="f.help"></div>
           </div>
         </template>
-        <button class="btn success" @click="saveSettingsChats()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700; margin-top: 6px;"
+        <button x-show="canAct('settings_tg_chats')" class="btn success" @click="saveSettingsChats()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700; margin-top: 6px;"
                 x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить ID чатов'"></button>
       </div>
     </div>
@@ -6379,7 +6451,7 @@
           <input type="number" x-model.number="settingsData.client_idle_minutes" min="1" max="60" step="1"
                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff;">
         </div>
-        <button class="btn success" @click="saveSettingsAi()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
+        <button x-show="canAct('settings_ai')" class="btn success" @click="saveSettingsAi()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
                 x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить AI-настройки'"></button>
       </div>
     </div>
@@ -6395,11 +6467,12 @@
           <div style="display: flex; gap: 8px; align-items: center; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 6px;">
             <span style="flex: 1; font-weight: 700; color: var(--hud-primary);" x-text="bank"></span>
             <input type="number" :value="settingsData.pricing[bank]"
+                   :disabled="!canAct('settings_pricing_set')"
                    @change="savePricing(bank, $event.target.value)"
                    step="1" min="0"
                    style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; text-align: right;">
             <span style="color: var(--text-dim); font-size: 12px;">USDT</span>
-            <button @click="deletePricing(bank)"
+            <button x-show="canAct('settings_pricing_delete')" @click="deletePricing(bank)"
                     style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer;">✕</button>
           </div>
         </template>
@@ -6412,7 +6485,7 @@
                  style="flex: 1; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
           <input type="number" x-model.number="settingsNewBankPrice" placeholder="USDT" step="1" min="0"
                  style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
-          <button class="btn success" @click="addPricing()" style="padding: 8px 16px;">+ Добавить</button>
+          <button x-show="canAct('settings_pricing_set')" class="btn success" @click="addPricing()" style="padding: 8px 16px;">+ Добавить</button>
         </div>
       </div>
     </div>
@@ -6450,7 +6523,7 @@
           <textarea x-model="settingsData.invite_jobs_text" rows="6"
                     style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 12px; resize: vertical; box-sizing: border-box;"></textarea>
         </div>
-        <button class="btn success" @click="saveSettingsInvite()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
+        <button x-show="canAct('settings_invite')" class="btn success" @click="saveSettingsInvite()" :disabled="settingsSaving" style="padding: 12px; font-weight: 700;"
                 x-text="settingsSaving ? '⏳ Сохраняем…' : '💾 Сохранить Invite-настройки'"></button>
       </div>
     </div>
@@ -6469,7 +6542,7 @@
                  placeholder="Txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                  maxlength="34"
                  style="flex: 1; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: monospace; font-size: 13px;">
-          <button class="btn" @click="savePaymentWallet()" :disabled="settingsPaymentLoading"
+          <button x-show="canAct('settings_payment_wallet')" class="btn" @click="savePaymentWallet()" :disabled="settingsPaymentLoading"
                   style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">
             💾 Сохранить
           </button>
@@ -6504,8 +6577,8 @@
               <span x-show="r.status === 'expired'" style="font-size: 10px; padding: 2px 8px; background: rgba(107,114,128,0.18); color:#9ca3af; border-radius: 3px;">⌛ expired</span>
               <span x-show="r.status === 'rejected'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color:#ef4444; border-radius: 3px;">❌ rejected</span>
               <span x-show="r.status === 'pending'" style="margin-left: auto; display: flex; gap: 6px;">
-                <button class="btn" @click="manualCreditTopup(r.id)" style="font-size: 11px; padding: 4px 10px; background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">✅ Зачислить</button>
-                <button class="btn" @click="rejectTopup(r.id)" style="font-size: 11px; padding: 4px 10px;">❌ Отклонить</button>
+                <button x-show="canAct('settings_payment_wallet')" class="btn" @click="manualCreditTopup(r.id)" style="font-size: 11px; padding: 4px 10px; background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">✅ Зачислить</button>
+                <button x-show="canAct('settings_payment_wallet')" class="btn" @click="rejectTopup(r.id)" style="font-size: 11px; padding: 4px 10px;">❌ Отклонить</button>
               </span>
               <span x-show="r.status !== 'pending'" style="margin-left: auto; font-size: 11px; color: var(--text-dim);"
                     x-text="r.credited_at ? new Date(r.credited_at * 1000).toLocaleString('ru-RU') : new Date(r.created_at * 1000).toLocaleString('ru-RU')"></span>
@@ -6553,11 +6626,11 @@
                       переменные: <code x-text="(botTextsPlaceholders[key] || []).map(p => '{' + p + '}').join(', ')"></code>
                     </span>
                     <span style="margin-left: auto; display: flex; gap: 6px;">
-                      <button class="btn" @click="saveBotText(key)"
+                      <button x-show="canAct('settings_payment_wallet')" class="btn" @click="saveBotText(key)"
                               :disabled="!textIsDirty(key) || botTextsSavingKey === key"
                               :style="textIsDirty(key) ? 'background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight:700;' : ''"
                               style="font-size: 11px; padding: 3px 10px;">💾 Сохранить</button>
-                      <button class="btn" @click="resetBotText(key)"
+                      <button x-show="canAct('settings_payment_wallet')" class="btn" @click="resetBotText(key)"
                               :disabled="!botTextsItems[key]?.is_overridden || botTextsSavingKey === key"
                               style="font-size: 11px; padding: 3px 10px;"
                               title="Сбросить к дефолту">⟲</button>
@@ -6579,6 +6652,64 @@
         <div x-show="!botTextsGroups || botTextsGroups.length === 0" style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 13px;">
           <span x-show="botTextsLoading">⏳ Загрузка…</span>
           <span x-show="!botTextsLoading">Не удалось загрузить тексты. Проверь что api.py обновился.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ОТКУПЫ — настройки -->
+    <div x-show="settingsActiveSection === 'outkup'" x-init="loadOutkupSettings()" class="jarvis-panel" style="padding: 20px;">
+      <h3 style="margin: 0 0 16px 0;">💱 Откупы — настройки</h3>
+      <div style="padding: 10px; background: rgba(106,216,255,0.06); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px; margin-bottom: 16px; font-size: 12px;">
+        ℹ Бот ловит сообщения вида «дай 100к СБП» в <b>чате клиентов</b> → считает USDT по курсу → спрашивает у клиента подтверждение → форвардит в <b>чат Откупщиков</b>. Откупщик вручную пишет реквизиты клиенту и помечает статусы в JARVIS.
+      </div>
+
+      <div style="display: grid; gap: 14px; max-width: 560px;">
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Курс обмена (рублей за 1 USDT):</label>
+          <input type="number" min="1" step="0.01" x-model.number="outkupSettings.rate_rub_per_usdt"
+                 :disabled="!canAct('outkup_settings_update')"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: monospace; font-size: 14px;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Чат клиентов (где ловить запросы) — chat_id:</label>
+          <input type="number" x-model.number="outkupSettings.payments_chat_id"
+                 :disabled="!canAct('outkup_settings_update')"
+                 placeholder="-1003xxxxxxxxx"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: monospace; font-size: 13px;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Чат Откупщиков (куда форвардить заявки):</label>
+          <input type="number" x-model.number="outkupSettings.outkup_team_chat_id"
+                 :disabled="!canAct('outkup_settings_update')"
+                 placeholder="-1003xxxxxxxxx"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: monospace; font-size: 13px;">
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Мин. сумма (₽):</label>
+            <input type="number" min="0" x-model.number="outkupSettings.min_amount_rub"
+                   :disabled="!canAct('outkup_settings_update')"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">Макс. сумма (₽):</label>
+            <input type="number" min="0" x-model.number="outkupSettings.max_amount_rub"
+                   :disabled="!canAct('outkup_settings_update')"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff;">
+          </div>
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" x-model="outkupSettings.enabled" :disabled="!canAct('outkup_settings_update')"
+                 style="width: 18px; height: 18px;">
+          <span>Модуль Откупов включён</span>
+        </label>
+        <div>
+          <button class="btn" @click="saveOutkupSettings()"
+                  x-show="canAct('outkup_settings_update')"
+                  :disabled="outkupSettingsLoading"
+                  style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">
+            💾 Сохранить
+          </button>
         </div>
       </div>
     </div>
@@ -6720,7 +6851,7 @@
       </div>
       <div class="modal-actions">
         <button class="btn" @click="discordChannelModal.open = false">Отмена</button>
-        <button class="btn success" @click="createDiscordChannel()">Создать</button>
+        <button x-show="canAct('discord_channel_create')" class="btn success" @click="createDiscordChannel()">Создать</button>
       </div>
     </div>
   </div>
@@ -6766,7 +6897,7 @@
       </select>
       <div class="modal-actions">
         <button class="btn" @click="closeStatusModal()">Отмена</button>
-        <button class="btn success" @click="applyStatusChange()">Применить</button>
+        <button x-show="canAct('lk_status_change')" class="btn success" @click="applyStatusChange()">Применить</button>
       </div>
     </div>
   </div>
@@ -6783,7 +6914,7 @@
       <div class="text-sm mt-2" style="color: var(--text-dim)">Операция необратима.</div>
       <div class="modal-actions">
         <button class="btn" @click="closeDeleteModal()">Отмена</button>
-        <button class="btn danger" @click="applyDelete()">Удалить</button>
+        <button x-show="canAct('lk_delete')" class="btn danger" @click="applyDelete()">Удалить</button>
       </div>
     </div>
   </div>
@@ -6913,9 +7044,9 @@
       </template>
 
       <div class="modal-actions">
-        <button class="btn danger" @click="closeDetailModal(); confirmDelete({card_id: detailModal.card_id, ...detailModal.original})">🗑 Удалить</button>
+        <button x-show="canAct('lk_delete')" class="btn danger" @click="closeDetailModal(); confirmDelete({card_id: detailModal.card_id, ...detailModal.original})">🗑 Удалить</button>
         <button class="btn" @click="closeDetailModal()">Закрыть</button>
-        <button class="btn success" @click="saveDetailCard()" :disabled="detailModal.saving" x-text="detailModal.saving ? 'Сохраняю...' : '💾 Сохранить'"></button>
+        <button x-show="canAct('lk_update')" class="btn success" @click="saveDetailCard()" :disabled="detailModal.saving" x-text="detailModal.saving ? 'Сохраняю...' : '💾 Сохранить'"></button>
       </div>
     </div>
   </div>
@@ -7077,6 +7208,19 @@ function jarvis() {
     healthcheckLoading: false,
     healthcheckSummary: null,
     healthcheckText: '',
+    // ОТКУПЫ
+    outkupOrders: [],
+    outkupLoading: false,
+    outkupFilter: 'all',
+    outkupSettings: {
+      rate_rub_per_usdt: 100,
+      payments_chat_id: 0,
+      outkup_team_chat_id: 0,
+      min_amount_rub: 5000,
+      max_amount_rub: 5000000,
+      enabled: true,
+    },
+    outkupSettingsLoading: false,
     // Payment (USDT TRC20)
     settingsPayment: { address: '', currentAddress: '' },
     settingsPaymentLoading: false,
@@ -11382,6 +11526,102 @@ function jarvis() {
     toggleBotTextsGroup(groupId) {
       this.botTextsExpanded[groupId] = !this.botTextsExpanded[groupId];
     },
+
+    // === ОТКУПЫ ===
+    async refreshOutkup() {
+      if (this.outkupLoading) return;
+      this.outkupLoading = true;
+      try {
+        const r = await fetch('/api/outkup/orders', { credentials: 'include' });
+        if (r.ok) { const j = await r.json(); this.outkupOrders = j.items || []; }
+        const r2 = await fetch('/api/settings/outkup', { credentials: 'include' });
+        if (r2.ok) {
+          const s = await r2.json();
+          this.outkupSettings = {
+            rate_rub_per_usdt: s.rate_rub_per_usdt ?? 100,
+            payments_chat_id: s.payments_chat_id ?? 0,
+            outkup_team_chat_id: s.outkup_team_chat_id ?? 0,
+            min_amount_rub: s.min_amount_rub ?? 5000,
+            max_amount_rub: s.max_amount_rub ?? 5000000,
+            enabled: s.enabled ?? true,
+          };
+        }
+      } catch (e) { console.error('refreshOutkup', e); }
+      finally { this.outkupLoading = false; }
+    },
+    async loadOutkupSettings() {
+      try {
+        const r = await fetch('/api/settings/outkup', { credentials: 'include' });
+        if (r.ok) {
+          const s = await r.json();
+          this.outkupSettings = {
+            rate_rub_per_usdt: s.rate_rub_per_usdt ?? 100,
+            payments_chat_id: s.payments_chat_id ?? 0,
+            outkup_team_chat_id: s.outkup_team_chat_id ?? 0,
+            min_amount_rub: s.min_amount_rub ?? 5000,
+            max_amount_rub: s.max_amount_rub ?? 5000000,
+            enabled: s.enabled ?? true,
+          };
+        }
+      } catch (e) { console.error('loadOutkupSettings', e); }
+    },
+    async saveOutkupSettings() {
+      this.outkupSettingsLoading = true;
+      try {
+        const r = await fetch('/api/settings/outkup', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.outkupSettings),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Сохранено');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+      finally { this.outkupSettingsLoading = false; }
+    },
+    outkupFiltered() {
+      const arr = this.outkupOrders || [];
+      if (this.outkupFilter === 'all') return arr;
+      return arr.filter(o => (o.status || '') === this.outkupFilter);
+    },
+    async outkupTake(id) {
+      try {
+        const r = await fetch(`/api/outkup/orders/${id}/take`, { method: 'POST', credentials: 'include' });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupMarkPaid(id) {
+      if (!confirm('Подтвердить что клиент заплатил рубли?')) return;
+      try {
+        const r = await fetch(`/api/outkup/orders/${id}/mark_paid`, { method: 'POST', credentials: 'include' });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupComplete(id) {
+      const txid = window.prompt ? (window.prompt('TXID транзакции USDT (опционально):') || '') : '';
+      try {
+        const r = await fetch(`/api/outkup/orders/${id}/complete`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ txid }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupCancel(id) {
+      const reason = window.prompt ? (window.prompt('Причина отмены:') || '') : '';
+      try {
+        const r = await fetch(`/api/outkup/orders/${id}/cancel`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
     async saveSettingsChats() {
       this.settingsSaving = true;
       try {
@@ -11490,6 +11730,7 @@ function jarvis() {
       'system': '⚙️ System (CRM/Кредит)',
       'accounting': '📒 Бухгалтерия',
       'operational': '🛠 Операционная',
+      'outkup': '💱 Откупы (RUB → USDT)',
       'settings': '⚙️ Настройки',
       'owner': '👑 Owner Panel',
     },
@@ -11586,6 +11827,12 @@ function jarvis() {
       'leo_notes_archive': '📦 Архивировать старые LEO-заметки',
       // === CRM-бот (через Telegram) ===
       'credit_capture_chat': '💳 Привязывать чат к кредитованию (команда «Ассистент возьми...»)',
+      // === ОТКУПЫ ===
+      'outkup_take': '✋ Брать заявки Откупов в работу',
+      'outkup_mark_paid': '💸 Помечать что клиент заплатил рубли',
+      'outkup_complete': '✅ Завершать заявку Откупа (отправил USDT)',
+      'outkup_cancel': '❌ Отменять заявки Откупов',
+      'outkup_settings_update': '⚙️ Менять настройки Откупов (курс, чаты)',
     },
     ownerViewLabel(v) { return this._OWNER_VIEW_LABELS[v] || v; },
     ownerActionLabel(a) { return this._OWNER_ACTION_LABELS[a] || a; },
@@ -12780,7 +13027,7 @@ function jarvis() {
     <input type="text" x-model="acc2AddForm.note" placeholder="за что / кому / когда…"
            style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; margin-bottom: 12px;">
     <div style="display: flex; gap: 8px;">
-      <button class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitAcc2Entry()">✅ Сохранить</button>
+      <button x-show="canAct('accounting_entry_add')" class="chip-btn" style="background: var(--hud-emerald); color: #000; flex: 1;" @click="submitAcc2Entry()">✅ Сохранить</button>
       <button class="chip-btn" @click="acc2ShowAddModal=false">Отмена</button>
     </div>
   </div>
@@ -13032,7 +13279,7 @@ function jarvis() {
 
     <div style="display: flex; gap: 8px;">
       <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
-      <button class="chip-btn"
+      <button x-show="canAct('exchange_request')" class="chip-btn"
               :style="'background: var(--hud-emerald); color: #000; flex: 1;' + (submittingExchange ? ' opacity: 0.5; cursor: not-allowed;' : '')"
               :disabled="submittingExchange"
               @click="submitExchangeRequest()"
@@ -13164,7 +13411,7 @@ function jarvis() {
     </div>
 
     <div style="display: flex; gap: 8px;">
-      <button :disabled="bulkMoveLoading" @click="submitBulkMove()"
+      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" :disabled="bulkMoveLoading" @click="submitBulkMove()"
               style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
               x-text="bulkMoveLoading ? '⏳ Переношу…' : ('📤 Перенести ' + sysSelCount(bulkMoveSection) + ' ЛК')"></button>
       <button :disabled="bulkMoveLoading" @click="closeBulkMoveModal()"
@@ -13196,7 +13443,7 @@ function jarvis() {
            placeholder="100"
            style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
     <div style="display: flex; gap: 8px;">
-      <button :disabled="createBundleLoading" @click="submitCreateBundle()"
+      <button x-show="canAct('bundle_create')" :disabled="createBundleLoading" @click="submitCreateBundle()"
               style="flex: 1; padding: 12px; background: linear-gradient(135deg, #22c55e, #16a34a); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
               x-text="createBundleLoading ? '⏳ Создаю…' : '🔗 Создать связку'"></button>
       <button :disabled="createBundleLoading" @click="closeCreateBundleModal()"
@@ -13302,7 +13549,7 @@ function jarvis() {
           ℹ После отправки бот напишет клиенту в его рабочий чат: <b>«Пройдите проверку: &lt;одноразовая ссылка&gt;»</b>. Клиент откроет ссылку и запишет 10-секундный видео-кружок. Вы получите его в этой же карточке.
         </div>
         <div style="display: flex; gap: 8px;">
-          <button :disabled="kucReqModalLoading" @click="submitKucRequest()"
+          <button x-show="canAct('request_kuc')" :disabled="kucReqModalLoading" @click="submitKucRequest()"
                   style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
                   x-text="kucReqModalLoading ? '⏳ Отправка…' : '📤 Отправить запрос'"></button>
           <button :disabled="kucReqModalLoading" @click="closeKucRequestModal()"
@@ -13339,9 +13586,9 @@ function jarvis() {
                     placeholder="Заметка по решению (опционально)…"
                     style="width: 100%; min-height: 60px; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; margin-bottom: 12px;"></textarea>
           <div style="display: flex; gap: 8px;">
-            <button class="btn success" :disabled="kucModalLoading" @click="decideKuc('approved')"
+            <button x-show="canAct('decide_kuc')" class="btn success" :disabled="kucModalLoading" @click="decideKuc('approved')"
                     style="flex: 1; padding: 12px; background: #22c55e; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">✅ Одобрить</button>
-            <button class="btn danger" :disabled="kucModalLoading" @click="decideKuc('rejected')"
+            <button x-show="canAct('decide_kuc')" class="btn danger" :disabled="kucModalLoading" @click="decideKuc('rejected')"
                     style="flex: 1; padding: 12px; background: #ef4444; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">❌ Отклонить</button>
           </div>
         </div>
@@ -13362,7 +13609,7 @@ function jarvis() {
             </div>
             <!-- Запросить повторно (для rejected/approved) -->
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <button @click="retryKucForCurrentModal()"
+              <button x-show="canAct('request_kuc')" @click="retryKucForCurrentModal()"
                       style="width: 100%; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;">
                 🔄 Запросить повторно
               </button>
