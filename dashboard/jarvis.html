@@ -4709,6 +4709,7 @@
     background: rgba(91, 114, 153, 0.15); color: var(--text-dim);
   }
   .support-chat {
+    min-height: 0;
     background: var(--bg-card);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 8px;
@@ -4746,6 +4747,7 @@
     color: var(--hud-emerald);
   }
   .support-msgs {
+    min-height: 0;
     flex: 1; overflow-y: auto; padding: 14px;
     display: flex; flex-direction: column; gap: 8px;
   }
@@ -4770,6 +4772,7 @@
     font-size: 9px; opacity: 0.5; margin-top: 2px; text-align: right;
   }
   .support-input {
+    flex-shrink: 0;
     padding: 10px; border-top: 1px solid rgba(255,255,255,0.05);
     display: flex; gap: 6px;
   }
@@ -4813,6 +4816,7 @@
   }
 
   .support-sender-toggle {
+    flex-shrink: 0;
     display: flex;
     gap: 4px;
     padding: 4px 12px;
@@ -4846,6 +4850,7 @@
   .sender-btn.link-btn:hover { background: rgba(251,113,133,0.2); }
 
   .support-quick-bar {
+    flex-shrink: 0;
     padding: 6px 12px;
     border-top: 1px solid rgba(255,255,255,0.05);
     background: rgba(255,255,255,0.02);
