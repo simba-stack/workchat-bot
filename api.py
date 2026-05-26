@@ -6448,10 +6448,6 @@ async def outreach_auth_confirm(req: OutreachAuthConfirmReq, _: None = Depends(_
     import outreach
     res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
     return res
- password если 2FA)."""
-    import outreach
-    res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
-    return res
 
 
 @app.get("/api/outreach/bots")
