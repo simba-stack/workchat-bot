@@ -477,10 +477,13 @@ class UserbotService:
         # 4) Делаем userbot админом (нужно для welcome / kick / pin / call)
         if getattr(config, "USERBOT_AS_ADMIN", True) and self._me:
             try:
+                # ВАЖНО: add_admins=True — нужно чтобы userbot мог потом
+                # промотить других через команду «Ассистент выдай админку @X»
+                # и авто-приглашение @PrideCONTROLE_bot в credit-чаты.
                 rights = ChatAdminRights(
                     change_info=True, post_messages=True, edit_messages=True,
                     delete_messages=True, ban_users=True, invite_users=True,
-                    pin_messages=True, add_admins=False, anonymous=False,
+                    pin_messages=True, add_admins=True, anonymous=False,
                     manage_call=True,
                 )
                 await self.client(EditAdminRequest(
@@ -4261,10 +4264,31 @@ class UserbotService:
         except FloodWaitError as e:
             await event.reply(f"⚠️ FloodWait {e.seconds}s — попробуй позже.")
         except Exception as e:
-            await event.reply(
-                f"⚠️ Не смог выдать админку @{uname}: <code>{e}</code>",
-                parse_mode="html",
-            )
+            # Расшифровываем типовые ошибки чтобы юзеру было понятно что делать
+            err_low = str(e).lower()
+            if "chat admin privileges are required" in err_low or "user_admin_invalid" in err_low:
+                friendly = (
+                    f"⚠️ Не смог выдать админку <b>@{uname}</b>.\n\n"
+                    f"<b>Причина:</b> у меня (юзербота PRIDE ASSISTANT) НЕТ права "
+                    f"<i>«добавлять администраторов»</i> в этом чате.\n\n"
+                    f"<b>Как починить:</b>\n"
+                    f"1. Зайди в Настройки группы → Администраторы\n"
+                    f"2. Найди PRIDE ASSISTANT Ai-#01\n"
+                    f"3. Включи галочку <b>«Добавлять администраторов»</b>\n"
+                    f"4. Сохрани и повтори команду.\n\n"
+                    f"<i>Новые рабочие чаты теперь создаются с этим правом автоматически "
+                    f"(фикс задеплоен) — но в существующих 400+ чатах нужно поправить руками.</i>"
+                )
+            elif "chat_admin_required" in err_low:
+                friendly = (
+                    f"⚠️ Не смог выдать админку @{uname}: я даже не админ в этом чате.\n"
+                    f"Сначала сделай PRIDE ASSISTANT Ai-#01 админом в настройках группы."
+                )
+            elif "user_not_participant" in err_low:
+                friendly = f"⚠️ @{uname} не в чате. Сначала добавь его в группу."
+            else:
+                friendly = f"⚠️ Не смог выдать админку @{uname}: <code>{e}</code>"
+            await event.reply(friendly, parse_mode="html")
             logger.warning("ai cmd grant_admin failed: chat=%s user=%s err=%s",
                            chat_id, uname, e)
 
