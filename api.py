@@ -1323,25 +1323,31 @@ async def api_system_installed_lks(
     out = []
     for lkid, lk in lks_raw.items():
         stage = (lk.get("sms_stage") or "").strip()
-        if stage != "done":
+        # Установленные = перевязка завершена/фактически готова.
+        # done — финальный статус (после нажатия кнопки «Финал»)
+        # perevyaz_received — перевязка принята, ждёт финальной кнопки —
+        # фактически ЛК уже работает, его и показываем в Установленных.
+        if stage not in ("done", "perevyaz_received"):
             continue
-        # Заполнены credentials (хотя бы один из ключевых полей — пароль или логин)
+        # Заполнены credentials (хотя бы один из ключевых полей).
+        # ВАЖНО: дедик БОЛЬШЕ НЕ ТРЕБУЕТСЯ — многие ЛК работают без RDP,
+        # они тоже должны попадать в «Установленные» сразу после перевязки.
+        # Раньше требование `creds_ok AND dedik_ok` блокировало ЛК без дедика —
+        # они зависали в «Паролях» и не появлялись в «Установленных».
         creds_ok = bool(
             (lk.get("new_password") or "").strip()
             or (lk.get("new_login") or "").strip()
             or (lk.get("new_mail") or "").strip()
             or (lk.get("new_number") or "").strip()
         )
-        # Дедик (хотя бы IP или пароль есть). В storage поле = ded_pass!
-        dedik_ok = bool(
+        if not creds_ok:
+            continue
+        # Дедик опционален — просто пометим флаг has_dedik для UI
+        has_dedik = bool(
             (lk.get("ded_ip") or "").strip()
             or (lk.get("ded_pass") or "").strip()
             or (lk.get("ded_password") or "").strip()
         )
-        # Попадает в Установленные ЛК если: stage=done И хоть какие-то credentials
-        # И хоть какие-то данные дедика. Подробные условия можно усилить позже.
-        if not (creds_ok and dedik_ok):
-            continue
         drop = drops_raw.get(lk.get("drop_id"), {}) or {}
         supplier = (drop.get("supplier") or "").lstrip("@")
         if not supplier and drop.get("owner_id"):
@@ -1367,6 +1373,7 @@ async def api_system_installed_lks(
             "ded_ip": lk.get("ded_ip") or "",
             "ded_location": lk.get("ded_location") or "",
             "value": lk.get("value") or "",
+            "has_dedik": has_dedik,  # для UI индикатора (ЛК с/без RDP)
             "installed_at": lk.get("updated_at") or lk.get("created_at") or 0,
             "created_at": lk.get("created_at") or 0,
         })
@@ -6437,7 +6444,11 @@ async def outreach_auth_start(req: OutreachAuthStartReq, _: None = Depends(_auth
 
 @app.post("/api/outreach/bots/auth/confirm")
 async def outreach_auth_confirm(req: OutreachAuthConfirmReq, _: None = Depends(_auth), _perm: bool = Depends(require_action("outreach_bot_auth_confirm"))):
-    """Шаг 2: подтвердить SMS-код (+ password если 2FA)."""
+    """Шаг 2: подтвердить SMS-код (+ password если включена 2FA)."""
+    import outreach
+    res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
+    return res
+ password если 2FA)."""
     import outreach
     res = await outreach.manager.confirm_code(req.phone, req.code, req.password)
     return res
