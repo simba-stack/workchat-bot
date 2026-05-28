@@ -477,10 +477,25 @@ class Storage:
             await self._save_unlocked()
 
     async def _save_unlocked(self):
+        """Async-safe save: вся I/O работа уезжает в thread executor,
+        чтобы event loop оставался отзывчивым (Railway healthcheck +
+        Telegram polling не должны блокироваться на json.dump)."""
+        try:
+            # Сериализация в строку — синхронная, но быстрая (<50ms даже для МБ-state).
+            # Делаем под caller-holding _lock, поэтому self.state не мутируется параллельно.
+            snapshot = json.dumps(self.state, ensure_ascii=False, indent=2)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._do_write_sync, snapshot)
+        except Exception as e:
+            print(f"[storage] save failed: {e}")
+
+    def _do_write_sync(self, snapshot_str: str):
+        """Sync atomic write. Выполняется в thread executor — НЕ блокирует
+        event loop. Атомарно: .tmp → os.replace + .bak от предыдущего state."""
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.state, f, ensure_ascii=False, indent=2)
+                f.write(snapshot_str)
             if os.path.exists(self.path):
                 try:
                     os.replace(self.path, self.path + ".bak")
@@ -488,7 +503,7 @@ class Storage:
                     pass
             os.replace(tmp, self.path)
         except Exception as e:
-            print(f"[storage] save failed: {e}")
+            print(f"[storage] sync write failed: {e}")
 
     async def save(self):
         async with _lock:
