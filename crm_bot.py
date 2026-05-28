@@ -57,6 +57,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from fsm_persistent import AsyncPersistentFSMStorage
 from aiogram.fsm.strategy import FSMStrategy
 from aiogram.types import (
     Message,
@@ -5412,7 +5413,14 @@ async def run_crm_bot():
         token=CRM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage(), fsm_strategy=FSMStrategy.CHAT)
+    _fsm_storage = AsyncPersistentFSMStorage(
+        os.path.join(
+            os.path.dirname(getattr(config, 'STORAGE_PATH', '/app/data/state.json')),
+            'crm_fsm.json',
+        ),
+        flush_interval=2.0,
+    )
+    dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.CHAT)
     dp.include_router(router)
 
     try:
@@ -5458,6 +5466,10 @@ async def run_crm_bot():
             reminder_task.cancel()
         if dashboard_worker_task and not dashboard_worker_task.done():
             dashboard_worker_task.cancel()
+        try:
+            await _fsm_storage.close()
+        except Exception:
+            pass
         try:
             await bot.session.close()
         except Exception:
