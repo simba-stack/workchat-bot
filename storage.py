@@ -4542,20 +4542,28 @@ class Storage:
             await self._save_unlocked()
             return mgrs[u]
 
-    async def bump_credit_manager_stat(self, username: str, key: str, delta: int = 1):
+    async def _bump_credit_manager_stat_unlocked(self, username: str, key: str, delta: int = 1):
+        """Логика без захвата _lock — для вызова из-под уже захваченного _lock.
+        Не делает _save_unlocked (caller сам сохранит когда вся транзакция готова)."""
         if not username:
             return
         u = username.lstrip("@").lower()
+        mgrs = self.state.setdefault("credit_managers", {})
+        if u not in mgrs:
+            mgrs[u] = {
+                "username": u, "tg_user_id": 0,
+                "first_seen_ts": time.time(), "last_active_ts": time.time(),
+                "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
+            }
+        stats = mgrs[u].setdefault("stats", {})
+        stats[key] = (stats.get(key) or 0) + delta
+
+    async def bump_credit_manager_stat(self, username: str, key: str, delta: int = 1):
+        """Публичная версия: берёт _lock и сохраняет state. Для внешних вызовов."""
+        if not username:
+            return
         async with _lock:
-            mgrs = self.state.setdefault("credit_managers", {})
-            if u not in mgrs:
-                mgrs[u] = {
-                    "username": u, "tg_user_id": 0,
-                    "first_seen_ts": time.time(), "last_active_ts": time.time(),
-                    "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
-                }
-            stats = mgrs[u].setdefault("stats", {})
-            stats[key] = (stats.get(key) or 0) + delta
+            await self._bump_credit_manager_stat_unlocked(username, key, delta)
             await self._save_unlocked()
 
     # --- Чаты кредитования ---
@@ -4672,10 +4680,10 @@ class Storage:
                 "created_at": time.time(),
                 "lk_card_ids": [],
             }
+            _log.info("[add_credit_drop] bumping manager stat (unlocked)")
+            await self._bump_credit_manager_stat_unlocked(manager_username, "drops_total", 1)
             _log.info("[add_credit_drop] saving state.json (size_estimate=%d entries)", len(self.state.get("credit_drops") or {}))
             await self._save_unlocked()
-            _log.info("[add_credit_drop] state saved, bumping stat")
-            await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
             _log.info("[add_credit_drop] DONE drop_id=%s", drop_id)
             return drop_id
 
@@ -4728,8 +4736,8 @@ class Storage:
             drop = (self.state.get("credit_drops") or {}).get(credit_drop_id)
             if drop:
                 drop.setdefault("lk_card_ids", []).append(droplk_id)
+            await self._bump_credit_manager_stat_unlocked(manager_username, "lks_total", 1)
             await self._save_unlocked()
-            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
             return droplk_id
 
     async def update_credit_drop_lk(self, droplk_id, **fields) -> bool:
@@ -4938,18 +4946,24 @@ class Storage:
             await self._save_unlocked()
             return mgrs[u]
 
-    async def bump_outsource_manager_stat(self, username: str, key: str, delta: int = 1):
+    async def _bump_outsource_manager_stat_unlocked(self, username: str, key: str, delta: int = 1):
+        """Логика без _lock — для вызова из-под уже захваченного _lock."""
         if not username: return
         u = username.lstrip("@").lower()
+        mgrs = self.state.setdefault("outsource_managers", {})
+        if u not in mgrs:
+            mgrs[u] = {"username": u, "tg_user_id": 0, "first_seen_ts": time.time(),
+                       "last_active_ts": time.time(), "wallet_balance_usdt": 0.0,
+                       "paid_total_usdt": 0.0, "stats": {"drops_total": 0, "drops_done": 0,
+                                                          "lks_total": 0, "lks_done": 0}}
+        stats = mgrs[u].setdefault("stats", {})
+        stats[key] = (stats.get(key) or 0) + delta
+
+    async def bump_outsource_manager_stat(self, username: str, key: str, delta: int = 1):
+        """Публичная: берёт _lock + save. Для внешних вызовов."""
+        if not username: return
         async with _lock:
-            mgrs = self.state.setdefault("outsource_managers", {})
-            if u not in mgrs:
-                mgrs[u] = {"username": u, "tg_user_id": 0, "first_seen_ts": time.time(),
-                           "last_active_ts": time.time(), "wallet_balance_usdt": 0.0,
-                           "paid_total_usdt": 0.0, "stats": {"drops_total": 0, "drops_done": 0,
-                                                              "lks_total": 0, "lks_done": 0}}
-            stats = mgrs[u].setdefault("stats", {})
-            stats[key] = (stats.get(key) or 0) + delta
+            await self._bump_outsource_manager_stat_unlocked(username, key, delta)
             await self._save_unlocked()
 
     def list_outsource_chats(self) -> dict:
@@ -5018,8 +5032,8 @@ class Storage:
                 "scan_file_ids": list(scan_file_ids or []),
                 "status": "draft", "created_at": time.time(), "lk_card_ids": [],
             }
+            await self._bump_outsource_manager_stat_unlocked(manager_username, "drops_total", 1)
             await self._save_unlocked()
-            await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
             return drop_id
 
     async def update_outsource_drop(self, drop_id: str, **fields) -> bool:
@@ -5060,8 +5074,8 @@ class Storage:
             drop = (self.state.get("outsource_drops") or {}).get(outsource_drop_id)
             if drop:
                 drop.setdefault("lk_card_ids", []).append(droplk_id)
+            await self._bump_outsource_manager_stat_unlocked(manager_username, "lks_total", 1)
             await self._save_unlocked()
-            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
             return droplk_id
 
     async def update_outsource_drop_lk(self, droplk_id, **fields) -> bool:
@@ -5141,7 +5155,7 @@ class Storage:
                     "created_at": time.time(), "lk_card_ids": [],
                     "_moved_from": ("credit" if is_credit else "crm") + ":" + (src_drop_id or ""),
                 }
-                await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
+                await self._bump_outsource_manager_stat_unlocked(manager_username, "drops_total", 1)
             # Создаём outsource_drop_lk
             seq_lk = (self.state.get("outsource_drop_lks_seq") or 0) + 1
             self.state["outsource_drop_lks_seq"] = seq_lk
@@ -5158,7 +5172,7 @@ class Storage:
             })
             ou_lks[new_olk_id] = new_lk
             ou_drops[odrop_id].setdefault("lk_card_ids", []).append(new_olk_id)
-            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
+            await self._bump_outsource_manager_stat_unlocked(manager_username, "lks_total", 1)
             # Удаляем из источника
             if is_credit:
                 src_lks = self.state.get("credit_drop_lks") or {}
@@ -5280,7 +5294,7 @@ class Storage:
                     "lk_card_ids": [],
                     "_moved_from_crm_drop": old_drop_id or "",
                 }
-                await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
+                await self._bump_credit_manager_stat_unlocked(manager_username, "drops_total", 1)
 
             # 2) Создаём credit_droplk с теми же данными
             seq_lk = (self.state.get("credit_drop_lks_seq") or 0) + 1
@@ -5296,7 +5310,7 @@ class Storage:
                 "updated_at": time.time(),
             }
             credit_drops[cdrop_id].setdefault("lk_card_ids", []).append(new_clk_id)
-            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
+            await self._bump_credit_manager_stat_unlocked(manager_username, "lks_total", 1)
 
             # 3) Удаляем ЛК из crm_drop_lks
             del crm_lks[str(droplk_id)]
