@@ -4636,7 +4636,12 @@ class Storage:
         self, chat_id, manager_username: str, fio: str = "",
         about: str = "", scan_file_ids: Optional[list] = None,
     ) -> str:
+        import logging as _lg
+        _log = _lg.getLogger("storage")
+        _log.info("[add_credit_drop] start chat=%s mgr=%s fio=%r", chat_id, manager_username, fio[:50])
+        _log.info("[add_credit_drop] acquiring _lock")
         async with _lock:
+            _log.info("[add_credit_drop] lock acquired")
             seq = (self.state.get("credit_drops_seq") or 0) + 1
             self.state["credit_drops_seq"] = seq
             drop_id = f"cdrp{seq:05d}"
@@ -4652,8 +4657,11 @@ class Storage:
                 "created_at": time.time(),
                 "lk_card_ids": [],
             }
+            _log.info("[add_credit_drop] saving state.json (size_estimate=%d entries)", len(self.state.get("credit_drops") or {}))
             await self._save_unlocked()
+            _log.info("[add_credit_drop] state saved, bumping stat")
             await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
+            _log.info("[add_credit_drop] DONE drop_id=%s", drop_id)
             return drop_id
 
     async def update_credit_drop(self, drop_id: str, **fields) -> bool:
