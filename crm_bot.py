@@ -5551,6 +5551,32 @@ async def run_crm_bot():
     dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.CHAT)
     dp.include_router(router)
 
+    # ─── Middleware: игнор сообщений от юзербот-аккаунта (AI ассистент) ───
+    # Юзербот работает в том же процессе через Telethon. Когда CRM-бот ставит
+    # FSM-state (ждёт ФИО / СМС / пароль / etc), любое сообщение в чате
+    # попадает в handler — включая AI-ответы юзербота клиенту. CRM грабит
+    # ответ ассистента вместо реального юзера. Этот middleware блокирует.
+    #
+    # USERBOT_USER_ID: автоматически кладётся в storage юзерботом при старте
+    # (см. userbot.py:start()). Fallback на env переменную если задана.
+    @dp.message.middleware()
+    async def _ignore_userbot_messages(handler, event, data):
+        ub_id = 0
+        try:
+            ub_id = int(crm_storage.state.get("userbot_user_id") or 0)
+        except Exception:
+            pass
+        if not ub_id:
+            try:
+                ub_id = int(os.environ.get("USERBOT_USER_ID", "0"))
+            except Exception:
+                pass
+        if ub_id and event.from_user and event.from_user.id == ub_id:
+            logger.debug("[crm-middleware] ignored userbot message in chat %s", event.chat.id if event.chat else "?")
+            return None
+        return await handler(event, data)
+
+
     try:
         me = await bot.get_me()
         logger.info("CRM bot online: @%s (id=%s)", me.username, me.id)

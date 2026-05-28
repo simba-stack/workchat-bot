@@ -619,6 +619,14 @@ class UserbotService:
             "Userbot started: %s (@%s, id=%s)",
             self._me.first_name, self._me.username, self._me.id,
         )
+        # Сохраняем userbot user_id в storage — чтобы crm_bot middleware
+        # мог игнорировать сообщения от юзербота (AI ассистент не должен
+        # попадать в FSM-формы и грабить ввод вместо клиента/менеджера).
+        try:
+            await storage.set_state_fields(userbot_user_id=int(self._me.id))
+            logger.info("[userbot] saved userbot_user_id=%s to storage for CRM FSM guard", self._me.id)
+        except Exception as e:
+            logger.warning("[userbot] save userbot_user_id failed: %s", e)
         # Запускаем воркер для команд из дашборда (опрос storage каждые 5 сек)
         try:
             asyncio.create_task(self._dashboard_command_worker())
