@@ -1,4 +1,4 @@
-﻿"""Async-safe persistent FSM storage for aiogram. Smoke-tested локально."""
+"""Async-safe persistent FSM storage for aiogram. Smoke-tested локально."""
 from __future__ import annotations
 import asyncio, json, logging, os
 from typing import Any, Dict, Optional
