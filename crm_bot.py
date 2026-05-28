@@ -3519,23 +3519,62 @@ def _client_lk_anketa(drop: dict, lk: dict) -> str:
 
 
 def _resolve_work_chat(drop: dict = None, lk: dict = None, owner: dict = None) -> int:
-    """Резолвит актуальный work_chat_id для клиента.
+    """Резолвит актуальный work_chat_id для отправки сообщения клиенту.
 
-    Приоритет: drop.work_chat_id → lk.work_chat_id → owner.work_chat_id.
-    Если drop/lk имеет свежий chat_id (созданный позже owner) — используем его,
-    т.к. owner.work_chat_id может быть STALE после миграции группы в супергруппу
-    (chat_id меняется при апгрейде, а в storage остался старый).
-    Возвращает int или 0.
+    Поддерживает два стэка:
+      - CRM: поле work_chat_id (готовый TG-ID с -100)
+      - Credit: поле chat_id (нормализованная short-form без -100 — денормализуем)
+
+    Приоритет:
+      1) drop.work_chat_id   (CRM, свежий)
+      2) drop.chat_id        (Credit)
+      3) lk.work_chat_id     (CRM)
+      4) lk.chat_id          (Credit, если есть)
+      5) owner.work_chat_id  (CRM, stale fallback)
+
+    Денормализация: short-form положительный (например "3900125840") → -1003900125840.
+    Возвращает int готовый для bot.send_message, или 0 если ничего не нашли.
     """
-    for src in (drop, lk, owner):
-        if not src:
+    def _norm_to_tg(raw) -> int:
+        """Short-form (положительный без -100) → TG-формат с -100. Уже-отрицательное оставляем."""
+        try:
+            n = int(raw)
+        except Exception:
+            return 0
+        if n == 0:
+            return 0
+        if n < 0:
+            return n  # уже готовый TG-ID
+        if n < 10**12:
+            return -1000000000000 - n  # supergroup short form → -100xxx
+        return -n  # длинный положительный — инвертируем
+
+    for src in (drop, lk):
+        if not isinstance(src, dict):
             continue
-        wc = src.get("work_chat_id") if isinstance(src, dict) else None
+        # CRM-style work_chat_id — должен быть уже готовый TG-ID
+        wc = src.get("work_chat_id")
         if wc:
             try:
-                return int(wc)
+                v = int(wc)
+                if v != 0:
+                    return v
             except Exception:
-                continue
+                pass
+        # Credit-style chat_id (нормализованная форма)
+        cc = src.get("chat_id")
+        if cc:
+            tg = _norm_to_tg(cc)
+            if tg != 0:
+                return tg
+
+    if isinstance(owner, dict) and owner.get("work_chat_id"):
+        try:
+            v = int(owner["work_chat_id"])
+            if v != 0:
+                return v
+        except Exception:
+            pass
     return 0
 
 
