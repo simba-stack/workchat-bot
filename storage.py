@@ -987,6 +987,94 @@ class Storage:
                 info["welcome_sent"] = True
             await self._save_unlocked()
 
+    # === Welcome v2: track choice + AI mute by operator ===
+    async def mark_awaiting_track_choice(self, chat_id):
+        """Помечает что чат ждёт выбора направления (ИП/VoIP/Дебет) от клиента."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is not None:
+                info["awaiting_track_choice"] = True
+                await self._save_unlocked()
+
+    def is_awaiting_track_choice(self, chat_id) -> bool:
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        return bool(info.get("awaiting_track_choice"))
+
+    async def set_chat_track(self, chat_id, track: str):
+        """track: 'ip' / 'voip' / 'debet'. Сбрасывает awaiting_track_choice."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is not None:
+                info["chosen_track"] = track
+                info["awaiting_track_choice"] = False
+                await self._save_unlocked()
+
+    def get_chat_track(self, chat_id) -> str:
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        return info.get("chosen_track") or ""
+
+    async def mute_chat_ai(self, chat_id, muted: bool = True):
+        """AI перестаёт отвечать в чате (оператор сам ведёт диалог).
+        Триггер 'Ассистент' всё равно работает — это override."""
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is not None:
+                info["ai_muted_by_operator"] = bool(muted)
+                await self._save_unlocked()
+
+    def is_chat_ai_muted(self, chat_id) -> bool:
+        """True если в чате AI замолчал из-за оператора."""
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        return bool(info.get("ai_muted_by_operator"))
+
+    def get_voip_operator_username(self) -> str:
+        return (self.state.get("voip_operator_username") or "pride_voip01").lstrip("@")
+
+    def get_debet_operator_username(self) -> str:
+        return (self.state.get("debet_operator_username") or "pride_debet01").lstrip("@")
+
+    async def set_voip_operator_username(self, username: str):
+        async with _lock:
+            self.state["voip_operator_username"] = (username or "").lstrip("@")
+            await self._save_unlocked()
+
+    async def set_debet_operator_username(self, username: str):
+        async with _lock:
+            self.state["debet_operator_username"] = (username or "").lstrip("@")
+            await self._save_unlocked()
+
+    # Welcome v2 text (с выбором направления) — редактируется через JARVIS
+    def get_welcome_v2(self) -> str:
+        return self.state.get("welcome_v2") or (
+            "🤩 Вы попали в рабочую инфраструктуру корпорации PRIDE.\n\n"
+            "🤝 Какой вариант сотрудничества Вас интересует?\n\n"
+            "1. ИП/ООО\n"
+            "2. VoIP-Телефония\n"
+            "3. Дебет\n\n"
+            "Выберите одно из направлений написав его порядковый номер или название направления."
+        )
+
+    async def set_welcome_v2(self, text: str):
+        async with _lock:
+            self.state["welcome_v2"] = text or ""
+            await self._save_unlocked()
+
+    def get_operator_invite_text(self) -> str:
+        return self.state.get("operator_invite_text") or (
+            "Сейчас я добавлю нашего менеджера по данному направлению и он Вам поможет."
+        )
+
+    async def set_operator_invite_text(self, text: str):
+        async with _lock:
+            self.state["operator_invite_text"] = text or ""
+            await self._save_unlocked()
+
     def was_assistant_hint_sent(self, chat_id) -> bool:
         """True если в этом чате уже отправляли подсказку «напиши Ассистент»."""
         key = _norm_chat_id(chat_id)

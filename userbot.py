@@ -731,9 +731,103 @@ class UserbotService:
                     if _norm(event.chat_id) == _norm(ideas_chat):
                         await self._handle_ideas_message(event)
                         return
+                # Welcome v2: если чат ждёт выбор направления — обрабатываем тут,
+                # AI не вызывается на это сообщение.
+                if storage.is_awaiting_track_choice(event.chat_id):
+                    handled = await self._handle_track_choice(event)
+                    if handled:
+                        return
+                # AI mute от оператора (VoIP/Дебет) — отвечаем только на «Ассистент».
+                if storage.is_chat_ai_muted(event.chat_id):
+                    text_raw = (event.message.text or event.message.message or "")
+                    if not re.search(r"\bассистент\w*\b", text_raw, re.IGNORECASE):
+                        return  # молчим — оператор работает
                 await self._handle_ai_message(event)
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
+
+    async def _handle_track_choice(self, event) -> bool:
+        """Парсит выбор направления клиента (1/2/3 или текст).
+        Возвращает True если выбор обработан (AI вызывать не нужно)."""
+        chat_id = event.chat_id
+        text = (event.message.text or event.message.message or "").strip().lower()
+        if not text:
+            return False
+
+        # Определяем track по тексту
+        track = None
+        if re.search(r"\b1\b|\bип\b|\booo\b|\bооо\b|\bip\b", text):
+            track = "ip"
+        elif re.search(r"\b2\b|voip|\bтелефон\w*\b|телефония", text):
+            track = "voip"
+        elif re.search(r"\b3\b|\bдебет\w*\b|\bdebet\b", text):
+            track = "debet"
+
+        if track is None:
+            # Не распознали — повторим welcome (опционально, можно молчать)
+            try:
+                await self.client.send_message(
+                    chat_id,
+                    "Не понял выбор. Напишите цифру 1 (ИП/ООО), 2 (VoIP) или 3 (Дебет).",
+                )
+            except Exception:
+                pass
+            return True  # обработано (не вызываем AI)
+
+        # Зафиксировать track
+        try:
+            await storage.set_chat_track(chat_id, track)
+        except Exception as e:
+            logger.warning("set_chat_track failed: %s", e)
+
+        if track == "ip":
+            # Стандартный AI flow — отдадим следующее сообщение клиента AI,
+            # текущее (ответ "1"/"ИП") пропустим (это просто выбор).
+            logger.info("Welcome v2: track=ip in chat=%s, AI continues", chat_id)
+            return True  # текущее сообщение НЕ AI-обрабатывается
+
+        # VoIP / Дебет — добавляем оператора + мьютим AI
+        operator = (
+            storage.get_voip_operator_username() if track == "voip"
+            else storage.get_debet_operator_username()
+        )
+        invite_text = storage.get_operator_invite_text()
+        try:
+            await self.client.send_message(chat_id, invite_text)
+        except Exception as e:
+            logger.warning("operator invite text send failed: %s", e)
+        # Мьютим AI
+        try:
+            await storage.mute_chat_ai(chat_id, True)
+        except Exception as e:
+            logger.warning("mute_chat_ai failed: %s", e)
+        # Приглашаем оператора в чат
+        try:
+            ok = await self._invite_operator_to_chat(chat_id, operator)
+            if ok:
+                logger.info("Welcome v2: invited operator @%s to chat=%s (track=%s)", operator, chat_id, track)
+            else:
+                logger.warning("Welcome v2: invite @%s failed in chat=%s", operator, chat_id)
+        except Exception as e:
+            logger.exception("invite_operator failed: %s", e)
+        return True
+
+    async def _invite_operator_to_chat(self, chat_id, username: str) -> bool:
+        """Пытается пригласить оператора (по username) в work_chat.
+        Возвращает True/False. Все ошибки логируются."""
+        if not username:
+            return False
+        try:
+            entity = await self.client.get_entity(username if username.startswith("@") else f"@{username}")
+        except Exception as e:
+            logger.warning("get_entity(@%s) failed: %s", username, e)
+            return False
+        try:
+            await self.client(InviteToChannelRequest(chat_id, [entity]))
+            return True
+        except Exception as e:
+            logger.warning("InviteToChannelRequest @%s -> chat=%s failed: %s", username, chat_id, e)
+            return False
 
     async def stop(self):
         """Аккуратный shutdown — отключаем Telethon клиент.
@@ -867,7 +961,10 @@ class UserbotService:
             if not info or info.get("welcome_sent"):
                 return False
 
-            welcome = storage.get_welcome()
+            # Welcome v2: новый текст с выбором направления (ИП/VoIP/Дебет).
+            # storage.get_welcome_v2() — редактируемый текст; entities/премиум-эмодзи
+            # пока через старые get_welcome_entities() — SIMBA позже привяжет.
+            welcome = storage.get_welcome_v2()
             entities_raw = storage.get_welcome_entities()
             try:
                 if entities_raw:
@@ -878,6 +975,13 @@ class UserbotService:
                         await self.client.send_message(chat_id, chunk)
                         await asyncio.sleep(0.3)
                 await storage.mark_welcome_sent(chat_id)
+                # Помечаем что ждём выбора направления — router в _on_new_message
+                # перехватит первое сообщение и определит track.
+                try:
+                    await storage.mark_awaiting_track_choice(chat_id)
+                    logger.info("Welcome v2: awaiting track choice in chat=%s", chat_id)
+                except Exception as e:
+                    logger.warning("mark_awaiting_track_choice failed: %s", e)
                 logger.info(
                     "Welcome sent (source=%s, entities=%d, len=%d) to chat=%s for client=%s",
                     source, len(entities_raw), len(welcome), chat_id, expected_client_id,

@@ -71,23 +71,20 @@ WELCOME_AFTER_SURVEY = (
 # Главный welcome-баннер @PrideInviteWork_bot.
 # Шаблон: {nick} подставится через format() из first_name пользователя.
 WELCOME_BANNER = (
-    "🔥 <b>{nick}</b>, добро пожаловать в <b>ЭКО-СИСТЕМУ PRIDE</b>!\n\n"
+    "👋 <b>{nick}</b>, добро пожаловать в <b>ЭКО-СИСТЕМУ PRIDE</b>!\n\n"
     "🤝 Безупречная репутация и <b>120.000 $ +</b> сделок в Continental.\n\n"
-    "👉 <b>Наши ресурсы:</b>\n\n"
-    "✋ <b>Покупка ИП</b> @pride_projectv2 <i>(ЧАТ, КАНАЛ)</i>\n"
-    "   • Уникальная автоматическая система с личной ЦРМ и AI-Ассистентом, "
-    "который не оставит Вас без ответа <b>24/7</b> "
-    "<i>(на рынке нет более удобной системы для людей, которые продают ИП).</i>\n"
-    "   • Если хотите начать работу по продаже ИП — просто нажмите кнопку "
-    "<b>«Продать ИП»</b>.\n\n"
-    "🙂 <b>Набор сотрудников</b> — актуальный список вакансий в разделе "
+    "👉 <b>Наши ресурсы:</b>\n"
+    "🟢 @pride_projectv2\n\n"
+    "👉 Чтобы начать сотрудничество с нашей Эко-Системой, просто нажмите "
+    "на кнопку <b>«Подключиться»</b> ниже этого сообщения и следуйте инструкциям.\n\n"
+    "🧑‍🚒 <b>Набор сотрудников</b> — актуальный список вакансий в разделе "
     "<b>«Вакансии»</b>."
 )
 
 # Эмодзи которые могут быть premium (заменяются на custom_emoji если в storage
 # заданы document_id'ы). Порядок важен — entities должны быть в порядке
-# появления в тексте.
-WELCOME_PREMIUM_EMOJI_SLOTS = ["🔥", "🤝", "👉", "✋", "🙂"]
+# появления в тексте. SIMBA может привязать premium document_id'ы через JARVIS.
+WELCOME_PREMIUM_EMOJI_SLOTS = ["👋", "🤝", "👉", "🟢", "👉", "🧑\u200d🚒"]
 
 CAPTCHA_MAX_ATTEMPTS = 3
 
@@ -117,7 +114,7 @@ def _get_chat_kb() -> InlineKeyboardMarkup:
 def _welcome_kb() -> InlineKeyboardMarkup:
     """Главная клавиатура welcome-баннера PrideInviteWork_bot."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Продать ИП", callback_data="iw:sell")],
+        [InlineKeyboardButton(text="🔌 Подключиться", callback_data="iw:sell")],
         [InlineKeyboardButton(text="💼 Вакансии",   callback_data="iw:jobs")],
         [
             InlineKeyboardButton(text="💬 ЧАТ PRIDE",  url="https://t.me/pride_projectv2"),
