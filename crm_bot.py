@@ -1567,6 +1567,7 @@ async def handle_fio_cancel(message: Message, state: FSMContext):
 async def handle_fio(message: Message, state: FSMContext):
     data = await state.get_data()
     fio = (message.text or "").strip()
+    logger.info("[handle_fio] start chat=%s user=%s fio=%r data_keys=%s", message.chat.id, (message.from_user.id if message.from_user else None), fio[:50], list(data.keys()))
     # === Простая, НЕ строгая валидация ФИО ===
     # Условия (любое нарушение → НЕ ФИО, но FSM не сбрасываем, даём ещё попытку):
     # - длина 5-100 символов
@@ -1582,6 +1583,7 @@ async def handle_fio(message: Message, state: FSMContext):
         and all(word_pat.match(p) for p in parts)
         and not any(ch.isdigit() for ch in fio)
     )
+    logger.info("[handle_fio] validation is_fio=%s parts=%d", is_fio, len(parts))
     if not is_fio:
         # НЕ выходим из FSM. Оставляем юзера в режиме ожидания ФИО,
         # просто говорим что введённое — не ФИО. Кнопка ◀ Отмена выше его выведет.
@@ -1592,7 +1594,8 @@ async def handle_fio(message: Message, state: FSMContext):
             "или напиши /cancel."
         )
         return
-    track = data.get("track", "crm")  # 'crm' (default) | 'credit'
+    track = data.get("track", "crm")
+    logger.info("[handle_fio] track=%s", track)  # 'crm' (default) | 'credit'
     owner_id = data.get("owner_id")
     manager_username = data.get("manager_username")
     work_chat_id = data.get("work_chat_id")
@@ -1608,6 +1611,7 @@ async def handle_fio(message: Message, state: FSMContext):
             await state.clear()
             return
     # Routing через storage.add_drop_for_chat (выберет add_crm_drop или add_credit_drop)
+    logger.info("[handle_fio] calling add_drop_for_chat")
     drop_id = await crm_storage.add_drop_for_chat(
         chat_id=work_chat_id or message.chat.id,
         fio=fio,
@@ -1616,10 +1620,15 @@ async def handle_fio(message: Message, state: FSMContext):
         work_chat_id=work_chat_id,
     )
     drop = crm_storage.get_drop_any(drop_id)
+    logger.info("[handle_fio] drop_id=%s found=%s", drop_id, bool(drop))
     await _safe_delete(message.bot, message.chat.id, message.message_id)
     if data.get("menu_msg_id"):
         await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
-    await _show_drop(message, drop)
+    try:
+        await _show_drop(message, drop)
+        logger.info("[handle_fio] _show_drop OK")
+    except Exception as _e:
+        logger.exception("[handle_fio] _show_drop FAILED: %s", _e)
     await state.clear()
     # SSE
     _emit_crm_event("drop.created", {
