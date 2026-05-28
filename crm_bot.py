@@ -199,7 +199,7 @@ def get_admin_chat_id_for(obj) -> int:
     """
     drop_id = _extract_drop_id(obj)
     if str(drop_id).startswith("cdrp"):
-        return config.CREDIT_ACCESS_CHAT_ID
+        return int(os.environ.get("CREDIT_ACCESS_CHAT_ID", "-1003457011118"))
     return get_admin_chat_id()
 
 
@@ -207,7 +207,7 @@ def get_password_chat_id_for(obj) -> int:
     """Аналогично для password-чата."""
     drop_id = _extract_drop_id(obj)
     if str(drop_id).startswith("cdrp"):
-        return config.CREDIT_PASSWORD_CHAT_ID
+        return int(os.environ.get("CREDIT_PASSWORD_CHAT_ID", "-1003945639230"))
     return get_password_chat_id()
 
 
@@ -1883,7 +1883,7 @@ async def cb_dropdelete_confirmed(call: CallbackQuery):
         await call.answer("Уже удалён", show_alert=True)
         return
     owner_id = drop.get("owner_id")
-    await crm_storage.delete_crm_drop(drop_id)
+    await crm_storage.delete_drop_any(drop_id)
     await call.answer("Удалено")
     owner = crm_storage.get_crm_owner(owner_id) if owner_id else None
     try:

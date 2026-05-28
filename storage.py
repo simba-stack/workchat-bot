@@ -3195,6 +3195,44 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    async def delete_credit_drop(self, drop_id: str) -> bool:
+        """Удалить credit-анкету + все её credit_drop_lks."""
+        async with _lock:
+            drops = self.state.get("credit_drops") or {}
+            if str(drop_id) not in drops:
+                return False
+            lks = self.state.get("credit_drop_lks") or {}
+            for lkid in list(lks.keys()):
+                if lks[lkid].get("credit_drop_id") == drop_id:
+                    del lks[lkid]
+            del drops[str(drop_id)]
+            await self._save_unlocked()
+            return True
+
+    async def delete_outsource_drop(self, drop_id: str) -> bool:
+        """Удалить outsource-анкету + все её outsource_drop_lks."""
+        async with _lock:
+            drops = self.state.get("outsource_drops") or {}
+            if str(drop_id) not in drops:
+                return False
+            lks = self.state.get("outsource_drop_lks") or {}
+            for lkid in list(lks.keys()):
+                if lks[lkid].get("outsource_drop_id") == drop_id:
+                    del lks[lkid]
+            del drops[str(drop_id)]
+            await self._save_unlocked()
+            return True
+
+    async def delete_drop_any(self, drop_id: str) -> bool:
+        """Router: удаляет drop по prefix.
+        cdrp* → credit, odrp* → outsource, иначе → crm."""
+        s = str(drop_id or "")
+        if s.startswith("cdrp"):
+            return await self.delete_credit_drop(s)
+        if s.startswith("odrp"):
+            return await self.delete_outsource_drop(s)
+        return await self.delete_crm_drop(s)
+
     # ---- DROP LKs (ЛК банков) ----
     def list_crm_drop_lks(self, drop_id: Optional[str] = None) -> dict:
         lks = self.state.get("crm_drop_lks") or {}
