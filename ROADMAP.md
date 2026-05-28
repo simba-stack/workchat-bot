@@ -2,8 +2,10 @@
 
 > Живой документ. Обновляется после каждой задачи в сессии Claude — чтобы при крэше или новой сессии всё было на руках.
 
-**Снимок:** обновлено **2026-05-23** (сессия SIMBA + Claude через Cowork).
-**Что в проде сейчас (Railway active deploy):** все этапы кредитования + КУЦ MVP без AI.
+**Снимок:** обновлено **2026-05-28** (сессия SIMBA + Claude через Cowork) — после **Долгого Фикса ЦРМ**.
+**Что в проде сейчас (Railway active deploy):** все этапы кредитования + КУЦ MVP без AI + async-safe storage + AsyncPersistentFSMStorage.
+
+> **См. [DOLGIY_FIX_CRM.md](DOLGIY_FIX_CRM.md)** — отдельный документ про многочасовой фикс credit-flow 27-28 мая. ТРИ корневые причины (sync json.dump в event loop в двух местах + дедлок asyncio.Lock) + протокол диагностики через debug-логи. Читать обязательно ДО любых правок storage.py или FSM-кода.
 
 ---
 
@@ -496,6 +498,32 @@ git push origin v2.0.3
 - Сущности: `outsource_drops` (prefix `odrp`) + `outsource_drop_lks` (prefix `olk`)
 - Своя группа управляющих, свой бот `@marketplace_PRIDE_BOT`
 - Routing аналогично
+
+---
+
+## 12.1 ДОЛГИЙ ФИКС ЦРМ (27-28 мая 2026)
+
+**Симптом:** юрист в credit-чате вводит `/clients` → «Новая анкета» → ФИО → бот молчит, анкета не создаётся. Контейнер на Railway периодически падает с healthcheck timeout каждые 5-10 минут.
+
+**Хронология диагностики:**
+1. Сначала думали что `handle_fio` вообще не вызывается. Добавили логи на каждом шаге → выяснилось что start приходит, dispatcher routит правильно, но зависает на `await crm_storage.add_drop_for_chat(...)`.
+2. Добавили логи внутрь `add_credit_drop` (start → acquiring _lock → lock acquired → saving state.json → state saved → bumping stat → DONE). Логи показали: **последний лог = `saving state.json`** → значит блокировка в `_save_unlocked()`.
+3. Исправили `_save_unlocked()` — вынесли `json.dump` через `run_in_executor`. Деплой ACTIVE → тестим снова → **последний лог теперь = `state saved, bumping stat`**, дальше тишина.
+4. Поняли: `bump_credit_manager_stat` пытается захватить `async with _lock`, который уже захвачен caller'ом. asyncio.Lock не реентерабельный → дедлок.
+
+**Три фикса в проде:**
+- **`fsm_persistent.py`** — `AsyncPersistentFSMStorage` вместо synchronous v1: `json.dump` через executor + debounced flush (dirty flag, фоновая задача каждые 2 сек) + graceful close(). 8 smoke-тестов покрывают persistence/concurrency/no-event-loop-block.
+- **`storage.py:_save_unlocked()`** — `json.dumps()` в event loop (быстро), запись на диск через `_do_write_sync(snapshot)` в thread executor. Атомарно через `.tmp` + `os.replace` + `.bak` от предыдущего state.
+- **`storage.py:bump_*_manager_stat`** — split на приватную `_bump_*_unlocked` (без захвата лока, для вызова из-под уже захваченного _lock) + публичную обёртку (берёт _lock + сохраняет state). Все 8 внутренних call-sites переключены на `_unlocked`. Порядок в caller-ах: bump → save (иначе stat не персистится).
+
+**Финальные коммиты:** `b3d1c68` (async I/O через executor) + дедлок-фикс.
+
+**Ключевые уроки:**
+- ❌ Никогда не делать sync I/O (json.dump на МБ) внутри event loop, особенно под Lock'ом.
+- ❌ Никогда не вызывать публичную функцию которая берёт `_lock` ИЗ-ПОД уже захваченного `_lock`. asyncio.Lock НЕ реентерабельный.
+- ✅ Любая mutation-функция в `storage.py` должна иметь `_unlocked` вариант для composability.
+- ✅ При диагностике зависания: добавлять debug-логи на каждый `await` → смотреть «какой лог последний» → там и блокировка.
+- ✅ PowerShell `Set-Content` / `WriteAllText` ОБРЕЗАЕТ файлы посреди UTF-8 emoji у файлов >200KB → ВСЕГДА Python-патчер с `ast.parse()` + atomic write + size-check ДО `git commit`. См. отдельный документ `DOLGIY_FIX_CRM.md`.
 
 ---
 
