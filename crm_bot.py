@@ -171,6 +171,86 @@ def get_password_chat_id() -> int:
     return HARDCODED_PASSWORD_CHAT_ID
 
 
+# === Track-aware routing (CRM vs Credit) ===
+# Когда drop/lk относится к credit-стэку (drop_id начинается с "cdrp"),
+# сообщения должны идти в КРЕДИТ Доступы/Пароли, а не в общие CRM-чаты.
+
+def _extract_drop_id(obj) -> str:
+    """Универсальный extractor drop_id из drop / lk / drop_id-строки.
+    Учитывает поля credit_drop_id и outsource_drop_id (унифицирует разные стэки)."""
+    if not obj:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if not isinstance(obj, dict):
+        return ""
+    return (
+        obj.get("drop_id")
+        or obj.get("credit_drop_id")
+        or obj.get("outsource_drop_id")
+        or ""
+    )
+
+
+def get_admin_chat_id_for(obj) -> int:
+    """Возвращает админ-чат с учётом track:
+    - credit (cdrp*) → CREDIT_ACCESS_CHAT_ID
+    - иначе (crm/outsource) → старая логика (CRM Доступы)
+    """
+    drop_id = _extract_drop_id(obj)
+    if str(drop_id).startswith("cdrp"):
+        return config.CREDIT_ACCESS_CHAT_ID
+    return get_admin_chat_id()
+
+
+def get_password_chat_id_for(obj) -> int:
+    """Аналогично для password-чата."""
+    drop_id = _extract_drop_id(obj)
+    if str(drop_id).startswith("cdrp"):
+        return config.CREDIT_PASSWORD_CHAT_ID
+    return get_password_chat_id()
+
+
+async def get_admin_chat_resolved_for(bot, obj) -> Optional[int]:
+    """Track-aware get_admin_chat_resolved. КРИТИЧНО: для credit-track
+    НЕ вызываем register_crm_chat (иначе credit-чат попадает в CRM-namespace
+    и find_crm_admin_chat() начнёт возвращать credit-ID для CRM-операций)."""
+    drop_id = _extract_drop_id(obj)
+    is_credit = str(drop_id).startswith("cdrp")
+    cid = get_admin_chat_id_for(obj)
+    if not cid:
+        return None
+    resolved = await _resolve_chat_id_variants(bot, cid)
+    if resolved and resolved != cid and not is_credit:
+        try:
+            await crm_storage.register_crm_chat(
+                chat_id=resolved, owner_id="_admin",
+                is_admin=True, is_password=False,
+            )
+        except Exception:
+            pass
+    return resolved
+
+
+async def get_password_chat_resolved_for(bot, obj) -> Optional[int]:
+    """То же для password-чата (без CRM-загрязнения для credit-track)."""
+    drop_id = _extract_drop_id(obj)
+    is_credit = str(drop_id).startswith("cdrp")
+    cid = get_password_chat_id_for(obj)
+    if not cid:
+        return None
+    resolved = await _resolve_chat_id_variants(bot, cid)
+    if resolved and resolved != cid and not is_credit:
+        try:
+            await crm_storage.register_crm_chat(
+                chat_id=resolved, owner_id="_password",
+                is_admin=False, is_password=True,
+            )
+        except Exception:
+            pass
+    return resolved
+
+
 async def get_admin_chat_resolved(bot) -> Optional[int]:
     """Получает admin-chat_id и проверяет доступность. Авто-корректирует если нужно."""
     cid = get_admin_chat_id()
@@ -2260,7 +2340,7 @@ async def _crm_drop_lk_post_save(message: Message, drop: dict, droplk_id: str, b
         if drop.get("status") == "accepted":
             bot = message.bot
             try:
-                admin_chat = await get_admin_chat_resolved(bot)
+                admin_chat = await get_admin_chat_resolved_for(bot, drop)
                 admin_msg_id = drop.get("admin_msg_id")
                 if admin_chat and admin_msg_id:
                     fio = drop.get("fio") or "—"
@@ -2283,7 +2363,7 @@ async def _crm_drop_lk_post_save(message: Message, drop: dict, droplk_id: str, b
             except Exception as e:
                 logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
             try:
-                pwd_chat = await get_password_chat_resolved(bot)
+                pwd_chat = await get_password_chat_resolved_for(bot, drop)
                 new_lk = crm_storage.get_drop_lk_any(droplk_id)
                 if pwd_chat and new_lk:
                     text_p = _render_password_text(drop, new_lk)
@@ -2423,7 +2503,7 @@ async def handle_lk_value(message: Message, state: FSMContext):
             bot = message.bot
             # 1) Reply на admin_msg_id в ДОСТУПАХ
             try:
-                admin_chat = await get_admin_chat_resolved(bot)
+                admin_chat = await get_admin_chat_resolved_for(bot, drop)
                 admin_msg_id = drop.get("admin_msg_id")
                 if admin_chat and admin_msg_id:
                     new_lk = crm_storage.get_drop_lk_any(droplk_id) or {}
@@ -2448,7 +2528,7 @@ async def handle_lk_value(message: Message, state: FSMContext):
                 logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
             # 2) Автопост шаблона в ПАРОЛИ
             try:
-                pwd_chat = await get_password_chat_resolved(bot)
+                pwd_chat = await get_password_chat_resolved_for(bot, drop)
                 new_lk = crm_storage.get_drop_lk_any(droplk_id)
                 if pwd_chat and new_lk:
                     text_p = _render_password_text(drop, new_lk)
@@ -2492,7 +2572,7 @@ async def cb_lkview(call: CallbackQuery):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     await call.answer()
     status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
     _slot = _lk_slot_tag(lk, drop or {})
@@ -2660,9 +2740,9 @@ async def cb_dropsend(call: CallbackQuery):
 
     is_resubmit = drop.get("status") == "accepted"
     bot = call.message.bot
-    admin_chat_id = await get_admin_chat_resolved(bot)
+    admin_chat_id = await get_admin_chat_resolved_for(bot, drop)
     if not admin_chat_id:
-        raw = get_admin_chat_id()
+        raw = get_admin_chat_id_for(drop)
         await call.answer("Admin-чат недоступен", show_alert=True)
         await ephemeral(
             call.message,
@@ -2763,9 +2843,9 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
 
     # СНАЧАЛА проверим что бот имеет доступ к password-чату
     # (иначе принимать дроп бессмысленно)
-    pwd_chat = await get_password_chat_resolved(bot)
+    pwd_chat = await get_password_chat_resolved_for(bot, drop)
     if not pwd_chat:
-        raw_pwd = get_password_chat_id()
+        raw_pwd = get_password_chat_id_for(drop)
         await call.answer("Password-чат недоступен — смотри подробности ниже", show_alert=True)
         await bot.send_message(
             call.message.chat.id,
@@ -3044,7 +3124,7 @@ async def cb_filldrop(call: CallbackQuery, state: FSMContext):
         return
     await call.answer()
     await state.set_state(FillForm.waiting_new_login)
-    drop = crm_storage.get_drop_any(lk["drop_id"])
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     # Шлём первый вопрос обычным send_message чтобы запомнить его id
     sent = await call.message.bot.send_message(
         call.message.chat.id,
@@ -3148,11 +3228,11 @@ async def fill_pass2(message: Message, state: FSMContext):
     await state.clear()
 
     lk = crm_storage.get_drop_lk_any(droplk_id)
-    drop = crm_storage.get_drop_any(lk["drop_id"])
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
 
     # Обновляем сообщение в password-чате (с новыми кнопками)
     bot = message.bot
-    pwd_chat = get_password_chat_id()
+    pwd_chat = get_password_chat_id_for(drop)
     if pwd_chat and lk.get("msgid_pass"):
         try:
             await bot.edit_message_text(
@@ -3165,7 +3245,7 @@ async def fill_pass2(message: Message, state: FSMContext):
             logger.warning("password edit failed: %s", e)
 
     # Обновляем контрольное сообщение в admin-чате
-    admin_chat = get_admin_chat_id()
+    admin_chat = get_admin_chat_id_for(drop)
     if admin_chat and drop.get("admin_msg_id"):
         try:
             await bot.edit_message_text(
@@ -3196,13 +3276,13 @@ async def cb_addpool(call: CallbackQuery):
         return
     await call.answer(f"✅ Добавлено в пул {pool_name}")
     # Простая запись в drop's history
-    drop_id = lk.get("drop_id")
+    drop_id = _extract_drop_id(lk)
     drop = crm_storage.get_drop_any(drop_id) if drop_id else None
     if drop:
         new_count = int(drop.get("prolit_count") or 0) + 1
         await crm_storage.update_drop_any(drop_id, prolit_count=new_count)
         # Обновим admin message
-        admin_chat = get_admin_chat_id()
+        admin_chat = get_admin_chat_id_for(drop)
         if admin_chat and drop.get("admin_msg_id"):
             try:
                 drop = crm_storage.get_drop_any(drop_id)
@@ -3259,7 +3339,7 @@ async def cb_dropdone(call: CallbackQuery):
                 # 2) Партнёру в work_chat
                 await _notify_work_chat(call.message.bot, owner, summary_text)
                 # 3) В admin-чат CRM
-                admin_chat_id = await get_admin_chat_resolved(call.message.bot)
+                admin_chat_id = await get_admin_chat_resolved_for(call.message.bot, drop)
                 if admin_chat_id:
                     try:
                         await call.message.bot.send_message(admin_chat_id, summary_text)
@@ -3285,7 +3365,7 @@ async def cb_dropproblem(call: CallbackQuery):
         return
     await call.answer("⚠ Помечено как проблема")
     # Уведомление в admin
-    admin_chat = get_admin_chat_id()
+    admin_chat = get_admin_chat_id_for(lk)
     if admin_chat:
         try:
             await call.message.bot.send_message(
@@ -3386,10 +3466,10 @@ async def _post_or_update_sms_tracker(bot, droplk_id):
     lk = crm_storage.get_drop_lk_any(droplk_id)
     if not lk:
         return None
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     if not drop:
         return None
-    admin_chat = await get_admin_chat_resolved(bot)
+    admin_chat = await get_admin_chat_resolved_for(bot, drop)
     if not admin_chat or not drop.get("admin_msg_id"):
         return None
     try:
@@ -3500,7 +3580,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
     bot = call.message.bot
     stage = lk.get("sms_stage") or ""
@@ -3704,7 +3784,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
     lk = crm_storage.get_drop_lk_any(droplk_id)
     if not lk:
         return f"⚠️ ЛК {droplk_id} не найден"
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
     if not (drop and owner and owner.get("work_chat_id")):
         return f"⚠️ Нет work_chat у владельца ЛК {droplk_id}"
@@ -3846,8 +3926,8 @@ async def _dashboard_command_worker_crm(bot):
                         if not lk:
                             result = f"⚠️ lk {droplk_id} not found"
                         else:
-                            drop = crm_storage.get_drop_any(lk.get("drop_id"))
-                            pwd_chat = get_password_chat_id()
+                            drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+                            pwd_chat = get_password_chat_id_for(drop)
                             if pwd_chat and lk.get("msgid_pass") and drop:
                                 try:
                                     await bot.edit_message_text(
@@ -3910,7 +3990,7 @@ async def handle_sms_code(message: Message, state: FSMContext):
     if not lk:
         await state.clear()
         return
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     await crm_storage.append_drop_sms_any(droplk_id, code=code)
     # Записываем в нужное поле + переключаем stage
     if sms_kind == "perevyaz":
@@ -3985,7 +4065,7 @@ async def cb_smsretry(call: CallbackQuery):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(lk.get("drop_id"))
+    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
     if not drop:
         await call.answer("Дроп не найден", show_alert=True)
         return
@@ -4040,10 +4120,10 @@ async def cb_smsmsgclose(call: CallbackQuery):
         pass
     await call.answer()
     # Обновляем сообщение в admin-чате
-    admin_chat = get_admin_chat_id()
+    admin_chat = get_admin_chat_id_for(lk)
     if drop and admin_chat and drop.get("admin_msg_id"):
         try:
-            drop = crm_storage.get_drop_any(lk.get("drop_id"))
+            drop = crm_storage.get_drop_any(_extract_drop_id(lk))
             await message.bot.edit_message_text(
                 await _render_admin_text(drop),
                 chat_id=admin_chat, message_id=drop["admin_msg_id"],
@@ -4090,7 +4170,7 @@ async def handle_price(message: Message, state: FSMContext):
     await state.clear()
     drop = crm_storage.get_drop_any(drop_id)
     await message.reply(f"✅ Цена обновлена: <b>${price}</b>")
-    admin_chat = get_admin_chat_id()
+    admin_chat = get_admin_chat_id_for(drop)
     if admin_chat and drop.get("admin_msg_id"):
         try:
             await message.bot.edit_message_text(
@@ -5298,7 +5378,7 @@ async def _payment_reminder_tick(bot) -> int:
             pass
         # 3) admin-чат CRM
         try:
-            admin_chat_id = await get_admin_chat_resolved(bot)
+            admin_chat_id = await get_admin_chat_resolved_for(bot, drop)
             if admin_chat_id:
                 await bot.send_message(
                     admin_chat_id,
