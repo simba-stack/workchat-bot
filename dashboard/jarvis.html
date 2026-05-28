@@ -3015,7 +3015,7 @@
   <!-- LEFT -->
   <aside class="space-y-4">
     <!-- ===== JARVIS CORE SPHERE ===== -->
-    <div class="jarvis-panel" x-show="['office','chat','lk','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
         ЯДРО JARVIS
         <span class="badge-mini" x-text="voiceActive ? 'В ЭФИРЕ' : 'ПОКОЙ'"></span>
@@ -3105,7 +3105,7 @@
     </div>
 
     <!-- ===== COMMAND CHAT ===== -->
-    <div class="jarvis-panel" x-show="['office','chat','lk','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','chat','lk','fin'].includes(currentView)">
       <div class="panel-title">
         Command Console
         <span class="badge-mini">СВОБОДНО</span>
@@ -3290,7 +3290,7 @@
 
         <!-- Walker AI-FIN -->
         <div class="walker clickable" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
-          <div class="walker-hint">→ Бухгалтерия</div>
+          <div class="walker-hint">→ Финансы</div>
           <div class="walker-name">AI-FIN</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -3604,7 +3604,7 @@
     </div>
 
         <!-- ===== FIN DEPT: Recent Applications ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'accounting'">
+    <div class="jarvis-panel" x-show="currentView === 'fin'">
       <div class="panel-title">
         Recent Applications V2
         <span class="badge-mini" x-text="(state.recent_applications || []).length + ' за неделю'"></span>
@@ -3672,7 +3672,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel" x-show="['office','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Финансы
         <span class="badge-mini">МАРЖА</span>
@@ -3708,7 +3708,7 @@
       </div>
     </div>
 
-    <div class="jarvis-panel" x-show="['office','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Operators
         <span class="badge-mini" x-text="managers.length + ' акт.'"></span>
@@ -3795,7 +3795,7 @@
     </div>
 
     <!-- ===== BRAIN NOTES (LEO) ===== -->
-    <div class="jarvis-panel" x-show="['office','lk','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','lk','fin'].includes(currentView)">
       <div class="panel-title">
         Brain Notes
         <span class="badge-mini" x-text="(notesPreview.length) + (notesPreview.length > 0 ? ' · LEO' : '')"></span>
@@ -3855,7 +3855,7 @@
     </div>
 
     <!-- ===== OUTREACH ===== -->
-    <div class="jarvis-panel" x-show="['office','accounting'].includes(currentView)">
+    <div class="jarvis-panel" x-show="['office','fin'].includes(currentView)">
       <div class="panel-title">
         Outreach
         <span class="badge-mini" x-text="outreachCampaigns.length + ' camp · ' + outreachBots.length + ' bots'"></span>
@@ -9022,12 +9022,12 @@ function jarvis() {
     characterClick(key) {
       // Кликаешь по человечку → переходишь в его департамент
       this.playBeep(900);
-      const viewMap = {chat: 'chat', lk: 'lk', accounting: 'accounting'};
+      const viewMap = {chat: 'chat', lk: 'lk', accounting: 'fin'};
       const view = viewMap[key];
       if (view) this.goToView(view);
     },
     goToView(view) {
-      // Legacy redirect: view 'fin' был объединён с 'accounting' — переадресуем.
+      // Legacy: tab Финансы убран — пускаем на accounting если кто-то приходит через #fin.
       if (view === 'fin') view = 'accounting';
       // Грузим профиль при первом переключении (если ещё не загружен)
       if (!this.dashMe) this.loadMe();
@@ -10768,7 +10768,7 @@ function jarvis() {
           // Если текущий view недоступен этой роли — переключаем на первый доступный
           try {
             if (this.currentView && !this.canView(this.currentView)) {
-              const allViews = ['office','chat','lk','crm','payouts','discord','support','system','accounting','operational','settings','owner'];
+              const allViews = ['office','chat','lk','fin','crm','payouts','discord','support','system','accounting','operational','settings','owner'];
               const fallback = allViews.find(v => this.canView(v));
               if (fallback) this.goToView(fallback);
             }
@@ -11728,6 +11728,7 @@ function jarvis() {
       'office': '🏢 Главная',
       'chat': '💬 Беседы',
       'lk': '📋 ЛК Отдел',
+      'fin': '📒 Финансы',
       'crm': '🤝 Партнёры',
       'payouts': '💰 Выплаты',
       'discord': '🟣 Хаб (звонки/чаты)',
