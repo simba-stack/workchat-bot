@@ -5415,7 +5415,7 @@ async def run_crm_bot():
     )
     _fsm_storage = AsyncPersistentFSMStorage(
         os.path.join(
-            os.path.dirname(getattr(config, 'STORAGE_PATH', '/app/data/state.json')),
+            os.path.dirname(os.environ.get('STORAGE_PATH', '/app/data/state.json')),
             'crm_fsm.json',
         ),
         flush_interval=2.0,
