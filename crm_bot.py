@@ -5555,7 +5555,9 @@ async def run_crm_bot():
     # Юзербот работает в том же процессе через Telethon. Когда CRM-бот ставит
     # FSM-state (ждёт ФИО / СМС / пароль / etc), любое сообщение в чате
     # попадает в handler — включая AI-ответы юзербота клиенту. CRM грабит
-    # ответ ассистента вместо реального юзера. Этот middleware блокирует.
+    # ответ ассистента вместо реального юзера. Этот middleware блокирует
+    # юзербота — но ТОЛЬКО когда есть активный FSM-state. Иначе пропускаем,
+    # чтобы юзербот мог слать команды CRM-у (например "+партнер @username").
     #
     # USERBOT_USER_ID: автоматически кладётся в storage юзерботом при старте
     # (см. userbot.py:start()). Fallback на env переменную если задана.
@@ -5571,9 +5573,25 @@ async def run_crm_bot():
                 ub_id = int(os.environ.get("USERBOT_USER_ID", "0"))
             except Exception:
                 pass
-        if ub_id and event.from_user and event.from_user.id == ub_id:
-            logger.debug("[crm-middleware] ignored userbot message in chat %s", event.chat.id if event.chat else "?")
-            return None
+        # Если это не юзербот — пропускаем сразу
+        if not (ub_id and event.from_user and event.from_user.id == ub_id):
+            return await handler(event, data)
+        # Это юзербот. Блокируем ТОЛЬКО если есть активный FSM-state в чате
+        # (защита от подмены ввода в FSM-форме). Иначе — пропускаем,
+        # юзербот должен иметь возможность слать команды.
+        try:
+            state = data.get("state") if isinstance(data, dict) else None
+            if state is not None:
+                current = await state.get_state()
+                if current:
+                    logger.info(
+                        "[crm-middleware] ignored userbot msg in chat %s (active FSM state: %s)",
+                        event.chat.id if event.chat else "?", current,
+                    )
+                    return None
+        except Exception as e:
+            logger.warning("[crm-middleware] FSM check failed: %s", e)
+        # FSM пуст или недоступен → пропускаем юзербота
         return await handler(event, data)
 
 

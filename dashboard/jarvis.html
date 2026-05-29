@@ -13,6 +13,15 @@
 <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
+
+    /* Refresh button spin animation (loading state) */
+    @keyframes jarvis-spin { to { transform: rotate(360deg); } }
+    .jarvis-spinning {
+      display: inline-block;
+      animation: jarvis-spin 0.8s linear infinite;
+    }
+    button.jarvis-loading { opacity: 0.6; cursor: progress !important; pointer-events: none; }
+    
   /* ===========================
      THEMES
      =========================== */
@@ -3290,7 +3299,7 @@
 
         <!-- Walker AI-FIN -->
         <div class="walker clickable" :class="chars.accounting.state" :style="'left: ' + chars.accounting.x + '%;'" @click="characterClick('accounting')">
-          <div class="walker-hint">→ Финансы</div>
+          <div class="walker-hint">→ Бухгалтерия</div>
           <div class="walker-name">AI-FIN</div>
           <svg viewBox="0 0 60 80">
             <ellipse cx="30" cy="76" rx="14" ry="3" fill="rgba(0,0,0,0.4)"/>
@@ -3377,7 +3386,7 @@
       <div class="panel-title">
         Отдел ЛК
         <span class="badge-mini" x-text="(lkSummary.all.count || 0) + ' карточек'"></span>
-        <button class="chip-btn" style="margin-left:auto;" @click="refreshLkAll()">⟳ Обновить</button>
+        <button class="chip-btn" style="margin-left:auto;" @click="_doRefresh('lk', refreshLkAll)" :disabled="_refreshing.lk" :class="_refreshing.lk ? 'jarvis-loading' : ''"><span :class="_refreshing.lk ? 'jarvis-spinning' : ''">⟳</span> Обновить</button>
       </div>
 
       <!-- Sub-tabs -->
@@ -3504,7 +3513,7 @@
         Операционная — ЛК в работе
         <span class="badge-mini"
               x-text="((opLkInWork.singles?.length || 0) + (opLkInWork.combos?.reduce((a,c)=>a+c.size,0) || 0)) + ' активных'"></span>
-        <button class="chip-btn" style="margin-left:auto;" @click="refreshOpAll()">⟳ Обновить</button>
+        <button class="chip-btn" style="margin-left:auto;" @click="_doRefresh('op', refreshOpAll)" :disabled="_refreshing.op" :class="_refreshing.op ? 'jarvis-loading' : ''"><span :class="_refreshing.op ? 'jarvis-spinning' : ''">⟳</span> Обновить</button>
         <button x-show="canAct('exchange_request')" class="chip-btn" style="margin-left:6px; background: var(--hud-primary); color: #000;"
                 @click="openExchangeModal()">➕ Новая заявка на обмен</button>
       </div>
@@ -3849,7 +3858,7 @@
         </template>
       </div>
       <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
-        <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1;" @click="refreshNotes()">↻ обновить</button>
+        <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1;" @click="_doRefresh('notes', refreshNotes)" :disabled="_refreshing.notes" :class="_refreshing.notes ? 'jarvis-loading' : ''"><span :class="_refreshing.notes ? 'jarvis-spinning' : ''">↻</span> обновить</button>
         <button x-show="canAct('leo_notes_archive')" class="btn" style="font-size: 10px; padding: 4px 10px;" @click="archiveOld()" title="старше 30 дней → archive">🗄 архив</button>
       </div>
     </div>
@@ -3921,7 +3930,7 @@
       <div style="padding: 6px 12px; border-top: 1px solid rgba(var(--primary-rgb), 0.08); display: flex; gap: 6px;">
         <button x-show="canAct('outreach_campaign_create')" class="btn success" style="font-size: 10px; padding: 4px 10px; flex: 1;"
                 @click="outreachCampaignOpen = true">+ новая кампания</button>
-        <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="refreshOutreach()">↻</button>
+        <button class="btn" style="font-size: 10px; padding: 4px 10px;" @click="_doRefresh('outreach', refreshOutreach)" :disabled="_refreshing.outreach" :class="_refreshing.outreach ? 'jarvis-loading' : ''"><span :class="_refreshing.outreach ? 'jarvis-spinning' : ''">↻</span></button>
       </div>
     </div>
   </aside>
@@ -4029,7 +4038,7 @@
 <section x-show="currentView === 'payouts'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
     <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">💰 ВЫПЛАТЫ</h2>
-    <button class="btn" @click="refreshPayouts()" :disabled="payoutLoading">↻ Обновить</button>
+    <button class="btn" @click="_doRefresh('payouts', refreshPayouts)" :disabled="_refreshing.payouts || payoutLoading" :class="_refreshing.payouts ? 'jarvis-loading' : ''"><span :class="_refreshing.payouts ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
   </div>
 
   <!-- USDT TRC20 -->
@@ -4124,7 +4133,7 @@
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
     <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">🤝 ПАРТНЁРЫ CRM</h2>
     <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-      <button class="btn" @click="refreshCrm()" :disabled="crmLoading">↻</button>
+      <button class="btn" @click="_doRefresh('crm', refreshCrm)" :disabled="_refreshing.crm || crmLoading" :class="_refreshing.crm ? 'jarvis-loading' : ''"><span :class="_refreshing.crm ? 'jarvis-spinning' : ''">↻</span></button>
       <button class="btn" @click="crmExportCsv()">📥 Экспорт CSV</button>
       <select x-model="crmFilter" class="btn" style="padding: 6px 10px;">
         <option value="all">все статусы</option>
@@ -4428,7 +4437,7 @@
         <button class="btn" @click="toggleDiscordExpanded()"
                 :title="discordExpanded ? 'Свернуть' : 'Развернуть'"
                 x-text="discordExpanded ? '⊟' : '⊞'"></button>
-        <button class="btn" @click="refreshDiscordMessages()" title="Обновить">↻</button>
+        <button class="btn" @click="_doRefresh('discord', refreshDiscordMessages)" :disabled="_refreshing.discord" :class="_refreshing.discord ? 'jarvis-loading' : ''" title="Обновить"><span :class="_refreshing.discord ? 'jarvis-spinning' : ''">↻</span></button>
       </div>
     </div>
 
@@ -4921,7 +4930,7 @@
     <div class="support-inbox">
       <div class="support-inbox-head">
         📞 Inbox
-        <button class="btn" @click="refreshSupportInbox()"
+        <button class="btn" @click="_doRefresh('support', refreshSupportInbox)" :disabled="_refreshing.support" :class="_refreshing.support ? 'jarvis-loading' : ''"
                 :disabled="supportInboxLoading"
                 style="margin-left: auto; padding: 3px 8px; font-size: 10px;">
           ↻
@@ -5133,7 +5142,7 @@
     <h2 style="margin: 0; font-size: 22px; font-weight: 700;">⚙️ System</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— анкеты + перевязки + заполнение credentials</span>
     <span style="font-size: 11px; color: var(--hud-primary); padding: 3px 9px; background: rgba(0,229,255,0.1); border-radius: 10px;">🔁 синхронизация с TG</span>
-    <button class="btn" @click="refreshSystem()" :disabled="systemLoading" style="margin-left: auto;">↻ Обновить</button>
+    <button class="btn" @click="_doRefresh('system', refreshSystem)" :disabled="_refreshing.system || systemLoading" :class="_refreshing.system ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.system ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
   </div>
 
   <!-- Sub-tabs: 2 -->
@@ -5425,7 +5434,7 @@
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💳 Кредитование — Доступы</h3>
       <span class="badge-mini" x-text="creditPendingLks.length + ' анкет'"></span>
-      <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
+      <button class="btn" @click="_doRefresh('credit', refreshCredit)" :disabled="_refreshing.credit || creditLoading" :class="_refreshing.credit ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.credit ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
     <!-- Toolbar выбора -->
@@ -5489,7 +5498,7 @@
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💳 Кредитование — Пароли</h3>
       <span class="badge-mini" x-text="creditPasswordsInbox.length + ' ЛК'"></span>
-      <button class="btn" @click="refreshCredit()" :disabled="creditLoading" style="margin-left: auto;">↻ Обновить</button>
+      <button class="btn" @click="_doRefresh('credit', refreshCredit)" :disabled="_refreshing.credit || creditLoading" :class="_refreshing.credit ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.credit ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
     <!-- Toolbar выбора -->
@@ -5567,7 +5576,7 @@
       <span class="badge-mini" x-text="outsourcePendingLks.length + ' анкет'"></span>
       <button class="btn" @click="bundlesViewOpen = !bundlesViewOpen" :style="bundlesViewOpen ? 'background:rgba(34,197,94,0.18);border-color:rgba(34,197,94,0.4);' : ''"
               x-text="bundlesViewOpen ? '🔗 Связки (открыто)' : ('🔗 Связки (' + (outsourceBundles?.length || 0) + ')')"></button>
-      <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
+      <button class="btn" @click="_doRefresh('outsource', refreshOutsource)" :disabled="_refreshing.outsource || outsourceLoading" :class="_refreshing.outsource ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.outsource ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
     <!-- Toolbar выбора (показывается когда что-то отмечено) -->
@@ -5660,7 +5669,7 @@
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
       <h3 style="margin: 0;">🏢 Аутсорс — Пароли</h3>
       <span class="badge-mini" x-text="outsourcePasswordsInbox.length + ' ЛК'"></span>
-      <button class="btn" @click="refreshOutsource()" :disabled="outsourceLoading" style="margin-left: auto;">↻ Обновить</button>
+      <button class="btn" @click="_doRefresh('outsource', refreshOutsource)" :disabled="_refreshing.outsource || outsourceLoading" :class="_refreshing.outsource ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.outsource ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
     <!-- Toolbar выбора (показывается когда что-то отмечено) -->
@@ -5908,7 +5917,7 @@
   <div style="margin-bottom: 24px; display: flex; align-items: center; gap: 12px;">
     <h2 style="margin: 0; font-size: 22px;">👑 Owner Panel</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— роли, разрешения, пользователи</span>
-    <button class="btn" @click="refreshOwner()" :disabled="ownerLoading" style="margin-left: auto;">↻ Обновить</button>
+    <button class="btn" @click="_doRefresh('owner', refreshOwner)" :disabled="_refreshing.owner || ownerLoading" :class="_refreshing.owner ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.owner ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     <button x-show="canAct('call_create')" class="btn" @click="openCallCreateModal()" style="background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a;">📞 Создать звонок</button>
   </div>
 
@@ -6061,7 +6070,7 @@
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💱 Откупы — RUB → USDT TRC20</h3>
       <span class="badge-mini" x-show="outkupSettings?.rate_rub_per_usdt" x-text="'Курс: ' + (outkupSettings?.rate_rub_per_usdt || '—') + ' ₽/USDT'"></span>
-      <button class="btn" @click="refreshOutkup()" :disabled="outkupLoading" style="margin-left: auto;">↻ Обновить</button>
+      <button class="btn" @click="_doRefresh('outkup', refreshOutkup)" :disabled="_refreshing.outkup || outkupLoading" :class="_refreshing.outkup ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.outkup ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
     <!-- Фильтр статуса -->
@@ -7061,6 +7070,25 @@ function jarvis() {
   return {
     booted: false,
     bootStatus: 'CONNECTING',
+    // === Refresh loading state: per-button флаги (вместо разрозненных *Loading) ===
+    _refreshing: {},  // { crm: true/false, lk: true/false, ... }
+    _doRefresh(name, fn) {
+      // Универсальный wrapper для refresh-кнопок:
+      //  • double-click guard (если уже грузится — игнор)
+      //  • CSS spinning + disabled state через _refreshing[name]
+      //  • try/finally чтобы даже на ошибке флаг снимался
+      if (this._refreshing[name]) return;
+      this._refreshing[name] = true;
+      const startTs = Date.now();
+      Promise.resolve(fn ? fn.call(this) : null)
+        .catch(e => { console.error('refresh ' + name + ' failed:', e); })
+        .finally(() => {
+          // Минимум 400ms показываем spinning чтобы UI был визуально отзывчив
+          const elapsed = Date.now() - startTs;
+          const wait = Math.max(0, 400 - elapsed);
+          setTimeout(() => { this._refreshing[name] = false; }, wait);
+        });
+    },
     // Vкладки: office (главная — сцена) / chat / lk / fin
     currentView: (() => { const h = (window.location.hash || '#office').replace('#', ''); return (h === 'fin') ? 'accounting' : (h || 'office'); })(),
     theme: localStorage.getItem('jarvis-theme') || 'jarvis',
@@ -9022,7 +9050,7 @@ function jarvis() {
     characterClick(key) {
       // Кликаешь по человечку → переходишь в его департамент
       this.playBeep(900);
-      const viewMap = {chat: 'chat', lk: 'lk', accounting: 'fin'};
+      const viewMap = {chat: 'chat', lk: 'lk', accounting: 'accounting'};
       const view = viewMap[key];
       if (view) this.goToView(view);
     },
@@ -10768,7 +10796,7 @@ function jarvis() {
           // Если текущий view недоступен этой роли — переключаем на первый доступный
           try {
             if (this.currentView && !this.canView(this.currentView)) {
-              const allViews = ['office','chat','lk','fin','crm','payouts','discord','support','system','accounting','operational','settings','owner'];
+              const allViews = ['office','chat','lk','crm','payouts','discord','support','system','accounting','operational','settings','owner'];
               const fallback = allViews.find(v => this.canView(v));
               if (fallback) this.goToView(fallback);
             }
@@ -11728,7 +11756,6 @@ function jarvis() {
       'office': '🏢 Главная',
       'chat': '💬 Беседы',
       'lk': '📋 ЛК Отдел',
-      'fin': '📒 Финансы',
       'crm': '🤝 Партнёры',
       'payouts': '💰 Выплаты',
       'discord': '🟣 Хаб (звонки/чаты)',
@@ -13622,13 +13649,3 @@ function jarvis() {
               <div style="font-size: 11px; color: rgba(255,255,255,0.5); text-align: center; margin-top: 6px;">
                 Создаст новый запрос — клиент получит свежую ссылку. Это видео сохранится в истории.
               </div>
-            </div>
-          </div>
-        </template>
-      </div>
-    </template>
-  </div>
-</div>
-
-</body>
-</html>
