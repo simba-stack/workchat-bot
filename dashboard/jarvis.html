@@ -3499,7 +3499,7 @@
     </div>
 
     <!-- ===== OPERATIONAL DEPT (May 2026): ЛК в работе + фикс заявок ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'operational'" x-init="$watch('currentView', v => { if (v === 'operational') refreshOpAll(); else stopOpTimer(); })">
+    <div class="jarvis-panel" x-show="currentView === 'operational'" x-init="$watch('currentView', v => { if (v === 'operational') refreshOpAll(); else stopOpTimer(); })" style="max-height: calc(100vh - 180px); overflow-y: auto;">
       <div class="panel-title">
         Операционная — ЛК в работе
         <span class="badge-mini"
@@ -3575,7 +3575,7 @@
     </div>
 
     <!-- ===== OPERATIONAL: Список зафиксированных заявок ===== -->
-    <div class="jarvis-panel" x-show="currentView === 'operational'">
+    <div class="jarvis-panel" x-show="currentView === 'operational'" style="max-height: calc(100vh - 180px); overflow-y: auto;">
       <div class="panel-title">
         Зафиксированные заявки на обмен
         <span class="badge-mini" x-text="(opExchangeRequests?.length || 0) + ' шт.'"></span>
