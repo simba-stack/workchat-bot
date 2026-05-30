@@ -4451,9 +4451,14 @@ class Storage:
     }
 
     def _ensure_default_role_permissions(self):
-        """Заполняет role_permissions дефолтами если пусто."""
+        """Заполняет role_permissions дефолтами если пусто.
+        Учитывает deleted_default_roles — те которые owner явно удалил
+        через Owner Panel НЕ восстанавливаются."""
         rp = self.state.setdefault("role_permissions", {})
+        deleted = set(self.state.get("deleted_default_roles") or [])
         for role_name, perms in self._DEFAULT_ROLE_PERMS.items():
+            if role_name in deleted:
+                continue  # owner явно удалил — не восстанавливаем
             if role_name not in rp:
                 rp[role_name] = dict(perms)
 
@@ -4493,18 +4498,27 @@ class Storage:
             return rp[role]
 
     async def delete_role_permission(self, role: str) -> bool:
-        """Удалить кастомную роль. Дефолтные нельзя удалить."""
-        if role in self._DEFAULT_ROLE_PERMS:
-            return False
+        """Удалить любую роль (кастомную или дефолтную).
+        Если дефолтная — добавляем в deleted_default_roles чтобы при следующем
+        рестарте/обращении она НЕ восстановилась. Owner=protected (нельзя удалить)."""
+        if role == "owner":
+            return False  # owner защищён всегда
         async with _lock:
             rp = self.state.get("role_permissions") or {}
-            if role in rp:
+            existed = role in rp
+            if existed:
                 del rp[role]
             custom = self.state.get("custom_roles") or []
             if role in custom:
                 custom.remove(role)
+            # Если это была дефолтная роль — помечаем чтобы не восстанавливалась
+            if role in self._DEFAULT_ROLE_PERMS:
+                deleted = self.state.setdefault("deleted_default_roles", [])
+                if role not in deleted:
+                    deleted.append(role)
             await self._save_unlocked()
-            return True
+            # Возвращаем True если что-то удалили ИЛИ это была дефолтная (запретили)
+            return existed or (role in self._DEFAULT_ROLE_PERMS)
 
     def role_can_view(self, role: str, view_id: str) -> bool:
         perms = self.get_role_permission(role)
