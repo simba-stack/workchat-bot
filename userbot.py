@@ -747,69 +747,96 @@ class UserbotService:
                 logger.exception("AI message handler error: %s", e)
 
     async def _handle_track_choice(self, event) -> bool:
-        """Парсит выбор направления клиента (1/2/3 или текст).
-        Возвращает True если выбор обработан (AI вызывать не нужно)."""
+        """Парсит выбор направления клиента (1/2/3 или текст). Поддерживает
+        мульти-выбор: клиент может написать «1 и 2», «ИП и VoIP», «дебет+ип»
+        и т.д. — обработаем ВСЕ упомянутые направления.
+
+        Правила:
+          • Если есть ИП — НЕ мьютим AI, AI продолжает обычный flow по ИП.
+          • Если есть VoIP/Дебет — приглашаем оператора + пишем «менеджер @user
+            добавлен, он поможет с …».
+          • Если ИП НЕТ а есть только VoIP/Дебет — мьютим AI (оператор сам ведёт).
+          • Возвращает True если выбор обработан (текущее сообщение не AI-кейс).
+        """
         chat_id = event.chat_id
         text = (event.message.text or event.message.message or "").strip().lower()
         if not text:
             return False
 
-        # Определяем track по тексту
-        track = None
+        # Собираем МНОЖЕСТВО треков из одного сообщения (поддержка «1 и 2», «ИП и Дебет»)
+        tracks = set()
         if re.search(r"\b1\b|\bип\b|\booo\b|\bооо\b|\bip\b", text):
-            track = "ip"
-        elif re.search(r"\b2\b|voip|\bтелефон\w*\b|телефония", text):
-            track = "voip"
-        elif re.search(r"\b3\b|\bдебет\w*\b|\bdebet\b", text):
-            track = "debet"
+            tracks.add("ip")
+        if re.search(r"\b2\b|voip|\bтелефон\w*\b|телефония", text):
+            tracks.add("voip")
+        if re.search(r"\b3\b|\bдебет\w*\b|\bdebet\b", text):
+            tracks.add("debet")
 
-        if track is None:
-            # Не распознали — повторим welcome (опционально, можно молчать)
+        if not tracks:
+            # Не распознали — переспросим
             try:
                 await self.client.send_message(
                     chat_id,
-                    "Не понял выбор. Напишите цифру 1 (ИП/ООО), 2 (VoIP) или 3 (Дебет).",
+                    "Не понял выбор. Напишите цифру 1 (ИП/ООО), 2 (VoIP) или 3 (Дебет). "
+                    "Можно сразу несколько — например «1 и 2».",
                 )
             except Exception:
                 pass
-            return True  # обработано (не вызываем AI)
+            return True  # обработано (не AI)
 
-        # Зафиксировать track
+        # Главный track для storage: ip приоритетнее (т.к. AI продолжает работать).
+        # Если ИП нет — берём первый из voip/debet.
+        primary = "ip" if "ip" in tracks else ("voip" if "voip" in tracks else "debet")
         try:
-            await storage.set_chat_track(chat_id, track)
+            await storage.set_chat_track(chat_id, primary)
         except Exception as e:
             logger.warning("set_chat_track failed: %s", e)
+        logger.info("Welcome v2: tracks=%s primary=%s in chat=%s", sorted(tracks), primary, chat_id)
 
-        if track == "ip":
-            # Стандартный AI flow — отдадим следующее сообщение клиента AI,
-            # текущее (ответ "1"/"ИП") пропустим (это просто выбор).
-            logger.info("Welcome v2: track=ip in chat=%s, AI continues", chat_id)
-            return True  # текущее сообщение НЕ AI-обрабатывается
+        # Приглашаем операторов для voip/debet (по одному на каждый track)
+        operator_msgs = []
+        for t in ("voip", "debet"):
+            if t not in tracks:
+                continue
+            username = (
+                storage.get_voip_operator_username() if t == "voip"
+                else storage.get_debet_operator_username()
+            )
+            if not username:
+                continue
+            # Приглашаем в чат
+            try:
+                ok = await self._invite_operator_to_chat(chat_id, username)
+                if ok:
+                    logger.info("Welcome v2: invited @%s for track=%s in chat=%s", username, t, chat_id)
+                else:
+                    logger.warning("Welcome v2: invite @%s failed (track=%s, chat=%s)", username, t, chat_id)
+            except Exception as e:
+                logger.exception("invite_operator failed: %s", e)
+            label = "VoIP-телефонии" if t == "voip" else "Дебету"
+            operator_msgs.append(f"По {label} вам поможет @{username} — добавил его в чат.")
 
-        # VoIP / Дебет — добавляем оператора + мьютим AI
-        operator = (
-            storage.get_voip_operator_username() if track == "voip"
-            else storage.get_debet_operator_username()
-        )
-        invite_text = storage.get_operator_invite_text()
+        # Решаем mute AI:
+        #   • Если ИП в выборе — НЕ мьютим (AI должен продолжить штатно объяснять про ИП)
+        #   • Если ИП НЕТ — мьютим (только оператор)
+        if "ip" not in tracks:
+            try:
+                await storage.mute_chat_ai(chat_id, True)
+            except Exception as e:
+                logger.warning("mute_chat_ai failed: %s", e)
+
+        # Отправляем сообщения про операторов + (если ИП есть) приглашение AI продолжить
+        msgs = list(operator_msgs)
+        if "ip" in tracks and operator_msgs:
+            # Hybrid: оператор по voip/debet добавлен + AI продолжит по ИП
+            msgs.append("По ИП я (Ассистент PRIDE) продолжу с вами здесь — расскажите, какой банк интересует.")
         try:
-            await self.client.send_message(chat_id, invite_text)
+            for m in msgs:
+                await self.client.send_message(chat_id, m)
+                await asyncio.sleep(0.4)
         except Exception as e:
-            logger.warning("operator invite text send failed: %s", e)
-        # Мьютим AI
-        try:
-            await storage.mute_chat_ai(chat_id, True)
-        except Exception as e:
-            logger.warning("mute_chat_ai failed: %s", e)
-        # Приглашаем оператора в чат
-        try:
-            ok = await self._invite_operator_to_chat(chat_id, operator)
-            if ok:
-                logger.info("Welcome v2: invited operator @%s to chat=%s (track=%s)", operator, chat_id, track)
-            else:
-                logger.warning("Welcome v2: invite @%s failed in chat=%s", operator, chat_id)
-        except Exception as e:
-            logger.exception("invite_operator failed: %s", e)
+            logger.warning("Welcome v2 track msg send failed: %s", e)
+
         return True
 
     async def _invite_operator_to_chat(self, chat_id, username: str) -> bool:

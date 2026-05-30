@@ -31,6 +31,7 @@ class AdminFSM(StatesGroup):
     set_invite_gif = State()      # ожидаем reply/forward с GIF (file_id)
     set_invite_emoji = State()    # формат "EMOJI document_id" или "EMOJI -"
     set_invite_jobs = State()     # текст раздела «Вакансии»
+    broadcast_text = State()      # ввод текста рассылки (audience в state.data)
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -43,9 +44,183 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
         [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
         [InlineKeyboardButton(text="📨 Invite-бот (welcome)", callback_data="adm:invite")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="🔐 Админы", callback_data="adm:admins")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="adm:close")],
     ])
+
+
+def _broadcast_audience_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Всем кто нажимал /start", callback_data="adm:bc:all")],
+        [InlineKeyboardButton(text="💤 Только тем кто НЕ зашёл в work-чат", callback_data="adm:bc:inactive")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")],
+    ])
+
+
+def _broadcast_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="adm:bc:send")],
+        [InlineKeyboardButton(text="✏️ Переписать", callback_data="adm:bc:rewrite")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:bc:cancel")],
+    ])
+
+
+# ─── BROADCAST flow ─────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:broadcast")
+async def cb_broadcast_menu(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.clear()
+    n_all = len(storage.list_bot_users() or {})
+    n_inactive = len(storage.list_inactive_bot_users() or [])
+    await call.message.edit_text(
+        f"📢 <b>Рассылка через @PrideInviteWork_bot</b>\n\n"
+        f"Выберите аудиторию:\n"
+        f"• <b>Все:</b> {n_all} чел.\n"
+        f"• <b>Не зашедшие в work-чат:</b> {n_inactive} чел.",
+        reply_markup=_broadcast_audience_kb(),
+    )
+    await call.answer()
+
+
+async def _broadcast_ask_text(call: CallbackQuery, state: FSMContext, audience: str):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.set_state(AdminFSM.broadcast_text)
+    await state.update_data(audience=audience)
+    label = "ВСЕМ" if audience == "all" else "НЕ зашедшим в work-чат"
+    count = (
+        len(storage.list_bot_users() or {}) if audience == "all"
+        else len(storage.list_inactive_bot_users() or [])
+    )
+    await call.message.edit_text(
+        f"✍️ <b>Рассылка → {label}</b> ({count} чел.)\n\n"
+        f"Пришлите текст следующим сообщением. Поддерживается HTML "
+        f"(<b>жирный</b>, <i>курсив</i>, <a href='url'>ссылка</a>).\n\n"
+        f"Для отмены — /admin",
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm:bc:all")
+async def cb_bc_all(call: CallbackQuery, state: FSMContext):
+    await _broadcast_ask_text(call, state, "all")
+
+
+@router.callback_query(F.data == "adm:bc:inactive")
+async def cb_bc_inactive(call: CallbackQuery, state: FSMContext):
+    await _broadcast_ask_text(call, state, "inactive")
+
+
+@router.message(AdminFSM.broadcast_text, F.text & ~F.text.startswith("/"))
+async def handle_broadcast_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    audience = data.get("audience", "all")
+    text = (message.text or "").strip()
+    if not text:
+        await message.reply("Пустой текст — отправьте ещё раз.")
+        return
+    await state.update_data(text=text)
+    label = "ВСЕМ" if audience == "all" else "НЕ зашедшим в work-чат"
+    count = (
+        len(storage.list_bot_users() or {}) if audience == "all"
+        else len(storage.list_inactive_bot_users() or [])
+    )
+    await message.reply(
+        f"📋 <b>Предпросмотр рассылки</b>\n\n"
+        f"<b>Аудитория:</b> {label} ({count} чел.)\n\n"
+        f"────── текст ──────\n{text}\n────────────────\n\n"
+        f"Отправить?",
+        reply_markup=_broadcast_confirm_kb(),
+    )
+
+
+@router.callback_query(F.data == "adm:bc:rewrite")
+async def cb_bc_rewrite(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    audience = data.get("audience", "all")
+    await _broadcast_ask_text(call, state, audience)
+
+
+@router.callback_query(F.data == "adm:bc:cancel")
+async def cb_bc_cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Рассылка отменена.", reply_markup=main_menu_kb())
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm:bc:send")
+async def cb_bc_send(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    data = await state.get_data()
+    audience = data.get("audience", "all")
+    text = data.get("text", "")
+    if not text:
+        await call.answer("Нет текста для рассылки", show_alert=True)
+        return
+
+    # Собираем список user_id
+    if audience == "all":
+        users_dict = storage.list_bot_users() or {}
+        user_ids = [int(uid) for uid in users_dict.keys()]
+    else:
+        user_ids = [u["user_id"] for u in (storage.list_inactive_bot_users() or [])]
+    total = len(user_ids)
+    if total == 0:
+        await call.message.edit_text("⚠️ Аудитория пустая — некому отправлять.", reply_markup=main_menu_kb())
+        await state.clear()
+        await call.answer()
+        return
+
+    await call.message.edit_text(
+        f"⏳ Отправляю {total} сообщений... подожди (~{total // 20 + 1} сек)",
+    )
+    await call.answer()
+
+    import asyncio as _asyncio
+    bot = call.message.bot
+    sent, failed, blocked = 0, 0, 0
+    # Throttle: Telegram limit ~30 msg/sec в общую группу но безопасно 20 msg/sec
+    for i, uid in enumerate(user_ids):
+        try:
+            await bot.send_message(uid, text, disable_web_page_preview=True)
+            sent += 1
+        except Exception as e:
+            es = str(e).lower()
+            if "bot was blocked" in es or "user is deactivated" in es or "chat not found" in es:
+                blocked += 1
+            else:
+                failed += 1
+                logger.warning("broadcast to %s failed: %s", uid, e)
+        # 50ms между сообщениями — ~20 msg/sec
+        if i < total - 1:
+            await _asyncio.sleep(0.05)
+
+    await state.clear()
+    summary = (
+        f"✅ <b>Рассылка завершена</b>\n\n"
+        f"• Отправлено: <b>{sent}</b>\n"
+        f"• Заблокировали бота / удалены: <b>{blocked}</b>\n"
+        f"• Ошибки: <b>{failed}</b>\n"
+        f"• Всего в аудитории: {total}"
+    )
+    try:
+        await call.message.edit_text(summary, reply_markup=main_menu_kb())
+    except Exception:
+        await call.message.answer(summary, reply_markup=main_menu_kb())
+
+
+@router.callback_query(F.data == "adm:menu")
+async def cb_back_to_menu(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
+    await call.answer()
 
 
 @router.message(Command("admin"))
