@@ -52,8 +52,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 
 def _broadcast_audience_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Всем кто нажимал /start", callback_data="adm:bc:all")],
-        [InlineKeyboardButton(text="💤 Только тем кто НЕ зашёл в work-чат", callback_data="adm:bc:inactive")],
+        [InlineKeyboardButton(text="👥 Всем (нажимали /start)", callback_data="adm:bc:all")],
+        [InlineKeyboardButton(text="💤 Только спящим (нет work-чата)", callback_data="adm:bc:inactive")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")],
     ])
 
@@ -76,11 +76,15 @@ async def cb_broadcast_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
     n_all = len(storage.list_bot_users() or {})
     n_inactive = len(storage.list_inactive_bot_users() or [])
+    n_active = n_all - n_inactive
     await call.message.edit_text(
         f"📢 <b>Рассылка через @PrideInviteWork_bot</b>\n\n"
         f"Выберите аудиторию:\n"
-        f"• <b>Все:</b> {n_all} чел.\n"
-        f"• <b>Не зашедшие в work-чат:</b> {n_inactive} чел.",
+        f"• <b>Все:</b> {n_all} чел. (нажимали /start)\n"
+        f"• <b>Активные:</b> {n_active} чел. (есть work-чат)\n"
+        f"• <b>Спящие:</b> {n_inactive} чел. (нажали /start, но work-чата нет)\n\n"
+        f"<i>Активность определяется derived: есть ли client_id в managed_chats. "
+        f"Работает ретроактивно — флаг entered_work_chat больше не нужен.</i>",
         reply_markup=_broadcast_audience_kb(),
     )
     await call.answer()
@@ -92,7 +96,7 @@ async def _broadcast_ask_text(call: CallbackQuery, state: FSMContext, audience: 
         return
     await state.set_state(AdminFSM.broadcast_text)
     await state.update_data(audience=audience)
-    label = "ВСЕМ" if audience == "all" else "НЕ зашедшим в work-чат"
+    label = "ВСЕМ" if audience == "all" else "СПЯЩИМ (нет work-чата)"
     count = (
         len(storage.list_bot_users() or {}) if audience == "all"
         else len(storage.list_inactive_bot_users() or [])
@@ -125,7 +129,7 @@ async def handle_broadcast_text(message: Message, state: FSMContext):
         await message.reply("Пустой текст — отправьте ещё раз.")
         return
     await state.update_data(text=text)
-    label = "ВСЕМ" if audience == "all" else "НЕ зашедшим в work-чат"
+    label = "ВСЕМ" if audience == "all" else "СПЯЩИМ (нет work-чата)"
     count = (
         len(storage.list_bot_users() or {}) if audience == "all"
         else len(storage.list_inactive_bot_users() or [])

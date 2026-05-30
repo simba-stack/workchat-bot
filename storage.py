@@ -2761,13 +2761,50 @@ class Storage:
     def list_bot_users(self) -> dict:
         return dict(self.state.get("bot_users") or {})
 
+    def _active_client_ids(self) -> set:
+        """Все client_id из managed_chats — юзеры у которых есть work-чат.
+        Derived источник истины (надёжнее чем флаг entered_work_chat который
+        ставится только при успешном _watch_for_client_join)."""
+        out = set()
+        for info in (self.state.get("managed_chats") or {}).values():
+            cid = info.get("client_id")
+            if cid:
+                try:
+                    out.add(int(cid))
+                except Exception:
+                    pass
+        return out
+
     def list_inactive_bot_users(self) -> list:
-        """Юзеры которые нажали /start но ещё не вошли в work-чат."""
+        """Юзеры которые нажали /start но НЕ имеют work-чата.
+        Derived: проверяем managed_chats.client_id (надёжно) + флаг
+        entered_work_chat (fallback для старых записей)."""
+        active = self._active_client_ids()
         out = []
         for uid, info in (self.state.get("bot_users") or {}).items():
-            if not info.get("entered_work_chat"):
-                out.append({"user_id": int(uid), **info})
+            try:
+                uid_int = int(uid)
+            except Exception:
+                continue
+            if uid_int in active:
+                continue
+            if info.get("entered_work_chat"):
+                continue
+            out.append({"user_id": uid_int, **info})
         return out
+
+    def count_active_bot_users(self) -> int:
+        """Сколько юзеров реально зашли в work-чат (для статистики/админки)."""
+        active = self._active_client_ids()
+        n = 0
+        for uid, info in (self.state.get("bot_users") or {}).items():
+            try:
+                uid_int = int(uid)
+            except Exception:
+                continue
+            if uid_int in active or info.get("entered_work_chat"):
+                n += 1
+        return n
 
     # === Dashboard commands queue ===
 
