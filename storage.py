@@ -581,7 +581,9 @@ class Storage:
                 self.state["workers"].append(clean)
             roles = self.state.setdefault("worker_roles", {})
             roles[key] = {
-                "role": (role or "").strip()[:16] or "Сотрудник",
+                # 64-символьный лимит — выше старого 16 который ломал длинные
+                # имена ролей (outkup_specialist=17 → outkup_specialis, ломалось).
+                "role": (role or "").strip()[:64] or "Сотрудник",
                 "is_admin": bool(is_admin),
             }
             await self._save_unlocked()
