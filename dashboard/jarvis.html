@@ -5957,21 +5957,11 @@
             </template>
             <span x-show="(perms.views || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
           </div>
-          <!-- Edit Actions -->
-          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">✏️ ДЕЙСТВИЯ (что может изменять):</div>
-          <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-            <template x-for="action in ownerAllActions" :key="action">
-              <label style="font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer;"
-                     :style="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*') ? 'background: rgba(106,216,255,0.2); color: #6ad8ff; border: 1px solid rgba(106,216,255,0.4);' : 'background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.06);'">
-                <input type="checkbox"
-                       :checked="(perms.edit_actions || []).includes(action) || (perms.edit_actions || []).includes('*')"
-                       :disabled="(perms.edit_actions || []).includes('*') || !canAct('owner_role_create_update')"
-                       @change="ownerToggleRoleAction(role, action, $event.target.checked)"
-                       style="display: none;">
-                <span x-text="ownerActionLabel(action)" :title="action"></span>
-              </label>
-            </template>
-            <span x-show="(perms.edit_actions || []).includes('*')" style="font-size: 10px; color: #fbbf24; align-self: center; margin-left: 6px;">★ все (wildcard)</span>
+          <!-- Edit Actions block — убран: SIMBA упростил роли (роль = вкладка).
+               Backend по-прежнему поддерживает edit_actions через API если нужно
+               тонкое управление. UI скрыт намеренно. -->
+          <div style="font-size: 10px; color: var(--text-dim); padding: 4px 0; font-style: italic;">
+            💡 Роль видит вкладки выше → может всё в них. Тонкое управление actions — через API.
           </div>
         </div>
       </template>

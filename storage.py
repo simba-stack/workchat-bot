@@ -4371,41 +4371,29 @@ class Storage:
             "label": "👑 Owner",
             "views": ["*"], "edit_actions": ["*"],
         },
+        # === Упрощённые роли (по запросу SIMBA): роль = одна вкладка =====
+        # Все edit_actions=['*'] → роль может ВСЁ в её views. Backend wildcard
+        # автоматом через role_can_edit('*' in acts → True). Можно расширить
+        # вручную через Owner Panel (UI убран, но API доступен).
         "manager": {
-            "label": "👤 Manager",
-            "views": ["office", "chat", "lk", "crm", "support", "system", "operational"],
-            "edit_actions": [
-                "request_kuc", "decide_kuc", "lk_sms_action", "lk_fill",
-                "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
-                "lk_status_change",
-                "support_take", "support_reply", "support_transfer", "support_close",
-                "credit_capture_chat",
-            ],
+            "label": "📞 Менеджер (Поддержка)",
+            "views": ["office", "support"],
+            "edit_actions": ["*"],
         },
         "system_dept": {
-            "label": "⚙️ System",
-            "views": ["office", "system", "operational"],
-            "edit_actions": [
-                "request_kuc", "decide_kuc", "lk_fill", "lk_sms_action",
-            ],
+            "label": "⚙️ Сус (System)",
+            "views": ["office", "system"],
+            "edit_actions": ["*"],
         },
         "accounting": {
-            "label": "💰 Accounting",
-            "views": ["office", "fin", "payouts", "accounting"],
-            "edit_actions": [
-                "exchange_request",
-                "payout_usdt_paid", "payout_released",
-                "payout_deal_funded", "payout_set_deal_id",
-                "accounting_entry_add", "accounting_entry_delete",
-                "accounting_payout_note",
-            ],
+            "label": "📒 Бухгалтер",
+            "views": ["office", "accounting"],
+            "edit_actions": ["*"],
         },
         "operationist": {
-            "label": "🛠 Operationist",
-            "views": ["office", "operational", "lk"],
-            "edit_actions": [
-                "exchange_request", "lk_status_change",
-            ],
+            "label": "🛠 Операционист",
+            "views": ["office", "operational"],
+            "edit_actions": ["*"],
         },
         # === Роль: ОТКУПЫ (RUB → USDT обмен) ===
         "outkup_specialist": {
