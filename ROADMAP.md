@@ -2,10 +2,93 @@
 
 > Живой документ. Обновляется после каждой задачи в сессии Claude — чтобы при крэше или новой сессии всё было на руках.
 
-**Снимок:** обновлено **2026-05-28** (сессия SIMBA + Claude через Cowork) — после **Долгого Фикса ЦРМ**.
-**Что в проде сейчас (Railway active deploy):** все этапы кредитования + КУЦ MVP без AI + async-safe storage + AsyncPersistentFSMStorage.
+**Снимок:** обновлено **2026-05-31** (ночная сессия Claude автономно пока SIMBA спит).
+**Что в проде сейчас (Railway active deploy):** все этапы кредитования + КУЦ MVP без AI + async-safe storage + AsyncPersistentFSMStorage + welcome v2 (multi-track) + native scroll fix + рассылка через инвайт-бот + автоматизация бухгалтерии v2 + Tron auto-payouts.
 
-> **См. [DOLGIY_FIX_CRM.md](DOLGIY_FIX_CRM.md)** — отдельный документ про многочасовой фикс credit-flow 27-28 мая. ТРИ корневые причины (sync json.dump в event loop в двух местах + дедлок asyncio.Lock) + протокол диагностики через debug-логи. Читать обязательно ДО любых правок storage.py или FSM-кода.
+> **См. [DOLGIY_FIX_CRM.md](DOLGIY_FIX_CRM.md)** — отдельный документ про многочасовой фикс credit-flow 27-28 мая. ТРИ корневые причины + протокол диагностики через debug-логи. Читать обязательно ДО любых правок storage.py или FSM-кода.
+
+## 🆕 Май-31 ночная сессия — что сделано
+
+**Welcome v2 (направления ИП/VoIP/Дебет):**
+- bot.py: новый welcome-баннер с «🔌 Подключиться» + premium emoji слоты
+- userbot.py: при входе клиента в work_chat → welcome v2 с выбором 1/2/3
+- Multi-track: клиент может выбрать «1 и 2» → AI продолжает ИП + @pride_voip01 добавлен в чат
+- knowledge/about.md: документация трёх направлений
+- Operators: @pride_voip01 / @pride_debet01 (env: VOIP_OPERATOR_USERNAME, DEBET_OPERATOR_USERNAME)
+
+**Рассылка через @PrideInviteWork_bot:**
+- admin_router.py: /admin → 📢 Рассылка → выбор аудитории (Все/Спящие) → ввод текста → preview → отправка с throttle 20 msg/sec + отчёт
+- Derived подсчёт «спящих»: через managed_chats.client_id (ретроактивно), не флаг entered_work_chat
+
+**Рефакторинг ролей:**
+- Дефолты упрощены: Менеджер→Поддержка, Сус→System, Бухгалтер→Бухгалтерия, Операционист→Операционная (все с edit_actions=['*'])
+- Owner Panel UI: убран блок «✏️ ДЕЙСТВИЯ» (сотни чекбоксов) — только вкладки
+- delete_role_permission: разрешено удалять любые роли кроме owner. Дефолты в deleted_default_roles не возвращаются
+- set_worker_role БОЛЬШЕ НЕ добавляет в state.workers (роль ≠ TG-чат membership)
+- DELETE /api/admin/workers/{username} — убрать из workers
+- Fix role[:16] → role[:64] — outkup_specialist/chat_access_manager не обрезаются
+
+**Notifications система:**
+- storage.add_notification + list/mark_read/mark_all_read + dedup_key
+- API: GET /api/notifications/poll, POST /{id}/read, POST /read_all
+- JARVIS: 🔔 pill в HUD-bar + dropdown + polling каждые 30 сек
+- crm_bot: _notify_owner_tg(text) — JARVIS bell + личка owner-у
+- Триггеры: payouts >24h, outkup >2h, daily margin <0
+
+**Tron auto-payouts (USDT TRC20):**
+- tron_payouts.py: send_usdt_to, get_hot_wallet_balance, validate_address, wait_for_confirmation
+- tronpy>=0.4.0 в requirements.txt
+- ENV: TRON_PRIVATE_KEY, TRON_HOT_WALLET_ADDRESS, TRON_OWNER_TG_ID, TRONGRID_API_KEY
+- Commands в crm_bot.py:
+  - /set_usdt @user TR7N... — установить адрес работника
+  - /payout @user 100 reason — подтверждение через TG-кнопку → авто-отправка → авто-запись в Бухгалтерию (salaries)
+  - /tron_balance — баланс hot-wallet'а
+- Storage: tron_outbound_log + worker_roles.usdt_address
+
+**Auto-accounting (5 категорий автоматом):**
+- Payout released → +kassa (auto из card.price_usdt)
+- Outkup completed → +kassa с пометкой 'outkup' + amount_rub/rate
+- Salary через /payout → +salaries (auto)
+- Ad campaign approved & paid → +ads (auto после Tron-отправки)
+- Suppliers — TODO bulk-action на следующей итерации
+
+**Реклама workflow:**
+- storage.ad_campaigns + add/update/list/get
+- API: POST /api/ads/campaigns/create, /set_address, /approve_and_pay
+- Flow: создать → менеджер даёт USDT адрес → owner approve → auto-pay через Tron → +ads в Бухгалтерию
+
+**Scroll RADICAL fix:**
+- Убрал body overflow:hidden — native window scroll
+- Top-bar + view-tabs sticky сверху
+- Никаких max-height на main/section — пусть растут под контент
+
+**Прочие фиксы:**
+- middleware crm_bot ignores юзербота ТОЛЬКО при active FSM state (не при командах)
+- _resolve_work_chat читает credit-style chat_id + денормализует short-form
+- get_admin_chat_id_for/get_password_chat_id_for — track-aware routing (credit → КРЕДИТ Доступы)
+
+## ⚠ Перед утренним push'ем
+
+Файлы изменены локально, но **git index corrupted** в моей сессии. SIMBA утром:
+
+```powershell
+cd C:\Users\sycev\workchat-bot
+Remove-Item .git\index -Force -ErrorAction SilentlyContinue
+Remove-Item .git\index.lock -Force -ErrorAction SilentlyContinue
+git reset
+git add -A
+git commit -m "feat: accounting v2 + tron payouts + notifications + welcome v2 + rassylka + roles refactor + scroll fix"
+git push
+```
+
+⚠ **Перед использованием Tron-выплат** добавь в Railway Variables:
+- `TRON_PRIVATE_KEY` = 64-hex приватник hot-wallet'а
+- `TRON_HOT_WALLET_ADDRESS` = TR7N... адрес кошелька
+- `TRON_OWNER_TG_ID` = `8151738775`
+- `VOIP_OPERATOR_USERNAME` = `pride_voip01`
+- `DEBET_OPERATOR_USERNAME` = `pride_debet01`
+
+**Бэкап pre-сессия:** `/tmp/backup_pre_accounting_v2/*.bak` (8 файлов). Если что — `cp /tmp/backup_pre_accounting_v2/storage.py.bak storage.py`.
 
 ---
 

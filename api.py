@@ -2186,6 +2186,32 @@ async def api_outkup_complete(
     o = await storage.complete_outkup_order(order_id, txid=txid, by=me.get("username") or "")
     if not o:
         raise HTTPException(400, "Не удалось завершить")
+    # === Auto-accounting: +kassa с пометкой outkup ===
+    # Для откупа: клиент даёт нам RUB, мы платим ему USDT — у нас остаётся margin.
+    # В кассу пишем USDT-эквивалент (rub_amount / rate).
+    try:
+        rub = float(o.get("amount_rub") or 0)
+        rate = float(o.get("rate_rub_per_usdt") or 100)
+        if rub > 0 and rate > 0:
+            usdt_eq = rub / rate
+            await storage.add_accounting_entry(
+                category="kassa",
+                amount_usdt=usdt_eq,
+                amount_rub=rub,
+                note=f"outkup #{order_id} (rate {rate} ₽/$, txid {txid[:16]}...)",
+                created_by="auto:outkup_complete",
+            )
+            try:
+                await storage.add_notification(
+                    type="success",
+                    text=f"💱 Откуп завершён: +{usdt_eq:.2f}$ ({rub} ₽)",
+                    dedup_key=f"auto_outkup:{order_id}",
+                )
+            except Exception:
+                pass
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning("auto-acc outkup failed: %s", _e)
     return {"ok": True, "order": o}
 
 
@@ -5315,6 +5341,31 @@ async def api_payouts_released(req: Request, _: None = Depends(_auth), _perm: bo
         )
     except Exception as e:
         raise HTTPException(500, str(e))
+    # === Auto-accounting: +kassa (приход от клиента когда сделка отпущена) ===
+    # Цена ЛК извлекается из card если возможно, иначе amount=0 (запись с пометкой)
+    try:
+        if card_id:
+            card = storage.get_lk_card(card_id)
+            if card:
+                price = float(card.get("price_usdt") or 0)
+                if price > 0:
+                    await storage.add_accounting_entry(
+                        category="kassa",
+                        amount_usdt=price,
+                        note=f"auto: release #{card_id} ({card.get('bank', '?')} {card.get('fio', '?')})",
+                        created_by="auto:payout_released",
+                    )
+                    try:
+                        await storage.add_notification(
+                            type="success",
+                            text=f"💰 Авто-запись в кассу: +{price:.2f}$ от ЛК #{card_id}",
+                            dedup_key=f"auto_kassa:{card_id}",
+                        )
+                    except Exception:
+                        pass
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning("auto-acc kassa failed: %s", _e)
     return {"ok": True, "key": key}
 
 
@@ -6770,3 +6821,145 @@ async def api_events_stream(request: Request, _: None = Depends(_auth)):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# =====================================================================
+# NOTIFICATIONS — алерты для JARVIS + TG личка owner-у
+# =====================================================================
+
+@app.get("/api/notifications/poll")
+async def api_notifications_poll(
+    request: Request,
+    since: float = 0,
+    unread_only: bool = True,
+    limit: int = 50,
+    me: dict = Depends(_get_me),
+):
+    """Polling endpoint для bell-иконки в JARVIS. Возвращает unread нотификации."""
+    role = me.get("role") or ""
+    user_id = int(me.get("tg_user_id") or 0) or None
+    notifs = storage.list_notifications(
+        role=role, user_id=user_id,
+        since_ts=float(since or 0), unread_only=bool(unread_only),
+        limit=int(limit),
+    )
+    return {"ok": True, "notifications": notifs, "count": len(notifs)}
+
+
+@app.post("/api/notifications/{notif_id}/read")
+async def api_notification_mark_read(notif_id: int, me: dict = Depends(_get_me)):
+    ok = await storage.mark_notification_read(int(notif_id))
+    return {"ok": ok, "id": notif_id}
+
+
+@app.post("/api/notifications/read_all")
+async def api_notifications_mark_all_read(me: dict = Depends(_get_me)):
+    role = me.get("role") or ""
+    user_id = int(me.get("tg_user_id") or 0) or None
+    count = await storage.mark_all_notifications_read(role=role, user_id=user_id)
+    return {"ok": True, "marked_read": count}
+
+# =====================================================================
+# AD CAMPAIGNS — рекламные кампании, выплаты менеджерам рекламодателей
+# =====================================================================
+
+@app.get("/api/ads/campaigns")
+async def api_ads_list(status: str = None, me: dict = Depends(_get_me)):
+    """Список кампаний (опц фильтр по статусу)."""
+    return {"ok": True, "campaigns": storage.list_ad_campaigns(status=status)}
+
+
+@app.post("/api/ads/campaigns/create")
+async def api_ads_create(request: Request, me: dict = Depends(_get_me)):
+    """Создать кампанию. Body: {manager_username, amount_usdt, platform?, note?, date_start?, date_end?, usdt_address?}"""
+    if (me.get("role") or "") not in ("owner", "accounting"):
+        raise HTTPException(403, "owner/accounting only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    entry = await storage.add_ad_campaign(
+        manager_username=body.get("manager_username", ""),
+        amount_usdt=float(body.get("amount_usdt") or 0),
+        usdt_address=body.get("usdt_address", ""),
+        platform=body.get("platform", ""),
+        note=body.get("note", ""),
+        date_start=body.get("date_start", ""),
+        date_end=body.get("date_end", ""),
+    )
+    # Notify owner — нужно подтверждение
+    try:
+        await storage.add_notification(
+            type="warning",
+            text=f"📢 Новая реклама #{entry['id']}: {entry['amount_usdt']}$ @{entry['manager_username']} ({entry.get('platform', '?')})",
+            action_url="accounting",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "campaign": entry}
+
+
+@app.post("/api/ads/campaigns/{cid}/set_address")
+async def api_ads_set_address(cid: int, request: Request, me: dict = Depends(_get_me)):
+    """Установить USDT адрес для кампании."""
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    address = (body.get("usdt_address") or "").strip()
+    try:
+        from tron_payouts import validate_tron_address
+        if not validate_tron_address(address):
+            raise HTTPException(400, "Невалидный Tron-адрес")
+    except ImportError:
+        pass  # tron_payouts ещё не установлен в env
+    ok = await storage.update_ad_campaign(cid, usdt_address=address, status="awaiting_approval")
+    if not ok:
+        raise HTTPException(404, "campaign not found")
+    return {"ok": True}
+
+
+@app.post("/api/ads/campaigns/{cid}/approve_and_pay")
+async def api_ads_approve_pay(cid: int, me: dict = Depends(_get_me)):
+    """Approve + autopay через tron_payouts. Owner-only."""
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    camp = storage.get_ad_campaign(cid)
+    if not camp:
+        raise HTTPException(404, "campaign not found")
+    if camp.get("status") == "paid":
+        return {"ok": True, "already_paid": True, "tx_hash": camp.get("tx_hash")}
+    if not camp.get("usdt_address"):
+        raise HTTPException(400, "Нет USDT адреса — сначала /set_address")
+    # Approve
+    await storage.update_ad_campaign(cid, status="approved", approved_by=me.get("username") or "")
+    # Pay
+    try:
+        from tron_payouts import is_configured, send_usdt_to
+        if not is_configured():
+            await storage.update_ad_campaign(cid, status="awaiting_payment_manual")
+            return {"ok": False, "error": "TRON не сконфигурирован — выплати вручную"}
+        result = await send_usdt_to(
+            to_address=camp["usdt_address"],
+            amount_usdt=float(camp["amount_usdt"]),
+            reason=f"ad campaign #{cid} {camp.get('platform', '')}",
+            wait_confirmation=True,
+        )
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error", "send failed")}
+        tx_hash = result.get("tx_hash", "")
+        await storage.update_ad_campaign(cid, status="paid", tx_hash=tx_hash)
+        # Auto-acc запись (ads)
+        try:
+            await storage.add_accounting_entry(
+                category="ads",
+                amount_usdt=float(camp["amount_usdt"]),
+                note=f"ad #{cid} @{camp['manager_username']} {camp.get('platform', '')} tx:{tx_hash[:16]}...",
+                created_by=f"auto:{me.get('username') or 'owner'}",
+            )
+        except Exception:
+            pass
+        try:
+            await storage.add_notification(
+                type="success",
+                text=f"📢💸 Реклама #{cid} оплачена: {camp['amount_usdt']}$ → @{camp['manager_username']}",
+            )
+        except Exception:
+            pass
+        return {"ok": True, "tx_hash": tx_hash, "confirmed": result.get("confirmed")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}

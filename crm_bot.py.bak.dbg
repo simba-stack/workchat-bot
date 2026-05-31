@@ -171,86 +171,6 @@ def get_password_chat_id() -> int:
     return HARDCODED_PASSWORD_CHAT_ID
 
 
-# === Track-aware routing (CRM vs Credit) ===
-# Когда drop/lk относится к credit-стэку (drop_id начинается с "cdrp"),
-# сообщения должны идти в КРЕДИТ Доступы/Пароли, а не в общие CRM-чаты.
-
-def _extract_drop_id(obj) -> str:
-    """Универсальный extractor drop_id из drop / lk / drop_id-строки.
-    Учитывает поля credit_drop_id и outsource_drop_id (унифицирует разные стэки)."""
-    if not obj:
-        return ""
-    if isinstance(obj, str):
-        return obj
-    if not isinstance(obj, dict):
-        return ""
-    return (
-        obj.get("drop_id")
-        or obj.get("credit_drop_id")
-        or obj.get("outsource_drop_id")
-        or ""
-    )
-
-
-def get_admin_chat_id_for(obj) -> int:
-    """Возвращает админ-чат с учётом track:
-    - credit (cdrp*) → CREDIT_ACCESS_CHAT_ID
-    - иначе (crm/outsource) → старая логика (CRM Доступы)
-    """
-    drop_id = _extract_drop_id(obj)
-    if str(drop_id).startswith("cdrp"):
-        return int(os.environ.get("CREDIT_ACCESS_CHAT_ID", "-1003457011118"))
-    return get_admin_chat_id()
-
-
-def get_password_chat_id_for(obj) -> int:
-    """Аналогично для password-чата."""
-    drop_id = _extract_drop_id(obj)
-    if str(drop_id).startswith("cdrp"):
-        return int(os.environ.get("CREDIT_PASSWORD_CHAT_ID", "-1003945639230"))
-    return get_password_chat_id()
-
-
-async def get_admin_chat_resolved_for(bot, obj) -> Optional[int]:
-    """Track-aware get_admin_chat_resolved. КРИТИЧНО: для credit-track
-    НЕ вызываем register_crm_chat (иначе credit-чат попадает в CRM-namespace
-    и find_crm_admin_chat() начнёт возвращать credit-ID для CRM-операций)."""
-    drop_id = _extract_drop_id(obj)
-    is_credit = str(drop_id).startswith("cdrp")
-    cid = get_admin_chat_id_for(obj)
-    if not cid:
-        return None
-    resolved = await _resolve_chat_id_variants(bot, cid)
-    if resolved and resolved != cid and not is_credit:
-        try:
-            await crm_storage.register_crm_chat(
-                chat_id=resolved, owner_id="_admin",
-                is_admin=True, is_password=False,
-            )
-        except Exception:
-            pass
-    return resolved
-
-
-async def get_password_chat_resolved_for(bot, obj) -> Optional[int]:
-    """То же для password-чата (без CRM-загрязнения для credit-track)."""
-    drop_id = _extract_drop_id(obj)
-    is_credit = str(drop_id).startswith("cdrp")
-    cid = get_password_chat_id_for(obj)
-    if not cid:
-        return None
-    resolved = await _resolve_chat_id_variants(bot, cid)
-    if resolved and resolved != cid and not is_credit:
-        try:
-            await crm_storage.register_crm_chat(
-                chat_id=resolved, owner_id="_password",
-                is_admin=False, is_password=True,
-            )
-        except Exception:
-            pass
-    return resolved
-
-
 async def get_admin_chat_resolved(bot) -> Optional[int]:
     """Получает admin-chat_id и проверяет доступность. Авто-корректирует если нужно."""
     cid = get_admin_chat_id()
@@ -1647,7 +1567,6 @@ async def handle_fio_cancel(message: Message, state: FSMContext):
 async def handle_fio(message: Message, state: FSMContext):
     data = await state.get_data()
     fio = (message.text or "").strip()
-    logger.info("[handle_fio] start chat=%s user=%s fio=%r data_keys=%s", message.chat.id, (message.from_user.id if message.from_user else None), fio[:50], list(data.keys()))
     # === Простая, НЕ строгая валидация ФИО ===
     # Условия (любое нарушение → НЕ ФИО, но FSM не сбрасываем, даём ещё попытку):
     # - длина 5-100 символов
@@ -1663,7 +1582,6 @@ async def handle_fio(message: Message, state: FSMContext):
         and all(word_pat.match(p) for p in parts)
         and not any(ch.isdigit() for ch in fio)
     )
-    logger.info("[handle_fio] validation is_fio=%s parts=%d", is_fio, len(parts))
     if not is_fio:
         # НЕ выходим из FSM. Оставляем юзера в режиме ожидания ФИО,
         # просто говорим что введённое — не ФИО. Кнопка ◀ Отмена выше его выведет.
@@ -1674,8 +1592,7 @@ async def handle_fio(message: Message, state: FSMContext):
             "или напиши /cancel."
         )
         return
-    track = data.get("track", "crm")
-    logger.info("[handle_fio] track=%s", track)  # 'crm' (default) | 'credit'
+    track = data.get("track", "crm")  # 'crm' (default) | 'credit'
     owner_id = data.get("owner_id")
     manager_username = data.get("manager_username")
     work_chat_id = data.get("work_chat_id")
@@ -1691,7 +1608,6 @@ async def handle_fio(message: Message, state: FSMContext):
             await state.clear()
             return
     # Routing через storage.add_drop_for_chat (выберет add_crm_drop или add_credit_drop)
-    logger.info("[handle_fio] calling add_drop_for_chat")
     drop_id = await crm_storage.add_drop_for_chat(
         chat_id=work_chat_id or message.chat.id,
         fio=fio,
@@ -1700,15 +1616,10 @@ async def handle_fio(message: Message, state: FSMContext):
         work_chat_id=work_chat_id,
     )
     drop = crm_storage.get_drop_any(drop_id)
-    logger.info("[handle_fio] drop_id=%s found=%s", drop_id, bool(drop))
     await _safe_delete(message.bot, message.chat.id, message.message_id)
     if data.get("menu_msg_id"):
         await _safe_delete(message.bot, message.chat.id, data["menu_msg_id"])
-    try:
-        await _show_drop(message, drop)
-        logger.info("[handle_fio] _show_drop OK")
-    except Exception as _e:
-        logger.exception("[handle_fio] _show_drop FAILED: %s", _e)
+    await _show_drop(message, drop)
     await state.clear()
     # SSE
     _emit_crm_event("drop.created", {
@@ -1883,7 +1794,7 @@ async def cb_dropdelete_confirmed(call: CallbackQuery):
         await call.answer("Уже удалён", show_alert=True)
         return
     owner_id = drop.get("owner_id")
-    await crm_storage.delete_drop_any(drop_id)
+    await crm_storage.delete_crm_drop(drop_id)
     await call.answer("Удалено")
     owner = crm_storage.get_crm_owner(owner_id) if owner_id else None
     try:
@@ -2340,7 +2251,7 @@ async def _crm_drop_lk_post_save(message: Message, drop: dict, droplk_id: str, b
         if drop.get("status") == "accepted":
             bot = message.bot
             try:
-                admin_chat = await get_admin_chat_resolved_for(bot, drop)
+                admin_chat = await get_admin_chat_resolved(bot)
                 admin_msg_id = drop.get("admin_msg_id")
                 if admin_chat and admin_msg_id:
                     fio = drop.get("fio") or "—"
@@ -2363,7 +2274,7 @@ async def _crm_drop_lk_post_save(message: Message, drop: dict, droplk_id: str, b
             except Exception as e:
                 logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
             try:
-                pwd_chat = await get_password_chat_resolved_for(bot, drop)
+                pwd_chat = await get_password_chat_resolved(bot)
                 new_lk = crm_storage.get_drop_lk_any(droplk_id)
                 if pwd_chat and new_lk:
                     text_p = _render_password_text(drop, new_lk)
@@ -2503,7 +2414,7 @@ async def handle_lk_value(message: Message, state: FSMContext):
             bot = message.bot
             # 1) Reply на admin_msg_id в ДОСТУПАХ
             try:
-                admin_chat = await get_admin_chat_resolved_for(bot, drop)
+                admin_chat = await get_admin_chat_resolved(bot)
                 admin_msg_id = drop.get("admin_msg_id")
                 if admin_chat and admin_msg_id:
                     new_lk = crm_storage.get_drop_lk_any(droplk_id) or {}
@@ -2528,7 +2439,7 @@ async def handle_lk_value(message: Message, state: FSMContext):
                 logger.warning("new-bank reply to ДОСТУПЫ fail: %s", e)
             # 2) Автопост шаблона в ПАРОЛИ
             try:
-                pwd_chat = await get_password_chat_resolved_for(bot, drop)
+                pwd_chat = await get_password_chat_resolved(bot)
                 new_lk = crm_storage.get_drop_lk_any(droplk_id)
                 if pwd_chat and new_lk:
                     text_p = _render_password_text(drop, new_lk)
@@ -2572,7 +2483,7 @@ async def cb_lkview(call: CallbackQuery):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     await call.answer()
     status_e = {"new": "🆕", "pending": "⏳", "ready": "✅", "done": "🏁"}.get(lk.get("status"), "•")
     _slot = _lk_slot_tag(lk, drop or {})
@@ -2740,9 +2651,9 @@ async def cb_dropsend(call: CallbackQuery):
 
     is_resubmit = drop.get("status") == "accepted"
     bot = call.message.bot
-    admin_chat_id = await get_admin_chat_resolved_for(bot, drop)
+    admin_chat_id = await get_admin_chat_resolved(bot)
     if not admin_chat_id:
-        raw = get_admin_chat_id_for(drop)
+        raw = get_admin_chat_id()
         await call.answer("Admin-чат недоступен", show_alert=True)
         await ephemeral(
             call.message,
@@ -2843,9 +2754,9 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
 
     # СНАЧАЛА проверим что бот имеет доступ к password-чату
     # (иначе принимать дроп бессмысленно)
-    pwd_chat = await get_password_chat_resolved_for(bot, drop)
+    pwd_chat = await get_password_chat_resolved(bot)
     if not pwd_chat:
-        raw_pwd = get_password_chat_id_for(drop)
+        raw_pwd = get_password_chat_id()
         await call.answer("Password-чат недоступен — смотри подробности ниже", show_alert=True)
         await bot.send_message(
             call.message.chat.id,
@@ -3124,7 +3035,7 @@ async def cb_filldrop(call: CallbackQuery, state: FSMContext):
         return
     await call.answer()
     await state.set_state(FillForm.waiting_new_login)
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk["drop_id"])
     # Шлём первый вопрос обычным send_message чтобы запомнить его id
     sent = await call.message.bot.send_message(
         call.message.chat.id,
@@ -3228,11 +3139,11 @@ async def fill_pass2(message: Message, state: FSMContext):
     await state.clear()
 
     lk = crm_storage.get_drop_lk_any(droplk_id)
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk["drop_id"])
 
     # Обновляем сообщение в password-чате (с новыми кнопками)
     bot = message.bot
-    pwd_chat = get_password_chat_id_for(drop)
+    pwd_chat = get_password_chat_id()
     if pwd_chat and lk.get("msgid_pass"):
         try:
             await bot.edit_message_text(
@@ -3245,7 +3156,7 @@ async def fill_pass2(message: Message, state: FSMContext):
             logger.warning("password edit failed: %s", e)
 
     # Обновляем контрольное сообщение в admin-чате
-    admin_chat = get_admin_chat_id_for(drop)
+    admin_chat = get_admin_chat_id()
     if admin_chat and drop.get("admin_msg_id"):
         try:
             await bot.edit_message_text(
@@ -3276,13 +3187,13 @@ async def cb_addpool(call: CallbackQuery):
         return
     await call.answer(f"✅ Добавлено в пул {pool_name}")
     # Простая запись в drop's history
-    drop_id = _extract_drop_id(lk)
+    drop_id = lk.get("drop_id")
     drop = crm_storage.get_drop_any(drop_id) if drop_id else None
     if drop:
         new_count = int(drop.get("prolit_count") or 0) + 1
         await crm_storage.update_drop_any(drop_id, prolit_count=new_count)
         # Обновим admin message
-        admin_chat = get_admin_chat_id_for(drop)
+        admin_chat = get_admin_chat_id()
         if admin_chat and drop.get("admin_msg_id"):
             try:
                 drop = crm_storage.get_drop_any(drop_id)
@@ -3339,7 +3250,7 @@ async def cb_dropdone(call: CallbackQuery):
                 # 2) Партнёру в work_chat
                 await _notify_work_chat(call.message.bot, owner, summary_text)
                 # 3) В admin-чат CRM
-                admin_chat_id = await get_admin_chat_resolved_for(call.message.bot, drop)
+                admin_chat_id = await get_admin_chat_resolved(call.message.bot)
                 if admin_chat_id:
                     try:
                         await call.message.bot.send_message(admin_chat_id, summary_text)
@@ -3365,7 +3276,7 @@ async def cb_dropproblem(call: CallbackQuery):
         return
     await call.answer("⚠ Помечено как проблема")
     # Уведомление в admin
-    admin_chat = get_admin_chat_id_for(lk)
+    admin_chat = get_admin_chat_id()
     if admin_chat:
         try:
             await call.message.bot.send_message(
@@ -3466,10 +3377,10 @@ async def _post_or_update_sms_tracker(bot, droplk_id):
     lk = crm_storage.get_drop_lk_any(droplk_id)
     if not lk:
         return None
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     if not drop:
         return None
-    admin_chat = await get_admin_chat_resolved_for(bot, drop)
+    admin_chat = await get_admin_chat_resolved(bot)
     if not admin_chat or not drop.get("admin_msg_id"):
         return None
     try:
@@ -3519,62 +3430,23 @@ def _client_lk_anketa(drop: dict, lk: dict) -> str:
 
 
 def _resolve_work_chat(drop: dict = None, lk: dict = None, owner: dict = None) -> int:
-    """Резолвит актуальный work_chat_id для отправки сообщения клиенту.
+    """Резолвит актуальный work_chat_id для клиента.
 
-    Поддерживает два стэка:
-      - CRM: поле work_chat_id (готовый TG-ID с -100)
-      - Credit: поле chat_id (нормализованная short-form без -100 — денормализуем)
-
-    Приоритет:
-      1) drop.work_chat_id   (CRM, свежий)
-      2) drop.chat_id        (Credit)
-      3) lk.work_chat_id     (CRM)
-      4) lk.chat_id          (Credit, если есть)
-      5) owner.work_chat_id  (CRM, stale fallback)
-
-    Денормализация: short-form положительный (например "3900125840") → -1003900125840.
-    Возвращает int готовый для bot.send_message, или 0 если ничего не нашли.
+    Приоритет: drop.work_chat_id → lk.work_chat_id → owner.work_chat_id.
+    Если drop/lk имеет свежий chat_id (созданный позже owner) — используем его,
+    т.к. owner.work_chat_id может быть STALE после миграции группы в супергруппу
+    (chat_id меняется при апгрейде, а в storage остался старый).
+    Возвращает int или 0.
     """
-    def _norm_to_tg(raw) -> int:
-        """Short-form (положительный без -100) → TG-формат с -100. Уже-отрицательное оставляем."""
-        try:
-            n = int(raw)
-        except Exception:
-            return 0
-        if n == 0:
-            return 0
-        if n < 0:
-            return n  # уже готовый TG-ID
-        if n < 10**12:
-            return -1000000000000 - n  # supergroup short form → -100xxx
-        return -n  # длинный положительный — инвертируем
-
-    for src in (drop, lk):
-        if not isinstance(src, dict):
+    for src in (drop, lk, owner):
+        if not src:
             continue
-        # CRM-style work_chat_id — должен быть уже готовый TG-ID
-        wc = src.get("work_chat_id")
+        wc = src.get("work_chat_id") if isinstance(src, dict) else None
         if wc:
             try:
-                v = int(wc)
-                if v != 0:
-                    return v
+                return int(wc)
             except Exception:
-                pass
-        # Credit-style chat_id (нормализованная форма)
-        cc = src.get("chat_id")
-        if cc:
-            tg = _norm_to_tg(cc)
-            if tg != 0:
-                return tg
-
-    if isinstance(owner, dict) and owner.get("work_chat_id"):
-        try:
-            v = int(owner["work_chat_id"])
-            if v != 0:
-                return v
-        except Exception:
-            pass
+                continue
     return 0
 
 
@@ -3619,7 +3491,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
     bot = call.message.bot
     stage = lk.get("sms_stage") or ""
@@ -3823,7 +3695,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
     lk = crm_storage.get_drop_lk_any(droplk_id)
     if not lk:
         return f"⚠️ ЛК {droplk_id} не найден"
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "") if drop else "")
     if not (drop and owner and owner.get("work_chat_id")):
         return f"⚠️ Нет work_chat у владельца ЛК {droplk_id}"
@@ -3965,8 +3837,8 @@ async def _dashboard_command_worker_crm(bot):
                         if not lk:
                             result = f"⚠️ lk {droplk_id} not found"
                         else:
-                            drop = crm_storage.get_drop_any(_extract_drop_id(lk))
-                            pwd_chat = get_password_chat_id_for(drop)
+                            drop = crm_storage.get_drop_any(lk.get("drop_id"))
+                            pwd_chat = get_password_chat_id()
                             if pwd_chat and lk.get("msgid_pass") and drop:
                                 try:
                                     await bot.edit_message_text(
@@ -4029,7 +3901,7 @@ async def handle_sms_code(message: Message, state: FSMContext):
     if not lk:
         await state.clear()
         return
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     await crm_storage.append_drop_sms_any(droplk_id, code=code)
     # Записываем в нужное поле + переключаем stage
     if sms_kind == "perevyaz":
@@ -4104,7 +3976,7 @@ async def cb_smsretry(call: CallbackQuery):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+    drop = crm_storage.get_drop_any(lk.get("drop_id"))
     if not drop:
         await call.answer("Дроп не найден", show_alert=True)
         return
@@ -4159,10 +4031,10 @@ async def cb_smsmsgclose(call: CallbackQuery):
         pass
     await call.answer()
     # Обновляем сообщение в admin-чате
-    admin_chat = get_admin_chat_id_for(lk)
+    admin_chat = get_admin_chat_id()
     if drop and admin_chat and drop.get("admin_msg_id"):
         try:
-            drop = crm_storage.get_drop_any(_extract_drop_id(lk))
+            drop = crm_storage.get_drop_any(lk.get("drop_id"))
             await message.bot.edit_message_text(
                 await _render_admin_text(drop),
                 chat_id=admin_chat, message_id=drop["admin_msg_id"],
@@ -4209,7 +4081,7 @@ async def handle_price(message: Message, state: FSMContext):
     await state.clear()
     drop = crm_storage.get_drop_any(drop_id)
     await message.reply(f"✅ Цена обновлена: <b>${price}</b>")
-    admin_chat = get_admin_chat_id_for(drop)
+    admin_chat = get_admin_chat_id()
     if admin_chat and drop.get("admin_msg_id"):
         try:
             await message.bot.edit_message_text(
@@ -5417,7 +5289,7 @@ async def _payment_reminder_tick(bot) -> int:
             pass
         # 3) admin-чат CRM
         try:
-            admin_chat_id = await get_admin_chat_resolved_for(bot, drop)
+            admin_chat_id = await get_admin_chat_resolved(bot)
             if admin_chat_id:
                 await bot.send_message(
                     admin_chat_id,
@@ -5443,8 +5315,7 @@ async def _payment_reminder_tick(bot) -> int:
 
 
 async def _payment_reminder_loop(bot):
-    """Бесконечный воркер: каждый час проверяет просроченные дропы +
-    триггеры для notifications (payouts pending >24h, outkup >2h, margin <0)."""
+    """Бесконечный воркер: каждый час проверяет просроченные дропы."""
     await asyncio.sleep(30)
     while True:
         try:
@@ -5453,115 +5324,10 @@ async def _payment_reminder_loop(bot):
                 logger.info("CRM payment reminders sent: %d", n)
         except Exception as e:
             logger.warning("payment reminder tick failed: %s", e)
-        # === Notification triggers ===
-        try:
-            await _notification_triggers_tick(bot)
-        except Exception as e:
-            logger.warning("notification triggers tick failed: %s", e)
         try:
             await asyncio.sleep(_PAYMENT_LOOP_INTERVAL)
         except asyncio.CancelledError:
             return
-
-
-async def _notify_owner_tg(bot, text: str, dedup_key: str = None):
-    """Шлёт уведомление owner-у в TG личку через @PrideCONTROLE_bot.
-    Owner ID из env TRON_OWNER_TG_ID или config.ADMIN_ID.
-    Также пишет в storage.notifications для JARVIS bell."""
-    # Сначала — в JARVIS-очередь
-    try:
-        await crm_storage.add_notification(
-            type="warning", text=text, dedup_key=dedup_key,
-        )
-    except Exception as e:
-        logger.warning("[notify_owner] storage add failed: %s", e)
-    # Затем — в TG личку owner-а
-    owner_id = 0
-    try:
-        owner_id = int(os.environ.get("TRON_OWNER_TG_ID", "0"))
-    except Exception:
-        pass
-    if not owner_id:
-        try:
-            owner_id = int(config.ADMIN_ID or 0)
-        except Exception:
-            pass
-    if not owner_id:
-        return
-    try:
-        await bot.send_message(owner_id, text, disable_web_page_preview=True)
-    except Exception as e:
-        logger.warning("[notify_owner] TG send to %s failed: %s", owner_id, e)
-
-
-async def _notification_triggers_tick(bot):
-    """Запускается каждые _PAYMENT_LOOP_INTERVAL сек. Проверяет:
-      • payouts queue: записи >24h без status=done → notify
-      • outkup_orders: pending >2h → notify
-      • margin за сегодня <0 → notify (1 раз в день)
-    """
-    import time as _time
-    now = _time.time()
-
-    # 1) Payouts >24h
-    try:
-        for queue_name in ("pending_pop", "ready_to_release", "pending_payout"):
-            for p in (crm_storage.list_payouts(queue_name) or []):
-                ts = float(p.get("ts") or p.get("created_at") or 0)
-                if not ts:
-                    continue
-                age_hours = (now - ts) / 3600
-                if age_hours >= 24 and p.get("status") not in ("done", "paid", "released"):
-                    pid = p.get("id") or p.get("card_id") or "?"
-                    dedup = f"payout_stale:{queue_name}:{pid}"
-                    await _notify_owner_tg(
-                        bot,
-                        f"⏰ <b>Выплата ждёт >24ч</b>\nQueue: {queue_name}\nID: {pid}\n"
-                        f"Возраст: {int(age_hours)}ч. Проверь в дашборде → Выплаты.",
-                        dedup_key=dedup,
-                    )
-    except Exception as e:
-        logger.warning("[notif] payouts check failed: %s", e)
-
-    # 2) Outkup pending >2h
-    try:
-        outkup_orders = crm_storage.list_outkup_orders() or {}
-        for oid, o in outkup_orders.items():
-            if o.get("status") not in ("pending_confirm", "awaiting_payment"):
-                continue
-            ts = float(o.get("created_at") or 0)
-            if not ts:
-                continue
-            age_hours = (now - ts) / 3600
-            if age_hours >= 2:
-                amount = o.get("amount_rub") or 0
-                dedup = f"outkup_stale:{oid}"
-                await _notify_owner_tg(
-                    bot,
-                    f"💱 <b>Откуп ждёт >2ч</b>\nID: {oid}\nСумма: {amount} ₽\n"
-                    f"Возраст: {int(age_hours)}ч. Откупщики должны обработать.",
-                    dedup_key=dedup,
-                )
-    except Exception as e:
-        logger.warning("[notif] outkup check failed: %s", e)
-
-    # 3) Сегодняшняя маржа < 0
-    try:
-        today_start = now - (now % 86400)  # начало UTC-дня
-        summary = crm_storage.get_accounting_summary(date_from=today_start, date_to=now)
-        margin = float(summary.get("margin_usdt") or 0)
-        if margin < -50:  # запас от шума
-            today_str = _time.strftime("%Y-%m-%d", _time.gmtime(now))
-            dedup = f"margin_negative:{today_str}"
-            await _notify_owner_tg(
-                bot,
-                f"📉 <b>Маржа за сегодня отрицательная</b>\nМаржа: {margin:.2f}$\n"
-                f"Проверь Бухгалтерию.",
-                dedup_key=dedup,
-            )
-    except Exception as e:
-        logger.warning("[notif] margin check failed: %s", e)
-
 
 
 # ════════════════════════════════════════════════════════════════
@@ -5656,50 +5422,6 @@ async def run_crm_bot():
     )
     dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.CHAT)
     dp.include_router(router)
-
-    # ─── Middleware: игнор сообщений от юзербот-аккаунта (AI ассистент) ───
-    # Юзербот работает в том же процессе через Telethon. Когда CRM-бот ставит
-    # FSM-state (ждёт ФИО / СМС / пароль / etc), любое сообщение в чате
-    # попадает в handler — включая AI-ответы юзербота клиенту. CRM грабит
-    # ответ ассистента вместо реального юзера. Этот middleware блокирует
-    # юзербота — но ТОЛЬКО когда есть активный FSM-state. Иначе пропускаем,
-    # чтобы юзербот мог слать команды CRM-у (например "+партнер @username").
-    #
-    # USERBOT_USER_ID: автоматически кладётся в storage юзерботом при старте
-    # (см. userbot.py:start()). Fallback на env переменную если задана.
-    @dp.message.middleware()
-    async def _ignore_userbot_messages(handler, event, data):
-        ub_id = 0
-        try:
-            ub_id = int(crm_storage.state.get("userbot_user_id") or 0)
-        except Exception:
-            pass
-        if not ub_id:
-            try:
-                ub_id = int(os.environ.get("USERBOT_USER_ID", "0"))
-            except Exception:
-                pass
-        # Если это не юзербот — пропускаем сразу
-        if not (ub_id and event.from_user and event.from_user.id == ub_id):
-            return await handler(event, data)
-        # Это юзербот. Блокируем ТОЛЬКО если есть активный FSM-state в чате
-        # (защита от подмены ввода в FSM-форме). Иначе — пропускаем,
-        # юзербот должен иметь возможность слать команды.
-        try:
-            state = data.get("state") if isinstance(data, dict) else None
-            if state is not None:
-                current = await state.get_state()
-                if current:
-                    logger.info(
-                        "[crm-middleware] ignored userbot msg in chat %s (active FSM state: %s)",
-                        event.chat.id if event.chat else "?", current,
-                    )
-                    return None
-        except Exception as e:
-            logger.warning("[crm-middleware] FSM check failed: %s", e)
-        # FSM пуст или недоступен → пропускаем юзербота
-        return await handler(event, data)
-
 
     try:
         me = await bot.get_me()
@@ -5908,252 +5630,3 @@ async def cmd_ideas_clean(message: Message):
         return
     n = await crm_storage.clear_resolved_ideas()
     await message.reply(f"🧹 Удалено закрытых идей: <b>{n}</b>")
-
-
-
-# =====================================================================
-# /payout — авто-выплаты работникам USDT TRC20 через Tron mainnet
-# (требует TRON_PRIVATE_KEY + TRON_HOT_WALLET_ADDRESS в env)
-# =====================================================================
-
-import re as _re_payout
-
-# {payout_request_id: {to_address, amount_usdt, worker_username, reason, requester_id}}
-_pending_payouts = {}
-_pending_payout_seq = [0]
-
-
-def _next_payout_req_id() -> str:
-    _pending_payout_seq[0] += 1
-    return f"pr{int(time.time()*1000)%1000000}{_pending_payout_seq[0]}"
-
-
-@router.message(Command("set_usdt"))
-async def cmd_set_usdt(message: Message):
-    """Owner: установить USDT TRC20 адрес работника. /set_usdt @vasya TR7Nx..."""
-    if not is_owner(message.from_user.id):
-        return
-    parts = (message.text or "").split(maxsplit=2)
-    if len(parts) < 3:
-        await message.reply(
-            "Использование: <code>/set_usdt @username TR7N...</code>\n"
-            "Адрес сохранится в worker_roles, после этого можно слать /payout."
-        )
-        return
-    username = parts[1].lstrip("@")
-    address = parts[2].strip()
-    # Валидация
-    try:
-        from tron_payouts import validate_tron_address
-        if not validate_tron_address(address):
-            await message.reply(f"❌ Невалидный Tron-адрес: <code>{address}</code>")
-            return
-    except Exception as e:
-        await message.reply(f"❌ tron_payouts недоступен: {e}")
-        return
-    await crm_storage.set_worker_usdt_address(username, address)
-    await message.reply(
-        f"✅ USDT TRC20 адрес работника <b>@{username}</b> сохранён:\n"
-        f"<code>{address}</code>\n\nТеперь можно слать /payout @{username} 100 reason"
-    )
-
-
-@router.message(Command("payout"))
-async def cmd_payout(message: Message):
-    """Owner: /payout @username 100 reason — авто-выплата USDT TRC20."""
-    if not is_owner(message.from_user.id):
-        return
-    text = (message.text or "").strip()
-    # /payout @user 100 [reason ...]
-    m = _re_payout.match(r"^/payout\s+@?(\w+)\s+([\d.,]+)(?:\s+(.+))?$", text)
-    if not m:
-        await message.reply(
-            "Использование: <code>/payout @username 100 [причина]</code>\n"
-            "Пример: <code>/payout @vasya 250 зарплата за май</code>"
-        )
-        return
-    username = m.group(1).lower()
-    try:
-        amount = float(m.group(2).replace(",", "."))
-    except Exception:
-        await message.reply("❌ Невалидная сумма")
-        return
-    reason = (m.group(3) or "salary").strip()
-
-    # Проверим что есть USDT адрес
-    address = crm_storage.get_worker_usdt_address(username)
-    if not address:
-        await message.reply(
-            f"❌ Нет USDT адреса для <b>@{username}</b>.\n\n"
-            f"Сначала: <code>/set_usdt @{username} TR7N...</code>"
-        )
-        return
-
-    # Проверка configured tron_payouts
-    try:
-        from tron_payouts import is_configured, get_hot_wallet_balance
-        if not is_configured():
-            await message.reply(
-                "❌ TRON не сконфигурирован.\n"
-                "Нужны env vars: <code>TRON_PRIVATE_KEY</code>, <code>TRON_HOT_WALLET_ADDRESS</code>."
-            )
-            return
-        # Покажем баланс
-        bal = await get_hot_wallet_balance()
-        if bal.get("error"):
-            await message.reply(f"❌ Tron-balance check failed: {bal.get('error')}")
-            return
-    except Exception as e:
-        await message.reply(f"❌ tron_payouts ошибка: {e}")
-        return
-
-    # Регистрируем pending запрос + кнопки confirm/cancel
-    pid = _next_payout_req_id()
-    _pending_payouts[pid] = {
-        "to_address": address,
-        "amount_usdt": amount,
-        "worker_username": username,
-        "reason": reason,
-        "requester_id": message.from_user.id,
-        "ts": time.time(),
-    }
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Подтвердить выплату", callback_data=f"pay_ok:{pid}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"pay_no:{pid}"),
-    ]])
-    await message.reply(
-        f"💰 <b>Подтверди выплату:</b>\n\n"
-        f"Получатель: <b>@{username}</b>\n"
-        f"Адрес: <code>{address}</code>\n"
-        f"Сумма: <b>{amount} USDT</b>\n"
-        f"Причина: <i>{reason}</i>\n\n"
-        f"💼 Баланс hot-wallet: <b>{bal.get('usdt', 0):.2f} USDT</b> | "
-        f"{bal.get('trx', 0):.2f} TRX (для fee)\n\n"
-        f"⚠ После ✅ деньги уйдут <b>сразу</b>, отмены не будет.",
-        reply_markup=kb,
-    )
-
-
-@router.callback_query(F.data.startswith("pay_no:"))
-async def cb_pay_cancel(call: CallbackQuery):
-    if not is_owner(call.from_user.id):
-        await call.answer("Только owner", show_alert=True); return
-    pid = call.data.split(":", 1)[1]
-    _pending_payouts.pop(pid, None)
-    await call.answer("Отменено")
-    try:
-        await call.message.edit_text("❌ Выплата отменена.")
-    except Exception:
-        pass
-
-
-@router.callback_query(F.data.startswith("pay_ok:"))
-async def cb_pay_confirm(call: CallbackQuery):
-    if not is_owner(call.from_user.id):
-        await call.answer("Только owner", show_alert=True); return
-    pid = call.data.split(":", 1)[1]
-    req = _pending_payouts.pop(pid, None)
-    if not req:
-        await call.answer("Запрос истёк или уже обработан", show_alert=True)
-        return
-    await call.answer("⏳ Отправляю в сеть...")
-    try:
-        await call.message.edit_text(
-            f"⏳ <b>Отправляю</b> {req['amount_usdt']} USDT на <code>{req['to_address']}</code>...\n"
-            f"<i>Подожди 30-60 сек для подтверждения в сети.</i>"
-        )
-    except Exception:
-        pass
-
-    try:
-        from tron_payouts import send_usdt_to
-        result = await send_usdt_to(
-            to_address=req["to_address"],
-            amount_usdt=req["amount_usdt"],
-            reason=f"{req['reason']} (@{req['worker_username']})",
-            wait_confirmation=True,
-            timeout_sec=90,
-        )
-    except Exception as e:
-        logger.exception("[/payout] send failed: %s", e)
-        await call.message.bot.send_message(
-            call.message.chat.id, f"❌ <b>Ошибка отправки:</b>\n{str(e)[:300]}"
-        )
-        return
-
-    if not result.get("ok"):
-        await call.message.bot.send_message(
-            call.message.chat.id,
-            f"❌ <b>Выплата НЕ прошла:</b>\n{result.get('error', 'unknown')}"
-        )
-        return
-
-    tx_hash = result.get("tx_hash", "")
-    confirmed = result.get("confirmed", False)
-    explorer = f"https://tronscan.org/#/transaction/{tx_hash}"
-    status_emoji = "✅" if confirmed else "⏳"
-    status_label = "ПОДТВЕРЖДЕНА" if confirmed else "Отправлена (ждём confirmation)"
-
-    # Запись в accounting (salaries)
-    try:
-        await crm_storage.add_accounting_entry(
-            category="salaries",
-            amount_usdt=req["amount_usdt"],
-            note=f"@{req['worker_username']} · {req['reason']} · tx:{tx_hash[:16]}...",
-            created_by=f"auto:{call.from_user.username or call.from_user.id}",
-        )
-    except Exception as e:
-        logger.warning("[/payout] accounting record failed: %s", e)
-
-    # Notify owner (JARVIS bell + TG)
-    try:
-        await _notify_owner_tg(
-            call.message.bot,
-            f"💸 Выплата отправлена @{req['worker_username']}: {req['amount_usdt']} USDT\nTX: {tx_hash[:24]}...",
-            dedup_key=f"payout_done:{tx_hash}",
-        )
-    except Exception:
-        pass
-
-    bal_after = result.get("balance_after", {})
-    await call.message.bot.send_message(
-        call.message.chat.id,
-        f"{status_emoji} <b>Выплата {status_label}</b>\n\n"
-        f"@{req['worker_username']}: <b>{req['amount_usdt']} USDT</b>\n"
-        f"Адрес: <code>{req['to_address']}</code>\n"
-        f"TX: <a href='{explorer}'>{tx_hash[:24]}...</a>\n\n"
-        f"💼 Баланс после: <b>{bal_after.get('usdt', 0):.2f} USDT</b> | "
-        f"{bal_after.get('trx', 0):.2f} TRX\n\n"
-        f"📒 Записано в Бухгалтерию → Зарплаты",
-        disable_web_page_preview=True,
-    )
-
-
-@router.message(Command("tron_balance"))
-async def cmd_tron_balance(message: Message):
-    """Owner: показывает баланс hot-wallet'а."""
-    if not is_owner(message.from_user.id):
-        return
-    try:
-        from tron_payouts import is_configured, get_hot_wallet_balance, get_hot_wallet_address
-        if not is_configured():
-            await message.reply(
-                "❌ TRON не сконфигурирован.\n"
-                "Нужны env vars: <code>TRON_PRIVATE_KEY</code>, <code>TRON_HOT_WALLET_ADDRESS</code>."
-            )
-            return
-        addr = get_hot_wallet_address()
-        bal = await get_hot_wallet_balance()
-        if bal.get("error"):
-            await message.reply(f"❌ {bal.get('error')}")
-            return
-        await message.reply(
-            f"💼 <b>Hot wallet</b>\n"
-            f"Адрес: <code>{addr}</code>\n\n"
-            f"USDT: <b>{bal.get('usdt', 0):.4f}</b>\n"
-            f"TRX: <b>{bal.get('trx', 0):.4f}</b> (для network fee)\n\n"
-            f"<a href='https://tronscan.org/#/address/{addr}'>📊 Tronscan</a>",
-            disable_web_page_preview=True,
-        )
-    except Exception as e:
-        await message.reply(f"❌ {e}")

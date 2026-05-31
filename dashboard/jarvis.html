@@ -2918,6 +2918,41 @@
     <div class="stat-pill" @click="downloadDesktop()" title="Скачать desktop-приложение" style="cursor: pointer;">📥 DESKTOP</div>
     <div class="stat-pill" @click="openPalette()" title="Cmd+K">⌘K</div>
     <div class="stat-pill" @click="location.href='/logout'" title="Выйти">🚪 ВЫХОД</div>
+    <!-- 🔔 Notifications bell -->
+    <div class="stat-pill" style="position: relative; cursor: pointer;" @click="bellOpen = !bellOpen; if(bellOpen) refreshNotifications()" title="Уведомления">
+      <span>🔔</span>
+      <span x-show="bellUnreadCount > 0" x-cloak
+            style="position: absolute; top: -4px; right: -4px; background: #f87171; color: #fff;
+                   border-radius: 10px; padding: 1px 6px; font-size: 9px; font-weight: 700; min-width: 16px; text-align: center;"
+            x-text="bellUnreadCount > 99 ? '99+' : bellUnreadCount"></span>
+    </div>
+    <!-- 🔔 Dropdown -->
+    <div x-show="bellOpen" x-cloak @click.outside="bellOpen = false"
+         style="position: absolute; top: 56px; right: 16px; width: 380px; max-height: 480px; overflow-y: auto;
+                background: rgba(15, 23, 42, 0.97); border: 1px solid rgba(106,216,255,0.3); border-radius: 8px;
+                z-index: 200; box-shadow: 0 8px 32px rgba(0,0,0,0.6); padding: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+        <span style="font-weight: 700; font-size: 13px;">🔔 Уведомления</span>
+        <button @click="markAllRead()" x-show="bellNotifications.length > 0"
+                style="background: transparent; border: 1px solid rgba(255,255,255,0.2); color: var(--text-dim); font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;">
+          ✓ Все прочитано
+        </button>
+      </div>
+      <template x-if="bellNotifications.length === 0">
+        <div style="text-align: center; padding: 32px 8px; color: var(--text-dim); font-size: 12px;">
+          Нет новых уведомлений
+        </div>
+      </template>
+      <template x-for="n in bellNotifications" :key="n.id">
+        <div @click="markRead(n.id); if(n.action_url) goToView(n.action_url)"
+             style="padding: 10px; margin-bottom: 6px; background: rgba(106,216,255,0.05); border-left: 3px solid var(--hud-primary); border-radius: 4px; cursor: pointer;"
+             :style="n.type === 'error' ? 'border-left-color: #f87171; background: rgba(248,113,113,0.05);' : (n.type === 'warning' ? 'border-left-color: #fbbf24; background: rgba(251,191,36,0.05);' : (n.type === 'success' ? 'border-left-color: #4ade80; background: rgba(74,222,128,0.05);' : ''))">
+          <div style="font-size: 11px; line-height: 1.4;" x-text="n.text"></div>
+          <div style="font-size: 9px; color: var(--text-dim); margin-top: 4px;"
+               x-text="new Date(n.ts * 1000).toLocaleString('ru-RU', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'})"></div>
+        </div>
+      </template>
+    </div>
     <div class="stat-pill"><span x-text="clockText"></span></div>
   </div>
 </header>
@@ -7064,6 +7099,40 @@ function jarvis() {
     bootStatus: 'CONNECTING',
     // === Refresh loading state: per-button флаги (вместо разрозненных *Loading) ===
     _refreshing: {},  // { crm: true/false, lk: true/false, ... }
+    // === Notifications bell ===
+    bellOpen: false,
+    bellNotifications: [],
+    bellUnreadCount: 0,
+    bellLastTs: 0,
+    async refreshNotifications() {
+      try {
+        const r = await fetch('/api/notifications/poll?unread_only=true&limit=30');
+        if (!r.ok) return;
+        const j = await r.json();
+        this.bellNotifications = j.notifications || [];
+        this.bellUnreadCount = j.count || 0;
+      } catch (e) { console.error('refreshNotifications', e); }
+    },
+    async markRead(id) {
+      try {
+        await fetch('/api/notifications/' + id + '/read', {method: 'POST'});
+        this.bellNotifications = this.bellNotifications.filter(n => n.id !== id);
+        this.bellUnreadCount = Math.max(0, this.bellUnreadCount - 1);
+      } catch (e) {}
+    },
+    async markAllRead() {
+      try {
+        await fetch('/api/notifications/read_all', {method: 'POST'});
+        this.bellNotifications = [];
+        this.bellUnreadCount = 0;
+        this.bellOpen = false;
+      } catch (e) {}
+    },
+    _startNotificationsPoller() {
+      // Polling каждые 30 сек чтобы badge обновлялся
+      this.refreshNotifications();
+      setInterval(() => this.refreshNotifications(), 30000);
+    },
     _doRefresh(name, fn) {
       // Универсальный wrapper для refresh-кнопок:
       //  • double-click guard (если уже грузится — игнор)
@@ -7499,6 +7568,8 @@ function jarvis() {
     },
 
     async init() {
+      // Notifications poller — каждые 30 сек обновляет 🔔 badge
+      this._startNotificationsPoller();
       // GLOBAL FULL SYNC каждые 4 секунды (май 2026)
       try {
         if (this._globalSyncInterval) clearInterval(this._globalSyncInterval);
@@ -13634,4 +13705,4 @@ function jarvis() {
             </div>
             <!-- Запросить повторно (для rejected/approved) -->
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <button x-show
+              <button x-show                                                                                                                                                                                                                 

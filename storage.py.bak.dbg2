@@ -477,25 +477,10 @@ class Storage:
             await self._save_unlocked()
 
     async def _save_unlocked(self):
-        """Async-safe save: вся I/O работа уезжает в thread executor,
-        чтобы event loop оставался отзывчивым (Railway healthcheck +
-        Telegram polling не должны блокироваться на json.dump)."""
-        try:
-            # Сериализация в строку — синхронная, но быстрая (<50ms даже для МБ-state).
-            # Делаем под caller-holding _lock, поэтому self.state не мутируется параллельно.
-            snapshot = json.dumps(self.state, ensure_ascii=False, indent=2)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._do_write_sync, snapshot)
-        except Exception as e:
-            print(f"[storage] save failed: {e}")
-
-    def _do_write_sync(self, snapshot_str: str):
-        """Sync atomic write. Выполняется в thread executor — НЕ блокирует
-        event loop. Атомарно: .tmp → os.replace + .bak от предыдущего state."""
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                f.write(snapshot_str)
+                json.dump(self.state, f, ensure_ascii=False, indent=2)
             if os.path.exists(self.path):
                 try:
                     os.replace(self.path, self.path + ".bak")
@@ -503,7 +488,7 @@ class Storage:
                     pass
             os.replace(tmp, self.path)
         except Exception as e:
-            print(f"[storage] sync write failed: {e}")
+            print(f"[storage] save failed: {e}")
 
     async def save(self):
         async with _lock:
@@ -569,42 +554,23 @@ class Storage:
         return dict(self.state.get("worker_roles") or {})
 
     async def set_worker_role(self, username: str, role: str, is_admin: bool = False):
-        """Задаёт роль (доступ к JARVIS dashboard) для username.
-
-        ВАЖНО: НЕ добавляет в workers — workers это отдельный список тех кого
-        юзербот приглашает в work_chat'ы клиентов. Роль = только доступ к
-        дашборду. Если нужно добавить в TG-чаты — отдельно через
-        /api/admin/workers/add или admin_router."""
+        """Задаёт роль и админ-флаг для worker'а. Если worker'а не было в
+        списке — добавляет (worker_roles работает только с членами workers)."""
         clean = username.lstrip("@").strip()
         if not clean:
             return False
         key = clean.lower()
         async with _lock:
+            # Гарантируем что worker в списке
+            if clean not in self.state["workers"]:
+                self.state["workers"].append(clean)
             roles = self.state.setdefault("worker_roles", {})
             roles[key] = {
-                # 64-символьный лимит — выше старого 16 который ломал длинные
-                # имена ролей (outkup_specialist=17 → outkup_specialis, ломалось).
-                "role": (role or "").strip()[:64] or "Сотрудник",
+                "role": (role or "").strip()[:16] or "Сотрудник",
                 "is_admin": bool(is_admin),
             }
             await self._save_unlocked()
             return True
-
-    # === Worker USDT TRC20 addresses (для авто-выплат) ===
-    async def set_worker_usdt_address(self, username: str, address: str) -> bool:
-        clean = (username or "").lstrip("@").strip().lower()
-        if not clean:
-            return False
-        async with _lock:
-            roles = self.state.setdefault("worker_roles", {})
-            entry = roles.setdefault(clean, {"role": "", "is_admin": False})
-            entry["usdt_address"] = (address or "").strip()
-            await self._save_unlocked()
-            return True
-
-    def get_worker_usdt_address(self, username: str) -> str:
-        clean = (username or "").lstrip("@").strip().lower()
-        return ((self.state.get("worker_roles") or {}).get(clean) or {}).get("usdt_address") or ""
 
     async def remove_worker_role(self, username: str):
         """Удаляет только роль (worker остаётся в списке)."""
@@ -1005,283 +971,6 @@ class Storage:
             if info:
                 info["welcome_sent"] = True
             await self._save_unlocked()
-
-    # === Welcome v2: track choice + AI mute by operator ===
-    async def mark_awaiting_track_choice(self, chat_id):
-        """Помечает что чат ждёт выбора направления (ИП/VoIP/Дебет) от клиента."""
-        key = _norm_chat_id(chat_id)
-        async with _lock:
-            info = self.state["managed_chats"].get(key)
-            if info is not None:
-                info["awaiting_track_choice"] = True
-                await self._save_unlocked()
-
-    def is_awaiting_track_choice(self, chat_id) -> bool:
-        key = _norm_chat_id(chat_id)
-        info = self.state.get("managed_chats", {}).get(key) or {}
-        return bool(info.get("awaiting_track_choice"))
-
-    async def set_chat_track(self, chat_id, track: str):
-        """track: 'ip' / 'voip' / 'debet'. Сбрасывает awaiting_track_choice."""
-        key = _norm_chat_id(chat_id)
-        async with _lock:
-            info = self.state["managed_chats"].get(key)
-            if info is not None:
-                info["chosen_track"] = track
-                info["awaiting_track_choice"] = False
-                await self._save_unlocked()
-
-    def get_chat_track(self, chat_id) -> str:
-        key = _norm_chat_id(chat_id)
-        info = self.state.get("managed_chats", {}).get(key) or {}
-        return info.get("chosen_track") or ""
-
-    async def mute_chat_ai(self, chat_id, muted: bool = True):
-        """AI перестаёт отвечать в чате (оператор сам ведёт диалог).
-        Триггер 'Ассистент' всё равно работает — это override."""
-        key = _norm_chat_id(chat_id)
-        async with _lock:
-            info = self.state["managed_chats"].get(key)
-            if info is not None:
-                info["ai_muted_by_operator"] = bool(muted)
-                await self._save_unlocked()
-
-    def is_chat_ai_muted(self, chat_id) -> bool:
-        """True если в чате AI замолчал из-за оператора."""
-        key = _norm_chat_id(chat_id)
-        info = self.state.get("managed_chats", {}).get(key) or {}
-        return bool(info.get("ai_muted_by_operator"))
-
-    def get_voip_operator_username(self) -> str:
-        return (self.state.get("voip_operator_username") or "pride_voip01").lstrip("@")
-
-    def get_debet_operator_username(self) -> str:
-        return (self.state.get("debet_operator_username") or "pride_debet01").lstrip("@")
-
-    async def set_voip_operator_username(self, username: str):
-        async with _lock:
-            self.state["voip_operator_username"] = (username or "").lstrip("@")
-            await self._save_unlocked()
-
-    async def set_debet_operator_username(self, username: str):
-        async with _lock:
-            self.state["debet_operator_username"] = (username or "").lstrip("@")
-            await self._save_unlocked()
-
-    # Welcome v2 text (с выбором направления) — редактируется через JARVIS
-    def get_welcome_v2(self) -> str:
-        return self.state.get("welcome_v2") or (
-            "🤩 Вы попали в рабочую инфраструктуру корпорации PRIDE.\n\n"
-            "🤝 Какой вариант сотрудничества Вас интересует?\n\n"
-            "1. ИП/ООО\n"
-            "2. VoIP-Телефония\n"
-            "3. Дебет\n\n"
-            "Выберите одно из направлений написав его порядковый номер или название направления."
-        )
-
-    async def set_welcome_v2(self, text: str):
-        async with _lock:
-            self.state["welcome_v2"] = text or ""
-            await self._save_unlocked()
-
-    def get_operator_invite_text(self) -> str:
-        return self.state.get("operator_invite_text") or (
-            "Сейчас я добавлю нашего менеджера по данному направлению и он Вам поможет."
-        )
-
-    async def set_operator_invite_text(self, text: str):
-        async with _lock:
-            self.state["operator_invite_text"] = text or ""
-            await self._save_unlocked()
-
-    # === NOTIFICATIONS QUEUE (alerts для owner / других ролей в JARVIS + TG) ===
-    # Структура: state.notifications = [
-    #   {id, ts, target_role, target_user_id, type, text, action_url, read}
-    # ]
-    # type: 'warning' | 'info' | 'success' | 'error'
-    # target_role/user_id — для фильтрации (None = всем owner)
-
-    async def add_notification(
-        self, type: str, text: str,
-        target_role: str = None, target_user_id: int = None,
-        action_url: str = None, dedup_key: str = None,
-    ) -> dict:
-        """Добавляет уведомление в очередь. dedup_key — если такой ключ уже есть
-        в последних 50 нотификациях, не дублируем."""
-        import time
-        async with _lock:
-            notifs = self.state.setdefault("notifications", [])
-            if dedup_key:
-                for n in notifs[-50:]:
-                    if n.get("dedup_key") == dedup_key and not n.get("read"):
-                        return n  # уже есть unread с этим ключом
-            seq = int(self.state.get("notifications_seq", 0)) + 1
-            self.state["notifications_seq"] = seq
-            entry = {
-                "id": seq,
-                "ts": time.time(),
-                "type": type or "info",
-                "text": text or "",
-                "target_role": target_role,
-                "target_user_id": int(target_user_id) if target_user_id else None,
-                "action_url": action_url,
-                "dedup_key": dedup_key,
-                "read": False,
-            }
-            notifs.append(entry)
-            # Не разрастаемся бесконечно — храним последние 500
-            if len(notifs) > 500:
-                self.state["notifications"] = notifs[-500:]
-            await self._save_unlocked()
-            return entry
-
-    def list_notifications(
-        self, role: str = None, user_id: int = None,
-        since_ts: float = 0, unread_only: bool = False, limit: int = 100,
-    ) -> list:
-        """Возвращает нотификации видимые этому пользователю.
-        Owner видит ВСЁ. Остальные — только свои target_role/user_id и broadcast."""
-        notifs = self.state.get("notifications") or []
-        out = []
-        is_owner = (role == "owner")
-        for n in notifs:
-            if since_ts and n.get("ts", 0) <= since_ts:
-                continue
-            if unread_only and n.get("read"):
-                continue
-            # Filter visibility
-            t_role = n.get("target_role")
-            t_uid = n.get("target_user_id")
-            if not is_owner:
-                # Не owner — видит только если адресовано ему или роли
-                if t_uid and user_id and int(t_uid) != int(user_id):
-                    continue
-                if t_role and t_role != role:
-                    continue
-                # broadcast (без таргета) — только owner видит
-                if not t_uid and not t_role:
-                    continue
-            out.append(n)
-        out.sort(key=lambda x: x.get("ts", 0), reverse=True)
-        return out[:limit]
-
-    async def mark_notification_read(self, notif_id: int) -> bool:
-        async with _lock:
-            for n in (self.state.get("notifications") or []):
-                if int(n.get("id") or 0) == int(notif_id):
-                    n["read"] = True
-                    await self._save_unlocked()
-                    return True
-            return False
-
-    # === TRON OUTBOUND LOG (исходящие USDT transfers) ===
-    async def add_tron_outbound(
-        self, tx_hash: str, to_address: str, amount_usdt: float,
-        reason: str = "", status: str = "broadcasted",
-    ) -> dict:
-        import time
-        async with _lock:
-            log = self.state.setdefault("tron_outbound_log", [])
-            entry = {
-                "tx_hash": tx_hash,
-                "to_address": to_address,
-                "amount_usdt": float(amount_usdt),
-                "reason": reason or "",
-                "status": status,  # broadcasted / confirmed / failed
-                "ts": time.time(),
-            }
-            log.append(entry)
-            if len(log) > 1000:
-                self.state["tron_outbound_log"] = log[-1000:]
-            await self._save_unlocked()
-            return entry
-
-    async def update_tron_outbound(self, tx_hash: str, **fields) -> bool:
-        async with _lock:
-            for e in (self.state.get("tron_outbound_log") or []):
-                if e.get("tx_hash") == tx_hash:
-                    for k, v in fields.items():
-                        e[k] = v
-                    await self._save_unlocked()
-                    return True
-            return False
-
-    def list_tron_outbound(self, limit: int = 100) -> list:
-        log = self.state.get("tron_outbound_log") or []
-        return list(reversed(log[-limit:]))
-
-    # === AD CAMPAIGNS (рекламные кампании, выплаты менеджерам рекламодателей) ===
-    async def add_ad_campaign(
-        self, manager_username: str, amount_usdt: float, usdt_address: str = "",
-        platform: str = "", note: str = "", date_start: str = "", date_end: str = "",
-    ) -> dict:
-        """Создаёт черновик кампании. status='draft'. Address можно ввести позже."""
-        import time
-        async with _lock:
-            seq = int(self.state.get("ad_campaigns_seq", 0)) + 1
-            self.state["ad_campaigns_seq"] = seq
-            entry = {
-                "id": seq,
-                "manager_username": (manager_username or "").lstrip("@").lower(),
-                "amount_usdt": float(amount_usdt),
-                "usdt_address": (usdt_address or "").strip(),
-                "platform": platform or "",
-                "note": note or "",
-                "date_start": date_start or "",
-                "date_end": date_end or "",
-                "status": "draft",   # draft → awaiting_address → awaiting_approval → approved → paid
-                "tx_hash": "",
-                "approved_by": "",
-                "created_at": time.time(),
-            }
-            self.state.setdefault("ad_campaigns", []).append(entry)
-            await self._save_unlocked()
-            return entry
-
-    async def update_ad_campaign(self, campaign_id: int, **fields) -> bool:
-        async with _lock:
-            for e in (self.state.get("ad_campaigns") or []):
-                if int(e.get("id") or 0) == int(campaign_id):
-                    for k, v in fields.items():
-                        e[k] = v
-                    await self._save_unlocked()
-                    return True
-            return False
-
-    def list_ad_campaigns(self, status: str = None) -> list:
-        out = list(self.state.get("ad_campaigns") or [])
-        if status:
-            out = [e for e in out if e.get("status") == status]
-        return sorted(out, key=lambda x: x.get("created_at", 0), reverse=True)
-
-    def get_ad_campaign(self, campaign_id: int) -> dict:
-        for e in (self.state.get("ad_campaigns") or []):
-            if int(e.get("id") or 0) == int(campaign_id):
-                return dict(e)
-        return {}
-
-    async def mark_all_notifications_read(self, role: str = None, user_id: int = None) -> int:
-        """Помечает все видимые нотификации как прочитанные. Возвращает кол-во."""
-        async with _lock:
-            count = 0
-            is_owner = (role == "owner")
-            for n in (self.state.get("notifications") or []):
-                if n.get("read"):
-                    continue
-                t_role = n.get("target_role")
-                t_uid = n.get("target_user_id")
-                if not is_owner:
-                    if t_uid and user_id and int(t_uid) != int(user_id):
-                        continue
-                    if t_role and t_role != role:
-                        continue
-                    if not t_uid and not t_role:
-                        continue
-                n["read"] = True
-                count += 1
-            if count > 0:
-                await self._save_unlocked()
-            return count
 
     def was_assistant_hint_sent(self, chat_id) -> bool:
         """True если в этом чате уже отправляли подсказку «напиши Ассистент»."""
@@ -2969,50 +2658,13 @@ class Storage:
     def list_bot_users(self) -> dict:
         return dict(self.state.get("bot_users") or {})
 
-    def _active_client_ids(self) -> set:
-        """Все client_id из managed_chats — юзеры у которых есть work-чат.
-        Derived источник истины (надёжнее чем флаг entered_work_chat который
-        ставится только при успешном _watch_for_client_join)."""
-        out = set()
-        for info in (self.state.get("managed_chats") or {}).values():
-            cid = info.get("client_id")
-            if cid:
-                try:
-                    out.add(int(cid))
-                except Exception:
-                    pass
-        return out
-
     def list_inactive_bot_users(self) -> list:
-        """Юзеры которые нажали /start но НЕ имеют work-чата.
-        Derived: проверяем managed_chats.client_id (надёжно) + флаг
-        entered_work_chat (fallback для старых записей)."""
-        active = self._active_client_ids()
+        """Юзеры которые нажали /start но ещё не вошли в work-чат."""
         out = []
         for uid, info in (self.state.get("bot_users") or {}).items():
-            try:
-                uid_int = int(uid)
-            except Exception:
-                continue
-            if uid_int in active:
-                continue
-            if info.get("entered_work_chat"):
-                continue
-            out.append({"user_id": uid_int, **info})
+            if not info.get("entered_work_chat"):
+                out.append({"user_id": int(uid), **info})
         return out
-
-    def count_active_bot_users(self) -> int:
-        """Сколько юзеров реально зашли в work-чат (для статистики/админки)."""
-        active = self._active_client_ids()
-        n = 0
-        for uid, info in (self.state.get("bot_users") or {}).items():
-            try:
-                uid_int = int(uid)
-            except Exception:
-                continue
-            if uid_int in active or info.get("entered_work_chat"):
-                n += 1
-        return n
 
     # === Dashboard commands queue ===
 
@@ -3527,44 +3179,6 @@ class Storage:
             del drops[str(drop_id)]
             await self._save_unlocked()
             return True
-
-    async def delete_credit_drop(self, drop_id: str) -> bool:
-        """Удалить credit-анкету + все её credit_drop_lks."""
-        async with _lock:
-            drops = self.state.get("credit_drops") or {}
-            if str(drop_id) not in drops:
-                return False
-            lks = self.state.get("credit_drop_lks") or {}
-            for lkid in list(lks.keys()):
-                if lks[lkid].get("credit_drop_id") == drop_id:
-                    del lks[lkid]
-            del drops[str(drop_id)]
-            await self._save_unlocked()
-            return True
-
-    async def delete_outsource_drop(self, drop_id: str) -> bool:
-        """Удалить outsource-анкету + все её outsource_drop_lks."""
-        async with _lock:
-            drops = self.state.get("outsource_drops") or {}
-            if str(drop_id) not in drops:
-                return False
-            lks = self.state.get("outsource_drop_lks") or {}
-            for lkid in list(lks.keys()):
-                if lks[lkid].get("outsource_drop_id") == drop_id:
-                    del lks[lkid]
-            del drops[str(drop_id)]
-            await self._save_unlocked()
-            return True
-
-    async def delete_drop_any(self, drop_id: str) -> bool:
-        """Router: удаляет drop по prefix.
-        cdrp* → credit, odrp* → outsource, иначе → crm."""
-        s = str(drop_id or "")
-        if s.startswith("cdrp"):
-            return await self.delete_credit_drop(s)
-        if s.startswith("odrp"):
-            return await self.delete_outsource_drop(s)
-        return await self.delete_crm_drop(s)
 
     # ---- DROP LKs (ЛК банков) ----
     def list_crm_drop_lks(self, drop_id: Optional[str] = None) -> dict:
@@ -4579,29 +4193,41 @@ class Storage:
             "label": "👑 Owner",
             "views": ["*"], "edit_actions": ["*"],
         },
-        # === Упрощённые роли (по запросу SIMBA): роль = одна вкладка =====
-        # Все edit_actions=['*'] → роль может ВСЁ в её views. Backend wildcard
-        # автоматом через role_can_edit('*' in acts → True). Можно расширить
-        # вручную через Owner Panel (UI убран, но API доступен).
         "manager": {
-            "label": "📞 Менеджер (Поддержка)",
-            "views": ["office", "support"],
-            "edit_actions": ["*"],
+            "label": "👤 Manager",
+            "views": ["office", "chat", "lk", "crm", "support", "system", "operational"],
+            "edit_actions": [
+                "request_kuc", "decide_kuc", "lk_sms_action", "lk_fill",
+                "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
+                "lk_status_change",
+                "support_take", "support_reply", "support_transfer", "support_close",
+                "credit_capture_chat",
+            ],
         },
         "system_dept": {
-            "label": "⚙️ Сус (System)",
-            "views": ["office", "system"],
-            "edit_actions": ["*"],
+            "label": "⚙️ System",
+            "views": ["office", "system", "operational"],
+            "edit_actions": [
+                "request_kuc", "decide_kuc", "lk_fill", "lk_sms_action",
+            ],
         },
         "accounting": {
-            "label": "📒 Бухгалтер",
-            "views": ["office", "accounting"],
-            "edit_actions": ["*"],
+            "label": "💰 Accounting",
+            "views": ["office", "fin", "payouts", "accounting"],
+            "edit_actions": [
+                "exchange_request",
+                "payout_usdt_paid", "payout_released",
+                "payout_deal_funded", "payout_set_deal_id",
+                "accounting_entry_add", "accounting_entry_delete",
+                "accounting_payout_note",
+            ],
         },
         "operationist": {
-            "label": "🛠 Операционист",
-            "views": ["office", "operational"],
-            "edit_actions": ["*"],
+            "label": "🛠 Operationist",
+            "views": ["office", "operational", "lk"],
+            "edit_actions": [
+                "exchange_request", "lk_status_change",
+            ],
         },
         # === Роль: ОТКУПЫ (RUB → USDT обмен) ===
         "outkup_specialist": {
@@ -4657,14 +4283,9 @@ class Storage:
     }
 
     def _ensure_default_role_permissions(self):
-        """Заполняет role_permissions дефолтами если пусто.
-        Учитывает deleted_default_roles — те которые owner явно удалил
-        через Owner Panel НЕ восстанавливаются."""
+        """Заполняет role_permissions дефолтами если пусто."""
         rp = self.state.setdefault("role_permissions", {})
-        deleted = set(self.state.get("deleted_default_roles") or [])
         for role_name, perms in self._DEFAULT_ROLE_PERMS.items():
-            if role_name in deleted:
-                continue  # owner явно удалил — не восстанавливаем
             if role_name not in rp:
                 rp[role_name] = dict(perms)
 
@@ -4704,27 +4325,18 @@ class Storage:
             return rp[role]
 
     async def delete_role_permission(self, role: str) -> bool:
-        """Удалить любую роль (кастомную или дефолтную).
-        Если дефолтная — добавляем в deleted_default_roles чтобы при следующем
-        рестарте/обращении она НЕ восстановилась. Owner=protected (нельзя удалить)."""
-        if role == "owner":
-            return False  # owner защищён всегда
+        """Удалить кастомную роль. Дефолтные нельзя удалить."""
+        if role in self._DEFAULT_ROLE_PERMS:
+            return False
         async with _lock:
             rp = self.state.get("role_permissions") or {}
-            existed = role in rp
-            if existed:
+            if role in rp:
                 del rp[role]
             custom = self.state.get("custom_roles") or []
             if role in custom:
                 custom.remove(role)
-            # Если это была дефолтная роль — помечаем чтобы не восстанавливалась
-            if role in self._DEFAULT_ROLE_PERMS:
-                deleted = self.state.setdefault("deleted_default_roles", [])
-                if role not in deleted:
-                    deleted.append(role)
             await self._save_unlocked()
-            # Возвращаем True если что-то удалили ИЛИ это была дефолтная (запретили)
-            return existed or (role in self._DEFAULT_ROLE_PERMS)
+            return True
 
     def role_can_view(self, role: str, view_id: str) -> bool:
         perms = self.get_role_permission(role)
@@ -4915,28 +4527,20 @@ class Storage:
             await self._save_unlocked()
             return mgrs[u]
 
-    async def _bump_credit_manager_stat_unlocked(self, username: str, key: str, delta: int = 1):
-        """Логика без захвата _lock — для вызова из-под уже захваченного _lock.
-        Не делает _save_unlocked (caller сам сохранит когда вся транзакция готова)."""
+    async def bump_credit_manager_stat(self, username: str, key: str, delta: int = 1):
         if not username:
             return
         u = username.lstrip("@").lower()
-        mgrs = self.state.setdefault("credit_managers", {})
-        if u not in mgrs:
-            mgrs[u] = {
-                "username": u, "tg_user_id": 0,
-                "first_seen_ts": time.time(), "last_active_ts": time.time(),
-                "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
-            }
-        stats = mgrs[u].setdefault("stats", {})
-        stats[key] = (stats.get(key) or 0) + delta
-
-    async def bump_credit_manager_stat(self, username: str, key: str, delta: int = 1):
-        """Публичная версия: берёт _lock и сохраняет state. Для внешних вызовов."""
-        if not username:
-            return
         async with _lock:
-            await self._bump_credit_manager_stat_unlocked(username, key, delta)
+            mgrs = self.state.setdefault("credit_managers", {})
+            if u not in mgrs:
+                mgrs[u] = {
+                    "username": u, "tg_user_id": 0,
+                    "first_seen_ts": time.time(), "last_active_ts": time.time(),
+                    "stats": {"drops_total": 0, "drops_done": 0, "lks_total": 0, "lks_done": 0},
+                }
+            stats = mgrs[u].setdefault("stats", {})
+            stats[key] = (stats.get(key) or 0) + delta
             await self._save_unlocked()
 
     # --- Чаты кредитования ---
@@ -5032,12 +4636,7 @@ class Storage:
         self, chat_id, manager_username: str, fio: str = "",
         about: str = "", scan_file_ids: Optional[list] = None,
     ) -> str:
-        import logging as _lg
-        _log = _lg.getLogger("storage")
-        _log.info("[add_credit_drop] start chat=%s mgr=%s fio=%r", chat_id, manager_username, fio[:50])
-        _log.info("[add_credit_drop] acquiring _lock")
         async with _lock:
-            _log.info("[add_credit_drop] lock acquired")
             seq = (self.state.get("credit_drops_seq") or 0) + 1
             self.state["credit_drops_seq"] = seq
             drop_id = f"cdrp{seq:05d}"
@@ -5053,11 +4652,8 @@ class Storage:
                 "created_at": time.time(),
                 "lk_card_ids": [],
             }
-            _log.info("[add_credit_drop] bumping manager stat (unlocked)")
-            await self._bump_credit_manager_stat_unlocked(manager_username, "drops_total", 1)
-            _log.info("[add_credit_drop] saving state.json (size_estimate=%d entries)", len(self.state.get("credit_drops") or {}))
             await self._save_unlocked()
-            _log.info("[add_credit_drop] DONE drop_id=%s", drop_id)
+            await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
             return drop_id
 
     async def update_credit_drop(self, drop_id: str, **fields) -> bool:
@@ -5109,8 +4705,8 @@ class Storage:
             drop = (self.state.get("credit_drops") or {}).get(credit_drop_id)
             if drop:
                 drop.setdefault("lk_card_ids", []).append(droplk_id)
-            await self._bump_credit_manager_stat_unlocked(manager_username, "lks_total", 1)
             await self._save_unlocked()
+            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
             return droplk_id
 
     async def update_credit_drop_lk(self, droplk_id, **fields) -> bool:
@@ -5319,24 +4915,18 @@ class Storage:
             await self._save_unlocked()
             return mgrs[u]
 
-    async def _bump_outsource_manager_stat_unlocked(self, username: str, key: str, delta: int = 1):
-        """Логика без _lock — для вызова из-под уже захваченного _lock."""
+    async def bump_outsource_manager_stat(self, username: str, key: str, delta: int = 1):
         if not username: return
         u = username.lstrip("@").lower()
-        mgrs = self.state.setdefault("outsource_managers", {})
-        if u not in mgrs:
-            mgrs[u] = {"username": u, "tg_user_id": 0, "first_seen_ts": time.time(),
-                       "last_active_ts": time.time(), "wallet_balance_usdt": 0.0,
-                       "paid_total_usdt": 0.0, "stats": {"drops_total": 0, "drops_done": 0,
-                                                          "lks_total": 0, "lks_done": 0}}
-        stats = mgrs[u].setdefault("stats", {})
-        stats[key] = (stats.get(key) or 0) + delta
-
-    async def bump_outsource_manager_stat(self, username: str, key: str, delta: int = 1):
-        """Публичная: берёт _lock + save. Для внешних вызовов."""
-        if not username: return
         async with _lock:
-            await self._bump_outsource_manager_stat_unlocked(username, key, delta)
+            mgrs = self.state.setdefault("outsource_managers", {})
+            if u not in mgrs:
+                mgrs[u] = {"username": u, "tg_user_id": 0, "first_seen_ts": time.time(),
+                           "last_active_ts": time.time(), "wallet_balance_usdt": 0.0,
+                           "paid_total_usdt": 0.0, "stats": {"drops_total": 0, "drops_done": 0,
+                                                              "lks_total": 0, "lks_done": 0}}
+            stats = mgrs[u].setdefault("stats", {})
+            stats[key] = (stats.get(key) or 0) + delta
             await self._save_unlocked()
 
     def list_outsource_chats(self) -> dict:
@@ -5405,8 +4995,8 @@ class Storage:
                 "scan_file_ids": list(scan_file_ids or []),
                 "status": "draft", "created_at": time.time(), "lk_card_ids": [],
             }
-            await self._bump_outsource_manager_stat_unlocked(manager_username, "drops_total", 1)
             await self._save_unlocked()
+            await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
             return drop_id
 
     async def update_outsource_drop(self, drop_id: str, **fields) -> bool:
@@ -5447,8 +5037,8 @@ class Storage:
             drop = (self.state.get("outsource_drops") or {}).get(outsource_drop_id)
             if drop:
                 drop.setdefault("lk_card_ids", []).append(droplk_id)
-            await self._bump_outsource_manager_stat_unlocked(manager_username, "lks_total", 1)
             await self._save_unlocked()
+            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
             return droplk_id
 
     async def update_outsource_drop_lk(self, droplk_id, **fields) -> bool:
@@ -5528,7 +5118,7 @@ class Storage:
                     "created_at": time.time(), "lk_card_ids": [],
                     "_moved_from": ("credit" if is_credit else "crm") + ":" + (src_drop_id or ""),
                 }
-                await self._bump_outsource_manager_stat_unlocked(manager_username, "drops_total", 1)
+                await self.bump_outsource_manager_stat(manager_username, "drops_total", 1)
             # Создаём outsource_drop_lk
             seq_lk = (self.state.get("outsource_drop_lks_seq") or 0) + 1
             self.state["outsource_drop_lks_seq"] = seq_lk
@@ -5545,7 +5135,7 @@ class Storage:
             })
             ou_lks[new_olk_id] = new_lk
             ou_drops[odrop_id].setdefault("lk_card_ids", []).append(new_olk_id)
-            await self._bump_outsource_manager_stat_unlocked(manager_username, "lks_total", 1)
+            await self.bump_outsource_manager_stat(manager_username, "lks_total", 1)
             # Удаляем из источника
             if is_credit:
                 src_lks = self.state.get("credit_drop_lks") or {}
@@ -5667,7 +5257,7 @@ class Storage:
                     "lk_card_ids": [],
                     "_moved_from_crm_drop": old_drop_id or "",
                 }
-                await self._bump_credit_manager_stat_unlocked(manager_username, "drops_total", 1)
+                await self.bump_credit_manager_stat(manager_username, "drops_total", 1)
 
             # 2) Создаём credit_droplk с теми же данными
             seq_lk = (self.state.get("credit_drop_lks_seq") or 0) + 1
@@ -5683,7 +5273,7 @@ class Storage:
                 "updated_at": time.time(),
             }
             credit_drops[cdrop_id].setdefault("lk_card_ids", []).append(new_clk_id)
-            await self._bump_credit_manager_stat_unlocked(manager_username, "lks_total", 1)
+            await self.bump_credit_manager_stat(manager_username, "lks_total", 1)
 
             # 3) Удаляем ЛК из crm_drop_lks
             del crm_lks[str(droplk_id)]
