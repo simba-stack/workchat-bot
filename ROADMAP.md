@@ -90,6 +90,66 @@ git push
 
 **Бэкап pre-сессия:** `/tmp/backup_pre_accounting_v2/*.bak` (8 файлов). Если что — `cp /tmp/backup_pre_accounting_v2/storage.py.bak storage.py`.
 
+## 🚀 ПОЛНАЯ АВТОМАТИЗАЦИЯ ВЫПЛАТ (Коммит 5)
+
+**storage.py — новая модель compensation:**
+- `worker_compensation` — правила: `rate_per_lk_usdt`, `monthly_base_usdt`, `pct_of_lk_price`, `min_payout_amount`, `auto_pay_enabled`
+- `worker_pending_balance` — накопленный долг работнику (растёт при каждом LK release)
+- `worker_accrual_log` — лог всех начислений
+- `payout_safety` — лимиты: `max_per_tx_usdt: 500`, `max_daily_usdt: 2000`, `auto_pay_enabled_global` (kill-switch), `salary_schedule_hours: 24`
+
+**Hooks при событиях (api.py):**
+- LK release → `accrue_to_worker(supplier, rate_per_lk + pct_of_lk_price)` → notification
+- outkup complete → `add_accounting_entry(kassa, note='outkup')` (auto)
+- payout released → `add_accounting_entry(kassa, price)` (auto)
+
+**auto_payouts_runner.py (новый модуль):**
+- `run_salary_payouts()` — пробегает всех работников, кому накопилось >= min_payout_amount → отправляет через tron_payouts
+- `maybe_run_salary_payouts()` — версия с throttle (раз в N часов, last_salary_tick в state)
+- Safety: skip если pending > max_per_tx (требует ручного /payout); skip если daily limit reached
+- Scheduler hook в `crm_bot._payment_reminder_loop` → запускается каждый цикл
+
+**API endpoints для управления:**
+- `GET /api/payouts/compensation` — список правил + pending по каждому работнику
+- `POST /api/payouts/compensation/{username}/set` — задать ставки
+- `GET /api/payouts/safety` + `POST /set` — настройки лимитов
+- `POST /api/payouts/run_salaries` — ручной trigger scheduler (для тестов)
+- `POST /api/outkup/orders/{id}/auto_pay` — авто-отправка USDT клиенту по адресу
+- ads/set_address — теперь авто-вызывает send_usdt_to если сумма <= max_per_tx
+
+**Полный workflow:**
+1. Owner задаёт ставку работнику: `POST /api/payouts/compensation/vasya/set {"rate_per_lk_usdt": 25}`
+2. Работник vasya отрабатывает LK → release → бот начисляет ему +25$ в pending
+3. Через 24 часа (или scheduler tick) → если pending >= 10$ и есть USDT адрес → авто-выплата
+4. tx_hash сохраняется в tron_outbound_log + запись в Бухгалтерию (salaries)
+5. Notification owner-у в TG + JARVIS bell
+
+**Реклама:**
+1. POST /api/ads/campaigns/create → notification owner
+2. Менеджер даёт адрес → set_address → **АВТО**-pay (если сумма ≤ max_per_tx)
+3. Запись в Бухгалтерию (ads) + notify
+
+**Откупы:**
+1. Клиент пишет «дай 100k СБП» → outkup_order создаётся
+2. Откупщик согласовывает с клиентом сумму USDT + адрес
+3. POST /api/outkup/orders/{id}/auto_pay {client_usdt_address} → **АВТО**-send USDT клиенту
+4. Запись в Бухгалтерию (kassa, outkup pomet) + notify
+
+**Safety kill-switches:**
+- `payout_safety.auto_pay_enabled_global = false` → останавливает ВСЁ
+- `auto_pay_salary_enabled / auto_pay_outkup_enabled / auto_pay_ads_enabled` — по типу
+- `max_per_tx_usdt` — больше → требует ручного `/payout`
+- `max_daily_usdt` — суммарный лимит, после превышения notification + пауза до завтра
+- Worker-level: `auto_pay_enabled` в comp rules — отключить конкретного
+
+**ENV vars (Railway):**
+- `TRON_PRIVATE_KEY` — 64-hex hot-wallet (минимум $500 баланса)
+- `TRON_HOT_WALLET_ADDRESS` — TR7N... адрес
+- `TRON_OWNER_TG_ID` — `8151738775`
+- `TRONGRID_API_KEY` (опционально) — для повышенного rate-limit
+
+**Файлы:** storage.py + api.py + crm_bot.py + tron_payouts.py (новый) + auto_payouts_runner.py (новый) + requirements.txt
+
 ---
 
 ## 1. Что это

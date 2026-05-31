@@ -5545,6 +5545,18 @@ async def _notification_triggers_tick(bot):
     except Exception as e:
         logger.warning("[notif] outkup check failed: %s", e)
 
+    # 3.5) AUTO-SALARY scheduler (раз в N часов — N из safety.salary_schedule_hours)
+    try:
+        from auto_payouts_runner import maybe_run_salary_payouts
+        salary_result = await maybe_run_salary_payouts(force=False)
+        if salary_result.get("paid"):
+            logger.info("[auto-pay] tick: paid %d workers, total %.2f USDT",
+                        len(salary_result.get("paid", [])), salary_result.get("total_paid_usdt", 0))
+        elif not salary_result.get("skipped"):
+            pass
+    except Exception as e:
+        logger.warning("[auto-pay] scheduler tick failed: %s", e)
+
     # 3) Сегодняшняя маржа < 0
     try:
         today_start = now - (now % 86400)  # начало UTC-дня

@@ -590,6 +590,127 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # === COMPENSATION RULES: как и сколько платим работнику ===
+    # Структура: state.worker_compensation = {
+    #   "vasya": {
+    #     "rate_per_lk_usdt": 25,       # фикс за каждый отработанный ЛК
+    #     "monthly_base_usdt": 0,       # ежемесячная база (выплачивается 1-го числа)
+    #     "pct_of_lk_price": 0,         # % с цены ЛК (вместо/вместе с rate_per_lk)
+    #     "min_payout_amount": 10,      # не выплачиваем меньше этой суммы (накапливаем)
+    #     "auto_pay_enabled": True,     # автовыплата вкл/выкл
+    #   }
+    # }
+    # Накопленный долг — state.worker_pending_balance = {"vasya": 75.50, ...}
+
+    def get_worker_compensation(self, username: str) -> dict:
+        clean = (username or "").lstrip("@").strip().lower()
+        return dict((self.state.get("worker_compensation") or {}).get(clean) or {})
+
+    async def set_worker_compensation(self, username: str, **rules) -> dict:
+        """Установить ставки работнику. Передавай только те поля что меняешь."""
+        clean = (username or "").lstrip("@").strip().lower()
+        if not clean:
+            return {}
+        async with _lock:
+            comp = self.state.setdefault("worker_compensation", {})
+            existing = comp.get(clean) or {}
+            # Дефолты только при первом создании
+            if not existing:
+                existing = {
+                    "rate_per_lk_usdt": 0.0,
+                    "monthly_base_usdt": 0.0,
+                    "pct_of_lk_price": 0.0,
+                    "min_payout_amount": 10.0,
+                    "auto_pay_enabled": True,
+                }
+            for k, v in rules.items():
+                if k in ("rate_per_lk_usdt", "monthly_base_usdt", "pct_of_lk_price", "min_payout_amount"):
+                    existing[k] = float(v)
+                elif k == "auto_pay_enabled":
+                    existing[k] = bool(v)
+            comp[clean] = existing
+            await self._save_unlocked()
+            return existing
+
+    def list_worker_compensations(self) -> dict:
+        return dict(self.state.get("worker_compensation") or {})
+
+    def get_worker_pending(self, username: str) -> float:
+        clean = (username or "").lstrip("@").strip().lower()
+        return float((self.state.get("worker_pending_balance") or {}).get(clean) or 0)
+
+    async def accrue_to_worker(self, username: str, amount_usdt: float, reason: str = "") -> float:
+        """Начислить amount работнику в pending_balance. Вызывается при LK release."""
+        clean = (username or "").lstrip("@").strip().lower()
+        if not clean or amount_usdt <= 0:
+            return 0
+        import time
+        async with _lock:
+            balances = self.state.setdefault("worker_pending_balance", {})
+            balances[clean] = float(balances.get(clean) or 0) + float(amount_usdt)
+            # Лог accrual
+            log = self.state.setdefault("worker_accrual_log", [])
+            log.append({
+                "ts": time.time(), "username": clean,
+                "amount": float(amount_usdt), "reason": reason,
+            })
+            if len(log) > 5000:
+                self.state["worker_accrual_log"] = log[-5000:]
+            await self._save_unlocked()
+            return balances[clean]
+
+    async def reset_worker_pending(self, username: str, paid_amount: float = None) -> bool:
+        """Сбросить (или уменьшить) pending после выплаты."""
+        clean = (username or "").lstrip("@").strip().lower()
+        async with _lock:
+            balances = self.state.setdefault("worker_pending_balance", {})
+            if paid_amount is None:
+                balances[clean] = 0
+            else:
+                cur = float(balances.get(clean) or 0)
+                balances[clean] = max(0, cur - float(paid_amount))
+            await self._save_unlocked()
+            return True
+
+    # === PAYOUT SAFETY (лимиты для auto-pay) ===
+    def get_payout_safety(self) -> dict:
+        defaults = {
+            "max_per_tx_usdt": 500,        # больше — требует ручного approve
+            "max_daily_usdt": 2000,        # суммарный лимит за день
+            "auto_pay_enabled_global": True,  # экстренный kill-switch
+            "auto_pay_outkup_enabled": True,
+            "auto_pay_ads_enabled": True,
+            "auto_pay_salary_enabled": True,
+            "salary_schedule_hours": 24,   # как часто запускать авто-зарплаты (часы)
+        }
+        cur = self.state.get("payout_safety") or {}
+        return {**defaults, **cur}
+
+    async def set_payout_safety(self, **fields) -> dict:
+        async with _lock:
+            cur = self.state.setdefault("payout_safety", {})
+            for k, v in fields.items():
+                if k.startswith("max_") or k.endswith("_usdt") or k.endswith("_hours"):
+                    cur[k] = float(v)
+                else:
+                    cur[k] = bool(v)
+            await self._save_unlocked()
+        return self.get_payout_safety()
+
+    def get_daily_outbound_total(self) -> float:
+        """Сумма всех успешных Tron-outbound за последние 24 часа (для daily limit check)."""
+        import time
+        now = time.time()
+        cutoff = now - 86400
+        total = 0.0
+        for e in (self.state.get("tron_outbound_log") or []):
+            if float(e.get("ts") or 0) < cutoff:
+                continue
+            if e.get("status") not in ("broadcasted", "confirmed"):
+                continue
+            total += float(e.get("amount_usdt") or 0)
+        return total
+
     # === Worker USDT TRC20 addresses (для авто-выплат) ===
     async def set_worker_usdt_address(self, username: str, address: str) -> bool:
         clean = (username or "").lstrip("@").strip().lower()

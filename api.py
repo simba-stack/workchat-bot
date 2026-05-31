@@ -5363,6 +5363,31 @@ async def api_payouts_released(req: Request, _: None = Depends(_auth), _perm: bo
                         )
                     except Exception:
                         pass
+                # === Auto-accrue worker compensation ===
+                # Кто отработал ЛК (supplier на карточке)? + у него есть compensation rules?
+                supplier = (card.get("supplier") or "").lstrip("@").lower()
+                if supplier and price > 0:
+                    comp = storage.get_worker_compensation(supplier)
+                    if comp:
+                        worker_due = 0.0
+                        if comp.get("rate_per_lk_usdt"):
+                            worker_due += float(comp["rate_per_lk_usdt"])
+                        if comp.get("pct_of_lk_price"):
+                            worker_due += price * float(comp["pct_of_lk_price"]) / 100
+                        if worker_due > 0:
+                            await storage.accrue_to_worker(
+                                supplier, worker_due,
+                                reason=f"LK #{card_id} release (price={price})",
+                            )
+                            try:
+                                await storage.add_notification(
+                                    type="info",
+                                    text=f"👷 @{supplier}: +{worker_due:.2f}$ начислено (LK #{card_id}). "
+                                         f"Pending: {storage.get_worker_pending(supplier):.2f}$",
+                                    dedup_key=f"accrue:{supplier}:{card_id}",
+                                )
+                            except Exception:
+                                pass
     except Exception as _e:
         import logging
         logging.getLogger(__name__).warning("auto-acc kassa failed: %s", _e)
@@ -6910,7 +6935,44 @@ async def api_ads_set_address(cid: int, request: Request, me: dict = Depends(_ge
     ok = await storage.update_ad_campaign(cid, usdt_address=address, status="awaiting_approval")
     if not ok:
         raise HTTPException(404, "campaign not found")
-    return {"ok": True}
+    # === AUTO-PAY если сумма в лимите + auto_pay_ads_enabled ===
+    safety = storage.get_payout_safety()
+    camp = storage.get_ad_campaign(cid)
+    if (safety.get("auto_pay_enabled_global", True) and
+        safety.get("auto_pay_ads_enabled", True) and
+        float(camp.get("amount_usdt", 0)) <= float(safety.get("max_per_tx_usdt") or 500)):
+        # Авто-вызываем approve_and_pay (но без owner check т.к. это автомат)
+        try:
+            from tron_payouts import is_configured, send_usdt_to
+            if is_configured():
+                daily_used = storage.get_daily_outbound_total()
+                if daily_used + float(camp["amount_usdt"]) <= float(safety.get("max_daily_usdt") or 2000):
+                    result = await send_usdt_to(
+                        to_address=address,
+                        amount_usdt=float(camp["amount_usdt"]),
+                        reason=f"ad #{cid} auto-pay {camp.get('platform', '')}",
+                        wait_confirmation=False,
+                    )
+                    if result.get("ok"):
+                        tx_hash = result.get("tx_hash", "")
+                        await storage.update_ad_campaign(cid, status="paid", tx_hash=tx_hash, approved_by="auto")
+                        try:
+                            await storage.add_accounting_entry(
+                                category="ads", amount_usdt=float(camp["amount_usdt"]),
+                                note=f"auto-ad #{cid} @{camp['manager_username']} tx:{tx_hash[:16]}",
+                                created_by="auto:set_address",
+                            )
+                            await storage.add_notification(
+                                type="success",
+                                text=f"📢💸 Реклама #{cid} АВТО-оплачена: {camp['amount_usdt']}$ → @{camp['manager_username']}",
+                            )
+                        except Exception:
+                            pass
+                        return {"ok": True, "auto_paid": True, "tx_hash": tx_hash}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("ads auto-pay failed: %s", e)
+    return {"ok": True, "auto_paid": False}
 
 
 @app.post("/api/ads/campaigns/{cid}/approve_and_pay")
@@ -6927,6 +6989,17 @@ async def api_ads_approve_pay(cid: int, me: dict = Depends(_get_me)):
         raise HTTPException(400, "Нет USDT адреса — сначала /set_address")
     # Approve
     await storage.update_ad_campaign(cid, status="approved", approved_by=me.get("username") or "")
+    # Safety checks
+    safety = storage.get_payout_safety()
+    if not safety.get("auto_pay_enabled_global", True):
+        return {"ok": False, "error": "auto-pay disabled (kill-switch)"}
+    if not safety.get("auto_pay_ads_enabled", True):
+        return {"ok": False, "error": "auto-pay-ads disabled"}
+    if float(camp["amount_usdt"]) > float(safety.get("max_per_tx_usdt") or 500):
+        return {"ok": False, "error": f"amount > max_per_tx ({safety.get('max_per_tx_usdt')} USDT) — выплати руками"}
+    daily_used = storage.get_daily_outbound_total()
+    if daily_used + float(camp["amount_usdt"]) > float(safety.get("max_daily_usdt") or 2000):
+        return {"ok": False, "error": f"daily limit exceeded ({daily_used:.2f}+ )"}
     # Pay
     try:
         from tron_payouts import is_configured, send_usdt_to
@@ -6961,5 +7034,141 @@ async def api_ads_approve_pay(cid: int, me: dict = Depends(_get_me)):
         except Exception:
             pass
         return {"ok": True, "tx_hash": tx_hash, "confirmed": result.get("confirmed")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+# =====================================================================
+# AUTO-PAY: compensation rules + ручной триггер для payout-runner
+# =====================================================================
+
+@app.get("/api/payouts/compensation")
+async def api_comp_list(me: dict = Depends(_get_me)):
+    """Список всех правил компенсации работников + их pending."""
+    if (me.get("role") or "") not in ("owner", "accounting"):
+        raise HTTPException(403, "owner/accounting only")
+    comps = storage.list_worker_compensations()
+    out = []
+    for username, rules in comps.items():
+        out.append({
+            "username": username, "rules": rules,
+            "pending_usdt": storage.get_worker_pending(username),
+            "usdt_address": storage.get_worker_usdt_address(username) or "",
+        })
+    return {"ok": True, "workers": out}
+
+
+@app.post("/api/payouts/compensation/{username}/set")
+async def api_comp_set(username: str, request: Request, me: dict = Depends(_get_me)):
+    """Body: {rate_per_lk_usdt?, monthly_base_usdt?, pct_of_lk_price?, min_payout_amount?, auto_pay_enabled?}"""
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    rules = await storage.set_worker_compensation(username, **body)
+    return {"ok": True, "username": username.lstrip("@").lower(), "rules": rules}
+
+
+@app.get("/api/payouts/safety")
+async def api_safety_get(me: dict = Depends(_get_me)):
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    return {"ok": True, "safety": storage.get_payout_safety(),
+            "daily_outbound": storage.get_daily_outbound_total()}
+
+
+@app.post("/api/payouts/safety/set")
+async def api_safety_set(request: Request, me: dict = Depends(_get_me)):
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    new = await storage.set_payout_safety(**body)
+    return {"ok": True, "safety": new}
+
+
+@app.post("/api/payouts/run_salaries")
+async def api_run_salaries(me: dict = Depends(_get_me)):
+    """Ручной запуск авто-выплаты зарплат прямо сейчас (для тестирования).
+    Обычно scheduler в reminder loop сам это делает каждые N часов."""
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    try:
+        from auto_payouts_runner import run_salary_payouts
+        result = await run_salary_payouts(reason="manual trigger by owner")
+        return {"ok": True, "result": result}
+    except Exception as e:
+        raise HTTPException(500, f"runner failed: {e}")
+
+@app.post("/api/outkup/orders/{order_id}/auto_pay")
+async def api_outkup_autopay(
+    order_id: str, request: Request,
+    me: dict = Depends(_get_me),
+):
+    """Авто-отправка USDT клиенту после approval откупщика.
+    Body: {client_usdt_address: str}
+    Safety: max_per_tx / max_daily / kill-switch.
+    После успешной отправки → outkup completed + acc запись."""
+    if (me.get("role") or "") not in ("owner", "outkup_specialist"):
+        raise HTTPException(403, "owner/outkup_specialist only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    address = (body.get("client_usdt_address") or "").strip()
+    if not address:
+        raise HTTPException(400, "client_usdt_address required")
+    orders = storage.list_outkup_orders() or {}
+    o = orders.get(order_id) or {}
+    if not o:
+        raise HTTPException(404, "order not found")
+    rub = float(o.get("amount_rub") or 0)
+    rate = float(o.get("rate_rub_per_usdt") or 100)
+    if rub <= 0 or rate <= 0:
+        raise HTTPException(400, "invalid order amount/rate")
+    usdt_amount = rub / rate
+
+    # Safety
+    safety = storage.get_payout_safety()
+    if not safety.get("auto_pay_enabled_global", True) or not safety.get("auto_pay_outkup_enabled", True):
+        raise HTTPException(403, "auto-pay outkup disabled")
+    if usdt_amount > float(safety.get("max_per_tx_usdt") or 500):
+        raise HTTPException(400, f"amount {usdt_amount:.2f}$ > max_per_tx")
+    daily_used = storage.get_daily_outbound_total()
+    if daily_used + usdt_amount > float(safety.get("max_daily_usdt") or 2000):
+        raise HTTPException(400, "daily limit exceeded")
+
+    try:
+        from tron_payouts import is_configured, send_usdt_to, validate_tron_address
+        if not is_configured():
+            raise HTTPException(500, "TRON not configured")
+        if not validate_tron_address(address):
+            raise HTTPException(400, f"Invalid Tron address: {address}")
+        result = await send_usdt_to(
+            to_address=address,
+            amount_usdt=usdt_amount,
+            reason=f"outkup #{order_id} ({rub} ₽ @ {rate} rate)",
+            wait_confirmation=False,
+        )
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error", "send failed")}
+        tx_hash = result.get("tx_hash", "")
+        # Завершить заказ
+        await storage.complete_outkup_order(order_id, txid=tx_hash, by=me.get("username") or "auto")
+        # Acc запись (через auto-hook в api_outkup_complete который я добавлял ранее НЕ сработает т.к. это другой путь)
+        try:
+            await storage.add_accounting_entry(
+                category="kassa",
+                amount_usdt=usdt_amount,
+                amount_rub=rub,
+                note=f"outkup #{order_id} auto-pay (rate {rate}, tx {tx_hash[:16]}...)",
+                created_by=f"auto:outkup_autopay",
+            )
+        except Exception:
+            pass
+        try:
+            await storage.add_notification(
+                type="success",
+                text=f"💱✅ Откуп #{order_id} АВТО-выплачен: {usdt_amount:.2f}$ → {address[:8]}...",
+            )
+        except Exception:
+            pass
+        return {"ok": True, "tx_hash": tx_hash, "amount_usdt": usdt_amount}
+    except HTTPException:
+        raise
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
