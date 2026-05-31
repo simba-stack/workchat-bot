@@ -593,6 +593,20 @@ class UserbotService:
         except Exception as e:
             logger.warning("register_chat failed: %s", e)
 
+        # 7.1) Запускаем polling fallback: каждые 3с проверяем вступил ли
+        # клиент в чат — на случай если ChatAction event пропущен/опоздал.
+        # Без этого welcome не отправится если клиент вступит до register_chat
+        # или если Telethon disconnect совпал с join-event'ом. Polling до 10 мин.
+        if client_id:
+            try:
+                asyncio.create_task(
+                    self._watch_for_client_join(channel, int(client_id))
+                )
+                logger.info("watch_for_client_join task started: chat=%s client=%s",
+                            channel.id, client_id)
+            except Exception as e:
+                logger.warning("watch_for_client_join start failed: %s", e)
+
         # 8) Эмитим событие на дашборд
         try:
             _e("chat-created", {
