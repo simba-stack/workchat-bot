@@ -310,6 +310,7 @@ def _default_state() -> dict:
         # форвардит в outkup_team_chat_id. Откупщики выдают реквизиты вручную.
         "outkup_settings": {
             "rate_rub_per_usdt": 100.0,        # 100 рублей за 1 USDT (старт)
+            "pct_fee": 5.0,                    # 5% наша комиссия (клиент получает: rub/rate * (1-pct/100))
             "payments_chat_id": 0,             # чат куда пишут клиенты
             "outkup_team_chat_id": 0,          # чат откупщиков (заявки приходят сюда)
             "min_amount_rub": 5000,            # минимальная сумма заявки
@@ -4330,6 +4331,35 @@ class Storage:
     # ════════════════════════════════════════════════════════════
     # ОТКУПЫ — RUB → USDT TRC20 обмен через ручных Откупщиков
     # ════════════════════════════════════════════════════════════
+    def get_outkup_quote(self, amount_rub: float) -> dict:
+        """Формула откупа: клиент даёт RUB, мы платим USDT с нашей комиссией.
+
+        usdt_total = rub / rate          # сколько USDT соответствует сумме RUB
+        usdt_to_client = usdt_total * (1 - pct_fee/100)
+        our_margin_usdt = usdt_total * (pct_fee/100)
+
+        Пример: 100k ₽ при rate=100 ₽/$ и pct=5%:
+          usdt_total = 1000
+          usdt_to_client = 950 USDT (отправляем клиенту)
+          our_margin_usdt = 50 USDT (наша маржа)
+        """
+        s = self.get_outkup_settings()
+        rate = float(s.get("rate_rub_per_usdt") or 100)
+        pct = float(s.get("pct_fee") or 0)
+        if rate <= 0:
+            return {"usdt_to_client": 0, "our_margin_usdt": 0, "rate": rate, "pct_fee": pct}
+        usdt_total = amount_rub / rate
+        usdt_to_client = usdt_total * (1 - pct / 100)
+        our_margin = usdt_total - usdt_to_client
+        return {
+            "amount_rub": amount_rub,
+            "rate": rate,
+            "pct_fee": pct,
+            "usdt_total": round(usdt_total, 4),
+            "usdt_to_client": round(usdt_to_client, 4),
+            "our_margin_usdt": round(our_margin, 4),
+        }
+
     def get_outkup_settings(self) -> dict:
         s = self.state.get("outkup_settings") or {}
         return {
@@ -4347,6 +4377,8 @@ class Storage:
             for k, v in fields.items():
                 if k == "rate_rub_per_usdt":
                     s[k] = float(v or 0)
+                elif k == "pct_fee":
+                    s[k] = max(0, min(50, float(v)))  # 0-50%
                 elif k in ("payments_chat_id", "outkup_team_chat_id",
                            "min_amount_rub", "max_amount_rub"):
                     s[k] = int(v or 0)

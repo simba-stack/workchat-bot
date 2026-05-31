@@ -7172,3 +7172,39 @@ async def api_outkup_autopay(
         raise
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
+
+# =====================================================================
+# TRON wallet info — для финансового UI
+# =====================================================================
+
+@app.get("/api/tron/balance")
+async def api_tron_balance(me: dict = Depends(_get_me)):
+    if (me.get("role") or "") != "owner":
+        raise HTTPException(403, "owner only")
+    try:
+        from tron_payouts import is_configured, get_hot_wallet_balance, get_hot_wallet_address
+        if not is_configured():
+            return {"ok": False, "error": "TRON not configured"}
+        bal = await get_hot_wallet_balance()
+        return {"ok": True, "address": get_hot_wallet_address(), "balance": bal}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/tron/outbound")
+async def api_tron_outbound(limit: int = 50, me: dict = Depends(_get_me)):
+    if (me.get("role") or "") not in ("owner", "accounting"):
+        raise HTTPException(403, "owner/accounting only")
+    log = storage.list_tron_outbound(limit=int(limit))
+    return {"ok": True, "log": log}
+
+
+# =====================================================================
+# OUTKUP QUOTE — расчёт USDT для клиента по RUB
+# =====================================================================
+
+@app.get("/api/outkup/quote")
+async def api_outkup_quote(amount_rub: float, me: dict = Depends(_get_me)):
+    """Возвращает: usdt_to_client (что отправим клиенту), our_margin_usdt (наша маржа)."""
+    q = storage.get_outkup_quote(float(amount_rub))
+    return {"ok": True, "quote": q}
