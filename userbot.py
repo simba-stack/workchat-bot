@@ -422,12 +422,14 @@ class UserbotService:
         channel = result.chats[0]
         logger.info("Created group '%s' (id=%s) for client=%s", title, channel.id, client_id)
 
-        # 2) Резолвим работников. Берём из storage.get_workers() (актуальный список,
-        # настраиваемый через админку), с fallback на config.DEFAULT_WORKERS.
+        # 2) Резолвим работников для добавления в work_chat.
+        # ВАЖНО: list_workers_for_chats() — whitelist по роли. Только
+        # owner/manager/accounting/system_dept попадают. operationist/
+        # outkup_specialist/chat_access_manager — НЕ добавляются.
         statuses: dict[str, str] = {}
         users_to_invite = []
         try:
-            workers_list = storage.get_workers() or []
+            workers_list = storage.list_workers_for_chats() or []
         except Exception:
             workers_list = []
         if not workers_list:

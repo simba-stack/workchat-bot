@@ -528,8 +528,29 @@ class Storage:
     def get_admins(self):
         return list(self.state["admins"])
 
+    # Whitelist ролей которые попадают в work_chat'ы клиентов.
+    # Operationist/outkup_specialist НЕ добавляются — у них
+    # своя зона (Операционная/Откупы/Доступы), в чате клиента им делать нечего.
+    WORK_CHAT_ROLES = {"owner", "manager", "accounting", "system_dept"}
+
     def get_workers(self):
         return list(self.state["workers"])
+
+    def list_workers_for_chats(self) -> list:
+        """Workers подходящие для добавления в work_chat'ы клиентов.
+        Whitelist по роли: только owner/manager/accounting/system_dept.
+        SIMBA_PRIDE_ADM/PRIDE_CL добавляются всегда (owner-аккаунты)."""
+        all_workers = self.state.get("workers") or []
+        roles = self.state.get("worker_roles") or {}
+        out = []
+        for username in all_workers:
+            key = username.lstrip("@").lower()
+            r = (roles.get(key) or {}).get("role") or ""
+            if r in self.WORK_CHAT_ROLES:
+                out.append(username)
+            elif key in ("simba_pride_adm", "pride_cl"):
+                out.append(username)
+        return out
 
     async def add_worker(self, username: str):
         username = username.lstrip("@").strip()
@@ -4766,48 +4787,19 @@ class Storage:
                 "outkup_cancel",
             ],
         },
-        # === Роль 1: Менеджер чатов Доступы (от SIMBA) ===
-        "chat_access_manager": {
-            "label": "👤 Менеджер чатов Доступы",
-            "views": [
-                "office",      # просмотр + LEO голос
-                "crm",         # просмотр
-                "discord",     # full
-                "support",     # full
-                "system",      # только Доступы вкладки
-                "settings",    # ограниченные подразделы
-            ],
-            "view_readonly": ["office", "crm"],  # только просмотр
-            "subviews": {
-                "system": ["access", "credit_access", "outsource_access"],  # без password / installed
-                "settings": ["profile", "workers", "pricing", "appearance"],
-            },
-            "subview_readonly": {
-                "settings": {"workers": True},  # работники — только просмотр
-            },
-            "edit_actions": [
-                # 🟣 ХАБ — полный доступ
-                "discord_channel_create", "discord_channel_delete",
-                "discord_message_send", "discord_message_delete",
-                "discord_reaction_add", "discord_reaction_remove",
-                "discord_pin", "discord_unpin",
-                "call_create", "call_end", "call_join",
-                # 🛟 Поддержка — полный
-                "support_take", "support_reply", "support_transfer", "support_close",
-                "tg_session_connect", "tg_session_verify", "tg_session_disconnect",
-                # ⚙ SYSTEM Доступы — full mutation для вкладок Доступы
-                "request_kuc", "decide_kuc",
-                "lk_sms_action", "lk_fill",
-                "move_lk_to_credit", "move_lk_to_outsource", "move_lk_to_supplier",
-                "bundle_create", "bundle_dissolve",
-                # ⚙️ Настройки — Прайс ЛК полный
-                "settings_pricing_set", "settings_pricing_delete",
-                # 🧠 LEO голос (whitelist вопросов на стороне prompt-фильтра)
-                "leo_ask", "leo_voice_command", "leo_realtime_session",
-                "leo_note_create",
-            ],
-        },
     }
+
+    def _migrate_removed_roles(self):
+        """Если у юзера была роль которой больше нет в дефолтах — переключаем."""
+        # chat_access_manager → system_dept (от 2026-05-31)
+        migrations = {"chat_access_manager": "system_dept"}
+        changed = False
+        for uname, info in (self.state.get("worker_roles") or {}).items():
+            old_role = (info or {}).get("role") or ""
+            if old_role in migrations:
+                info["role"] = migrations[old_role]
+                changed = True
+        return changed
 
     def _ensure_default_role_permissions(self):
         """Заполняет role_permissions дефолтами если пусто.
