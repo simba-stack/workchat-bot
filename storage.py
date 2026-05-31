@@ -569,16 +569,17 @@ class Storage:
         return dict(self.state.get("worker_roles") or {})
 
     async def set_worker_role(self, username: str, role: str, is_admin: bool = False):
-        """Задаёт роль и админ-флаг для worker'а. Если worker'а не было в
-        списке — добавляет (worker_roles работает только с членами workers)."""
+        """Задаёт роль (доступ к JARVIS dashboard) для username.
+
+        ВАЖНО: НЕ добавляет в workers — workers это отдельный список тех кого
+        юзербот приглашает в work_chat'ы клиентов. Роль = только доступ к
+        дашборду. Если нужно добавить в TG-чаты — отдельно через
+        /api/admin/workers/add или admin_router."""
         clean = username.lstrip("@").strip()
         if not clean:
             return False
         key = clean.lower()
         async with _lock:
-            # Гарантируем что worker в списке
-            if clean not in self.state["workers"]:
-                self.state["workers"].append(clean)
             roles = self.state.setdefault("worker_roles", {})
             roles[key] = {
                 # 64-символьный лимит — выше старого 16 который ломал длинные

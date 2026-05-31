@@ -552,6 +552,20 @@ async def api_admin_workers(request: Request, _: None = Depends(_auth)):
     return {"ok": True, "workers": out, "available_roles": ["manager", "system", "accounting", "operationist", "owner"]}
 
 
+@app.delete("/api/admin/workers/{username}")
+async def api_admin_remove_worker(username: str, request: Request, _: None = Depends(_auth)):
+    """Убрать username из state.workers (юзербот больше не пригласит его
+    в новые work_chat'ы). Заодно чистит worker_roles. Только owner."""
+    uid = _try_session_auth(request) or 0
+    if _resolve_user_role(uid or 0) != "owner":
+        raise HTTPException(403, "owner only")
+    uname = (username or "").lstrip("@").strip()
+    if not uname:
+        raise HTTPException(400, "username required")
+    await storage.remove_worker(uname)  # уже чистит worker_roles внутри
+    return {"ok": True, "username": uname, "removed": True}
+
+
 @app.post("/api/admin/workers/{username}/role")
 async def api_admin_set_role(username: str, request: Request, _: None = Depends(_auth), _perm: bool = Depends(require_action("admin_worker_role"))):
     """Установить роль работника. Только owner."""
