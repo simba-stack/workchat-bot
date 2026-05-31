@@ -3274,7 +3274,40 @@ async def fill_pass2(message: Message, state: FSMContext):
                 disable_web_page_preview=True,
             )
         except Exception as e:
-            logger.warning("password edit failed: %s", e)
+            # Edit мог упасть (старый msgid, message not modified, нет прав).
+            # Шлём новое сообщение чтобы сус ТОЧНО увидел заполненную анкету,
+            # и обновляем msgid_pass на свежий.
+            logger.warning("password edit failed (%s); sending fresh message", e)
+            try:
+                new_msg = await bot.send_message(
+                    pwd_chat,
+                    _render_password_text(drop, lk),
+                    reply_markup=_password_filled_keyboard(droplk_id),
+                    disable_web_page_preview=True,
+                )
+                pwd_str = str(pwd_chat).replace("-100", "").lstrip("-")
+                new_link = f"https://t.me/c/{pwd_str}/{new_msg.message_id}"
+                await crm_storage.update_drop_lk_any(
+                    droplk_id, msgid_pass=new_msg.message_id, link_pass=new_link,
+                )
+            except Exception as e2:
+                logger.error("password fresh-send also failed: %s", e2)
+    elif pwd_chat:
+        # msgid_pass отсутствует — шлём свежее сообщение
+        try:
+            new_msg = await bot.send_message(
+                pwd_chat,
+                _render_password_text(drop, lk),
+                reply_markup=_password_filled_keyboard(droplk_id),
+                disable_web_page_preview=True,
+            )
+            pwd_str = str(pwd_chat).replace("-100", "").lstrip("-")
+            new_link = f"https://t.me/c/{pwd_str}/{new_msg.message_id}"
+            await crm_storage.update_drop_lk_any(
+                droplk_id, msgid_pass=new_msg.message_id, link_pass=new_link,
+            )
+        except Exception as e:
+            logger.error("password initial-send failed: %s", e)
 
     # Обновляем контрольное сообщение в admin-чате
     admin_chat = get_admin_chat_id_for(drop)
