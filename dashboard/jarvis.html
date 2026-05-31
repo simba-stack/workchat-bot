@@ -80,9 +80,12 @@
   /* === Главный shell — фиксированная страница, скроллится только внутреннее содержимое === */
   /* Только списки и панели имеют свой overflow-y: auto. Глобальный body НЕ скроллится. */
   main, .central-office, aside, section[x-show] {
-    max-height: 100vh;
+    /* 100vh минус top-bar (~52px) + view-tabs (~78px) ≈ 130px.
+       Запас 20px для padding/border = 150px чтобы не упирался. */
+    max-height: calc(100vh - 150px);
     overflow-y: auto;
     overscroll-behavior: contain;
+    padding-bottom: 40px;  /* запас снизу чтобы последний блок не прилипал к краю */
   }
   /* Топ-tabs остаются фиксированными */
   nav.view-tabs { flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
@@ -701,11 +704,8 @@
     padding: 14px;
     position: relative;
     z-index: 2;
-    /* Fix: контент главной/lk/chat/fin не доскроливался до конца — body имеет
-       overflow:hidden, поэтому main сам обязан иметь scroll. align-items:start
-       чтобы колонки не растягивались до полной высоты viewport. */
-    overflow-y: auto;
-    max-height: calc(100vh - 130px);
+    /* align-items:start чтобы колонки не растягивались на полный viewport;
+       scroll делает global rule выше (main { max-height: calc(100vh-150px) }) */
     align-items: start;
   }
   @media (max-width: 1100px) {
@@ -4041,7 +4041,7 @@
 </section>
 
 <!-- ===== PAYOUTS TAB ===== -->
-<section x-show="currentView === 'payouts'" style="padding: 20px; max-width: 1400px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'payouts'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
     <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">💰 ВЫПЛАТЫ</h2>
     <button class="btn" @click="_doRefresh('payouts', refreshPayouts)" :disabled="_refreshing.payouts || payoutLoading" :class="_refreshing.payouts ? 'jarvis-loading' : ''"><span :class="_refreshing.payouts ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
@@ -4135,7 +4135,7 @@
 </section>
 
 <!-- ===== CRM TAB (Партнёры) ===== -->
-<section x-show="currentView === 'crm'" style="padding: 20px; max-width: 1400px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'crm'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
     <h2 style="margin: 0; color: var(--hud-primary); font-size: 18px; letter-spacing: 2px;">🤝 ПАРТНЁРЫ CRM</h2>
     <div style="display: flex; gap: 6px; flex-wrap: wrap;">
@@ -5143,7 +5143,7 @@
 </div>
 
 <!-- ===== SYSTEM v3 — CRM Доступы + CRM Пароли (копия TG-групп) ===== -->
-<section x-show="currentView === 'system'" style="padding: 20px; max-width: 1400px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'system'" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center;">
     <h2 style="margin: 0; font-size: 22px; font-weight: 700;">⚙️ System</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— анкеты + перевязки + заполнение credentials</span>
@@ -5852,7 +5852,7 @@
 
 
 <!-- ===== БУХГАЛТЕРИЯ ===== -->
-<section x-show="currentView === 'accounting'" x-init="$watch('currentView', v => { if (v === 'accounting') refreshAcc2(); })" style="padding: 20px; max-width: 1400px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'accounting'" x-init="$watch('currentView', v => { if (v === 'accounting') refreshAcc2(); })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div style="margin-bottom: 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
     <h2 style="margin: 0; font-size: 22px; font-weight: 700;">📒 Бухгалтерия</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— касса / расходы / маржа</span>
@@ -5919,7 +5919,7 @@
 </section>
 
 <!-- ===== 👑 OWNER PANEL — только для owner ===== -->
-<section x-show="currentView === 'owner'" x-cloak style="padding: 24px; max-width: 1300px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'owner'" x-cloak style="padding: 24px; max-width: 1300px; margin: 0 auto;">
   <div style="margin-bottom: 24px; display: flex; align-items: center; gap: 12px;">
     <h2 style="margin: 0; font-size: 22px;">👑 Owner Panel</h2>
     <span style="font-size: 13px; color: var(--text-dim);">— роли, разрешения, пользователи</span>
@@ -6061,7 +6061,7 @@
 
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
 <!-- ═══════════ ОТКУПЫ — RUB → USDT обмен ═══════════ -->
-<section x-show="currentView === 'outkup'" x-init="$watch('currentView', v => { if (v === 'outkup') refreshOutkup() })" style="padding: 20px; max-width: 1400px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'outkup'" x-init="$watch('currentView', v => { if (v === 'outkup') refreshOutkup() })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div class="jarvis-panel" style="padding: 20px;">
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💱 Откупы — RUB → USDT TRC20</h3>
@@ -6118,7 +6118,7 @@
   </div>
 </section>
 
-<section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto; max-height: calc(100vh - 130px); overflow-y: auto;">
+<section x-show="currentView === 'settings'" style="padding: 24px; max-width: 1100px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
     <h2 style="margin: 0 0 6px 0; font-size: 24px; font-weight: 700; color: var(--text);">⚙️ Настройки</h2>
     <div style="font-size: 13px; color: var(--text-dim);">Конфигурация системы PRIDE J.A.R.V.I.S.</div>
@@ -13638,6 +13638,4 @@ function jarvis() {
             </div>
             <!-- Запросить повторно (для rejected/approved) -->
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <button x-show="canAct('request_kuc')" @click="retryKucForCurrentModal()"
-                      style="width: 100%; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;">
-                🔄 Зап
+              <button x-show
