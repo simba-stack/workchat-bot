@@ -701,6 +701,12 @@
     padding: 14px;
     position: relative;
     z-index: 2;
+    /* Fix: контент главной/lk/chat/fin не доскроливался до конца — body имеет
+       overflow:hidden, поэтому main сам обязан иметь scroll. align-items:start
+       чтобы колонки не растягивались до полной высоты viewport. */
+    overflow-y: auto;
+    max-height: calc(100vh - 130px);
+    align-items: start;
   }
   @media (max-width: 1100px) {
     .jarvis-grid { grid-template-columns: 1fr; }
