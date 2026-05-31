@@ -80,12 +80,11 @@
   /* === Главный shell — фиксированная страница, скроллится только внутреннее содержимое === */
   /* Только списки и панели имеют свой overflow-y: auto. Глобальный body НЕ скроллится. */
   main, .central-office, aside, section[x-show] {
-    /* 100vh минус top-bar (~52px) + view-tabs (~78px) ≈ 130px.
-       Запас 20px для padding/border = 150px чтобы не упирался. */
-    max-height: calc(100vh - 150px);
+    /* 100vh минус top-bar+view-tabs (~130px) — точное значение чтобы контент
+       не упирался В НИЗ И не уезжал вниз от лишних отступов. */
+    max-height: calc(100vh - 130px);
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding-bottom: 40px;  /* запас снизу чтобы последний блок не прилипал к краю */
   }
   /* Топ-tabs остаются фиксированными */
   nav.view-tabs { flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
