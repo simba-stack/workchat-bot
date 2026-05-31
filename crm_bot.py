@@ -2940,11 +2940,16 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
         except Exception:
             pass
 
+        # Метод оплаты: если AI уже зафиксировал (через set_payment_method)
+        # — берём из owner.payment_method + usdt_address. Иначе fallback на
+        # chat_info.method/usdt_address (managed_chats), иначе «уточняется».
+        pay_line = _resolve_payment_method_line(owner, drop)
+
         handoff_text = (
             f"✅ <b>Клиент {drop.get('fio')} принят в работу.</b>\n"
             f"📋 ЛК: <b>{n_lks}</b> ({banks_line or '—'})"
             f"{price_line}\n"
-            f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
+            f"💳 Метод оплаты: {pay_line}\n\n"
             f"<i>Карточки уже в Группе 1 ЛК. Если клиент хочет USDT — "
             f"AI уточнит адрес. Если деньги вперёд — переключим на Тимона.</i>"
         )
@@ -2989,6 +2994,66 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
         })
     except Exception:
         pass
+
+
+# Маппинг кодов метода → русские лейблы для отображения
+_PAYMENT_METHOD_LABELS = {
+    "USDT_TRC20": "USDT TRC20 (на кошелёк)",
+    "USDT_BEP20": "USDT BEP20 (на кошелёк)",
+    "USDT_ERC20": "USDT ERC20 (на кошелёк)",
+    "GUARANTOR_BEFORE": "Гарант — деньги вперёд",
+    "GUARANTOR_AFTER_WORK": "Гарант — после отработки",
+    "SBP": "СБП (по номеру телефона)",
+    "CARD": "На карту",
+    "CASH": "Наличными",
+}
+
+
+def _resolve_payment_method_line(owner: dict, drop: dict) -> str:
+    """Собирает строку «Метод оплаты» для handoff'а. Приоритет:
+    1) owner.payment_method (set_payment_method AI-tool сохраняет сюда)
+    2) chat_info(work_chat_id).method (managed_chats — save_chat в _tool_set_payment_method)
+    3) client_preferences[username].payment_method (save_client_preferences)
+    4) «<b>уточняется у клиента</b>» если ничего не зафиксировано.
+    Если есть usdt_address — добавляем coda с укороченным адресом.
+    """
+    method = ""
+    addr = ""
+    try:
+        if owner and isinstance(owner, dict):
+            method = (owner.get("payment_method") or "").strip().upper()
+            addr = (owner.get("usdt_address") or "").strip()
+    except Exception:
+        pass
+    if not method:
+        try:
+            wc = (owner or {}).get("work_chat_id")
+            if wc:
+                ci = crm_storage.get_chat_info(int(wc)) or {}
+                method = (ci.get("method") or ci.get("payment_method") or "").strip().upper()
+                if not addr:
+                    addr = (ci.get("usdt_address") or "").strip()
+        except Exception:
+            pass
+    if not method:
+        # Fallback на client_preferences по username клиента (если есть)
+        try:
+            uname = (owner or {}).get("username") or (drop or {}).get("client_username") or ""
+            if uname:
+                prefs = crm_storage.get_client_preferences(uname.lstrip("@")) or {}
+                method = (prefs.get("payment_method") or "").strip().upper()
+                if not addr:
+                    addr = (prefs.get("usdt_address") or "").strip()
+        except Exception:
+            pass
+    if not method:
+        return "<b>уточняется у клиента</b>"
+    label = _PAYMENT_METHOD_LABELS.get(method, method)
+    if addr and method.startswith("USDT"):
+        # Укороченный адрес — первые 6 + последние 4
+        short = addr if len(addr) <= 14 else f"{addr[:6]}…{addr[-4:]}"
+        return f"<b>{label}</b> · <code>{short}</code>"
+    return f"<b>{label}</b>"
 
 
 def _render_password_text(drop: dict, lk: dict) -> str:
@@ -3795,13 +3860,14 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             bot, drop, owner,
             f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
         )
-        # Уведомление в work_chat партнёра — карточка в работе + запрос метода оплаты
+        # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
         try:
+            pay_line = _resolve_payment_method_line(owner, drop)
             handoff = (
                 f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
                 f"📋 Карточка: #{card_id or '—'}\n"
-                f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
-                f"<i>Ассистент уточнит у клиента способ оплаты и пропишет в карточке.</i>"
+                f"💳 Метод оплаты: {pay_line}\n\n"
+                f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
             )
             await _notify_work_chat(bot, owner, handoff)
         except Exception:
@@ -3964,11 +4030,12 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                 f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
             )
             try:
+                pay_line = _resolve_payment_method_line(owner, drop)
                 handoff = (
                     f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
                     f"📋 Карточка: #{card_id or '—'}\n"
-                    f"💳 Метод оплаты: <b>уточняется у клиента</b>\n\n"
-                    f"<i>Ассистент уточнит у клиента способ оплаты и пропишет в карточке.</i>"
+                    f"💳 Метод оплаты: {pay_line}\n\n"
+                    f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
                 )
                 await _notify_work_chat(bot, owner, handoff)
             except Exception:
