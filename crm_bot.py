@@ -2435,15 +2435,20 @@ async def handle_lk_mail(message: Message, state: FSMContext):
         await message.reply("❌ Не удалось создать ЛК (storage routing вернул пусто). Проверь логи.")
         await state.clear()
         return
+    # КЛИЕНТСКИЕ исходные данные сохраняем в client_* поля. Сус-данные
+    # (FillForm после перевязки) пишутся в new_*. Это разделение нужно
+    # чтобы анкета суса не приходила «уже заполненной» и сус-ввод не
+    # путался с клиентским исходником. Раньше оба flow писали в new_* —
+    # пересечение полей ломало логику.
     saved = await crm_storage.update_drop_lk_any(
         droplk_id,
-        new_login=_clean(nlk.get("login")),
-        new_password=_clean(nlk.get("password")),
-        new_number=_clean(nlk.get("number")),
-        code_word=_clean(nlk.get("code_word")),
-        new_mail=_clean(nlk.get("mail")),
+        client_login=_clean(nlk.get("login")),
+        client_password=_clean(nlk.get("password")),
+        client_number=_clean(nlk.get("number")),
+        client_code_word=_clean(nlk.get("code_word")),
+        client_mail=_clean(nlk.get("mail")),
     )
-    logger.info("[LKForm] saved droplk %s (status=%s) data=%s",
+    logger.info("[LKForm] saved droplk %s (status=%s) client_data=%s",
                 droplk_id, saved, {k: _clean(nlk.get(k)) for k in ("login","password","number","code_word","mail")})
 
     # Удалить ответ user'а + меню
@@ -2990,14 +2995,31 @@ def _render_password_text(drop: dict, lk: dict) -> str:
     owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
     _slot = _lk_slot_tag(lk, drop)
     _slot_pfx = (f"<code>{_slot}</code> " if _slot else "")
+    # Клиентские исходники (что дал сам клиент в work_chat при создании ЛК).
+    # Показываем отдельным блоком чтобы сус не путался. Поля new_* —
+    # это «после перевязки» (заполнит сус через FillForm).
+    cli = (
+        f"<b>📋 Исходные данные клиента:</b>\n"
+        f"  Логин: <code>{lk.get('client_login') or lk.get('new_login') or '—'}</code>\n"
+        f"  Пароль: <code>{lk.get('client_password') or lk.get('new_password') or '—'}</code>\n"
+        f"  Почта: <code>{lk.get('client_mail') or lk.get('new_mail') or '—'}</code>\n"
+        f"  Номер: <code>{lk.get('client_number') or lk.get('new_number') or '—'}</code>\n"
+        f"  Код. слово: <code>{lk.get('client_code_word') or lk.get('code_word') or '—'}</code>\n\n"
+    )
+    # Сус заполняет это после перевязки.
+    new_block = (
+        f"<b>🔑 После перевязки (заполняет сус):</b>\n"
+        f"  Новый логин: <code>{lk.get('new_login') or '—'}</code>\n"
+        f"  Новый пароль: <code>{lk.get('new_password') or '—'}</code>\n"
+        f"  Новая почта: <code>{lk.get('new_mail') or '—'}</code>\n"
+        f"  Новый номер: <code>{lk.get('new_number') or '—'}</code>\n"
+        f"  Кодовое слово: <code>{lk.get('code_word') or '—'}</code>\n\n"
+    )
     return (
         f"🔐 {_slot_pfx}<b>ЛК {lk.get('bank')}</b> · {drop.get('fio') or '—'}\n"
         f"<i>поставщик: @{owner.get('username') or '—'}</i>\n\n"
-        f"<b>Новый логин:</b> <code>{lk.get('new_login') or '—'}</code>\n"
-        f"<b>Новый пароль:</b> <code>{lk.get('new_password') or '—'}</code>\n"
-        f"<b>Новая почта:</b> <code>{lk.get('new_mail') or '—'}</code>\n"
-        f"<b>Новый номер:</b> <code>{lk.get('new_number') or '—'}</code>\n"
-        f"<b>Кодовое слово:</b> <code>{lk.get('code_word') or '—'}</code>\n\n"
+        f"{cli}"
+        f"{new_block}"
         f"<b>🖥 Дедик:</b>\n"
         f"  Где установлен: <code>{lk.get('ded_location') or '—'}</code>\n"
         f"  IP: <code>{lk.get('ded_ip') or '—'}</code>\n"
@@ -3210,8 +3232,18 @@ async def fill_pass2(message: Message, state: FSMContext):
         except Exception:
             pass
     if not droplk_id:
+        logger.warning("[FillForm] fill_pass2 fired but droplk_id missing in state, fd=%s", fd)
         await state.clear()
         return
+    logger.info(
+        "[FillForm] saving droplk=%s by user=%s len=login:%d pwd:%d mail:%d num:%d code:%d ded_loc:%d ded_ip:%d ded_pass:%d",
+        droplk_id, (message.from_user.id if message.from_user else None),
+        len(fd.get("new_login") or ""), len(fd.get("new_password") or ""),
+        len(fd.get("new_mail") or ""), len(fd.get("new_number") or ""),
+        len(fd.get("code_word") or ""),
+        len(fd.get("ded_location") or ""), len(fd.get("ded_ip") or ""),
+        len(fd.get("ded_pass") or ""),
+    )
     # Сохраняем все 8 полей
     await crm_storage.update_drop_lk_any(
         droplk_id,
