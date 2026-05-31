@@ -545,6 +545,20 @@ class UserbotService:
                         )
                     # Если role_str пустой — ставим хотя бы "—" чтобы был визуальный префикс
                     rank_to_use = (role_str or "").strip() or ("Менеджер" if not is_admin else "Admin")
+                    # SIMBA: системные роли → русские отображаемые имена.
+                    # accounting=Бухгалтер, system=Перевяз+проверка,
+                    # manager=Менеджер, owner=Руководство.
+                    _RU_RANK = {
+                        "owner": "Руководство",
+                        "manager": "Менеджер",
+                        "system": "Перевяз+проверка",
+                        "system_dept": "Перевяз+проверка",
+                        "accounting": "Бухгалтер",
+                        "operationist": "Оператор",
+                        "outkup_specialist": "Откупщик",
+                        "support": "Менеджер",
+                    }
+                    rank_to_use = _RU_RANK.get(rank_to_use.lower(), rank_to_use)
                     # Telegram ограничивает rank 16 символов
                     rank_to_use = rank_to_use[:16]
                     await self.client(EditAdminRequest(

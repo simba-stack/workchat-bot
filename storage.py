@@ -531,21 +531,29 @@ class Storage:
     # Whitelist ролей которые попадают в work_chat'ы клиентов.
     # Operationist/outkup_specialist НЕ добавляются — у них
     # своя зона (Операционная/Откупы/Доступы), в чате клиента им делать нечего.
-    WORK_CHAT_ROLES = {"owner", "manager", "accounting", "system_dept"}
+    # Включены: owner, manager, accounting, system (=system_dept, =Перевяз+проверка).
+    # Сравнение всегда case-insensitive (см. list_workers_for_chats).
+    WORK_CHAT_ROLES = {
+        "owner", "manager", "accounting",
+        "system", "system_dept", "перевяз+проверка",
+        # Русские синонимы (на случай кастомных ролей):
+        "руководство", "менеджер", "бухгалтер",
+    }
 
     def get_workers(self):
         return list(self.state["workers"])
 
     def list_workers_for_chats(self) -> list:
         """Workers подходящие для добавления в work_chat'ы клиентов.
-        Whitelist по роли: только owner/manager/accounting/system_dept.
+        Whitelist по роли: owner/manager/accounting/system (любой синоним).
+        Operationist/outkup_specialist НЕ попадают.
         SIMBA_PRIDE_ADM/PRIDE_CL добавляются всегда (owner-аккаунты)."""
         all_workers = self.state.get("workers") or []
         roles = self.state.get("worker_roles") or {}
         out = []
         for username in all_workers:
             key = username.lstrip("@").lower()
-            r = (roles.get(key) or {}).get("role") or ""
+            r = ((roles.get(key) or {}).get("role") or "").strip().lower()
             if r in self.WORK_CHAT_ROLES:
                 out.append(username)
             elif key in ("simba_pride_adm", "pride_cl"):
