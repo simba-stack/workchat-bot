@@ -372,6 +372,31 @@ def _default_state() -> dict:
         # chat_id беседы где работники сбрасывают «ОБНОВИ ПРАЙС/ПРАВИЛА».
         # 0 = не настроено. Настраивается через JARVIS Settings.
         "knowledge_admin_chat_id": 0,
+        # === Рассылки Асика (утро/вечер во все managed_chats) ===
+        # Юзербот раз в минуту проверяет, и если HH:MM совпадает с time_hhmm
+        # и last_sent_date != сегодня — шлёт текст во все managed_chats.
+        # Утренний текст автоматически дополняется актуальным прайсом/правилами
+        # из knowledge_overrides (если задано flag append_pricing=True).
+        "asik_broadcast_morning": {
+            "enabled": True,
+            "time_hhmm": "08:00",
+            "text": (
+                "👋 Доброе утро, PRIDE проснулся и желает вам "
+                "хорошего продуктивного дня по добыче материала!"
+            ),
+            "append_pricing": True,
+            "last_sent_date": "",
+        },
+        "asik_broadcast_evening": {
+            "enabled": True,
+            "time_hhmm": "22:00",
+            "text": (
+                "👑 Всем спасибо за работу, это был продуктивный день, "
+                "сейчас начнётся подведение итогов, ждём Вас с новыми силами!"
+            ),
+            "append_pricing": False,
+            "last_sent_date": "",
+        },
     }
 
 
@@ -3115,6 +3140,51 @@ class Storage:
                 self.state["knowledge_admin_chat_id"] = int(chat_id or 0)
             except Exception:
                 self.state["knowledge_admin_chat_id"] = 0
+            await self._save_unlocked()
+            return True
+
+    # ============== ASIK BROADCASTS (утро/вечер) ==============
+
+    def get_asik_broadcast(self, slot: str) -> dict:
+        """slot = 'morning' | 'evening'. Возвращает все поля."""
+        key = f"asik_broadcast_{slot}"
+        cfg = self.state.get(key) or {}
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "time_hhmm": (cfg.get("time_hhmm") or ("08:00" if slot == "morning" else "22:00")),
+            "text": (cfg.get("text") or "").strip(),
+            "append_pricing": bool(cfg.get("append_pricing", slot == "morning")),
+            "last_sent_date": cfg.get("last_sent_date") or "",
+        }
+
+    async def set_asik_broadcast(
+        self, slot: str, enabled: bool = None,
+        time_hhmm: str = None, text: str = None,
+        append_pricing: bool = None, last_sent_date: str = None,
+    ) -> bool:
+        if slot not in ("morning", "evening"):
+            return False
+        key = f"asik_broadcast_{slot}"
+        async with _lock:
+            cfg = self.state.setdefault(key, {})
+            if enabled is not None:
+                cfg["enabled"] = bool(enabled)
+            if time_hhmm is not None:
+                # Валидация HH:MM
+                tt = (time_hhmm or "").strip()
+                if len(tt) == 5 and tt[2] == ":":
+                    try:
+                        h = int(tt[:2]); m = int(tt[3:])
+                        if 0 <= h <= 23 and 0 <= m <= 59:
+                            cfg["time_hhmm"] = tt
+                    except Exception:
+                        pass
+            if text is not None:
+                cfg["text"] = (text or "").strip()
+            if append_pricing is not None:
+                cfg["append_pricing"] = bool(append_pricing)
+            if last_sent_date is not None:
+                cfg["last_sent_date"] = str(last_sent_date or "")
             await self._save_unlocked()
             return True
 

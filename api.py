@@ -2229,6 +2229,37 @@ async def api_outkup_cancel(
     return {"ok": True, "order": o}
 
 
+# --- Рассылки Асика (утро/вечер во все managed_chats) ---
+@app.get("/api/settings/asik_broadcasts")
+async def settings_get_asik_broadcasts(me: dict = Depends(_get_me)):
+    return {
+        "ok": True,
+        "morning": storage.get_asik_broadcast("morning"),
+        "evening": storage.get_asik_broadcast("evening"),
+    }
+
+
+@app.post("/api/settings/asik_broadcasts/{slot}")
+async def settings_set_asik_broadcast(
+    slot: str, request: Request, me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("settings_pricing_set")),
+):
+    """slot = morning | evening. Body:
+    {enabled?: bool, time_hhmm?: 'HH:MM', text?: str, append_pricing?: bool}"""
+    _require_owner_or_manager(me)
+    if slot not in ("morning", "evening"):
+        raise HTTPException(400, "slot must be morning or evening")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    await storage.set_asik_broadcast(
+        slot,
+        enabled=body.get("enabled"),
+        time_hhmm=body.get("time_hhmm"),
+        text=body.get("text"),
+        append_pricing=body.get("append_pricing"),
+    )
+    return {"ok": True, "slot": slot, "current": storage.get_asik_broadcast(slot)}
+
+
 # --- Knowledge overrides (Прайс + Правила забора ЛК) ---
 @app.get("/api/settings/knowledge")
 async def settings_get_knowledge(me: dict = Depends(_get_me)):

@@ -670,6 +670,12 @@ class UserbotService:
             logger.info("outreach manager connect_all scheduled")
         except Exception as e:
             logger.warning("outreach connect_all start failed: %s", e)
+        # Планировщик рассылок Асика (утро/вечер в managed_chats)
+        try:
+            asyncio.create_task(self._asik_broadcast_scheduler())
+            logger.info("asik_broadcast_scheduler started")
+        except Exception as e:
+            logger.warning("asik_broadcast_scheduler start failed: %s", e)
         for label, cid in (
             ("brain_chat", storage.get_brain_chat_id()),
             ("coord_chat", storage.get_coordination_chat_id()),
@@ -906,6 +912,90 @@ class UserbotService:
                 logger.info("Userbot stopped")
         except Exception as e:
             logger.warning("userbot stop error: %s", e)
+
+    async def _asik_broadcast_scheduler(self):
+        """Раз в минуту проверяет надо ли разослать утро/вечер во все
+        managed_chats. Использует storage.asik_broadcast_morning/evening.
+        last_sent_date защищает от дублей внутри одного дня."""
+        import datetime as _dt
+        await asyncio.sleep(20)  # warm-up: ждём инициализацию storage/клиента
+        while True:
+            try:
+                now = _dt.datetime.now()
+                hhmm = now.strftime("%H:%M")
+                today = now.strftime("%Y-%m-%d")
+                for slot in ("morning", "evening"):
+                    try:
+                        cfg = storage.get_asik_broadcast(slot)
+                    except Exception:
+                        continue
+                    if not cfg.get("enabled"):
+                        continue
+                    if cfg.get("time_hhmm") != hhmm:
+                        continue
+                    if cfg.get("last_sent_date") == today:
+                        continue  # уже слали сегодня
+                    await self._asik_broadcast_send(slot, cfg)
+                    try:
+                        await storage.set_asik_broadcast(slot, last_sent_date=today)
+                    except Exception as e:
+                        logger.warning("asik broadcast mark last_sent failed: %s", e)
+            except Exception as e:
+                logger.warning("[asik_broadcast] loop tick error: %s", e)
+            # Спим ~55 сек чтобы не пропустить минуту
+            await asyncio.sleep(55)
+
+    async def _asik_broadcast_send(self, slot: str, cfg: dict):
+        """Шлёт текст рассылки во все managed_chats. Если append_pricing —
+        добавляет к тексту актуальный прайс + правила из knowledge_overrides."""
+        text = (cfg.get("text") or "").strip()
+        if cfg.get("append_pricing"):
+            try:
+                ov = storage.get_knowledge_overrides()
+                pricing = (ov.get("pricing") or "").strip()
+                rules = (ov.get("lk_rules") or "").strip()
+                addendum = []
+                if pricing:
+                    addendum.append("📋 Актуальный прайс ЛК:\n" + pricing)
+                if rules:
+                    addendum.append("📐 Правила забора ЛК:\n" + rules)
+                if addendum:
+                    text = text + "\n\n" + "\n\n".join(addendum)
+            except Exception as e:
+                logger.warning("[asik_broadcast] append_pricing failed: %s", e)
+        if not text:
+            logger.info("[asik_broadcast] slot=%s empty text, skip", slot)
+            return
+        try:
+            chats = (storage.state.get("managed_chats") or {})
+        except Exception as e:
+            logger.warning("[asik_broadcast] managed_chats read failed: %s", e)
+            chats = {}
+        if not chats:
+            logger.info("[asik_broadcast] slot=%s no managed_chats", slot)
+            return
+        sent = 0
+        failed = 0
+        for cid_raw, info in chats.items():
+            try:
+                cid = int(cid_raw)
+            except Exception:
+                continue
+            try:
+                await self.client.send_message(cid, text[:3900])
+                sent += 1
+                # Маленькая пауза против flood-wait
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                failed += 1
+                logger.warning(
+                    "[asik_broadcast] send to chat=%s failed: %s",
+                    cid, e,
+                )
+        logger.info(
+            "[asik_broadcast] slot=%s sent=%d failed=%d total_chats=%d",
+            slot, sent, failed, len(chats),
+        )
 
     async def _handle_knowledge_command(self, event) -> bool:
         """Обрабатывает команды в knowledge_admin_chat:

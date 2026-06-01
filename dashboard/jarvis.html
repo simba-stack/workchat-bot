@@ -6205,6 +6205,15 @@
       </div>
     </div>
 
+    <!-- ====== РАССЫЛКИ АСИКА ====== -->
+    <div class="settings-card" x-show="canSubview('settings', 'pricing')" @click="settingsActiveSection = 'asik_broadcasts'; loadAsikBroadcasts()" :class="settingsActiveSection === 'asik_broadcasts' ? 'active' : ''">
+      <div class="settings-card-icon">🔔</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Рассылки Асика</div>
+        <div class="settings-card-sub">Утро + вечер во все рабочие беседы</div>
+      </div>
+    </div>
+
     <!-- ====== INVITE / WELCOME ====== -->
     <div class="settings-card" x-show="canSubview('settings', 'invite')" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
       <div class="settings-card-icon">📨</div>
@@ -6696,6 +6705,67 @@
                   style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
         <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
           <button class="btn success" @click="saveKnowledgeRules()" style="padding: 8px 20px;">💾 Сохранить правила</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ASIK BROADCASTS (утро/вечер) -->
+    <div x-show="settingsActiveSection === 'asik_broadcasts'" x-init="if(settingsActiveSection==='asik_broadcasts') loadAsikBroadcasts()" class="jarvis-panel" style="padding: 20px; max-height: calc(100vh - 200px); overflow-y: auto;">
+      <h3 style="margin: 0 0 8px 0;">🔔 Рассылки Асика</h3>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5;">
+        Асик (юзербот) автоматически шлёт сообщения во <b>ВСЕ</b> рабочие беседы где он состоит — каждый день в указанное время.
+        Утром обычно подмешивается актуальный прайс/правила из вкладки выше.
+      </div>
+
+      <!-- Утренняя рассылка -->
+      <div style="margin-bottom: 24px; max-width: 900px; padding: 16px; background: rgba(255,193,7,0.05); border: 1px solid rgba(255,193,7,0.15); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <span style="font-size: 18px;">🌅</span>
+          <h4 style="margin: 0; flex: 1;">Утренняя рассылка (начало дня)</h4>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+            <input type="checkbox" x-model="asikMorning.enabled">
+            <span>Включена</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px; margin-bottom: 10px; align-items: center;">
+          <label style="font-size: 12px; color: var(--text-dim);">⏰ Время:</label>
+          <input type="time" x-model="asikMorning.time_hhmm"
+                 style="padding: 6px 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-family: monospace; font-size: 14px;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; margin-left: 16px;">
+            <input type="checkbox" x-model="asikMorning.append_pricing">
+            <span>Дополнить прайсом + правилами забора ЛК</span>
+          </label>
+        </div>
+        <textarea x-model="asikMorning.text" rows="4" placeholder="👋 Доброе утро, PRIDE проснулся..."
+                  style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button class="btn success" @click="saveAsikBroadcast('morning')" style="padding: 8px 20px;">💾 Сохранить утро</button>
+        </div>
+      </div>
+
+      <!-- Вечерняя рассылка -->
+      <div style="max-width: 900px; padding: 16px; background: rgba(168,85,247,0.05); border: 1px solid rgba(168,85,247,0.15); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <span style="font-size: 18px;">🌙</span>
+          <h4 style="margin: 0; flex: 1;">Вечерняя рассылка (окончание дня)</h4>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+            <input type="checkbox" x-model="asikEvening.enabled">
+            <span>Включена</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px; margin-bottom: 10px; align-items: center;">
+          <label style="font-size: 12px; color: var(--text-dim);">⏰ Время:</label>
+          <input type="time" x-model="asikEvening.time_hhmm"
+                 style="padding: 6px 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-family: monospace; font-size: 14px;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; margin-left: 16px;">
+            <input type="checkbox" x-model="asikEvening.append_pricing">
+            <span>Дополнить прайсом</span>
+          </label>
+        </div>
+        <textarea x-model="asikEvening.text" rows="4" placeholder="👑 Всем спасибо за работу..."
+                  style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button class="btn success" @click="saveAsikBroadcast('evening')" style="padding: 8px 20px;">💾 Сохранить вечер</button>
         </div>
       </div>
     </div>
@@ -7490,6 +7560,9 @@ function jarvis() {
     knowledgePricingUpdatedBy: '',
     knowledgeRulesUpdatedBy: '',
     knowledgeChatId: 0,
+    // === ASIK BROADCASTS (утро/вечер) ===
+    asikMorning: { enabled: true, time_hhmm: '08:00', text: '', append_pricing: true },
+    asikEvening: { enabled: true, time_hhmm: '22:00', text: '', append_pricing: false },
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -12090,6 +12163,36 @@ function jarvis() {
         });
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         alert('✅ Chat ID сохранён. Userbot теперь ловит «ОБНОВИ ПРАЙС/ПРАВИЛА» в этой беседе.');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === ASIK BROADCASTS ===
+    async loadAsikBroadcasts() {
+      try {
+        const r = await fetch('/api/settings/asik_broadcasts', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j.morning) this.asikMorning = j.morning;
+        if (j.evening) this.asikEvening = j.evening;
+      } catch (e) { console.warn('loadAsikBroadcasts failed', e); }
+    },
+    async saveAsikBroadcast(slot) {
+      const cfg = (slot === 'morning') ? this.asikMorning : this.asikEvening;
+      try {
+        const r = await fetch('/api/settings/asik_broadcasts/' + slot, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: !!cfg.enabled,
+            time_hhmm: cfg.time_hhmm || '08:00',
+            text: cfg.text || '',
+            append_pricing: !!cfg.append_pricing,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        const label = (slot === 'morning') ? '🌅 Утренняя' : '🌙 Вечерняя';
+        alert('✅ ' + label + ' рассылка сохранена');
+        await this.loadAsikBroadcasts();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
 
