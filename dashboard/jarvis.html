@@ -6196,12 +6196,12 @@
       </div>
     </div>
 
-    <!-- ====== ПРАЙС ====== -->
+    <!-- ====== ПРАЙС + ПРАВИЛА ЗАБОРА ЛК ====== -->
     <div class="settings-card" x-show="canSubview('settings', 'pricing')" @click="settingsActiveSection = 'pricing'; loadSettings()" :class="settingsActiveSection === 'pricing' ? 'active' : ''">
       <div class="settings-card-icon">💸</div>
       <div class="settings-card-body">
-        <div class="settings-card-title">Прайс ЛК</div>
-        <div class="settings-card-sub">Цены за банки, USDT/гарант, наценки</div>
+        <div class="settings-card-title">Прайс + Правила забора ЛК</div>
+        <div class="settings-card-sub">Текстовые массивы которые AI использует ПРИОРИТЕТНО</div>
       </div>
     </div>
 
@@ -6644,36 +6644,58 @@
       </div>
     </div>
 
-    <!-- PRICING -->
-    <div x-show="settingsActiveSection === 'pricing'" x-init="if(settingsActiveSection==='pricing') loadSettings()" class="jarvis-panel" style="padding: 20px;">
-      <h3 style="margin: 0 0 16px 0;">💸 Прайс ЛК (цены за банки в USDT)</h3>
-      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 14px;">
-        Эти цены используются AI при общении с клиентами и в расчёте маржи.
+    <!-- PRICING + LK RULES (knowledge overrides) -->
+    <div x-show="settingsActiveSection === 'pricing'" x-init="if(settingsActiveSection==='pricing') loadKnowledge()" class="jarvis-panel" style="padding: 20px; max-height: calc(100vh - 200px); overflow-y: auto;">
+      <h3 style="margin: 0 0 8px 0;">💸 Прайс + Правила забора ЛК</h3>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5;">
+        Эти тексты AI использует <b style="color:#f87171;">ПРИОРИТЕТНО</b> при общении с клиентами — выше всех статических знаний.
+        Можно менять прямо здесь или из TG-беседы командой <code>ОБНОВИ ПРАЙС</code> / <code>ОБНОВИ ПРАВИЛА ЗАБОРА ЛК</code>.
       </div>
-      <div style="display: grid; gap: 8px; max-width: 600px;">
-        <template x-for="bank in Object.keys(settingsData.pricing || {}).sort()" :key="bank">
-          <div style="display: flex; gap: 8px; align-items: center; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 6px;">
-            <span style="flex: 1; font-weight: 700; color: var(--hud-primary);" x-text="bank"></span>
-            <input type="number" :value="settingsData.pricing[bank]"
-                   :disabled="!canAct('settings_pricing_set')"
-                   @change="savePricing(bank, $event.target.value)"
-                   step="1" min="0"
-                   style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; text-align: right;">
-            <span style="color: var(--text-dim); font-size: 12px;">USDT</span>
-            <button x-show="canAct('settings_pricing_delete')" @click="deletePricing(bank)"
-                    style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer;">✕</button>
-          </div>
-        </template>
-        <div x-show="Object.keys(settingsData.pricing || {}).length === 0" style="text-align: center; color: var(--text-dim); padding: 20px; font-size: 13px;">
-          Цены не заданы. Добавь банк ниже.
+
+      <!-- Admin chat ID для команд -->
+      <div style="padding: 14px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 8px; margin-bottom: 18px; max-width: 700px;">
+        <label style="display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">
+          🆔 Chat ID беседы для команд (userbot ловит «ОБНОВИ ПРАЙС/ПРАВИЛА» только в ней)
+        </label>
+        <div style="display: flex; gap: 8px;">
+          <input type="number" x-model.number="knowledgeChatId" placeholder="-1001234567890"
+                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-family: monospace;">
+          <button class="btn success" @click="saveKnowledgeChatId()" style="padding: 8px 16px;">💾 Сохранить</button>
         </div>
-        <!-- Добавление нового банка -->
-        <div style="margin-top: 12px; display: flex; gap: 8px; padding: 12px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
-          <input type="text" x-model="settingsNewBank" placeholder="БАНК (например ОЗОН)"
-                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
-          <input type="number" x-model.number="settingsNewBankPrice" placeholder="USDT" step="1" min="0"
-                 style="width: 120px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
-          <button x-show="canAct('settings_pricing_set')" class="btn success" @click="addPricing()" style="padding: 8px 16px;">+ Добавить</button>
+        <div style="font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 6px;">
+          Узнать chat_id: добавь @username_to_id_bot в беседу, он напишет ID. Обычно начинается с <code>-100</code>.
+        </div>
+      </div>
+
+      <!-- Прайс -->
+      <div style="margin-bottom: 24px; max-width: 900px;">
+        <label style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--hud-primary); margin-bottom: 6px; font-weight: 700;">
+          <span>💰 АКТУАЛЬНЫЙ ПРАЙС ЛК</span>
+          <span style="font-size: 11px; color: var(--text-dim); font-weight: 400;" x-show="knowledgePricingUpdatedBy">
+            обновил: <span x-text="'@'+knowledgePricingUpdatedBy"></span>
+          </span>
+        </label>
+        <textarea x-model="knowledgePricing" rows="10"
+                  placeholder="АЛЬФА — 5000&#10;Тинькофф — 6000&#10;Озон — 4500&#10;..."
+                  style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button class="btn success" @click="saveKnowledgePricing()" style="padding: 8px 20px;">💾 Сохранить прайс</button>
+        </div>
+      </div>
+
+      <!-- Правила забора ЛК -->
+      <div style="max-width: 900px;">
+        <label style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--hud-primary); margin-bottom: 6px; font-weight: 700;">
+          <span>📋 ПРАВИЛА ЗАБОРА ЛК</span>
+          <span style="font-size: 11px; color: var(--text-dim); font-weight: 400;" x-show="knowledgeRulesUpdatedBy">
+            обновил: <span x-text="'@'+knowledgeRulesUpdatedBy"></span>
+          </span>
+        </label>
+        <textarea x-model="knowledgeRules" rows="14"
+                  placeholder="УРАЛ — только в паре с Точкой, без Точки НЕ берём&#10;Альфа — берём всегда&#10;Тинькофф + Сбер — связка, по отдельности нет&#10;..."
+                  style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button class="btn success" @click="saveKnowledgeRules()" style="padding: 8px 20px;">💾 Сохранить правила</button>
         </div>
       </div>
     </div>
@@ -7462,6 +7484,12 @@ function jarvis() {
     settingsNewBankPrice: 0,
     settingsSaving: false,
     settingsLoaded: false,
+    // === KNOWLEDGE OVERRIDES (Прайс + Правила забора ЛК) ===
+    knowledgePricing: '',
+    knowledgeRules: '',
+    knowledgePricingUpdatedBy: '',
+    knowledgeRulesUpdatedBy: '',
+    knowledgeChatId: 0,
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -12016,6 +12044,55 @@ function jarvis() {
       } catch (e) { alert('Ошибка: ' + e.message); }
       finally { this.settingsSaving = false; }
     },
+    // === KNOWLEDGE OVERRIDES (Прайс + Правила забора ЛК) ===
+    async loadKnowledge() {
+      try {
+        const r = await fetch('/api/settings/knowledge', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        this.knowledgePricing = j.pricing || '';
+        this.knowledgeRules = j.lk_rules || '';
+        this.knowledgePricingUpdatedBy = j.pricing_updated_by || '';
+        this.knowledgeRulesUpdatedBy = j.lk_rules_updated_by || '';
+        this.knowledgeChatId = j.knowledge_admin_chat_id || 0;
+      } catch (e) { console.warn('loadKnowledge failed', e); }
+    },
+    async saveKnowledgePricing() {
+      try {
+        const r = await fetch('/api/settings/knowledge/pricing', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: this.knowledgePricing || '' }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Прайс сохранён. AI теперь использует его приоритетно.');
+        await this.loadKnowledge();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async saveKnowledgeRules() {
+      try {
+        const r = await fetch('/api/settings/knowledge/lk_rules', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: this.knowledgeRules || '' }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Правила сохранены. AI теперь использует их приоритетно.');
+        await this.loadKnowledge();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async saveKnowledgeChatId() {
+      try {
+        const r = await fetch('/api/settings/knowledge/chat_id', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: this.knowledgeChatId || 0 }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Chat ID сохранён. Userbot теперь ловит «ОБНОВИ ПРАЙС/ПРАВИЛА» в этой беседе.');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
     async savePricing(bank, price) {
       try {
         const r = await fetch('/api/settings/pricing/set', {

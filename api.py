@@ -2229,6 +2229,68 @@ async def api_outkup_cancel(
     return {"ok": True, "order": o}
 
 
+# --- Knowledge overrides (Прайс + Правила забора ЛК) ---
+@app.get("/api/settings/knowledge")
+async def settings_get_knowledge(me: dict = Depends(_get_me)):
+    """Возвращает текущие raw-тексты прайса/правил + chat_id админ-беседы."""
+    ov = storage.get_knowledge_overrides()
+    return {
+        "ok": True,
+        "pricing": ov.get("pricing") or "",
+        "lk_rules": ov.get("lk_rules") or "",
+        "pricing_updated_at": ov.get("pricing_updated_at") or 0,
+        "lk_rules_updated_at": ov.get("lk_rules_updated_at") or 0,
+        "pricing_updated_by": ov.get("pricing_updated_by") or "",
+        "lk_rules_updated_by": ov.get("lk_rules_updated_by") or "",
+        "knowledge_admin_chat_id": storage.get_knowledge_admin_chat_id(),
+    }
+
+
+@app.post("/api/settings/knowledge/pricing")
+async def settings_set_knowledge_pricing(
+    request: Request, me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("settings_pricing_set")),
+):
+    """Body: {text: str}. Сохраняет raw-прайс."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    text = (body.get("text") or "").strip()
+    uname = me.get("username") or str(me.get("id") or "")
+    await storage.set_knowledge_override("pricing", text, updated_by=uname)
+    return {"ok": True, "len": len(text)}
+
+
+@app.post("/api/settings/knowledge/lk_rules")
+async def settings_set_knowledge_rules(
+    request: Request, me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("settings_pricing_set")),
+):
+    """Body: {text: str}. Сохраняет raw-правила забора ЛК."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    text = (body.get("text") or "").strip()
+    uname = me.get("username") or str(me.get("id") or "")
+    await storage.set_knowledge_override("lk_rules", text, updated_by=uname)
+    return {"ok": True, "len": len(text)}
+
+
+@app.post("/api/settings/knowledge/chat_id")
+async def settings_set_knowledge_chat_id(
+    request: Request, me: dict = Depends(_get_me),
+    _perm: bool = Depends(require_action("settings_pricing_set")),
+):
+    """Body: {chat_id: int}. Telegram chat_id беседы где userbot ловит
+    «ОБНОВИ ПРАЙС / ПРАВИЛА ЗАБОРА ЛК»."""
+    _require_owner_or_manager(me)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    try:
+        cid = int(body.get("chat_id") or 0)
+    except Exception:
+        cid = 0
+    await storage.set_knowledge_admin_chat_id(cid)
+    return {"ok": True, "chat_id": cid}
+
+
 # --- Прайс ЛК ---
 @app.post("/api/settings/pricing/set")
 async def settings_set_pricing(request: Request, me: dict = Depends(_get_me), _perm: bool = Depends(require_action("settings_pricing_set"))):

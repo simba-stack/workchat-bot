@@ -761,6 +761,17 @@ class UserbotService:
                     if _norm(event.chat_id) == _norm(ideas_chat):
                         await self._handle_ideas_message(event)
                         return
+                # Knowledge-admin чат — ловим «ОБНОВИ ПРАЙС» / «ОБНОВИ ПРАВИЛА ЗАБОРА ЛК».
+                # Эти команды обновляют тексты которые AI использует ПРИОРИТЕТНО
+                # над статическим knowledge/*.md контекстом.
+                try:
+                    kn_chat = storage.get_knowledge_admin_chat_id()
+                    if kn_chat and _norm(event.chat_id) == _norm(kn_chat):
+                        handled = await self._handle_knowledge_command(event)
+                        if handled:
+                            return
+                except Exception as _kn_err:
+                    logger.warning("knowledge handler check failed: %s", _kn_err)
                 # Welcome v2: если чат ждёт выбор направления — обрабатываем тут,
                 # AI не вызывается на это сообщение.
                 if storage.is_awaiting_track_choice(event.chat_id):
@@ -895,6 +906,87 @@ class UserbotService:
                 logger.info("Userbot stopped")
         except Exception as e:
             logger.warning("userbot stop error: %s", e)
+
+    async def _handle_knowledge_command(self, event) -> bool:
+        """Обрабатывает команды в knowledge_admin_chat:
+          • «ОБНОВИ ПРАЙС» + многострочный текст → сохраняет в pricing override
+          • «ОБНОВИ ПРАВИЛА ЗАБОРА ЛК» + многострочный текст → lk_rules override
+        Триггер регистронезависимый. Сохранённые тексты подмешиваются в
+        system prompt AI с пометкой ПРИОРИТЕТНЫЕ — AI обязан им следовать.
+        Возвращает True если сообщение обработано (дальше не передаём)."""
+        try:
+            text = (event.message.text or event.message.message or "").strip()
+            if not text:
+                return False
+            text_lc = text.lower()
+            # Идентификация автора
+            sender_uname = ""
+            try:
+                sender = await event.get_sender()
+                sender_uname = getattr(sender, "username", "") or ""
+            except Exception:
+                pass
+
+            # Триггер «ОБНОВИ ПРАВИЛА ЗАБОРА ЛК» (проверяем первым — длиннее)
+            for trig in ("обнови правила забора лк", "обнови правила забора", "обнови правила"):
+                if text_lc.startswith(trig):
+                    payload = text[len(trig):].strip().lstrip(":").strip()
+                    if not payload:
+                        await event.reply(
+                            "⚠️ Пришли команду И текст правил одним сообщением.\n\n"
+                            "Пример:\n<code>ОБНОВИ ПРАВИЛА ЗАБОРА ЛК\n"
+                            "УРАЛ — только в паре с Точкой\n"
+                            "Альфа — берём всегда\n"
+                            "...</code>",
+                            parse_mode="html",
+                        )
+                        return True
+                    await storage.set_knowledge_override(
+                        "lk_rules", payload, updated_by=sender_uname,
+                    )
+                    await event.reply(
+                        f"✅ <b>Правила забора ЛК обновлены</b> ({len(payload)} симв.)\n"
+                        f"AI теперь использует их ПРИОРИТЕТНО при ответах клиентам.",
+                        parse_mode="html",
+                    )
+                    logger.info(
+                        "[knowledge] lk_rules updated by @%s (%d chars)",
+                        sender_uname or "?", len(payload),
+                    )
+                    return True
+
+            # Триггер «ОБНОВИ ПРАЙС»
+            for trig in ("обнови прайс лк", "обнови прайс"):
+                if text_lc.startswith(trig):
+                    payload = text[len(trig):].strip().lstrip(":").strip()
+                    if not payload:
+                        await event.reply(
+                            "⚠️ Пришли команду И прайс одним сообщением.\n\n"
+                            "Пример:\n<code>ОБНОВИ ПРАЙС\n"
+                            "АЛЬФА — 5000\n"
+                            "Тинькофф — 6000\n"
+                            "...</code>",
+                            parse_mode="html",
+                        )
+                        return True
+                    await storage.set_knowledge_override(
+                        "pricing", payload, updated_by=sender_uname,
+                    )
+                    await event.reply(
+                        f"✅ <b>Прайс обновлён</b> ({len(payload)} симв.)\n"
+                        f"AI теперь использует этот прайс ПРИОРИТЕТНО.",
+                        parse_mode="html",
+                    )
+                    logger.info(
+                        "[knowledge] pricing updated by @%s (%d chars)",
+                        sender_uname or "?", len(payload),
+                    )
+                    return True
+
+            return False
+        except Exception as e:
+            logger.exception("knowledge_command handler error: %s", e)
+            return False
 
     async def _handle_ideas_message(self, event):
         """Сохраняет сообщения из ideas-чата в storage.ideas_inbox.

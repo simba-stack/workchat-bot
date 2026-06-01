@@ -2951,7 +2951,7 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
             f"{price_line}\n"
             f"💳 Метод оплаты: {pay_line}\n\n"
             f"<i>Карточки уже в Группе 1 ЛК. Если клиент хочет USDT — "
-            f"AI уточнит адрес. Если деньги вперёд — переключим на Тимона.</i>"
+            f"AI уточнит адрес.</i>"
         )
         try:
             await _notify_work_chat(bot, owner, handoff_text)
@@ -3634,18 +3634,14 @@ async def cb_takesmscodedrop(call: CallbackQuery):
 
 
 def _client_lk_anketa(drop: dict, lk: dict) -> str:
-    """Анкета ЛК для клиента (банк, ФИО, новый логин/пароль/кодовое — то что
-    клиенту нужно знать для входа). Дед-данные НЕ показываем."""
+    """Анкета ЛК для клиента — БЕЗ конфиденциальных данных.
+    SIMBA: даже если в CRM Пароли уже заполнены new_login/new_password/
+    code_word/new_mail/new_number — клиенту в work-чат ИХ НЕ ПОКАЗЫВАТЬ.
+    Это пост-перевязочные данные сус-стороны, клиент про них знать не должен.
+    Клиенту показываем только идентификацию ЛК: ФИО + Банк."""
     bank = lk.get("bank") or "—"
     fio = drop.get("fio") if drop else "—"
-    lines = [f"ФИО: <b>{fio}</b>", f"Банк: <b>{bank}</b>"]
-    if lk.get("new_login"):
-        lines.append(f"Логин: <code>{lk.get('new_login')}</code>")
-    if lk.get("new_password"):
-        lines.append(f"Пароль: <code>{lk.get('new_password')}</code>")
-    if lk.get("code_word"):
-        lines.append(f"Кодовое слово: <code>{lk.get('code_word')}</code>")
-    return "\n".join(lines)
+    return f"ФИО: <b>{fio}</b>\nБанк: <b>{bank}</b>"
 
 
 def _resolve_work_chat(drop: dict = None, lk: dict = None, owner: dict = None) -> int:

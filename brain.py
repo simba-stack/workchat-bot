@@ -373,6 +373,31 @@ def _build_system_prompt(brain_notes: str = "", client_context: Optional[dict] =
         "менеджер ответит сам. Объяснять что ты молчишь — ЗАПРЕЩЕНО."
     )
     parts = [intro]
+    # === KNOWLEDGE OVERRIDES (SIMBA: ОБНОВИ ПРАЙС / ПРАВИЛА ЗАБОРА ЛК) ===
+    # Эти тексты задаёт работник вручную через специальную беседу. Они
+    # ОБЯЗАТЕЛЬНЫ к исполнению — приоритетнее статической базы знаний.
+    try:
+        from storage import storage as _stg
+        ov = _stg.get_knowledge_overrides()
+        pricing_ov = (ov.get("pricing") or "").strip()
+        rules_ov = (ov.get("lk_rules") or "").strip()
+        if pricing_ov or rules_ov:
+            ov_block = [
+                "# === 🔴 ПРИОРИТЕТНЫЕ ДАННЫЕ (АКТУАЛЬНЫЙ ПРАЙС И ПРАВИЛА) ===\n"
+                "Эти данные заданы вручную руководством PRIDE. Они ОБЯЗАТЕЛЬНЫ к "
+                "исполнению и ПЕРЕОПРЕДЕЛЯЮТ статическую базу знаний ниже. "
+                "Когда клиент спрашивает про цену или возможность взять банк — "
+                "отвечай СТРОГО по этим текстам. Не предлагай альтернатив кроме "
+                "указанных. Если правила запрещают банк без пары — так и говори "
+                "клиенту (например «Урал берём ТОЛЬКО в паре с Точкой»)."
+            ]
+            if pricing_ov:
+                ov_block.append("\n## АКТУАЛЬНЫЙ ПРАЙС ЛК:\n" + pricing_ov)
+            if rules_ov:
+                ov_block.append("\n## ПРАВИЛА ЗАБОРА ЛК:\n" + rules_ov)
+            parts.append("\n".join(ov_block))
+    except Exception as _ov_err:
+        pass  # не валим prompt если storage недоступен
     if knowledge:
         parts.append("# === БАЗА ЗНАНИЙ ===\n" + knowledge)
     if brain_notes.strip():

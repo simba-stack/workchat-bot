@@ -357,6 +357,21 @@ def _default_state() -> dict:
         "credit_drop_lks_seq": 0,
         # FSM для CRM-бота в credit-чатах (зеркало crm_fsm).
         "credit_fsm": {},
+        # === Knowledge overrides (SIMBA: ОБНОВИ ПРАЙС / ПРАВИЛА ЗАБОРА ЛК) ===
+        # Текстовые массивы которые работник присылает в knowledge_admin_chat.
+        # AI ОБЯЗАН использовать их при общении с клиентом — они приоритетнее
+        # statических knowledge/*.md файлов.
+        "knowledge_overrides": {
+            "pricing": "",          # прайс банков — raw text
+            "lk_rules": "",         # правила забора ЛК — raw text
+            "pricing_updated_at": 0,
+            "lk_rules_updated_at": 0,
+            "pricing_updated_by": "",
+            "lk_rules_updated_by": "",
+        },
+        # chat_id беседы где работники сбрасывают «ОБНОВИ ПРАЙС/ПРАВИЛА».
+        # 0 = не настроено. Настраивается через JARVIS Settings.
+        "knowledge_admin_chat_id": 0,
     }
 
 
@@ -3056,6 +3071,52 @@ class Storage:
                 pass
             await self._save_unlocked()
             return cid
+
+    # ============== KNOWLEDGE OVERRIDES ==============
+    # Текстовые массивы прайса/правил, заданные SIMBA вручную. Имеют
+    # приоритет над статическим knowledge/*.md контекстом.
+
+    def get_knowledge_overrides(self) -> dict:
+        """Возвращает {pricing, lk_rules, *_updated_at, *_updated_by}."""
+        out = self.state.get("knowledge_overrides") or {}
+        # Гарантируем все ключи
+        return {
+            "pricing": (out.get("pricing") or "").strip(),
+            "lk_rules": (out.get("lk_rules") or "").strip(),
+            "pricing_updated_at": out.get("pricing_updated_at") or 0,
+            "lk_rules_updated_at": out.get("lk_rules_updated_at") or 0,
+            "pricing_updated_by": out.get("pricing_updated_by") or "",
+            "lk_rules_updated_by": out.get("lk_rules_updated_by") or "",
+        }
+
+    async def set_knowledge_override(
+        self, kind: str, text: str, updated_by: str = "",
+    ) -> bool:
+        """kind = 'pricing' | 'lk_rules'. Сохраняет текст + ts + автор."""
+        if kind not in ("pricing", "lk_rules"):
+            return False
+        async with _lock:
+            ov = self.state.setdefault("knowledge_overrides", {})
+            ov[kind] = (text or "").strip()
+            ov[f"{kind}_updated_at"] = time.time()
+            ov[f"{kind}_updated_by"] = (updated_by or "").lstrip("@").strip()
+            await self._save_unlocked()
+            return True
+
+    def get_knowledge_admin_chat_id(self) -> int:
+        try:
+            return int(self.state.get("knowledge_admin_chat_id") or 0)
+        except Exception:
+            return 0
+
+    async def set_knowledge_admin_chat_id(self, chat_id: int) -> bool:
+        async with _lock:
+            try:
+                self.state["knowledge_admin_chat_id"] = int(chat_id or 0)
+            except Exception:
+                self.state["knowledge_admin_chat_id"] = 0
+            await self._save_unlocked()
+            return True
 
     async def save_client_preferences(
         self, username: str, payment_method: str = "",
