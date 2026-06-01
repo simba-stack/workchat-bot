@@ -2383,6 +2383,38 @@ async def balance_set_address(user_key: str, request: Request, me: dict = Depend
     return {"ok": True, "balance": storage.get_balance(user_key)}
 
 
+# --- Hot wallet status (для индикатора в JARVIS) ---
+@app.get("/api/tron/balance")
+async def api_tron_balance(me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    try:
+        from tron_payouts import is_configured, get_hot_wallet_address, get_hot_wallet_balance
+    except Exception as e:
+        return {"error": f"tron_payouts import failed: {e}"}
+    if not is_configured():
+        return {
+            "error": "not configured (TRON_PRIVATE_KEY/TRON_MNEMONIC + TRON_HOT_WALLET_ADDRESS missing)",
+            "configured": False,
+        }
+    try:
+        bal = await get_hot_wallet_balance()
+        bal["address"] = get_hot_wallet_address()
+        bal["configured"] = True
+        return bal
+    except Exception as e:
+        return {"error": str(e), "configured": False}
+
+
+# --- 2FA: список pending запросов (для JARVIS owner view) ---
+@app.get("/api/2fa/pending")
+async def api_2fa_pending(me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    storage.reload_sync()
+    return {"requests": storage.list_2fa_requests(status="pending")}
+
+
 # --- Cleanup данных (Owner only): фикс багa где CRM-бот стал supplier'ом ---
 @app.post("/api/admin/cleanup_lk_suppliers")
 async def admin_cleanup_lk_suppliers(request: Request, me: dict = Depends(_get_me)):

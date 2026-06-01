@@ -1,8 +1,19 @@
 """USDT TRC20 авто-выплаты через Tron (mainnet).
 
-Архитектура:
-  • TRON_PRIVATE_KEY (env) — приватник hot-wallet'а из которого платим
+Архитектура (поддерживает 2 способа авторизации):
+
+  ВАРИАНТ A — Прямой приватный ключ:
+  • TRON_PRIVATE_KEY (env, 64 hex) — приватник hot-wallet'а
   • TRON_HOT_WALLET_ADDRESS (env) — публичный адрес этого кошелька
+
+  ВАРИАНТ B — BIP39 мнемоника (SafePal-style):
+  • TRON_MNEMONIC (env) — 12 или 24 слова через пробел
+  • TRON_DERIVATION_PATH (env, опц.) — default "m/44'/195'/0'/0/0" (стандарт TRX)
+  • TRON_HOT_WALLET_ADDRESS (env, опц.) — для cross-check;
+        если не задан — derive из мнемоники
+
+  Если заданы ОБА — приоритет у TRON_PRIVATE_KEY.
+
   • TRON_OWNER_TG_ID (env) — кому шлём уведомления о каждой выплате
   • TRONGRID_API_KEY (env, опционально) — для повышенного rate-limit
 
@@ -10,6 +21,7 @@
   • Hot wallet НЕ держит большие суммы — только operational balance
   • При каждой выплате — TG уведомление owner-у с tx_hash
   • Логирование ВСЕХ исходящих в state.tron_outbound_log
+  • Выплаты ≥ tfa_threshold_usdt требуют 2FA-код от @PrideGuard_bot
 
 Использование:
     from tron_payouts import send_usdt_to
@@ -18,8 +30,6 @@
         amount_usdt=100.5,
         reason="salary @vasya",
     )
-    # result: {"ok": True, "tx_hash": "abc...", "confirmed": True}
-    #     OR  {"ok": False, "error": "insufficient balance", ...}
 """
 from __future__ import annotations
 
@@ -43,13 +53,96 @@ def _get_env_int(name: str, default: int = 0) -> int:
         return default
 
 
-def get_hot_wallet_address() -> str:
-    return (os.environ.get("TRON_HOT_WALLET_ADDRESS") or "").strip()
+def _derive_from_mnemonic(mnemonic: str, path: str = "") -> tuple:
+    """BIP39 → seed → BIP32 (SLIP-44 TRX coin) → (privkey_hex, tron_address).
+
+    Default path: m/44'/195'/0'/0/0 (стандарт для TRX).
+    SafePal использует именно его.
+
+    Возвращает (priv_hex, address) или ("", "") если что-то пошло не так.
+    Зависимости: mnemonic, bip_utils.
+    """
+    mnemonic = (mnemonic or "").strip()
+    if not mnemonic:
+        return "", ""
+    try:
+        from mnemonic import Mnemonic
+        from bip_utils import (
+            Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes,
+        )
+    except ImportError as e:
+        logger.error(
+            "BIP39 libraries не установлены: %s. Добавь "
+            "'mnemonic>=0.20' и 'bip_utils>=2.7' в requirements.txt", e,
+        )
+        return "", ""
+    try:
+        # 1) Валидация мнемоники
+        mnemo = Mnemonic("english")
+        if not mnemo.check(mnemonic):
+            logger.error("[tron] mnemonic check failed (invalid checksum or wordlist)")
+            return "", ""
+        # 2) Mnemonic → seed
+        seed = Bip39SeedGenerator(mnemonic).Generate()
+        # 3) BIP44 derivation для TRX
+        bip44_mst = Bip44.FromSeed(seed, Bip44Coins.TRON)
+        # Стандартный путь m/44'/195'/0'/0/0
+        derived = (
+            bip44_mst
+            .Purpose()
+            .Coin()
+            .Account(0)
+            .Change(Bip44Changes.CHAIN_EXT)
+            .AddressIndex(0)
+        )
+        priv_hex = derived.PrivateKey().Raw().ToHex()
+        # tron-адрес из публичного ключа
+        address = derived.PublicKey().ToAddress()
+        return priv_hex, address
+    except Exception as e:
+        logger.exception("[tron] derive from mnemonic failed: %s", e)
+        return "", ""
+
+
+# Кэш — derive один раз при первом запросе чтобы не считать каждый раз.
+_DERIVED_CACHE = {"priv": "", "address": "", "ts": 0.0}
+
+
+def _ensure_derived():
+    """Если задан TRON_MNEMONIC — derive один раз и закэшируй."""
+    global _DERIVED_CACHE
+    if _DERIVED_CACHE["priv"]:
+        return
+    mn = (os.environ.get("TRON_MNEMONIC") or "").strip()
+    if not mn:
+        return
+    path = (os.environ.get("TRON_DERIVATION_PATH") or "").strip()
+    priv, addr = _derive_from_mnemonic(mn, path)
+    if priv:
+        _DERIVED_CACHE["priv"] = priv
+        _DERIVED_CACHE["address"] = addr
+        _DERIVED_CACHE["ts"] = time.time()
+        logger.info("[tron] hot wallet derived from mnemonic, address=%s", addr)
 
 
 def get_private_key() -> str:
-    """Возвращает приватный ключ (64-hex). НИКОГДА не логируем!"""
-    return (os.environ.get("TRON_PRIVATE_KEY") or "").strip()
+    """Возвращает приватный ключ (64-hex). НИКОГДА не логируем!
+
+    Приоритет: TRON_PRIVATE_KEY (если задан) → TRON_MNEMONIC (derive)."""
+    direct = (os.environ.get("TRON_PRIVATE_KEY") or "").strip()
+    if direct:
+        return direct
+    _ensure_derived()
+    return _DERIVED_CACHE.get("priv") or ""
+
+
+def get_hot_wallet_address() -> str:
+    """Приоритет: TRON_HOT_WALLET_ADDRESS env → derive из мнемоники."""
+    direct = (os.environ.get("TRON_HOT_WALLET_ADDRESS") or "").strip()
+    if direct:
+        return direct
+    _ensure_derived()
+    return _DERIVED_CACHE.get("address") or ""
 
 
 def get_trongrid_key() -> str:
@@ -61,7 +154,7 @@ def get_owner_tg_id() -> int:
 
 
 def is_configured() -> bool:
-    """True если все необходимые env vars установлены."""
+    """True если все необходимые env vars установлены (любым способом)."""
     return bool(get_private_key() and get_hot_wallet_address())
 
 

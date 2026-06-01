@@ -672,6 +672,22 @@ async def main():
     except Exception as e:
         logger.warning("Tron monitor load failed: %s", e)
 
+    # === Guard bot (@PrideGuard_bot — 2FA подтверждение крупных выплат) ===
+    guard_bot_task = None
+    try:
+        from guard_bot import run_guard_bot
+
+        async def _safe_guard_bot_task():
+            try:
+                await run_guard_bot()
+            except Exception as e:
+                logger.exception("guard_bot task crashed: %s", e)
+
+        guard_bot_task = asyncio.create_task(_safe_guard_bot_task())
+        logger.info("Guard bot task created")
+    except Exception as e:
+        logger.warning("Guard bot module load failed: %s", e)
+
     # === HEALTHCHECK на старте ===
     # Прогоняем все системы и шлём отчёт в HEALTH_CHAT_ID (если задан).
     # Делается в фоне чтобы не блокировать запуск polling.

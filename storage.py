@@ -436,7 +436,19 @@ def _default_state() -> dict:
             "auto_threshold_usdt": 200.0,  # ≤ этой суммы → авто-вывод
             "manual_above": True,           # > порога → обязательный апрув owner'а
             "min_payout_usdt": 10.0,        # минимальная сумма для запроса
+            "tfa_enabled": True,            # включена ли 2FA для крупных выплат
+            "tfa_threshold_usdt": 1000.0,   # выплаты ≥ этой суммы требуют 2FA-код
+            "tfa_code_ttl_sec": 300,        # 5 минут на ввод кода
+            "tfa_max_attempts": 3,
         },
+
+        # === 2FA pending-подтверждения (для @PrideGuard_bot) ===
+        # {request_id: {req_id (withdraw req_id), code (6-digit),
+        #               amount_usdt, address, user_key,
+        #               created_at, expires_at, attempts,
+        #               status: pending|verified|expired|locked}}
+        "pending_2fa_requests": {},
+        "pending_2fa_seq": 0,
     }
 
 
@@ -3449,8 +3461,106 @@ class Storage:
                     s["min_payout_usdt"] = float(fields["min_payout_usdt"])
                 except Exception:
                     pass
+            if "tfa_enabled" in fields:
+                s["tfa_enabled"] = bool(fields["tfa_enabled"])
+            if "tfa_threshold_usdt" in fields:
+                try:
+                    s["tfa_threshold_usdt"] = float(fields["tfa_threshold_usdt"])
+                except Exception:
+                    pass
+            if "tfa_code_ttl_sec" in fields:
+                try:
+                    s["tfa_code_ttl_sec"] = int(fields["tfa_code_ttl_sec"])
+                except Exception:
+                    pass
             await self._save_unlocked()
             return True
+
+    # ============== 2FA Pending-подтверждения ==============
+
+    async def create_2fa_request(
+        self, withdraw_req_id: str, amount_usdt: float,
+        address: str, user_key: str, ttl_sec: int = 300,
+    ) -> tuple:
+        """Создаёт 2FA-request с 6-значным кодом. Возвращает (request_id, code)."""
+        import random
+        code = f"{random.randint(0, 999999):06d}"
+        async with _lock:
+            seq = int(self.state.get("pending_2fa_seq", 0)) + 1
+            self.state["pending_2fa_seq"] = seq
+            req_id = f"2fa{seq:05d}"
+            reqs = self.state.setdefault("pending_2fa_requests", {})
+            now = time.time()
+            reqs[req_id] = {
+                "request_id": req_id,
+                "withdraw_req_id": withdraw_req_id,
+                "code": code,
+                "amount_usdt": float(amount_usdt),
+                "address": address or "",
+                "user_key": user_key or "",
+                "created_at": now,
+                "expires_at": now + int(ttl_sec),
+                "attempts": 0,
+                "status": "pending",
+            }
+            await self._save_unlocked()
+            return req_id, code
+
+    def get_2fa_request(self, request_id: str) -> dict:
+        return (self.state.get("pending_2fa_requests") or {}).get(request_id) or {}
+
+    def find_2fa_for_withdraw(self, withdraw_req_id: str) -> dict:
+        """Найти активный (pending) 2FA-request для конкретной заявки на вывод."""
+        for rid, r in (self.state.get("pending_2fa_requests") or {}).items():
+            if r.get("withdraw_req_id") == withdraw_req_id and r.get("status") == "pending":
+                return r
+        return {}
+
+    async def verify_2fa_code(self, request_id: str, code: str) -> str:
+        """Возвращает статус после попытки: 'ok' | 'wrong' | 'expired' | 'locked' | 'notfound'."""
+        async with _lock:
+            reqs = self.state.setdefault("pending_2fa_requests", {})
+            r = reqs.get(request_id)
+            if not r:
+                return "notfound"
+            if r.get("status") != "pending":
+                return r.get("status") or "notfound"
+            now = time.time()
+            if now > float(r.get("expires_at") or 0):
+                r["status"] = "expired"
+                await self._save_unlocked()
+                return "expired"
+            settings = self.state.get("balance_settings") or {}
+            max_att = int(settings.get("tfa_max_attempts") or 3)
+            attempts = int(r.get("attempts") or 0) + 1
+            r["attempts"] = attempts
+            if (code or "").strip() == r.get("code"):
+                r["status"] = "verified"
+                await self._save_unlocked()
+                return "ok"
+            if attempts >= max_att:
+                r["status"] = "locked"
+                await self._save_unlocked()
+                return "locked"
+            await self._save_unlocked()
+            return "wrong"
+
+    async def expire_2fa_request(self, request_id: str) -> bool:
+        async with _lock:
+            reqs = self.state.setdefault("pending_2fa_requests", {})
+            r = reqs.get(request_id)
+            if not r:
+                return False
+            r["status"] = "expired"
+            await self._save_unlocked()
+            return True
+
+    def list_2fa_requests(self, status: str = "") -> list:
+        out = list((self.state.get("pending_2fa_requests") or {}).values())
+        if status:
+            out = [r for r in out if (r.get("status") or "") == status]
+        out.sort(key=lambda r: r.get("created_at") or 0, reverse=True)
+        return out
 
     # ============== ASIK BROADCASTS (утро/вечер) ==============
 

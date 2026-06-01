@@ -261,6 +261,55 @@ async def process_withdrawal(req_id: str, approved_by: str = "") -> tuple:
     if not safety.get("auto_pay_enabled_global", True):
         logger.warning("[withdraw] kill-switch on — skipping req=%s", req_id)
         return False, ""
+
+    # === 2FA gate (для крупных выплат) ===
+    bal_settings = storage.get_balance_settings()
+    tfa_enabled = bool(bal_settings.get("tfa_enabled", True))
+    tfa_threshold = float(bal_settings.get("tfa_threshold_usdt") or 1000)
+    if tfa_enabled and amount >= tfa_threshold:
+        # Проверяем — есть ли verified 2FA-запрос для этой withdraw?
+        existing = storage.find_2fa_for_withdraw(req_id)
+        # Если только что approved через guard_bot — статус 'verified'
+        all_for_wd = [
+            r for r in (storage.state.get("pending_2fa_requests") or {}).values()
+            if r.get("withdraw_req_id") == req_id
+        ]
+        verified = [r for r in all_for_wd if r.get("status") == "verified"]
+        if not verified:
+            # 2FA нужна, но ещё не пройдена
+            if not existing:
+                # Создаём новый 2FA-запрос и шлём код в guard_bot
+                ttl = int(bal_settings.get("tfa_code_ttl_sec") or 300)
+                fa_id, code = await storage.create_2fa_request(
+                    withdraw_req_id=req_id,
+                    amount_usdt=amount,
+                    address=address,
+                    user_key=user_key,
+                    ttl_sec=ttl,
+                )
+                try:
+                    from guard_bot import send_2fa_code
+                    sent = await send_2fa_code(fa_id, code, amount, address)
+                    if not sent:
+                        logger.warning(
+                            "[withdraw] 2FA код не отправлен — guard_bot offline? "
+                            "Заявка %s осталась pending до апрува из JARVIS.", req_id,
+                        )
+                except Exception as e:
+                    logger.exception("[withdraw] guard_bot send failed: %s", e)
+                # Помечаем withdraw как awaiting_2fa
+                await storage.update_withdrawal(req_id, status="awaiting_2fa")
+                try:
+                    await storage.add_notification(
+                        type="warning",
+                        text=f"🔐 Выплата #{req_id} ({amount:.2f}$) требует 2FA — "
+                             f"проверь @PrideGuard_bot",
+                        dedup_key=f"2fa:{req_id}",
+                    )
+                except Exception:
+                    pass
+            logger.info("[withdraw] req=%s ждёт 2FA-кода", req_id)
+            return False, ""
     max_per_tx = float(safety.get("max_per_tx_usdt") or 500)
     if amount > max_per_tx:
         logger.warning("[withdraw] req=%s amount %.2f > max_per_tx %.2f", req_id, amount, max_per_tx)

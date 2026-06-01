@@ -6747,6 +6747,26 @@
         </div>
       </div>
 
+      <!-- Hot Wallet статус -->
+      <div style="max-width: 700px; padding: 14px; background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15); border-radius: 8px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <h4 style="margin: 0;">🔐 Hot Wallet (TRC20)</h4>
+          <button @click="refreshHotWallet()" style="background: rgba(106,216,255,0.15); color: var(--hud-primary); border: 1px solid rgba(106,216,255,0.3); border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer;">🔄 Обновить</button>
+        </div>
+        <div style="font-size: 12px; line-height: 1.7;">
+          <div>Статус: <b x-text="hotWallet.configured ? '✅ Подключён' : '❌ Не подключён'" :style="hotWallet.configured ? 'color:#4ade80' : 'color:#f87171'"></b></div>
+          <div>Адрес: <code x-text="hotWallet.address || '—'"></code></div>
+          <div>Баланс USDT: <b x-text="(hotWallet.usdt || 0).toFixed(2) + ' USDT'"></b></div>
+          <div>Баланс TRX (для fee): <b x-text="(hotWallet.trx || 0).toFixed(2) + ' TRX'"></b></div>
+        </div>
+        <div style="margin-top: 10px; font-size: 11px; color: var(--text-dim); line-height: 1.5;">
+          Env vars в Railway:
+          <code>TRON_MNEMONIC</code> + <code>TRON_DERIVATION_PATH</code> (default m/44'/195'/0'/0/0)
+          ИЛИ <code>TRON_PRIVATE_KEY</code> + <code>TRON_HOT_WALLET_ADDRESS</code>.
+          Также <code>TRON_OWNER_TG_ID</code> для уведомлений.
+        </div>
+      </div>
+
       <!-- Настройки CRM-баланса -->
       <div style="max-width: 700px; padding: 14px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 8px;">
         <h4 style="margin: 0 0 12px 0;">🏦 Лимиты вывода с CRM-баланса</h4>
@@ -6764,6 +6784,25 @@
           <label style="font-size: 12px;">Крупные → ручной апрув</label>
           <div></div>
           <input type="checkbox" x-model="balanceSettings.manual_above" style="justify-self: center;">
+
+          <label style="font-size: 12px;">🔐 2FA-подтверждение включено</label>
+          <div></div>
+          <input type="checkbox" x-model="balanceSettings.tfa_enabled" style="justify-self: center;">
+
+          <label style="font-size: 12px;">2FA порог (USDT)</label>
+          <input type="number" x-model.number="balanceSettings.tfa_threshold_usdt" step="100" min="0"
+                 style="padding: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <span style="font-size: 11px; color: var(--text-dim);">≥ нужен код</span>
+
+          <label style="font-size: 12px;">TTL кода (сек)</label>
+          <input type="number" x-model.number="balanceSettings.tfa_code_ttl_sec" step="60" min="60"
+                 style="padding: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <span style="font-size: 11px; color: var(--text-dim);">сек</span>
+        </div>
+        <div style="font-size: 10px; color: var(--text-dim); margin-top: 8px;">
+          Выплаты ≥ <b x-text="balanceSettings.tfa_threshold_usdt || 1000"></b> USDT
+          требуют 6-значный код от <b>@PrideGuard_bot</b>.
+          Не забудь добавить <code>GUARD_BOT_TOKEN</code> в Railway env.
         </div>
         <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
           <button class="btn success" @click="saveBalanceSettings()" style="padding: 8px 20px;">💾 Сохранить</button>
@@ -7628,7 +7667,11 @@ function jarvis() {
     // === OPERATIONAL settings ===
     opReportTypes: [],
     opNewReportType: '',
-    balanceSettings: { auto_threshold_usdt: 200, min_payout_usdt: 10, manual_above: true },
+    balanceSettings: {
+      auto_threshold_usdt: 200, min_payout_usdt: 10, manual_above: true,
+      tfa_enabled: true, tfa_threshold_usdt: 1000, tfa_code_ttl_sec: 300,
+    },
+    hotWallet: { configured: false, address: '', usdt: 0, trx: 0 },
     // === CRM Balances (для Бухгалтерии) ===
     crmBalances: [],
     crmWithdrawals: [],
@@ -12305,9 +12348,28 @@ function jarvis() {
             auto_threshold_usdt: j.auto_threshold_usdt || 200,
             min_payout_usdt: j.min_payout_usdt || 10,
             manual_above: !!j.manual_above,
+            tfa_enabled: j.tfa_enabled !== false,
+            tfa_threshold_usdt: j.tfa_threshold_usdt || 1000,
+            tfa_code_ttl_sec: j.tfa_code_ttl_sec || 300,
           };
         }
       } catch (e) { console.warn('loadBalanceSettings failed', e); }
+      // Параллельно подтягиваем hot wallet статус
+      try { await this.refreshHotWallet(); } catch (_e) {}
+    },
+    async refreshHotWallet() {
+      try {
+        const r = await fetch('/api/tron/balance', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          this.hotWallet = {
+            configured: !j.error,
+            address: j.address || '',
+            usdt: j.usdt || 0,
+            trx: j.trx || 0,
+          };
+        }
+      } catch (e) { console.warn('refreshHotWallet failed', e); }
     },
     async saveBalanceSettings() {
       try {
