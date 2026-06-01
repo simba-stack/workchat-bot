@@ -397,6 +397,46 @@ def _default_state() -> dict:
             "append_pricing": False,
             "last_sent_date": "",
         },
+
+        # === Operational: настраиваемые типы отчётности ===
+        # SIMBA сам наполняет (Owner-only через JARVIS Settings)
+        "operational_report_types": [],
+
+        # === CRM Balance — баланс поставщиков и работников ===
+        # user_key:
+        #   "owner:{owner_id}"     для поставщика (клиента CRM)
+        #   "worker:{username}"    для работника PRIDE
+        # {user_key: {
+        #     pending_usdt:    X.XX,   # начислено но не доступно к выводу (ЛК в работе)
+        #     available_usdt:  Y.YY,   # доступно прямо сейчас
+        #     total_earned:    Z.ZZ,   # за всё время начислено
+        #     total_withdrawn: W.WW,   # за всё время выплачено
+        #     usdt_address:    "TR7N…",
+        #     payout_method:   "USDT_TRC20" | "GUARANTOR_AFTER_WORK",
+        #     last_payout_ts:  0,
+        # }}
+        "crm_balance": {},
+
+        # Журнал транзакций баланса (audit trail)
+        # [{tx_id, user_key, type, amount_usdt, ref, ts, note, status}]
+        # type: lk_payout | salary | outkup | ad_payout | manual_adjust | withdraw | refund
+        # status: pending | available | withdrawn | cancelled
+        "crm_balance_tx": [],
+        "crm_balance_tx_seq": 0,
+
+        # Заявки на вывод с баланса
+        # {req_id: {user_key, amount_usdt, address, method, status, requested_at,
+        #           approved_at, approved_by, tx_hash, note}}
+        # status: pending | approved | paid | rejected | failed
+        "balance_withdrawal_requests": {},
+        "balance_withdrawal_seq": 0,
+
+        # Настройки вывода с баланса
+        "balance_settings": {
+            "auto_threshold_usdt": 200.0,  # ≤ этой суммы → авто-вывод
+            "manual_above": True,           # > порога → обязательный апрув owner'а
+            "min_payout_usdt": 10.0,        # минимальная сумма для запроса
+        },
     }
 
 
@@ -3140,6 +3180,275 @@ class Storage:
                 self.state["knowledge_admin_chat_id"] = int(chat_id or 0)
             except Exception:
                 self.state["knowledge_admin_chat_id"] = 0
+            await self._save_unlocked()
+            return True
+
+    # ============== OPERATIONAL REPORT TYPES ==============
+
+    def list_operational_report_types(self) -> list:
+        return list(self.state.get("operational_report_types") or [])
+
+    async def add_operational_report_type(self, name: str) -> bool:
+        name = (name or "").strip()
+        if not name:
+            return False
+        async with _lock:
+            types = self.state.setdefault("operational_report_types", [])
+            if name not in types:
+                types.append(name)
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def remove_operational_report_type(self, name: str) -> bool:
+        async with _lock:
+            types = self.state.setdefault("operational_report_types", [])
+            if name in types:
+                types.remove(name)
+                await self._save_unlocked()
+                return True
+            return False
+
+    # ============== CRM BALANCE ==============
+
+    @staticmethod
+    def _balance_key_owner(owner_id: str) -> str:
+        return f"owner:{(owner_id or '').strip()}"
+
+    @staticmethod
+    def _balance_key_worker(username: str) -> str:
+        return f"worker:{(username or '').lstrip('@').lower().strip()}"
+
+    def get_balance(self, user_key: str) -> dict:
+        """Возвращает баланс с дефолтами (для отображения)."""
+        b = (self.state.get("crm_balance") or {}).get(user_key) or {}
+        return {
+            "user_key": user_key,
+            "pending_usdt": float(b.get("pending_usdt") or 0),
+            "available_usdt": float(b.get("available_usdt") or 0),
+            "total_earned": float(b.get("total_earned") or 0),
+            "total_withdrawn": float(b.get("total_withdrawn") or 0),
+            "usdt_address": b.get("usdt_address") or "",
+            "payout_method": b.get("payout_method") or "USDT_TRC20",
+            "last_payout_ts": float(b.get("last_payout_ts") or 0),
+        }
+
+    def list_balances(self) -> dict:
+        return self.state.get("crm_balance") or {}
+
+    def list_balance_tx(self, user_key: str = "", limit: int = 50) -> list:
+        all_tx = list(self.state.get("crm_balance_tx") or [])
+        if user_key:
+            all_tx = [t for t in all_tx if t.get("user_key") == user_key]
+        all_tx.sort(key=lambda t: t.get("ts") or 0, reverse=True)
+        return all_tx[:max(1, int(limit))]
+
+    async def set_balance_address(
+        self, user_key: str, address: str = "", method: str = "",
+    ) -> bool:
+        async with _lock:
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            if address is not None:
+                b["usdt_address"] = (address or "").strip()
+            if method:
+                b["payout_method"] = method
+            await self._save_unlocked()
+            return True
+
+    async def accrue_to_balance(
+        self, user_key: str, amount_usdt: float,
+        tx_type: str = "lk_payout", ref: str = "", note: str = "",
+        status: str = "pending",  # pending | available
+    ) -> str:
+        """Начисляет сумму на баланс пользователя. Если status='available' —
+        идёт сразу в доступное; 'pending' — в холд. Возвращает tx_id."""
+        if amount_usdt is None:
+            return ""
+        try:
+            amount = float(amount_usdt)
+        except Exception:
+            return ""
+        if amount <= 0:
+            return ""
+        async with _lock:
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            if status == "available":
+                b["available_usdt"] = float(b.get("available_usdt") or 0) + amount
+            else:
+                b["pending_usdt"] = float(b.get("pending_usdt") or 0) + amount
+            b["total_earned"] = float(b.get("total_earned") or 0) + amount
+            # tx log
+            seq = int(self.state.get("crm_balance_tx_seq", 0)) + 1
+            tx_id = f"btx{seq:06d}"
+            self.state["crm_balance_tx_seq"] = seq
+            log = self.state.setdefault("crm_balance_tx", [])
+            log.append({
+                "tx_id": tx_id, "user_key": user_key,
+                "type": tx_type, "amount_usdt": amount,
+                "ref": ref, "ts": time.time(), "note": note,
+                "status": status,
+            })
+            await self._save_unlocked()
+            return tx_id
+
+    async def move_pending_to_available(
+        self, user_key: str, amount_usdt: float, ref: str = "", note: str = "",
+    ) -> bool:
+        """Переводит сумму из pending в available."""
+        try:
+            amount = float(amount_usdt)
+        except Exception:
+            return False
+        if amount <= 0:
+            return False
+        async with _lock:
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            cur_pending = float(b.get("pending_usdt") or 0)
+            if cur_pending < amount:
+                # допустим перевод того что есть
+                amount = cur_pending
+                if amount <= 0:
+                    return False
+            b["pending_usdt"] = cur_pending - amount
+            b["available_usdt"] = float(b.get("available_usdt") or 0) + amount
+            await self._save_unlocked()
+            return True
+
+    async def request_withdrawal(
+        self, user_key: str, amount_usdt: float, address: str,
+        method: str = "USDT_TRC20", note: str = "",
+    ) -> str:
+        """Создаёт заявку на вывод. Возвращает req_id."""
+        try:
+            amount = float(amount_usdt)
+        except Exception:
+            return ""
+        if amount <= 0:
+            return ""
+        async with _lock:
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            avail = float(b.get("available_usdt") or 0)
+            if avail < amount:
+                return ""  # недостаточно средств
+            # резервируем сумму (списываем из available, но статус pending)
+            b["available_usdt"] = avail - amount
+            seq = int(self.state.get("balance_withdrawal_seq", 0)) + 1
+            req_id = f"wd{seq:05d}"
+            self.state["balance_withdrawal_seq"] = seq
+            reqs = self.state.setdefault("balance_withdrawal_requests", {})
+            reqs[req_id] = {
+                "req_id": req_id,
+                "user_key": user_key,
+                "amount_usdt": amount,
+                "address": (address or "").strip(),
+                "method": method,
+                "status": "pending",
+                "requested_at": time.time(),
+                "approved_at": 0,
+                "approved_by": "",
+                "tx_hash": "",
+                "note": note,
+            }
+            await self._save_unlocked()
+            return req_id
+
+    async def update_withdrawal(self, req_id: str, **fields) -> bool:
+        async with _lock:
+            reqs = self.state.setdefault("balance_withdrawal_requests", {})
+            r = reqs.get(req_id)
+            if not r:
+                return False
+            for k, v in fields.items():
+                r[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def cancel_withdrawal(self, req_id: str, by: str = "") -> bool:
+        """Отменяет заявку: возвращает сумму в available."""
+        async with _lock:
+            reqs = self.state.setdefault("balance_withdrawal_requests", {})
+            r = reqs.get(req_id)
+            if not r or r.get("status") not in ("pending", "approved"):
+                return False
+            user_key = r.get("user_key")
+            amount = float(r.get("amount_usdt") or 0)
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            b["available_usdt"] = float(b.get("available_usdt") or 0) + amount
+            r["status"] = "rejected"
+            r["approved_at"] = time.time()
+            r["approved_by"] = by
+            await self._save_unlocked()
+            return True
+
+    async def finalize_withdrawal_paid(
+        self, req_id: str, tx_hash: str = "", by: str = "",
+    ) -> bool:
+        """Фиксирует факт оплаты: списывает total_withdrawn + tx log."""
+        async with _lock:
+            reqs = self.state.setdefault("balance_withdrawal_requests", {})
+            r = reqs.get(req_id)
+            if not r:
+                return False
+            user_key = r.get("user_key")
+            amount = float(r.get("amount_usdt") or 0)
+            balances = self.state.setdefault("crm_balance", {})
+            b = balances.setdefault(user_key, {})
+            b["total_withdrawn"] = float(b.get("total_withdrawn") or 0) + amount
+            b["last_payout_ts"] = time.time()
+            r["status"] = "paid"
+            r["tx_hash"] = (tx_hash or "").strip()
+            r["approved_at"] = time.time()
+            r["approved_by"] = by or r.get("approved_by") or ""
+            # tx log
+            seq = int(self.state.get("crm_balance_tx_seq", 0)) + 1
+            tx_id = f"btx{seq:06d}"
+            self.state["crm_balance_tx_seq"] = seq
+            log = self.state.setdefault("crm_balance_tx", [])
+            log.append({
+                "tx_id": tx_id, "user_key": user_key,
+                "type": "withdraw", "amount_usdt": -amount,
+                "ref": req_id, "ts": time.time(),
+                "note": f"tx:{(tx_hash or '')[:24]}",
+                "status": "withdrawn",
+            })
+            await self._save_unlocked()
+            return True
+
+    def list_withdrawals(self, status: str = "") -> list:
+        reqs = list((self.state.get("balance_withdrawal_requests") or {}).values())
+        if status:
+            reqs = [r for r in reqs if (r.get("status") or "") == status]
+        reqs.sort(key=lambda r: r.get("requested_at") or 0, reverse=True)
+        return reqs
+
+    def get_balance_settings(self) -> dict:
+        s = self.state.get("balance_settings") or {}
+        return {
+            "auto_threshold_usdt": float(s.get("auto_threshold_usdt") or 200.0),
+            "manual_above": bool(s.get("manual_above", True)),
+            "min_payout_usdt": float(s.get("min_payout_usdt") or 10.0),
+        }
+
+    async def set_balance_settings(self, **fields) -> bool:
+        async with _lock:
+            s = self.state.setdefault("balance_settings", {})
+            if "auto_threshold_usdt" in fields:
+                try:
+                    s["auto_threshold_usdt"] = float(fields["auto_threshold_usdt"])
+                except Exception:
+                    pass
+            if "manual_above" in fields:
+                s["manual_above"] = bool(fields["manual_above"])
+            if "min_payout_usdt" in fields:
+                try:
+                    s["min_payout_usdt"] = float(fields["min_payout_usdt"])
+                except Exception:
+                    pass
             await self._save_unlocked()
             return True
 

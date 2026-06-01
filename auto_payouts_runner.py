@@ -131,28 +131,31 @@ async def run_salary_payouts(reason: str = "scheduled") -> Dict[str, Any]:
                 result["skipped"].append({"username": username, "reason": f"pending {pending:.2f}$ > daily budget left {daily_budget_left:.2f}$"})
                 continue
 
-            # === Отправляем! ===
-            send_result = await send_usdt_to(
-                to_address=address,
-                amount_usdt=pending,
-                reason=f"auto-salary @{username} ({reason})",
-                wait_confirmation=False,  # не ждём — scheduler не должен висеть
-                timeout_sec=30,
+            # === НОВАЯ СХЕМА (июнь 2026): начисляем на CRM-баланс работника,
+            # а не шлём напрямую. Работник сам запросит вывод когда захочет —
+            # это унифицирует все выплаты через один поток (balance withdrawal).
+            user_key = storage._balance_key_worker(username)
+            tx_id = await storage.accrue_to_balance(
+                user_key, pending,
+                tx_type="salary", ref="",
+                note=f"Зарплата ({reason})",
+                status="available",  # зп сразу доступна к выводу
             )
-
-            if not send_result.get("ok"):
-                result["errors"].append({"username": username, "amount": pending, "error": send_result.get("error", "send failed")})
-                continue
-
-            tx_hash = send_result.get("tx_hash", "")
-            # Reset pending
+            # Сохраняем адрес в баланс если работник его задавал ранее (для удобства)
+            try:
+                cur_b = storage.get_balance(user_key)
+                if not cur_b.get("usdt_address") and address:
+                    await storage.set_balance_address(user_key, address=address)
+            except Exception:
+                pass
+            # Reset pending в worker_pending_balance (мигрировано на crm_balance)
             await storage.reset_worker_pending(username, paid_amount=pending)
             # Запись в accounting
             try:
                 await storage.add_accounting_entry(
                     category="salaries",
                     amount_usdt=pending,
-                    note=f"auto-salary @{username} · tx:{tx_hash[:16]}...",
+                    note=f"@{username} → crm_balance (доступно к выводу, tx_id={tx_id})",
                     created_by="auto:scheduler",
                 )
             except Exception as _e:
@@ -160,22 +163,22 @@ async def run_salary_payouts(reason: str = "scheduled") -> Dict[str, Any]:
 
             result["paid"].append({
                 "username": username, "amount": pending,
-                "tx_hash": tx_hash, "address": address,
+                "accrued_to_balance": True, "address": address,
             })
             result["total_paid_usdt"] += pending
-            daily_budget_left -= pending
 
-            # Notify owner
+            # Notify owner + работника
             try:
                 await storage.add_notification(
                     type="success",
-                    text=f"💸 Авто-зарплата отправлена @{username}: {pending:.2f}$\nTX: {tx_hash[:24]}...",
+                    text=f"💼 Зарплата начислена на баланс @{username}: {pending:.2f}$ "
+                         f"(работник может вывести в CRM-боте)",
                 )
             except Exception:
                 pass
 
-            # Pause между transactions чтобы не флудить network
-            await asyncio.sleep(2)
+            # Pause между записями
+            await asyncio.sleep(0.2)
 
         except Exception as e:
             logger.exception("auto-pay worker %s failed: %s", username, e)
@@ -220,3 +223,127 @@ async def maybe_run_salary_payouts(force: bool = False) -> Dict[str, Any]:
     except Exception:
         pass
     return result
+
+
+# ============================================================================
+# Balance Withdrawals (B-часть: CRM-баланс с выводом)
+# ============================================================================
+
+async def process_withdrawal(req_id: str, approved_by: str = "") -> tuple:
+    """Выполняет фактическую выплату по заявке withdrawal.
+
+    Используется:
+      - автоматически из api.balance_withdraw если amount <= auto_threshold
+      - вручную при apruv owner'а из JARVIS
+
+    Returns: (ok: bool, tx_hash: str)
+    """
+    from storage import storage
+    storage.reload_sync()
+    reqs = storage.state.get("balance_withdrawal_requests") or {}
+    r = reqs.get(req_id)
+    if not r:
+        logger.warning("[withdraw] req=%s not found", req_id)
+        return False, ""
+    if r.get("status") not in ("pending", "approved"):
+        logger.warning("[withdraw] req=%s status=%s, skipping", req_id, r.get("status"))
+        return False, ""
+
+    user_key = r.get("user_key") or ""
+    amount = float(r.get("amount_usdt") or 0)
+    address = (r.get("address") or "").strip()
+    if not address or amount <= 0:
+        await storage.cancel_withdrawal(req_id, by=approved_by or "auto")
+        return False, ""
+
+    # Safety
+    safety = storage.get_payout_safety()
+    if not safety.get("auto_pay_enabled_global", True):
+        logger.warning("[withdraw] kill-switch on — skipping req=%s", req_id)
+        return False, ""
+    max_per_tx = float(safety.get("max_per_tx_usdt") or 500)
+    if amount > max_per_tx:
+        logger.warning("[withdraw] req=%s amount %.2f > max_per_tx %.2f", req_id, amount, max_per_tx)
+        try:
+            await storage.add_notification(
+                type="warning",
+                text=f"⚠ Заявка на вывод #{req_id}: {amount:.2f}$ > max_per_tx {max_per_tx}$. "
+                     f"Требуется ручной /payout или повышение лимита.",
+                dedup_key=f"wd_over_limit:{req_id}",
+            )
+        except Exception:
+            pass
+        return False, ""
+    max_daily = float(safety.get("max_daily_usdt") or 2000)
+    daily_already = storage.get_daily_outbound_total()
+    if (daily_already + amount) > max_daily:
+        logger.warning("[withdraw] daily limit: %.2f + %.2f > %.2f", daily_already, amount, max_daily)
+        try:
+            await storage.add_notification(
+                type="warning",
+                text=f"⏸ Заявка #{req_id} отложена: дневной лимит исчерпан.",
+                dedup_key=f"wd_daily:{req_id}",
+            )
+        except Exception:
+            pass
+        return False, ""
+
+    # Tron available?
+    try:
+        from tron_payouts import is_configured, send_usdt_to
+    except ImportError:
+        return False, ""
+    if not is_configured():
+        return False, ""
+
+    # Send!
+    try:
+        send_result = await send_usdt_to(
+            to_address=address,
+            amount_usdt=amount,
+            reason=f"withdraw {req_id} for {user_key}",
+            wait_confirmation=False,
+            timeout_sec=30,
+        )
+    except Exception as e:
+        logger.exception("[withdraw] send failed: %s", e)
+        await storage.update_withdrawal(req_id, status="failed", note=f"send error: {e}")
+        return False, ""
+
+    if not send_result.get("ok"):
+        err = send_result.get("error") or "send failed"
+        await storage.update_withdrawal(req_id, status="failed", note=err)
+        try:
+            await storage.add_notification(
+                type="error",
+                text=f"❌ Вывод #{req_id} провалился: {err}",
+            )
+        except Exception:
+            pass
+        return False, ""
+
+    tx_hash = send_result.get("tx_hash", "")
+    await storage.finalize_withdrawal_paid(req_id, tx_hash=tx_hash, by=approved_by or "auto")
+
+    # accounting
+    try:
+        await storage.add_accounting_entry(
+            category="balance_withdraw",
+            amount_usdt=amount,
+            note=f"Withdraw {req_id} → {user_key} · tx:{tx_hash[:16]}",
+            created_by=approved_by or "auto:withdraw",
+            ref_id=req_id,
+        )
+    except Exception:
+        pass
+
+    # notify owner
+    try:
+        await storage.add_notification(
+            type="success",
+            text=f"💸 Выплата по заявке #{req_id}: {amount:.2f}$ → {user_key}\nTX: {tx_hash[:24]}...",
+        )
+    except Exception:
+        pass
+
+    return True, tx_hash

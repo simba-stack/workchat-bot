@@ -2229,6 +2229,241 @@ async def api_outkup_cancel(
     return {"ok": True, "order": o}
 
 
+# --- Operational: типы отчётности (Owner only CRUD) ---
+@app.get("/api/operational/report_types")
+async def op_list_report_types(me: dict = Depends(_get_me)):
+    return {"types": storage.list_operational_report_types()}
+
+
+@app.post("/api/operational/report_types")
+async def op_add_report_type(request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    ok = await storage.add_operational_report_type(name)
+    return {"ok": ok, "types": storage.list_operational_report_types()}
+
+
+@app.delete("/api/operational/report_types/{name}")
+async def op_delete_report_type(name: str, me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    ok = await storage.remove_operational_report_type(name)
+    return {"ok": ok, "types": storage.list_operational_report_types()}
+
+
+# --- CRM Balances ---
+class WithdrawRequestPayload(BaseModel):
+    user_key: str
+    amount_usdt: float
+    address: str
+    method: Optional[str] = "USDT_TRC20"
+    note: Optional[str] = ""
+
+
+@app.get("/api/balance")
+async def balance_list(me: dict = Depends(_get_me)):
+    """Все балансы — для бухгалтерии. Owner/Manager/Accounting."""
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    raw = storage.list_balances()
+    items = []
+    for ukey, b in raw.items():
+        items.append({
+            "user_key": ukey,
+            "kind": "owner" if ukey.startswith("owner:") else "worker",
+            "id": ukey.split(":", 1)[1] if ":" in ukey else ukey,
+            "pending_usdt": float(b.get("pending_usdt") or 0),
+            "available_usdt": float(b.get("available_usdt") or 0),
+            "total_earned": float(b.get("total_earned") or 0),
+            "total_withdrawn": float(b.get("total_withdrawn") or 0),
+            "usdt_address": b.get("usdt_address") or "",
+            "last_payout_ts": float(b.get("last_payout_ts") or 0),
+        })
+    items.sort(key=lambda x: x["available_usdt"] + x["pending_usdt"], reverse=True)
+    return {"balances": items, "total": len(items)}
+
+
+@app.get("/api/balance/{user_key}")
+async def balance_get(user_key: str, me: dict = Depends(_get_me)):
+    storage.reload_sync()
+    return {"balance": storage.get_balance(user_key)}
+
+
+@app.get("/api/balance/{user_key}/tx")
+async def balance_tx(user_key: str, limit: int = 50, me: dict = Depends(_get_me)):
+    storage.reload_sync()
+    return {"transactions": storage.list_balance_tx(user_key, limit=limit)}
+
+
+@app.post("/api/balance/withdraw")
+async def balance_withdraw(payload: WithdrawRequestPayload, me: dict = Depends(_get_me)):
+    """Запрос на вывод. Может ставить юзер сам (из CRM-бота) либо owner от имени юзера.
+    Если сумма ≤ auto_threshold — авто-вывод; иначе остаётся pending для апрува."""
+    storage.reload_sync()
+    s = storage.get_balance_settings()
+    if payload.amount_usdt < s["min_payout_usdt"]:
+        raise HTTPException(400, f"min payout = {s['min_payout_usdt']} USDT")
+    b = storage.get_balance(payload.user_key)
+    if b["available_usdt"] < payload.amount_usdt:
+        raise HTTPException(400, "insufficient available balance")
+    req_id = await storage.request_withdrawal(
+        payload.user_key, payload.amount_usdt, payload.address,
+        method=payload.method or "USDT_TRC20", note=payload.note or "",
+    )
+    if not req_id:
+        raise HTTPException(500, "failed to create request")
+    # Авто-выплата для мелких сумм
+    auto_paid = False
+    if payload.amount_usdt <= s["auto_threshold_usdt"]:
+        try:
+            from auto_payouts_runner import process_withdrawal
+            ok, tx_hash = await process_withdrawal(req_id)
+            if ok:
+                auto_paid = True
+        except Exception as e:
+            logger.warning("auto withdraw failed for %s: %s", req_id, e)
+    return {"req_id": req_id, "auto_paid": auto_paid}
+
+
+@app.get("/api/balance/withdrawals/list")
+async def balance_withdrawals_list(status: str = "", me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    return {"requests": storage.list_withdrawals(status=status)}
+
+
+@app.post("/api/balance/withdrawals/{req_id}/approve")
+async def balance_withdrawal_approve(req_id: str, me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    try:
+        from auto_payouts_runner import process_withdrawal
+        ok, tx_hash = await process_withdrawal(
+            req_id, approved_by=me.get("username") or str(me.get("id") or ""),
+        )
+        return {"ok": ok, "tx_hash": tx_hash}
+    except Exception as e:
+        raise HTTPException(500, f"payout failed: {e}")
+
+
+@app.post("/api/balance/withdrawals/{req_id}/cancel")
+async def balance_withdrawal_cancel(req_id: str, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    ok = await storage.cancel_withdrawal(req_id, by=me.get("username") or "")
+    return {"ok": ok}
+
+
+@app.get("/api/balance/settings/get")
+async def balance_settings_get(me: dict = Depends(_get_me)):
+    return storage.get_balance_settings()
+
+
+@app.post("/api/balance/settings/set")
+async def balance_settings_set(request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    await storage.set_balance_settings(**body)
+    return {"ok": True, "settings": storage.get_balance_settings()}
+
+
+@app.post("/api/balance/{user_key}/address")
+async def balance_set_address(user_key: str, request: Request, me: dict = Depends(_get_me)):
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    await storage.set_balance_address(
+        user_key, address=body.get("address") or "", method=body.get("method") or "",
+    )
+    return {"ok": True, "balance": storage.get_balance(user_key)}
+
+
+# --- Cleanup данных (Owner only): фикс багa где CRM-бот стал supplier'ом ---
+@app.post("/api/admin/cleanup_lk_suppliers")
+async def admin_cleanup_lk_suppliers(request: Request, me: dict = Depends(_get_me)):
+    """Чистит ЛК-карточки где supplier = системный аккаунт (PrideCONTROLE_bot
+    и т.п.). Для каждой такой берёт client_username из managed_chats[work_chat_id]
+    и проставляет туда. Owner-only."""
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    storage.reload_sync()
+    SYS = {
+        "pridecontrole_bot", "prideкоntrol", "prideконтроль",
+        "pride_sys01", "pride_sys02", "pride_manager1",
+        "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
+        "prideassistant", "pride_assistant", "pride_invite_bot",
+        "pridework_invite_bot", "prideoutsource_bot",
+    }
+    cards = storage.list_lk_cards() or {}
+    managed = storage.state.get("managed_chats") or {}
+
+    # Index managed_chats by work_chat_id (как Telethon отдаёт — с -100).
+    # Ключ может быть в разных форматах, поэтому индексируем оба варианта.
+    from storage import _norm_chat_id as _norm
+    by_chat = {}
+    for k, info in managed.items():
+        try:
+            by_chat[_norm(k)] = info
+        except Exception:
+            pass
+
+    fixed = []
+    cleared = []
+    for cid, c in cards.items():
+        if not c:
+            continue
+        sup = ((c.get("supplier") or "").lstrip("@") or "").lower().strip()
+        if sup not in SYS:
+            continue
+        wc = c.get("work_chat_id") or 0
+        try:
+            wc_norm = _norm(wc) if wc else 0
+        except Exception:
+            wc_norm = 0
+        info = by_chat.get(wc_norm) or {}
+        new_supplier = (info.get("client_username") or "").lstrip("@").strip()
+        if new_supplier:
+            await storage.update_lk_card(cid, supplier=new_supplier)
+            fixed.append({"card_id": cid, "old": sup, "new": new_supplier})
+        else:
+            # Чат не найден — просто очищаем supplier (notify будет использовать
+            # work_chat_id напрямую, что и так уже исправлено в коде)
+            await storage.update_lk_card(cid, supplier="")
+            cleared.append({"card_id": cid, "old": sup, "wc": wc})
+    return {"ok": True, "fixed": fixed, "cleared": cleared, "total": len(fixed) + len(cleared)}
+
+
+@app.post("/api/admin/cleanup_crm_owners")
+async def admin_cleanup_crm_owners(request: Request, me: dict = Depends(_get_me)):
+    """Удаляет crm_owners где username = системный аккаунт. Owner-only."""
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    storage.reload_sync()
+    SYS = {
+        "pridecontrole_bot", "prideкоntrol", "prideконтроль",
+        "pride_sys01", "pride_sys02", "pride_manager1",
+        "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
+        "prideassistant", "pride_assistant", "pride_invite_bot",
+        "pridework_invite_bot", "prideoutsource_bot",
+    }
+    owners = storage.state.get("crm_owners") or {}
+    removed = []
+    for oid, o in list(owners.items()):
+        if not o:
+            continue
+        uname = ((o.get("username") or "").lstrip("@") or "").lower().strip()
+        if uname in SYS:
+            del owners[oid]
+            removed.append({"owner_id": oid, "username": uname, "name": o.get("name")})
+    await storage.save()
+    return {"ok": True, "removed": removed, "count": len(removed)}
+
+
 # --- Рассылки Асика (утро/вечер во все managed_chats) ---
 @app.get("/api/settings/asik_broadcasts")
 async def settings_get_asik_broadcasts(me: dict = Depends(_get_me)):
@@ -4041,10 +4276,20 @@ class ExchangeRequestPayload(BaseModel):
     amount_in: float
     lk_in_price_usdt: float = 0
     lk_in_status: Optional[str] = "ОТРАБОТАН"
-    outs: list  # [{bank, fio, lk_card_id, amount_out, lk_out_price_usdt, status_after, jur_jur_receivers: [{bank, fio, lk_card_id, lk_price_usdt, status_after}]}]
+    outs: list  # [{bank, fio, lk_card_id, amount_out, lk_out_price_usdt,
+                #   op_status (IN_WORK_RELEASE|IN_WORK_HOLD|DONE|BLOCK),
+                #   block_amount_rub, block_note,
+                #   jur_jur_receivers: [{bank, fio, lk_card_id, lk_price_usdt, op_status}]}]
     partner_pct: float = 0
     exchange_rate: float = 0
     commission_usdt: float = 0   # % комиссии откупа
+    # === Новые поля (отчётность v2) ===
+    report_date: Optional[str] = ""   # YYYY-MM-DD
+    report_type: Optional[str] = ""   # из storage.operational_report_types
+    payout_rate_partner: float = 0    # курс выплаты партнёру (отдельно от exchange_rate)
+    losses: list = []                  # [{amount_rub, reason}]
+    commissions: list = []             # [{amount_rub, where}]
+    remains: list = []                 # [{amount_rub, where}]
 
 
 @app.post("/api/operational/exchange_request")
@@ -4059,37 +4304,70 @@ async def api_op_create_exchange_request(
     rate = float(payload.exchange_rate or 0)
     if rate <= 0:
         raise HTTPException(status_code=400, detail="exchange_rate required")
+    payout_rate_partner = float(payload.payout_rate_partner or 0) or rate  # fallback на rate
     total_in_rub = float(payload.amount_in or 0)
-    total_out_rub = sum(float(o.get("amount_out") or 0) for o in (payload.outs or []))
     partner_pct = float(payload.partner_pct or 0)
     comm_pct = float(payload.commission_usdt or 0)  # % комиссии откупа
 
-    # Новая формула (май 2026 v2):
-    # 1) Выплата партнёру в USDT = (вход - вход*pct_partner/100) / rate
-    partner_payout_usdt = (total_in_rub - total_in_rub * partner_pct / 100.0) / rate
-    # 2) Что получили мы (USDT) = сумма выходов / rate * (1 - comm_pct/100)
-    we_received_usdt = (total_out_rub / rate) * (1.0 - comm_pct / 100.0)
-    # 3) Стоимость ЛК (вход + все выходы + юр-юр)
+    # === НОВАЯ формула (июнь 2026 v3, на основе ответов SIMBA) ===
+    # 1) Выплата партнёру USDT = (amount_in / payout_rate_partner) × (1 − partner_pct/100)
+    partner_payout_usdt = (
+        (total_in_rub / payout_rate_partner) * (1.0 - partner_pct / 100.0)
+        if payout_rate_partner > 0 else 0.0
+    )
+    # 2) Маржа: суммируем выходы только по ЛК БЕЗ юр-юр (чтобы не дублировать)
+    out_sum_no_jurjur = 0.0
+    total_out_rub = 0.0
+    for o in (payload.outs or []):
+        amt = float(o.get("amount_out") or 0)
+        total_out_rub += amt
+        if not (o.get("jur_jur_receivers") or []):
+            out_sum_no_jurjur += amt
+    margin_gross = (out_sum_no_jurjur / rate) * (1.0 - comm_pct / 100.0) if rate > 0 else 0.0
+    # Цены ЛК — каждый ЛК один раз
     lk_prices = float(payload.lk_in_price_usdt or 0)
     for o in (payload.outs or []):
         lk_prices += float(o.get("lk_out_price_usdt") or 0)
         for jj in (o.get("jur_jur_receivers") or []):
             lk_prices += float(jj.get("lk_price_usdt") or 0)
-    # 4) Маржа = мы_получили − выплата_партнёру − стоимость_ЛК
-    margin_usdt = we_received_usdt - partner_payout_usdt - lk_prices
+    # Дополнительные модификаторы
+    losses_total = sum(float(x.get("amount_rub") or 0) for x in (payload.losses or [])) / (rate or 1.0)
+    commissions_total = sum(float(x.get("amount_rub") or 0) for x in (payload.commissions or [])) / (rate or 1.0)
+    remains_total = sum(float(x.get("amount_rub") or 0) for x in (payload.remains or [])) / (rate or 1.0)
+    margin_usdt = margin_gross - lk_prices - losses_total - commissions_total + remains_total
 
-    # Собираем ЛК и их target-статусы
-    involved_lk = []  # [(card_id, status_after)]
+    # === Маппинг op_status → старый status_after для совместимости ===
+    OP_STATUS_MAP = {
+        "IN_WORK_RELEASE": "ОТРАБОТАН",  # в работе но можно отпустить → отпускаем
+        "DONE":            "ОТРАБОТАН",
+        "IN_WORK_HOLD":    "В_РАБОТЕ",   # держим — оплата НЕ идёт
+        "BLOCK":           "БЛОК",
+    }
+    # ЛК которые «отпускаем оплату» — только эти попадают в available на баланс
+    RELEASE_OP_STATUSES = {"IN_WORK_RELEASE", "DONE"}
+
+    # Собираем ЛК и их target-статусы + op_status
+    involved_lk = []  # [(card_id, status_after, op_status, block_amount, block_note)]
     if payload.lk_card_id_in:
-        involved_lk.append((payload.lk_card_id_in, payload.lk_in_status or "ОТРАБОТАН"))
+        involved_lk.append((
+            payload.lk_card_id_in,
+            payload.lk_in_status or "ОТРАБОТАН",
+            "DONE", 0.0, "",
+        ))
     for o in (payload.outs or []):
         cid = o.get("lk_card_id")
+        op_st = (o.get("op_status") or "DONE").upper()
+        mapped = OP_STATUS_MAP.get(op_st, o.get("status_after") or "ОТРАБОТАН")
+        block_amt = float(o.get("block_amount_rub") or 0)
+        block_note = (o.get("block_note") or "").strip()
         if cid:
-            involved_lk.append((cid, o.get("status_after") or "ОТРАБОТАН"))
+            involved_lk.append((cid, mapped, op_st, block_amt, block_note))
         for jj in (o.get("jur_jur_receivers") or []):
             jj_cid = jj.get("lk_card_id")
+            jj_op = (jj.get("op_status") or "DONE").upper()
+            jj_mapped = OP_STATUS_MAP.get(jj_op, jj.get("status_after") or "ОТРАБОТАН")
             if jj_cid:
-                involved_lk.append((jj_cid, jj.get("status_after") or "ОТРАБОТАН"))
+                involved_lk.append((jj_cid, jj_mapped, jj_op, 0.0, ""))
 
     req_id = await storage.add_exchange_request(
         bank_in=payload.bank_in,
@@ -4105,13 +4383,67 @@ async def api_op_create_exchange_request(
         total_out_rub=total_out_rub,
         status="ЗАФИКСИРОВАНА",
         created_by=me.get("username") or str(me.get("tg_id")) or "operationist",
-        involved_lk_cards=[cid for cid, _ in involved_lk],
+        involved_lk_cards=[cid for cid, *_ in involved_lk],
+        # Новые поля v3:
+        report_date=payload.report_date or "",
+        report_type=payload.report_type or "",
+        payout_rate_partner=payout_rate_partner,
+        losses=list(payload.losses or []),
+        commissions=list(payload.commissions or []),
+        remains=list(payload.remains or []),
+        partner_payout_usdt=partner_payout_usdt,
     )
 
+    # === Начисление на баланс поставщика (новая схема балансов) ===
+    # Распределяем partner_payout_usdt пропорционально цене каждого ЛК для вывода
+    # (или равномерно если цены не заданы). Только для ЛК с op_status в RELEASE_OP_STATUSES.
+    release_lks = [
+        (cid, op_st) for cid, _, op_st, _, _ in involved_lk
+        if op_st in RELEASE_OP_STATUSES
+    ]
+    if release_lks and partner_payout_usdt > 0:
+        # Группируем по supplier (= owner_id)
+        per_supplier = {}  # {owner_id_or_username: total_share}
+        n = len(release_lks)
+        share_per_lk = partner_payout_usdt / n
+        for cid, _ in release_lks:
+            card = storage.get_lk_card(cid) if hasattr(storage, "get_lk_card") else None
+            if not card:
+                continue
+            sup = (card.get("supplier") or "").lstrip("@").strip().lower()
+            if not sup:
+                continue
+            # Ищем owner_id по username (сначала через crm_owners)
+            owner_id = ""
+            for oid, o in (storage.state.get("crm_owners") or {}).items():
+                if (o.get("username") or "").lstrip("@").lower().strip() == sup:
+                    owner_id = oid
+                    break
+            user_key = (
+                storage._balance_key_owner(owner_id)
+                if owner_id else storage._balance_key_worker(sup)
+            )
+            per_supplier[user_key] = per_supplier.get(user_key, 0.0) + share_per_lk
+        for ukey, amt in per_supplier.items():
+            try:
+                await storage.accrue_to_balance(
+                    ukey, amt,
+                    tx_type="lk_payout", ref=req_id,
+                    note=f"Exchange {req_id} · {len(release_lks)} ЛК отпущено",
+                    status="available",  # отпущено → сразу available
+                )
+            except Exception as e:
+                logger.warning("[balance accrue] %s amt=%.2f failed: %s", ukey, amt, e)
+
     notified_chats = set()
-    for cid, status_after in involved_lk:
+    for cid, status_after, op_st, block_amt, block_note in involved_lk:
         try:
-            await storage.update_lk_card(cid, status=status_after)
+            update_fields = {"status": status_after}
+            # БЛОК — пишем сумму и заметку, ЛК автоматически попадает в раздел БЛОКИ
+            if op_st == "BLOCK":
+                update_fields["block_amount_rub"] = block_amt
+                update_fields["block_note"] = block_note
+            await storage.update_lk_card(cid, **update_fields)
         except Exception:
             pass
         # Уведомляем клиента ТОЛЬКО если ЛК стал ОТРАБОТАН (для В_РАБОТЕ — не дёргаем).
@@ -4146,12 +4478,16 @@ async def api_op_create_exchange_request(
         except Exception as e:
             logger.warning("notify ОТРАБОТАН for card=%s failed: %s", cid, e)
 
+    # we_received: что мы получили на руки в USDT (до вычета цены ЛК).
+    # Используется для accounting записи. Это margin_gross без вычета комиссии откупа.
+    we_received_usdt = (out_sum_no_jurjur / rate) if rate > 0 else 0.0
+
     try:
         await storage.add_accounting_entry(
             category="kassa",
-            amount_usdt=we_received_usdt - partner_payout_usdt,
+            amount_usdt=margin_usdt,
             amount_rub=total_in_rub,
-            note=f"Exchange request {req_id} (маржа: {margin_usdt:.2f}$)",
+            note=f"Exchange request {req_id} (маржа: {margin_usdt:.2f}$, выплата партнёру: {partner_payout_usdt:.2f}$)",
             created_by=me.get("username") or "",
             ref_id=req_id,
         )
@@ -4164,7 +4500,8 @@ async def api_op_create_exchange_request(
         emit_event("exchange-request-created", {
             "req_id": req_id,
             "margin_usdt": margin_usdt,
-            "involved_lk": involved_lk,
+            "partner_payout_usdt": partner_payout_usdt,
+            "involved_lk_count": len(involved_lk),
         }, character="lk", severity="success")
     except Exception:
         pass
@@ -4175,7 +4512,10 @@ async def api_op_create_exchange_request(
         "partner_payout_usdt": partner_payout_usdt,
         "we_received_usdt": we_received_usdt,
         "lk_prices_usdt": lk_prices,
-        "involved_lk_cards": [cid for cid, _ in involved_lk],
+        "losses_usdt": losses_total,
+        "commissions_usdt": commissions_total,
+        "remains_usdt": remains_total,
+        "involved_lk_cards": [t[0] for t in involved_lk],
     }
 
 

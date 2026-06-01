@@ -597,6 +597,18 @@ async def cmd_myorders(message: Message):
 # ════════════════════════════════════════════════════════════════
 # 🎒 ПРОФИЛЬ
 # ════════════════════════════════════════════════════════════════
+def _resolve_user_balance_key(username: str) -> str:
+    """Возвращает crm_balance user_key для пользователя outsource-бота.
+    Приоритет: владелец (crm_owner) → работник."""
+    uname = (username or "").lstrip("@").lower().strip()
+    if not uname:
+        return ""
+    for oid, o in (storage.state.get("crm_owners") or {}).items():
+        if (o.get("username") or "").lstrip("@").lower().strip() == uname:
+            return storage._balance_key_owner(oid)
+    return storage._balance_key_worker(uname)
+
+
 @router.message(F.text.func(_is_btn("btn_profile")))
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
@@ -610,14 +622,181 @@ async def cmd_profile(message: Message):
     paid = float(mgr.get("paid_total_usdt") or 0)
     first_seen = mgr.get("first_seen_ts") or 0
     days = int((_time.time() - first_seen) / 86400) if first_seen else 0
+    # CRM-баланс PRIDE (для вывода зп / выплат за ЛК)
+    user_key = _resolve_user_balance_key(username)
+    crm_b = storage.get_balance(user_key) if user_key else {}
+    crm_block = ""
+    if crm_b and (crm_b.get("available_usdt") or crm_b.get("pending_usdt") or crm_b.get("total_earned")):
+        avail = float(crm_b.get("available_usdt") or 0)
+        pend = float(crm_b.get("pending_usdt") or 0)
+        earned = float(crm_b.get("total_earned") or 0)
+        withdrawn = float(crm_b.get("total_withdrawn") or 0)
+        addr = crm_b.get("usdt_address") or "—"
+        crm_block = (
+            f"\n\n💼 <b>Кошелёк PRIDE</b>\n"
+            f"💵 Доступно к выводу: <b>{avail:.2f} USDT</b>\n"
+            f"⏳ В работе (ждёт): <b>{pend:.2f} USDT</b>\n"
+            f"📈 Всего начислено: {earned:.2f} USDT\n"
+            f"💸 Всего выведено: {withdrawn:.2f} USDT\n"
+            f"🔗 Адрес: <code>{addr}</code>\n\n"
+            f"<i>/wallet — детали и история\n"
+            f"/withdraw &lt;сумма&gt; — запрос вывода\n"
+            f"/wallet_address &lt;TR…&gt; — установить адрес</i>"
+        )
     await message.reply(
         T("profile_text",
           username=username, tg_id=message.from_user.id, days=days,
           balance=balance, paid=paid,
           drops_total=stats.get("drops_total", 0),
           lks_total=stats.get("lks_total", 0),
-          lks_done=stats.get("lks_done", 0)),
+          lks_done=stats.get("lks_done", 0)) + crm_block,
         reply_markup=build_main_menu(),
+    )
+
+
+@router.message(Command("wallet"))
+async def cmd_wallet(message: Message):
+    """Детальный показ CRM-баланса + последние 10 транзакций."""
+    username = _username(message)
+    if not username:
+        await message.reply(T("no_username"))
+        return
+    user_key = _resolve_user_balance_key(username)
+    if not user_key:
+        await message.reply("❌ Пользователь не найден в системе CRM.")
+        return
+    b = storage.get_balance(user_key)
+    txs = storage.list_balance_tx(user_key, limit=10)
+    s = storage.get_balance_settings()
+    lines = [
+        f"💼 <b>Кошелёк PRIDE — @{username}</b>",
+        f"",
+        f"💵 Доступно: <b>{b['available_usdt']:.2f} USDT</b>",
+        f"⏳ В работе: <b>{b['pending_usdt']:.2f} USDT</b>",
+        f"📈 Всего начислено: {b['total_earned']:.2f} USDT",
+        f"💸 Всего выведено: {b['total_withdrawn']:.2f} USDT",
+        f"🔗 Адрес: <code>{b['usdt_address'] or '— не задан —'}</code>",
+        f"",
+        f"⚙️ Мин. вывод: {s['min_payout_usdt']:.0f} USDT · авто до {s['auto_threshold_usdt']:.0f} USDT",
+    ]
+    if txs:
+        lines.append("")
+        lines.append("<b>📜 Последние 10 операций:</b>")
+        type_emoji = {
+            "lk_payout": "💼", "salary": "👷", "outkup": "🔄",
+            "ad_payout": "📢", "manual_adjust": "✏️", "withdraw": "💸",
+            "refund": "↩️",
+        }
+        from datetime import datetime
+        for t in txs:
+            emoji = type_emoji.get(t.get("type") or "", "•")
+            amt = float(t.get("amount_usdt") or 0)
+            sign = "+" if amt > 0 else ""
+            ts = datetime.fromtimestamp(t.get("ts") or 0).strftime("%d.%m %H:%M")
+            note = (t.get("note") or "")[:40]
+            lines.append(f"{emoji} {ts} · {sign}{amt:.2f}$ · {note}")
+    lines.append("")
+    lines.append("<i>/withdraw &lt;сумма&gt; — запрос вывода</i>")
+    lines.append("<i>/wallet_address &lt;TR…&gt; — изменить адрес</i>")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("wallet_address"))
+async def cmd_wallet_address(message: Message):
+    """Установить USDT TRC20 адрес для вывода."""
+    username = _username(message)
+    if not username:
+        await message.reply(T("no_username"))
+        return
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply(
+            "Использование: <code>/wallet_address TR…</code>\n\n"
+            "Пришлите ваш USDT TRC20 адрес (начинается с T, длина 34 символа)."
+        )
+        return
+    addr = parts[1].strip()
+    if not (addr.startswith("T") and len(addr) == 34):
+        await message.reply("❌ Неверный TRC20 адрес. Должен начинаться с T и иметь длину 34 символа.")
+        return
+    user_key = _resolve_user_balance_key(username)
+    if not user_key:
+        await message.reply("❌ Пользователь не найден в системе CRM.")
+        return
+    await storage.set_balance_address(user_key, address=addr)
+    await message.reply(f"✅ Адрес обновлён: <code>{addr}</code>")
+
+
+@router.message(Command("withdraw"))
+async def cmd_withdraw(message: Message):
+    """Запрос вывода с CRM-баланса. /withdraw <сумма>"""
+    username = _username(message)
+    if not username:
+        await message.reply(T("no_username"))
+        return
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply(
+            "Использование: <code>/withdraw &lt;сумма&gt;</code>\n\n"
+            "Пример: <code>/withdraw 50</code>"
+        )
+        return
+    try:
+        amount = float(parts[1].replace(",", "."))
+    except ValueError:
+        await message.reply("❌ Сумма должна быть числом.")
+        return
+    if amount <= 0:
+        await message.reply("❌ Сумма должна быть положительной.")
+        return
+    user_key = _resolve_user_balance_key(username)
+    if not user_key:
+        await message.reply("❌ Пользователь не найден в системе CRM.")
+        return
+    b = storage.get_balance(user_key)
+    s = storage.get_balance_settings()
+    if amount < s["min_payout_usdt"]:
+        await message.reply(f"❌ Минимальный вывод: {s['min_payout_usdt']:.2f} USDT")
+        return
+    if b["available_usdt"] < amount:
+        await message.reply(f"❌ Недостаточно средств. Доступно: {b['available_usdt']:.2f} USDT")
+        return
+    address = b.get("usdt_address") or ""
+    if not address:
+        await message.reply("❌ Сначала установите адрес: <code>/wallet_address TR…</code>")
+        return
+    req_id = await storage.request_withdrawal(
+        user_key, amount, address, method="USDT_TRC20",
+        note=f"@{username} via outsource_bot",
+    )
+    if not req_id:
+        await message.reply("❌ Не удалось создать заявку. Попробуйте позже.")
+        return
+    # Авто-выплата для мелких сумм
+    auto_msg = ""
+    if amount <= s["auto_threshold_usdt"]:
+        try:
+            from auto_payouts_runner import process_withdrawal
+            ok, tx_hash = await process_withdrawal(req_id)
+            if ok:
+                auto_msg = (
+                    f"\n\n✅ <b>Выплата отправлена!</b>\n"
+                    f"TX: <code>{tx_hash[:32]}…</code>\n"
+                    f"Проверьте через 1-2 минуты на TronScan."
+                )
+            else:
+                auto_msg = "\n\n⏳ Авто-выплата не прошла, заявка ушла на ручной апрув."
+        except Exception as e:
+            logger.warning("auto withdraw failed: %s", e)
+            auto_msg = "\n\n⏳ Заявка создана, ожидайте ручной апрув."
+    else:
+        auto_msg = (
+            f"\n\n⏳ Сумма выше лимита авто-вывода ({s['auto_threshold_usdt']:.0f} USDT).\n"
+            f"Заявка ожидает ручного апрува от руководства."
+        )
+    await message.reply(
+        f"📤 Заявка <b>#{req_id}</b> на {amount:.2f} USDT\n"
+        f"🔗 Адрес: <code>{address}</code>{auto_msg}"
     )
 
 

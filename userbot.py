@@ -6034,8 +6034,17 @@ class UserbotService:
 
     async def _notify_client_status_change(self, card_id: str, new_status: str) -> bool:
         """Уведомление клиенту при смене статуса ЛК на БЛОК / БРАК / ОТРАБОТАН / ЗАВЕРШЁН.
-        Шаблон выбирается по new_status. Целевой work_chat резолвится строго
-        через @supplier — никаких fallback (security-first)."""
+        Шаблон выбирается по new_status.
+
+        КОРОНКА (фикс июнь-2026): целевой чат берём СТРОГО из card.work_chat_id
+        (это и есть чат конкретного клиента, привязанный к ЛК при создании).
+        Резолв через @supplier — только fallback ЕСЛИ work_chat_id пуст, И
+        только если найденный чат реально в managed_chats. Иначе раньше
+        notify летел во все чаты где встречался @supplier, включая случаи
+        когда supplier=наш системный аккаунт (PrideCONTROLE_bot и т.п.).
+
+        Дополнительно: блэклист — системные аккаунты PRIDE НЕ должны
+        резолвиться в чат клиента (они сами не клиенты)."""
         try:
             storage.reload_sync()
         except Exception:
@@ -6046,8 +6055,49 @@ class UserbotService:
         bank = card.get("bank") or "—"
         fio = card.get("fio") or "—"
         supplier = (card.get("supplier") or "").lstrip("@").strip()
-        wc = None
-        if supplier:
+
+        # 1) ОСНОВНОЙ путь — work_chat_id из самой карточки ЛК
+        wc = 0
+        try:
+            wc = int(card.get("work_chat_id") or 0)
+        except Exception:
+            wc = 0
+
+        # 2) Если work_chat_id есть — проверяем что это РЕАЛЬНЫЙ чат клиента,
+        # а не системный (CRM Доступы / Пароли / Бухгалтерия / админ-чаты).
+        SYSTEM_USERNAMES = {
+            "pridecontrole_bot", "prideкоntrol", "prideконтроль",
+            "pride_sys01", "pride_sys02", "pride_manager1",
+            "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
+            "prideassistant", "pride_assistant", "pride_invite_bot",
+            "pridework_invite_bot", "prideoutsource_bot",
+        }
+        if supplier and supplier.lower() in SYSTEM_USERNAMES:
+            logger.warning(
+                "notify_status %s: card=%s supplier=@%s — СИСТЕМНЫЙ аккаунт, "
+                "уведомление НЕ шлём (баг данных, очистите supplier у этого ЛК)",
+                new_status, card_id, supplier,
+            )
+            return False
+
+        if wc:
+            # Проверяем что чат в managed_chats. Если нет — fallback по supplier.
+            from storage import _norm_chat_id as _norm
+            try:
+                mc = storage.state.get("managed_chats") or {}
+                ok = any(_norm(k) == _norm(wc) for k in mc.keys())
+            except Exception:
+                ok = True  # не валим — лучше попытка отправить, чем глухо молчать
+            if not ok:
+                logger.warning(
+                    "notify_status %s: card=%s work_chat_id=%s НЕ в managed_chats — "
+                    "fallback на supplier-резолв",
+                    new_status, card_id, wc,
+                )
+                wc = 0
+
+        # 3) Fallback — резолв через supplier, ТОЛЬКО если в blacklist его нет
+        if not wc and supplier:
             try:
                 wc_key = storage.find_chat_by_client_username(supplier)
                 if wc_key:
@@ -6058,7 +6108,7 @@ class UserbotService:
                 )
         if not wc:
             logger.info(
-                "notify_status %s: card=%s wc=None — пропускаем (нет supplier match)",
+                "notify_status %s: card=%s wc=None — пропускаем (нет work_chat_id и нет supplier match)",
                 new_status, card_id,
             )
             return False

@@ -6214,6 +6214,15 @@
       </div>
     </div>
 
+    <!-- ====== ОПЕРАЦИОННАЯ (типы отчётности) ====== -->
+    <div class="settings-card" x-show="canSubview('settings', 'pricing')" @click="settingsActiveSection = 'operational'; loadOpReportTypes(); loadBalanceSettings()" :class="settingsActiveSection === 'operational' ? 'active' : ''">
+      <div class="settings-card-icon">🛠</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Операционная + Балансы</div>
+        <div class="settings-card-sub">Типы отчётов, лимиты вывода с CRM-баланса</div>
+      </div>
+    </div>
+
     <!-- ====== INVITE / WELCOME ====== -->
     <div class="settings-card" x-show="canSubview('settings', 'invite')" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
       <div class="settings-card-icon">📨</div>
@@ -6705,6 +6714,59 @@
                   style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box;"></textarea>
         <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
           <button class="btn success" @click="saveKnowledgeRules()" style="padding: 8px 20px;">💾 Сохранить правила</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- OPERATIONAL: report types + balance settings -->
+    <div x-show="settingsActiveSection === 'operational'" x-init="if(settingsActiveSection==='operational'){loadOpReportTypes(); loadBalanceSettings()}" class="jarvis-panel" style="padding: 20px; max-height: calc(100vh - 200px); overflow-y: auto;">
+      <h3 style="margin: 0 0 16px 0;">🛠 Операционная + Балансы CRM</h3>
+
+      <!-- Типы отчётности -->
+      <div style="margin-bottom: 28px; max-width: 700px;">
+        <h4 style="margin: 0 0 8px 0;">📁 Типы отчётности операциониста</h4>
+        <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 12px;">
+          Список появляется в dropdown при создании заявки. Owner-only.
+        </div>
+        <div style="display: grid; gap: 6px;">
+          <template x-for="t in opReportTypes" :key="t">
+            <div style="display: flex; gap: 8px; align-items: center; padding: 8px 10px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+              <span style="flex: 1;" x-text="t"></span>
+              <button @click="deleteOpReportType(t)"
+                      style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">✕</button>
+            </div>
+          </template>
+          <div x-show="opReportTypes.length === 0" style="text-align: center; color: var(--text-dim); padding: 16px; font-size: 13px;">
+            Список пуст. Добавьте первый тип ниже.
+          </div>
+        </div>
+        <div style="margin-top: 12px; display: flex; gap: 8px;">
+          <input type="text" x-model="opNewReportType" placeholder="Например: Откуп, Обмен, Грей…" @keydown.enter="addOpReportType()"
+                 style="flex: 1; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <button class="btn success" @click="addOpReportType()" style="padding: 8px 16px;">+ Добавить</button>
+        </div>
+      </div>
+
+      <!-- Настройки CRM-баланса -->
+      <div style="max-width: 700px; padding: 14px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 8px;">
+        <h4 style="margin: 0 0 12px 0;">🏦 Лимиты вывода с CRM-баланса</h4>
+        <div style="display: grid; grid-template-columns: 1fr 100px 80px; gap: 8px; align-items: center;">
+          <label style="font-size: 12px;">Порог авто-вывода (USDT)</label>
+          <input type="number" x-model.number="balanceSettings.auto_threshold_usdt" step="10" min="0"
+                 style="padding: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <span style="font-size: 11px; color: var(--text-dim);">≤ авто</span>
+
+          <label style="font-size: 12px;">Минимальная сумма вывода</label>
+          <input type="number" x-model.number="balanceSettings.min_payout_usdt" step="1" min="0"
+                 style="padding: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff;">
+          <span style="font-size: 11px; color: var(--text-dim);">мин</span>
+
+          <label style="font-size: 12px;">Крупные → ручной апрув</label>
+          <div></div>
+          <input type="checkbox" x-model="balanceSettings.manual_above" style="justify-self: center;">
+        </div>
+        <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+          <button class="btn success" @click="saveBalanceSettings()" style="padding: 8px 20px;">💾 Сохранить</button>
         </div>
       </div>
     </div>
@@ -7563,6 +7625,13 @@ function jarvis() {
     // === ASIK BROADCASTS (утро/вечер) ===
     asikMorning: { enabled: true, time_hhmm: '08:00', text: '', append_pricing: true },
     asikEvening: { enabled: true, time_hhmm: '22:00', text: '', append_pricing: false },
+    // === OPERATIONAL settings ===
+    opReportTypes: [],
+    opNewReportType: '',
+    balanceSettings: { auto_threshold_usdt: 200, min_payout_usdt: 10, manual_above: true },
+    // === CRM Balances (для Бухгалтерии) ===
+    crmBalances: [],
+    crmWithdrawals: [],
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -12193,6 +12262,103 @@ function jarvis() {
         const label = (slot === 'morning') ? '🌅 Утренняя' : '🌙 Вечерняя';
         alert('✅ ' + label + ' рассылка сохранена');
         await this.loadAsikBroadcasts();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === OPERATIONAL report types ===
+    async loadOpReportTypes() {
+      try {
+        const r = await fetch('/api/operational/report_types', { credentials: 'include' });
+        if (r.ok) this.opReportTypes = (await r.json()).types || [];
+      } catch (e) { console.warn('loadOpReportTypes failed', e); }
+    },
+    async addOpReportType() {
+      const name = (this.opNewReportType || '').trim();
+      if (!name) return;
+      try {
+        const r = await fetch('/api/operational/report_types', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this.opNewReportType = '';
+        await this.loadOpReportTypes();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async deleteOpReportType(name) {
+      if (!confirm('Удалить тип "' + name + '"?')) return;
+      try {
+        const r = await fetch('/api/operational/report_types/' + encodeURIComponent(name), {
+          method: 'DELETE', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOpReportTypes();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async loadBalanceSettings() {
+      try {
+        const r = await fetch('/api/balance/settings/get', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          this.balanceSettings = {
+            auto_threshold_usdt: j.auto_threshold_usdt || 200,
+            min_payout_usdt: j.min_payout_usdt || 10,
+            manual_above: !!j.manual_above,
+          };
+        }
+      } catch (e) { console.warn('loadBalanceSettings failed', e); }
+    },
+    async saveBalanceSettings() {
+      try {
+        const r = await fetch('/api/balance/settings/set', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.balanceSettings),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Настройки сохранены');
+        await this.loadBalanceSettings();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === CRM Balances (для Бухгалтерии) ===
+    async loadCrmBalances() {
+      try {
+        const r = await fetch('/api/balance', { credentials: 'include' });
+        if (r.ok) this.crmBalances = (await r.json()).balances || [];
+      } catch (e) { console.warn('loadCrmBalances failed', e); }
+    },
+    async loadCrmWithdrawals(status) {
+      const qs = status ? ('?status=' + status) : '';
+      try {
+        const r = await fetch('/api/balance/withdrawals/list' + qs, { credentials: 'include' });
+        if (r.ok) this.crmWithdrawals = (await r.json()).requests || [];
+      } catch (e) { console.warn('loadCrmWithdrawals failed', e); }
+    },
+    async approveCrmWithdrawal(reqId) {
+      if (!confirm('Подтвердить выплату #' + reqId + '? Это отправит USDT прямо сейчас.')) return;
+      try {
+        const r = await fetch('/api/balance/withdrawals/' + reqId + '/approve', {
+          method: 'POST', credentials: 'include',
+        });
+        const j = await r.json();
+        if (j.ok) {
+          alert('✅ Выплата отправлена. TX: ' + (j.tx_hash || '').slice(0, 24));
+        } else {
+          alert('❌ Не удалось отправить. См. логи.');
+        }
+        await this.loadCrmWithdrawals('');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async cancelCrmWithdrawal(reqId) {
+      if (!confirm('Отменить заявку #' + reqId + '? Сумма вернётся в available баланс.')) return;
+      try {
+        const r = await fetch('/api/balance/withdrawals/' + reqId + '/cancel', {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadCrmWithdrawals('');
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
 
