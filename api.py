@@ -2420,6 +2420,8 @@ async def api_tron_balance(me: dict = Depends(_get_me)):
         _ensure_derived()
         diag["derived_cache_has_priv"] = bool(_DERIVED_CACHE.get("priv"))
         diag["derived_cache_address"] = _DERIVED_CACHE.get("address") or ""
+        diag["derive_error"] = _DERIVED_CACHE.get("error") or ""
+        diag["derive_info"] = _DERIVED_CACHE.get("info") or ""
     except Exception as e:
         diag["derive_attempt_error"] = str(e)
 

@@ -77,12 +77,32 @@ def _derive_from_mnemonic(mnemonic: str, path: str = "") -> tuple:
         )
         return "", ""
     try:
-        # 1) Валидация мнемоники
-        mnemo = Mnemonic("english")
-        if not mnemo.check(mnemonic):
-            logger.error("[tron] mnemonic check failed (invalid checksum or wordlist)")
+        # 1) Валидация мнемоники — проверяем во всех wordlists (BIP39 поддерживает
+        # 9 языков). SafePal обычно даёт английскую.
+        valid_lang = None
+        for lang in ("english", "japanese", "korean", "spanish", "chinese_simplified",
+                     "chinese_traditional", "french", "italian", "czech", "portuguese"):
+            try:
+                if Mnemonic(lang).check(mnemonic):
+                    valid_lang = lang
+                    break
+            except Exception:
+                continue
+        if not valid_lang:
+            logger.error(
+                "[tron] mnemonic checksum failed for ALL wordlists "
+                "(words=%d). Проверь что мнемоника из SafePal копирована БЕЗ опечаток.",
+                len(mnemonic.split()),
+            )
+            _DERIVED_CACHE["error"] = (
+                f"BIP39 checksum failed for all 10 wordlists "
+                f"(word_count={len(mnemonic.split())}). "
+                f"Скорее всего опечатка в одном из слов."
+            )
             return "", ""
-        # 2) Mnemonic → seed
+        if valid_lang != "english":
+            logger.info("[tron] mnemonic language detected: %s", valid_lang)
+        # 2) Mnemonic → seed (Bip39SeedGenerator language-agnostic)
         seed = Bip39SeedGenerator(mnemonic).Generate()
         # 3) BIP44 derivation для TRX
         bip44_mst = Bip44.FromSeed(seed, Bip44Coins.TRON)
@@ -105,7 +125,7 @@ def _derive_from_mnemonic(mnemonic: str, path: str = "") -> tuple:
 
 
 # Кэш — derive один раз при первом запросе чтобы не считать каждый раз.
-_DERIVED_CACHE = {"priv": "", "address": "", "ts": 0.0}
+_DERIVED_CACHE = {"priv": "", "address": "", "ts": 0.0, "error": "", "info": ""}
 
 
 def _ensure_derived():
@@ -115,14 +135,27 @@ def _ensure_derived():
         return
     mn = (os.environ.get("TRON_MNEMONIC") or "").strip()
     if not mn:
+        _DERIVED_CACHE["error"] = "TRON_MNEMONIC env not set"
         return
+    # Нормализуем: схлопываем множественные пробелы в один
+    words = mn.split()
+    word_count = len(words)
+    _DERIVED_CACHE["info"] = f"word_count={word_count}, lengths={[len(w) for w in words[:5]]}…"
+    mn_normalized = " ".join(words)
     path = (os.environ.get("TRON_DERIVATION_PATH") or "").strip()
-    priv, addr = _derive_from_mnemonic(mn, path)
+    try:
+        priv, addr = _derive_from_mnemonic(mn_normalized, path)
+    except Exception as e:
+        _DERIVED_CACHE["error"] = f"derive raised: {type(e).__name__}: {e}"
+        return
     if priv:
         _DERIVED_CACHE["priv"] = priv
         _DERIVED_CACHE["address"] = addr
         _DERIVED_CACHE["ts"] = time.time()
+        _DERIVED_CACHE["error"] = ""
         logger.info("[tron] hot wallet derived from mnemonic, address=%s", addr)
+    else:
+        _DERIVED_CACHE["error"] = "derive returned empty — см. логи Railway (likely BIP39 checksum failed)"
 
 
 def get_private_key() -> str:
