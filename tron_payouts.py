@@ -89,16 +89,49 @@ def _derive_from_mnemonic(mnemonic: str, path: str = "") -> tuple:
             except Exception:
                 continue
         if not valid_lang:
+            # Найдём слово которого нет в английском wordlist и предложим
+            # ближайшее по Levenshtein — для подсказки SIMBA без раскрытия мнемоники.
+            words = mnemonic.split()
+            mn_en = Mnemonic("english")
+            wordlist = set(mn_en.wordlist)
+            bad_positions = []
+            suggestions = []
+            for i, w in enumerate(words):
+                if w.lower() not in wordlist:
+                    bad_positions.append(i + 1)
+                    # Levenshtein distance — найдём 3 ближайших
+                    def _lev(a, b):
+                        if a == b: return 0
+                        if not a: return len(b)
+                        if not b: return len(a)
+                        m = [[0]*(len(b)+1) for _ in range(len(a)+1)]
+                        for x in range(len(a)+1): m[x][0] = x
+                        for y in range(len(b)+1): m[0][y] = y
+                        for x in range(1, len(a)+1):
+                            for y in range(1, len(b)+1):
+                                c = 0 if a[x-1] == b[y-1] else 1
+                                m[x][y] = min(m[x-1][y]+1, m[x][y-1]+1, m[x-1][y-1]+c)
+                        return m[len(a)][len(b)]
+                    near = sorted(wordlist, key=lambda x: _lev(w.lower(), x))[:3]
+                    suggestions.append({"pos": i+1, "len": len(w), "first_char": w[:1], "hint": near})
             logger.error(
-                "[tron] mnemonic checksum failed for ALL wordlists "
-                "(words=%d). Проверь что мнемоника из SafePal копирована БЕЗ опечаток.",
-                len(mnemonic.split()),
+                "[tron] mnemonic checksum failed. bad_positions=%s",
+                bad_positions,
             )
-            _DERIVED_CACHE["error"] = (
-                f"BIP39 checksum failed for all 10 wordlists "
-                f"(word_count={len(mnemonic.split())}). "
-                f"Скорее всего опечатка в одном из слов."
-            )
+            if bad_positions:
+                _DERIVED_CACHE["error"] = (
+                    f"Слов(а) не из BIP39 wordlist: позиции {bad_positions}. "
+                    f"См. derive_suggestions для подсказок."
+                )
+                _DERIVED_CACHE["suggestions"] = suggestions
+            else:
+                # Все слова валидны но checksum не сходится — значит порядок неверный
+                # или одно слово заменено на другое из wordlist (опечатка типа brand→broom)
+                _DERIVED_CACHE["error"] = (
+                    "Все 12 слов есть в wordlist, но checksum не сходится. "
+                    "Скорее всего одно слово заменено на ДРУГОЕ из BIP39 (типа 'broom'→'brand' — оба валидны). "
+                    "Перепроверь порядок и каждое слово по списку https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt"
+                )
             return "", ""
         if valid_lang != "english":
             logger.info("[tron] mnemonic language detected: %s", valid_lang)
