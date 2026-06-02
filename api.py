@@ -2388,22 +2388,53 @@ async def balance_set_address(user_key: str, request: Request, me: dict = Depend
 async def api_tron_balance(me: dict = Depends(_get_me)):
     if me.get("role") not in ("owner", "manager", "accounting"):
         raise HTTPException(403, "forbidden")
+    import os as _os
+    diag = {
+        "env_TRON_MNEMONIC_set": bool((_os.environ.get("TRON_MNEMONIC") or "").strip()),
+        "env_TRON_PRIVATE_KEY_set": bool((_os.environ.get("TRON_PRIVATE_KEY") or "").strip()),
+        "env_TRON_HOT_WALLET_ADDRESS_set": bool((_os.environ.get("TRON_HOT_WALLET_ADDRESS") or "").strip()),
+        "env_TRON_OWNER_TG_ID_set": bool((_os.environ.get("TRON_OWNER_TG_ID") or "").strip()),
+        "env_GUARD_BOT_TOKEN_set": bool((_os.environ.get("GUARD_BOT_TOKEN") or "").strip()),
+        "env_TRON_DERIVATION_PATH": _os.environ.get("TRON_DERIVATION_PATH", "") or "(default m/44'/195'/0'/0/0)",
+    }
+    # Проверка BIP39 зависимостей
+    bip39_ok = False
+    bip39_err = ""
+    try:
+        import mnemonic as _m  # noqa: F401
+        import bip_utils as _b  # noqa: F401
+        bip39_ok = True
+    except Exception as e:
+        bip39_err = str(e)
+    diag["bip39_libs_installed"] = bip39_ok
+    diag["bip39_libs_error"] = bip39_err
+
     try:
         from tron_payouts import is_configured, get_hot_wallet_address, get_hot_wallet_balance
     except Exception as e:
-        return {"error": f"tron_payouts import failed: {e}"}
+        return {**diag, "error": f"tron_payouts import failed: {e}", "configured": False}
+
+    # Принудительно пробуем derive если есть мнемоника но нет privkey
+    try:
+        from tron_payouts import _ensure_derived, _DERIVED_CACHE
+        _ensure_derived()
+        diag["derived_cache_has_priv"] = bool(_DERIVED_CACHE.get("priv"))
+        diag["derived_cache_address"] = _DERIVED_CACHE.get("address") or ""
+    except Exception as e:
+        diag["derive_attempt_error"] = str(e)
+
     if not is_configured():
-        return {
-            "error": "not configured (TRON_PRIVATE_KEY/TRON_MNEMONIC + TRON_HOT_WALLET_ADDRESS missing)",
-            "configured": False,
-        }
+        diag["configured"] = False
+        diag["error"] = "not configured — см. diagnostic выше"
+        return diag
     try:
         bal = await get_hot_wallet_balance()
         bal["address"] = get_hot_wallet_address()
         bal["configured"] = True
+        bal["diagnostic"] = diag
         return bal
     except Exception as e:
-        return {"error": str(e), "configured": False}
+        return {**diag, "error": str(e), "configured": False}
 
 
 # --- 2FA: список pending запросов (для JARVIS owner view) ---

@@ -3444,6 +3444,10 @@ class Storage:
             "auto_threshold_usdt": float(s.get("auto_threshold_usdt") or 200.0),
             "manual_above": bool(s.get("manual_above", True)),
             "min_payout_usdt": float(s.get("min_payout_usdt") or 10.0),
+            "tfa_enabled": bool(s.get("tfa_enabled", True)),
+            "tfa_threshold_usdt": float(s.get("tfa_threshold_usdt") or 1000.0),
+            "tfa_code_ttl_sec": int(s.get("tfa_code_ttl_sec") or 300),
+            "tfa_max_attempts": int(s.get("tfa_max_attempts") or 3),
         }
 
     async def set_balance_settings(self, **fields) -> bool:
