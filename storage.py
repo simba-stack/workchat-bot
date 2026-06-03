@@ -3195,6 +3195,71 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # ============== INVITE REMINDERS (если клиент не вошёл) ==============
+
+    def list_pending_invite_reminders(self, max_age_hours: int = 24) -> list:
+        """Возвращает managed_chats где client_id известен, welcome_sent=False,
+        и нужно отправить очередной reminder (30мин / 2ч / 12ч).
+        Возвращает [{chat_id, client_id, client_name, age_sec, next_stage}]"""
+        import time as _time
+        now = _time.time()
+        out = []
+        mc = self.state.get("managed_chats") or {}
+        # 3 stage с растущими интервалами (в секундах). Если age в окне ±5мин
+        # от нужного offset И reminders_sent не содержит этот stage — шлём.
+        STAGES = [
+            ("30min", 30 * 60),
+            ("2h", 2 * 3600),
+            ("12h", 12 * 3600),
+        ]
+        max_age_sec = max_age_hours * 3600
+        WINDOW = 5 * 60  # ±5 минут окно
+        for chat_id_raw, info in mc.items():
+            try:
+                chat_id = int(chat_id_raw)
+            except Exception:
+                continue
+            if not info or info.get("welcome_sent"):
+                continue
+            client_id = int(info.get("client_id") or 0)
+            if not client_id:
+                continue
+            created_at = float(info.get("created_at") or 0)
+            if not created_at:
+                continue
+            age = now - created_at
+            if age > max_age_sec:
+                continue  # клиент уже забыл, не спамим
+            sent_stages = set(info.get("reminders_sent") or [])
+            # Какой stage сейчас актуален?
+            for stage_name, offset in STAGES:
+                if stage_name in sent_stages:
+                    continue
+                if (offset - WINDOW) <= age <= (offset + WINDOW):
+                    out.append({
+                        "chat_id": chat_id,
+                        "client_id": client_id,
+                        "client_name": info.get("client_name") or "",
+                        "client_username": info.get("client_username") or "",
+                        "age_sec": int(age),
+                        "next_stage": stage_name,
+                    })
+                    break
+        return out
+
+    async def mark_invite_reminder_sent(self, chat_id: int, stage: str) -> bool:
+        async with _lock:
+            mc = self.state.setdefault("managed_chats", {})
+            # Поддерживаем оба формата ключей (signed -100... и unsigned)
+            info = mc.get(str(chat_id)) or mc.get(str(abs(chat_id)))
+            if not info:
+                return False
+            sent = info.setdefault("reminders_sent", [])
+            if stage not in sent:
+                sent.append(stage)
+            await self._save_unlocked()
+            return True
+
     # ============== OPERATIONAL REPORT TYPES ==============
 
     def list_operational_report_types(self) -> list:

@@ -693,6 +693,9 @@ async def main():
     # Делается в фоне чтобы не блокировать запуск polling.
     asyncio.create_task(_run_startup_healthcheck())
 
+    # === Invite reminders (если клиент не вошёл в чат) ===
+    asyncio.create_task(_invite_reminders_loop(bot))
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot)
@@ -754,6 +757,113 @@ async def _safe_outsource_task():
         await run_outsource_bot()
     except Exception as e:
         logger.error("Outsource bot crashed: %s — main bot continues", e)
+
+
+async def _invite_reminders_loop(bot):
+    """Фоновая задача: каждые 5 минут проверяет managed_chats где клиент
+    не вступил, и шлёт reminder через invite-бота в личку клиенту.
+    Stages: 30мин, 2ч, 12ч от создания чата."""
+    await asyncio.sleep(60)  # warm-up
+    REMINDER_TEXTS = {
+        "30min": (
+            "👋 Заметил, что вы пока не зашли в свою рабочую беседу PRIDE.\n\n"
+            "Если что-то не так — напишите сюда, я уточню условия лично под вас. "
+            "Цены и схема работы гибкие, всегда можем подобрать вариант."
+        ),
+        "2h": (
+            "⏳ Ваш персональный рабочий чат всё ещё ждёт вас.\n\n"
+            "Если у вас остались вопросы по условиям или цене — напишите, "
+            "мы готовы обсудить индивидуальные условия."
+        ),
+        "12h": (
+            "👑 Последнее напоминание о вашей беседе в PRIDE.\n\n"
+            "Если что-то не устроило (цена, схема оплаты, банки) — напишите, "
+            "мы можем сделать персональное предложение под ваши задачи. "
+            "Если не интересно — больше беспокоить не будем."
+        ),
+    }
+    CLIENT_LEFT_TEXT = (
+        "👋 Заметили что вы покинули рабочую беседу PRIDE.\n\n"
+        "Если вас что-то не устроило — цены, условия, метод оплаты, "
+        "выбор банков — напишите. Мы можем подобрать персональные условия "
+        "именно под ваши задачи.\n\n"
+        "Готовы обсудить?"
+    )
+    import re as _re
+    while True:
+        try:
+            from storage import storage
+            # 1) Обычные reminder'ы (30мин/2ч/12ч)
+            pending = storage.list_pending_invite_reminders(max_age_hours=24)
+            for p in pending:
+                stage = p.get("next_stage")
+                client_id = p.get("client_id")
+                if not client_id or stage not in REMINDER_TEXTS:
+                    continue
+                try:
+                    await bot.send_message(client_id, REMINDER_TEXTS[stage])
+                    await storage.mark_invite_reminder_sent(p["chat_id"], stage)
+                    logger.info(
+                        "[invite_reminder] sent stage=%s to client=%s (chat=%s)",
+                        stage, client_id, p["chat_id"],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[invite_reminder] send to client=%s failed: %s",
+                        client_id, e,
+                    )
+                    await storage.mark_invite_reminder_sent(p["chat_id"], stage)
+                await asyncio.sleep(0.2)
+
+            # 2) Anti-churn: команды __notify_client_left от юзербота
+            try:
+                cmds = storage.get_pending_dashboard_commands() or []
+            except Exception:
+                cmds = []
+            for cmd in cmds:
+                text = (cmd.get("text") or "").strip()
+                m = _re.match(r"^__notify_client_left\s+(\d+)\s*$", text)
+                if not m:
+                    continue
+                client_id = int(m.group(1))
+                try:
+                    await bot.send_message(client_id, CLIENT_LEFT_TEXT)
+                    cmd_id = cmd.get("id") or cmd.get("ts")
+                    try:
+                        # Помечаем команду как done через storage helper
+                        if hasattr(storage, "mark_dashboard_command_done"):
+                            await storage.mark_dashboard_command_done(cmd_id)
+                        else:
+                            # Fallback — прямо в state
+                            for c in storage.state.get("dashboard_commands") or []:
+                                if c.get("id") == cmd_id or c.get("ts") == cmd_id:
+                                    c["status"] = "done"
+                                    c["result"] = "anti-churn sent"
+                                    break
+                            await storage.save()
+                    except Exception:
+                        pass
+                    logger.info("[client_left] anti-churn sent to client=%s", client_id)
+                except Exception as e:
+                    logger.warning(
+                        "[client_left] send to client=%s failed: %s (likely blocked bot)",
+                        client_id, e,
+                    )
+                    # Тоже отмечаем как done чтобы не зависало в очереди
+                    try:
+                        cmd_id = cmd.get("id") or cmd.get("ts")
+                        for c in storage.state.get("dashboard_commands") or []:
+                            if c.get("id") == cmd_id or c.get("ts") == cmd_id:
+                                c["status"] = "done"
+                                c["result"] = f"failed: {str(e)[:100]}"
+                                break
+                        await storage.save()
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning("[invite_reminder] loop tick error: %s", e)
+        await asyncio.sleep(300)  # 5 минут
 
 
 async def _safe_tron_monitor_task():

@@ -2448,6 +2448,54 @@ async def api_2fa_pending(me: dict = Depends(_get_me)):
     return {"requests": storage.list_2fa_requests(status="pending")}
 
 
+# --- Аудит всех чатов где есть ассистент ---
+@app.get("/api/admin/chats_audit")
+async def api_admin_chats_audit(me: dict = Depends(_get_me)):
+    """Полный аудит managed_chats: title, client_id, joined?, welcome_sent,
+    last_message_ts. Owner/Manager only."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    mc = storage.state.get("managed_chats") or {}
+    import time as _time
+    out = []
+    for k, info in mc.items():
+        try:
+            chat_id = int(k)
+        except Exception:
+            continue
+        last_msg = float(info.get("last_message_ts") or 0)
+        created_at = float(info.get("created_at") or 0)
+        welcome_sent = bool(info.get("welcome_sent"))
+        client_id = int(info.get("client_id") or 0)
+        out.append({
+            "chat_id": chat_id,
+            "title": info.get("title") or info.get("client_name") or "—",
+            "client_id": client_id,
+            "client_username": info.get("client_username") or "",
+            "client_name": info.get("client_name") or "",
+            "welcome_sent": welcome_sent,
+            "client_entered": bool(info.get("client_entered") or welcome_sent),
+            "created_at": created_at,
+            "last_message_ts": last_msg,
+            "age_sec": int(_time.time() - created_at) if created_at else 0,
+            "silence_sec": int(_time.time() - last_msg) if last_msg else None,
+            "ai_muted": bool(info.get("ai_muted")),
+            "awaiting_track_choice": bool(info.get("awaiting_track_choice")),
+            "track": info.get("track") or "",
+            "payment_method": info.get("payment_method") or info.get("method") or "",
+        })
+    out.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+    return {
+        "ok": True,
+        "total": len(out),
+        "client_joined": sum(1 for x in out if x["client_entered"]),
+        "no_welcome": sum(1 for x in out if not x["welcome_sent"]),
+        "ai_muted_count": sum(1 for x in out if x["ai_muted"]),
+        "chats": out,
+    }
+
+
 # --- Cleanup данных (Owner only): фикс багa где CRM-бот стал supplier'ом ---
 @app.post("/api/admin/cleanup_lk_suppliers")
 async def admin_cleanup_lk_suppliers(request: Request, me: dict = Depends(_get_me)):
@@ -2532,6 +2580,7 @@ async def admin_cleanup_crm_owners(request: Request, me: dict = Depends(_get_me)
 # --- Рассылки Асика (утро/вечер во все managed_chats) ---
 @app.get("/api/settings/asik_broadcasts")
 async def settings_get_asik_broadcasts(me: dict = Depends(_get_me)):
+    storage.reload_sync()  # подтянуть свежий state из state.json
     return {
         "ok": True,
         "morning": storage.get_asik_broadcast("morning"),
@@ -2564,6 +2613,7 @@ async def settings_set_asik_broadcast(
 @app.get("/api/settings/knowledge")
 async def settings_get_knowledge(me: dict = Depends(_get_me)):
     """Возвращает текущие raw-тексты прайса/правил + chat_id админ-беседы."""
+    storage.reload_sync()  # свежий state из state.json
     ov = storage.get_knowledge_overrides()
     return {
         "ok": True,
@@ -2588,7 +2638,8 @@ async def settings_set_knowledge_pricing(
     text = (body.get("text") or "").strip()
     uname = me.get("username") or str(me.get("id") or "")
     await storage.set_knowledge_override("pricing", text, updated_by=uname)
-    return {"ok": True, "len": len(text)}
+    logger.info("[knowledge] pricing saved: %d chars by @%s", len(text), uname)
+    return {"ok": True, "len": len(text), "saved": True}
 
 
 @app.post("/api/settings/knowledge/lk_rules")
@@ -2602,7 +2653,8 @@ async def settings_set_knowledge_rules(
     text = (body.get("text") or "").strip()
     uname = me.get("username") or str(me.get("id") or "")
     await storage.set_knowledge_override("lk_rules", text, updated_by=uname)
-    return {"ok": True, "len": len(text)}
+    logger.info("[knowledge] lk_rules saved: %d chars by @%s", len(text), uname)
+    return {"ok": True, "len": len(text), "saved": True}
 
 
 @app.post("/api/settings/knowledge/chat_id")

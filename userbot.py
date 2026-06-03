@@ -966,6 +966,12 @@ class UserbotService:
         if not text:
             logger.info("[asik_broadcast] slot=%s empty text, skip", slot)
             return
+        # Перечитываем свежий state — на случай если рассылка идёт в фоне
+        # и managed_chats обновился из другого процесса.
+        try:
+            storage.reload_sync()
+        except Exception:
+            pass
         try:
             chats = (storage.state.get("managed_chats") or {})
         except Exception as e:
@@ -973,9 +979,18 @@ class UserbotService:
             chats = {}
         if not chats:
             logger.info("[asik_broadcast] slot=%s no managed_chats", slot)
+            try:
+                await storage.add_notification(
+                    type="warning",
+                    text=f"⚠️ Рассылка {slot}: 0 managed_chats — некуда слать!",
+                    dedup_key=f"asik_no_chats:{slot}:{__import__('time').strftime('%Y-%m-%d')}",
+                )
+            except Exception:
+                pass
             return
         sent = 0
         failed = 0
+        failed_chats = []  # для детального отчёта
         for cid_raw, info in chats.items():
             try:
                 cid = int(cid_raw)
@@ -984,18 +999,51 @@ class UserbotService:
             try:
                 await self.client.send_message(cid, text[:3900])
                 sent += 1
-                # Маленькая пауза против flood-wait
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05)  # flood-wait protection
             except Exception as e:
                 failed += 1
+                err_short = str(e)[:80]
+                failed_chats.append({
+                    "chat_id": cid,
+                    "title": (info or {}).get("client_name") or "—",
+                    "error": err_short,
+                })
                 logger.warning(
-                    "[asik_broadcast] send to chat=%s failed: %s",
-                    cid, e,
+                    "[asik_broadcast] send to chat=%s (%s) failed: %s",
+                    cid, (info or {}).get("client_name") or "—", err_short,
                 )
         logger.info(
             "[asik_broadcast] slot=%s sent=%d failed=%d total_chats=%d",
             slot, sent, failed, len(chats),
         )
+        # Сохраняем результат рассылки в storage (для JARVIS просмотра)
+        try:
+            log_entry = {
+                "slot": slot, "ts": __import__("time").time(),
+                "sent": sent, "failed": failed, "total": len(chats),
+                "failed_chats": failed_chats[:50],  # cap to не разнести state
+            }
+            broadcasts_log = storage.state.setdefault("asik_broadcast_log", [])
+            broadcasts_log.append(log_entry)
+            # Держим последние 50 записей
+            if len(broadcasts_log) > 50:
+                storage.state["asik_broadcast_log"] = broadcasts_log[-50:]
+            await storage.save()
+        except Exception as e:
+            logger.warning("[asik_broadcast] save log failed: %s", e)
+        # Сводный notification в JARVIS
+        try:
+            emoji = "🌅" if slot == "morning" else "🌙"
+            await storage.add_notification(
+                type="success" if failed == 0 else "warning",
+                text=(
+                    f"{emoji} Рассылка {slot}: ✅ {sent} / ❌ {failed} (всего {len(chats)} чатов). "
+                    + (f"Не дошло: {', '.join(str(c['chat_id']) for c in failed_chats[:5])}" if failed_chats else "")
+                ),
+                dedup_key=f"asik_summary:{slot}:{__import__('time').strftime('%Y-%m-%d')}",
+            )
+        except Exception:
+            pass
 
     async def _handle_knowledge_command(self, event) -> bool:
         """Обрабатывает команды в knowledge_admin_chat:
@@ -1151,11 +1199,20 @@ class UserbotService:
         try:
             uid = getattr(event, "user_id", None)
             logger.info(
-                "ChatAction received: chat_id=%s user_id=%s joined=%s added=%s",
+                "ChatAction received: chat_id=%s user_id=%s joined=%s added=%s left=%s kicked=%s",
                 event.chat_id, uid, event.user_joined, event.user_added,
+                getattr(event, "user_left", False), getattr(event, "user_kicked", False),
             )
         except Exception:
             pass
+
+        # === Клиент ВЫШЕЛ из чата → invite-бот пишет ему в личку ===
+        if getattr(event, "user_left", False) or getattr(event, "user_kicked", False):
+            try:
+                await self._handle_client_left(event)
+            except Exception as e:
+                logger.warning("client_left handler failed: %s", e)
+            return
 
         if not (event.user_joined or event.user_added):
             return
@@ -1188,6 +1245,96 @@ class UserbotService:
             return
 
         await self._send_welcome(event.chat_id, expected, source="event")
+
+    async def _handle_client_left(self, event):
+        """Клиент вышел/был кикнут из work_chat — invite-бот пишет ему в личку
+        с предложением обсудить условия индивидуально (anti-churn)."""
+        chat_id = event.chat_id
+        info = storage.get_chat_info(chat_id)
+        if not info:
+            return
+        client_id = int(info.get("client_id") or 0)
+        if not client_id:
+            return
+        # Кто вышел? Должен быть именно клиент (не один из работников).
+        # event.user_id обычно — кто кикнул/удалился.
+        left_uid = None
+        try:
+            left_uid = int(getattr(event, "user_id", 0) or 0)
+        except Exception:
+            pass
+        try:
+            users = await event.get_users()
+            for u in users or []:
+                _uid = getattr(u, "id", None)
+                if _uid:
+                    left_uid = int(_uid)
+                    break
+        except Exception:
+            pass
+        if left_uid and left_uid != client_id:
+            logger.info(
+                "[client_left] chat=%s left_uid=%s != client_id=%s — skip",
+                chat_id, left_uid, client_id,
+            )
+            return
+        # Анти-спам: запоминаем что уже слали anti-churn в этот чат
+        if info.get("anti_churn_sent"):
+            return
+        # Шлём через invite-бот (main bot)
+        text = (
+            "👋 Заметили что вы покинули рабочую беседу PRIDE.\n\n"
+            "Если вас что-то не устроило — цены, условия, метод оплаты, "
+            "выбор банков — напишите. Мы можем подобрать персональные условия "
+            "именно под ваши задачи.\n\n"
+            "Готовы обсудить?"
+        )
+        sent = False
+        try:
+            # event_bus → main bot
+            try:
+                from event_bus import emit_event
+                emit_event("client_left_chat", {
+                    "chat_id": chat_id, "client_id": client_id,
+                    "client_name": info.get("client_name") or "",
+                }, character="chat", severity="warning")
+            except Exception:
+                pass
+            # Прямой fallback: pipe через storage.enqueue_dashboard_command
+            try:
+                await storage.enqueue_dashboard_command(
+                    f"__notify_client_left {client_id}"
+                )
+                sent = True
+            except Exception as e:
+                logger.warning("[client_left] enqueue notify failed: %s", e)
+        except Exception as e:
+            logger.warning("[client_left] notify-flow failed: %s", e)
+
+        # Отмечаем чтобы не спамить если клиент выходит-входит несколько раз
+        try:
+            mc = storage.state.setdefault("managed_chats", {})
+            key = str(chat_id) if str(chat_id) in mc else str(abs(chat_id))
+            if key in mc:
+                mc[key]["anti_churn_sent"] = True
+                mc[key]["anti_churn_ts"] = __import__("time").time()
+                await storage.save()
+        except Exception:
+            pass
+
+        # Уведомление в JARVIS для owner
+        try:
+            await storage.add_notification(
+                type="warning",
+                text=(
+                    f"😶 Клиент {info.get('client_name') or client_id} вышел из "
+                    f"чата {chat_id}. Invite-бот написал ему предложение обсудить "
+                    f"условия (sent={sent})."
+                ),
+                dedup_key=f"client_left:{chat_id}:{client_id}",
+            )
+        except Exception:
+            pass
 
     async def _send_welcome(self, chat_id, expected_client_id: int, source: str = "?"):
         lock = self._get_welcome_lock(chat_id)
