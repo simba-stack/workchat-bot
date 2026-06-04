@@ -117,13 +117,18 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
     settings = storage.get_outkup_settings()
     if not settings.get("enabled"):
         return False
-    payments_chat = settings.get("payments_chat_id") or 0
-    if not payments_chat:
-        return False
-    # Нормализуем chat_id (-100 префикс)
-    from storage import _norm_chat_id
-    if _norm_chat_id(event.chat_id) != _norm_chat_id(payments_chat):
-        return False
+    # v2: проверяем что чат зарегистрирован как outkup work-chat (per-партнёр).
+    # Старый legacy: payments_chat_id (один общий чат) — поддерживаем как fallback.
+    is_outkup = False
+    try:
+        is_outkup = storage.is_outkup_chat(event.chat_id)
+    except Exception:
+        pass
+    if not is_outkup:
+        from storage import _norm_chat_id
+        legacy_chat = settings.get("payments_chat_id") or 0
+        if not legacy_chat or _norm_chat_id(event.chat_id) != _norm_chat_id(legacy_chat):
+            return False
     # Игнорируем сообщения от самого userbot/админа
     if not event.message or not (event.message.text or "").strip():
         return False
@@ -194,16 +199,21 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
 
 
 async def handle_outkup_confirm(event, userbot, storage) -> bool:
-    """Если клиент пишет 'да' или 'нет' в ответ на заявку — обрабатываем."""
+    """Если клиент пишет 'да' / 'подтверждаю' / 'нет' в ответ на заявку."""
     settings = storage.get_outkup_settings()
     if not settings.get("enabled"):
         return False
-    payments_chat = settings.get("payments_chat_id") or 0
-    if not payments_chat:
-        return False
-    from storage import _norm_chat_id
-    if _norm_chat_id(event.chat_id) != _norm_chat_id(payments_chat):
-        return False
+    # v2: проверяем outkup_chats, legacy fallback на payments_chat_id
+    is_outkup = False
+    try:
+        is_outkup = storage.is_outkup_chat(event.chat_id)
+    except Exception:
+        pass
+    if not is_outkup:
+        from storage import _norm_chat_id
+        legacy_chat = settings.get("payments_chat_id") or 0
+        if not legacy_chat or _norm_chat_id(event.chat_id) != _norm_chat_id(legacy_chat):
+            return False
     if not event.message:
         return False
     text = (event.message.text or "").strip().lower()

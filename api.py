@@ -2448,6 +2448,60 @@ async def api_2fa_pending(me: dict = Depends(_get_me)):
     return {"requests": storage.list_2fa_requests(status="pending")}
 
 
+# --- Откупы v2: чаты фин-партнёров (регистрация) ---
+@app.get("/api/outkup/chats")
+async def api_outkup_chats_list(me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist", "accounting"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    chats = storage.list_outkup_chats()
+    items = []
+    for cid_raw, info in chats.items():
+        eff = storage.get_outkup_client_settings(cid_raw)
+        items.append({
+            "chat_id": info.get("chat_id") or int(cid_raw),
+            "partner_username": info.get("partner_username") or "",
+            "partner_name": info.get("partner_name") or "",
+            "registered_at": info.get("registered_at") or 0,
+            "registered_by": info.get("registered_by") or "",
+            "notes": info.get("notes") or "",
+            "rate_rub_per_usdt": eff["rate_rub_per_usdt"],
+            "pct_fee": eff["pct_fee"],
+            "is_personal_rate": eff.get("is_personal", False),
+        })
+    items.sort(key=lambda x: -(x.get("registered_at") or 0))
+    return {"chats": items, "total": len(items)}
+
+
+@app.post("/api/outkup/chats/add")
+async def api_outkup_chats_add(request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    try:
+        cid = int(body.get("chat_id") or 0)
+    except Exception:
+        cid = 0
+    if not cid:
+        raise HTTPException(400, "chat_id required")
+    await storage.add_outkup_chat(
+        cid,
+        partner_username=(body.get("partner_username") or "").lstrip("@"),
+        partner_name=body.get("partner_name") or "",
+        registered_by=me.get("username") or "",
+        notes=body.get("notes") or "",
+    )
+    return {"ok": True, "chat": storage.get_outkup_chat(cid)}
+
+
+@app.delete("/api/outkup/chats/{chat_id}")
+async def api_outkup_chats_remove(chat_id: int, me: dict = Depends(_get_me)):
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    ok = await storage.remove_outkup_chat(chat_id)
+    return {"ok": ok}
+
+
 # --- Откупы v2: per-client settings + payments lifecycle ---
 @app.get("/api/outkup/client_settings/{chat_id}")
 async def api_outkup_client_settings_get(chat_id: int, me: dict = Depends(_get_me)):

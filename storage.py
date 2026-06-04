@@ -326,7 +326,12 @@ def _default_state() -> dict:
         "outkup_orders": {},
         "outkup_orders_seq": 0,
         # === Откупы v2 (июнь 2026) ===
-        # Per-client overrides: для каждого work_chat можно задать свой курс и %.
+        # Зарегистрированные work-чаты фин-партнёров (откупщики). У каждого
+        # партнёра свой чат, ассистент сидит внутри и обрабатывает заявки.
+        # {chat_id_str: {partner_username, partner_name, registered_at,
+        #                registered_by, notes}}
+        "outkup_chats": {},
+        # Per-client overrides: для каждого outkup-чата свой курс и %.
         # {chat_id_str: {rate_rub_per_usdt, pct_fee, notes, updated_at, updated_by}}
         "outkup_client_settings": {},
         # Выданные реквизиты под заявку (partial payments).
@@ -5056,6 +5061,59 @@ class Storage:
         if not order_id:
             return None
         return (self.state.get("outkup_orders") or {}).get(str(order_id))
+
+    # === v2: outkup_chats — регистрация чатов фин-партнёров ===
+
+    def is_outkup_chat(self, chat_id) -> bool:
+        """True если чат зарегистрирован как outkup work-chat."""
+        chats = self.state.get("outkup_chats") or {}
+        if str(chat_id) in chats:
+            return True
+        # cross-check со знаком (-100…)
+        try:
+            cid = int(chat_id)
+            if str(abs(cid)) in chats:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def list_outkup_chats(self) -> dict:
+        return dict(self.state.get("outkup_chats") or {})
+
+    def get_outkup_chat(self, chat_id) -> Optional[dict]:
+        chats = self.state.get("outkup_chats") or {}
+        return chats.get(str(chat_id)) or chats.get(str(abs(int(chat_id or 0))))
+
+    async def add_outkup_chat(
+        self, chat_id, partner_username: str = "",
+        partner_name: str = "", registered_by: str = "",
+        notes: str = "",
+    ) -> bool:
+        async with _lock:
+            chats = self.state.setdefault("outkup_chats", {})
+            chats[str(chat_id)] = {
+                "chat_id": int(chat_id),
+                "partner_username": (partner_username or "").lstrip("@").lower(),
+                "partner_name": partner_name or "",
+                "registered_at": time.time(),
+                "registered_by": registered_by or "",
+                "notes": notes or "",
+            }
+            await self._save_unlocked()
+            return True
+
+    async def remove_outkup_chat(self, chat_id) -> bool:
+        async with _lock:
+            chats = self.state.setdefault("outkup_chats", {})
+            removed = False
+            for key in (str(chat_id), str(abs(int(chat_id or 0)))):
+                if key in chats:
+                    del chats[key]
+                    removed = True
+            if removed:
+                await self._save_unlocked()
+            return removed
 
     # === v2: per-client settings (курс и % комиссии могут отличаться) ===
 

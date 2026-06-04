@@ -9453,6 +9453,138 @@ class UserbotService:
                 logger.warning("notify_client_otrabotan %s %s: %s", wc, cid, e)
                 return f"⚠️ notify failed: {e}"
 
+        # ===== ОТКУПЫ v2: __outkup_send_req <order_id> <pay_id> =====
+        # Менеджер выдал реквизит через JARVIS → шлём клиенту в его outkup-чат.
+        m = re.match(r"^__outkup_send_req\s+(\S+)\s+(\S+)\s*$", text, re.I)
+        if m:
+            order_id = m.group(1)
+            pay_id = m.group(2)
+            try:
+                order = storage.get_outkup_order(order_id)
+                pay = storage.get_outkup_payment(pay_id)
+                if not order or not pay:
+                    return f"⚠️ outkup_send_req: order={order_id} pay={pay_id} not found"
+                wc = int(order.get("client_chat_id") or 0)
+                if not wc:
+                    return f"⚠️ outkup_send_req: client_chat_id empty"
+                req_num = int(order.get("req_num") or 0)
+                remaining = float(order.get("amount_rub_remaining") or 0)
+                rem_line = (
+                    f"\n💼 Остаток заявки: <b>{remaining:,.0f} ₽</b>".replace(",", " ")
+                    if remaining > 0.01 else ""
+                )
+                msg = (
+                    f"📋 <b>Реквизит к заявке #{req_num:04d}:</b>\n\n"
+                    f"🏦 Банк: <b>{pay.get('bank')}</b>\n"
+                    f"📱 Телефон: <code>{pay.get('phone')}</code>\n"
+                    f"💰 К переводу: <b>{float(pay.get('amount_rub') or 0):,.0f} ₽</b>\n\n"
+                    f"После перевода <b>пришлите чек reply'ом</b> на это сообщение."
+                    f"{rem_line}"
+                ).replace(",", " ").replace(" ", " ")
+                target = await self._resolve_chat_target(wc)
+                sent = await self.client.send_message(target, msg, parse_mode="html")
+                # Сохраняем msg_id для receipt-reply детектора
+                if sent:
+                    await storage.update_outkup_payment(
+                        pay_id, client_msg_id=int(sent.id),
+                    )
+                return f"✅ outkup req sent: order={order_id} pay={pay_id}"
+            except Exception as e:
+                logger.warning("outkup_send_req failed: %s", e)
+                return f"⚠️ outkup_send_req: {e}"
+
+        # ===== __outkup_notify_confirmed <pay_id> =====
+        m = re.match(r"^__outkup_notify_confirmed\s+(\S+)\s*$", text, re.I)
+        if m:
+            pay_id = m.group(1)
+            try:
+                pay = storage.get_outkup_payment(pay_id)
+                if not pay:
+                    return f"⚠️ outkup_confirmed: pay={pay_id} not found"
+                order = storage.get_outkup_order(pay.get("order_id"))
+                if not order:
+                    return f"⚠️ outkup_confirmed: order not found"
+                wc = int(order.get("client_chat_id") or 0)
+                req_num = int(order.get("req_num") or 0)
+                msg = (
+                    f"✅ Чек по заявке #{req_num:04d} подтверждён. "
+                    f"Сумма: <b>{float(pay.get('amount_rub') or 0):,.0f} ₽</b>."
+                ).replace(",", " ")
+                # Если заявка закрыта (все реки confirmed) — добавим итог
+                if order.get("status") == "done":
+                    payout = float(order.get("payout_client_usdt") or 0)
+                    msg += f"\n\n💵 К выплате: <b>{payout:.2f} USDT TRC20</b>. Спасибо за обмен!"
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(target, msg, parse_mode="html",
+                                                reply_to=int(pay.get("client_msg_id") or 0) or None)
+                return f"✅ outkup confirmed sent: pay={pay_id}"
+            except Exception as e:
+                return f"⚠️ outkup_confirmed: {e}"
+
+        # ===== __outkup_request_new_receipt <pay_id> =====
+        m = re.match(r"^__outkup_request_new_receipt\s+(\S+)\s*$", text, re.I)
+        if m:
+            pay_id = m.group(1)
+            try:
+                pay = storage.get_outkup_payment(pay_id)
+                if not pay:
+                    return f"⚠️ pay={pay_id} not found"
+                order = storage.get_outkup_order(pay.get("order_id"))
+                if not order:
+                    return f"⚠️ order not found"
+                wc = int(order.get("client_chat_id") or 0)
+                req_num = int(order.get("req_num") or 0)
+                # Берём последний коммент-причину
+                reason = ""
+                for c in reversed(pay.get("comments") or []):
+                    if "Отклонено" in (c.get("text") or ""):
+                        reason = c.get("text") or ""
+                        break
+                msg = (
+                    f"🔄 По заявке #{req_num:04d} требуется новый чек.\n\n"
+                    + (reason + "\n\n" if reason else "")
+                    + f"Пришлите корректный чек на сумму "
+                    f"<b>{float(pay.get('amount_rub') or 0):,.0f} ₽</b> "
+                    f"reply'ом на это сообщение."
+                ).replace(",", " ")
+                target = await self._resolve_chat_target(wc)
+                sent = await self.client.send_message(target, msg, parse_mode="html",
+                                                       reply_to=int(pay.get("client_msg_id") or 0) or None)
+                if sent:
+                    await storage.update_outkup_payment(
+                        pay_id, client_msg_id=int(sent.id), status="waiting_receipt",
+                    )
+                return f"✅ outkup new-receipt requested: pay={pay_id}"
+            except Exception as e:
+                return f"⚠️ outkup_request_new_receipt: {e}"
+
+        # ===== __outkup_comment_to_client <pay_id> =====
+        m = re.match(r"^__outkup_comment_to_client\s+(\S+)\s*$", text, re.I)
+        if m:
+            pay_id = m.group(1)
+            try:
+                pay = storage.get_outkup_payment(pay_id)
+                if not pay:
+                    return f"⚠️ pay={pay_id} not found"
+                order = storage.get_outkup_order(pay.get("order_id"))
+                if not order:
+                    return f"⚠️ order not found"
+                wc = int(order.get("client_chat_id") or 0)
+                # Последний комментарий от менеджера
+                comments = pay.get("comments") or []
+                if not comments:
+                    return f"⚠️ no comments"
+                last = comments[-1]
+                if (last.get("by") or "").startswith("client:"):
+                    return f"ℹ️ last comment is from client — nothing to send"
+                msg = f"💬 {last.get('text') or ''}"
+                target = await self._resolve_chat_target(wc)
+                await self.client.send_message(target, msg,
+                                                reply_to=int(pay.get("client_msg_id") or 0) or None)
+                return f"✅ outkup comment sent: pay={pay_id}"
+            except Exception as e:
+                return f"⚠️ outkup_comment_to_client: {e}"
+
         # ===== KUC → уведомить клиента в work_chat о решении =====
         # Формат: __notify_client_kuc_result <work_chat_id> <token> <decision>
         # decision: 'approved' | 'rejected'

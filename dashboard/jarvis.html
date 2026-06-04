@@ -6299,6 +6299,15 @@
       </div>
     </div>
 
+    <!-- ====== ОТКУПЫ (P2P фин-партнёры) ====== -->
+    <div class="settings-card" x-show="canSubview('settings', 'pricing')" @click="settingsActiveSection = 'outkup_partners'; loadOutkupAll()" :class="settingsActiveSection === 'outkup_partners' ? 'active' : ''">
+      <div class="settings-card-icon">🔄</div>
+      <div class="settings-card-body">
+        <div class="settings-card-title">Откупы — фин-партнёры</div>
+        <div class="settings-card-sub">Курс/% по каждому партнёру + чат команды</div>
+      </div>
+    </div>
+
     <!-- ====== INVITE / WELCOME ====== -->
     <div class="settings-card" x-show="canSubview('settings', 'invite')" @click="settingsActiveSection = 'invite'; loadSettings()" :class="settingsActiveSection === 'invite' ? 'active' : ''">
       <div class="settings-card-icon">📨</div>
@@ -6887,6 +6896,117 @@
     </div>
 
     <!-- ASIK BROADCASTS (утро/вечер) -->
+    <!-- OUTKUP PARTNERS — глобальные + команда + список партнёров -->
+    <div x-show="settingsActiveSection === 'outkup_partners'" x-init="if(settingsActiveSection==='outkup_partners') loadOutkupAll()" class="jarvis-panel" style="padding: 20px; max-height: calc(100vh - 200px); overflow-y: auto;">
+      <h3 style="margin: 0 0 16px 0;">🔄 Откупы — фин-партнёры</h3>
+
+      <!-- Глобальные настройки + чат команды -->
+      <div style="max-width: 900px; padding: 14px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 8px; margin-bottom: 18px;">
+        <h4 style="margin: 0 0 10px 0;">⚙️ Глобальные настройки</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div>
+            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">📊 Курс по умолчанию (₽/USDT)</label>
+            <input type="number" step="0.01" x-model.number="outkupGlobal.rate_rub_per_usdt"
+                   style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">⚙️ Комиссия по умолчанию (%)</label>
+            <input type="number" step="0.1" x-model.number="outkupGlobal.pct_fee"
+                   style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">💰 Минимальная сумма (₽)</label>
+            <input type="number" step="1000" x-model.number="outkupGlobal.min_amount_rub"
+                   style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">💎 Максимальная сумма (₽)</label>
+            <input type="number" step="10000" x-model.number="outkupGlobal.max_amount_rub"
+                   style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+          </div>
+          <div style="grid-column: 1/3;">
+            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">👥 Chat ID команды-откупщиков (туда приходят новые заявки)</label>
+            <input type="number" x-model.number="outkupGlobal.outkup_team_chat_id" placeholder="-1001234567890"
+                   style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px; font-family:monospace;">
+          </div>
+          <div style="grid-column: 1/3;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px;">
+              <input type="checkbox" x-model="outkupGlobal.enabled">
+              <span>Модуль Откупов включён</span>
+            </label>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+          <button class="btn success" @click="saveOutkupGlobal()" style="padding: 8px 20px;">💾 Сохранить глобальные</button>
+        </div>
+      </div>
+
+      <!-- Список чатов фин-партнёров -->
+      <div style="max-width: 900px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+          <h4 style="margin: 0;">🤝 Чаты фин-партнёров</h4>
+          <button class="chip-btn" @click="loadOutkupChats()" style="padding: 4px 10px;">↻ Обновить</button>
+        </div>
+        <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 12px; line-height: 1.5;">
+          У каждого фин-партнёра свой work_chat. Ассистент слушает «дай рек на N» только в этих чатах.
+          Можно задать персональный курс и % для каждого.
+        </div>
+
+        <!-- Add form -->
+        <div style="padding: 12px; background: rgba(74,222,128,0.05); border: 1px solid rgba(74,222,128,0.15); border-radius: 8px; margin-bottom: 12px;">
+          <div style="display: grid; grid-template-columns: 2fr 1.5fr 1.5fr auto; gap: 8px; align-items: end;">
+            <div>
+              <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">Chat ID *</label>
+              <input type="number" x-model.number="outkupNewChat.chat_id" placeholder="-1001234567890"
+                     style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px; font-family:monospace;">
+            </div>
+            <div>
+              <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">@ Username партнёра</label>
+              <input type="text" x-model="outkupNewChat.partner_username" placeholder="partner_user"
+                     style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">Имя</label>
+              <input type="text" x-model="outkupNewChat.partner_name" placeholder="ООО Ромашка"
+                     style="width:100%; padding:6px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+            </div>
+            <button class="btn success" @click="addOutkupChat()" style="padding: 7px 14px;">+ Добавить</button>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div style="display: grid; grid-template-columns: 130px 1fr 1fr 100px 80px 60px; gap: 6px; padding: 6px 8px; font-size: 11px; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 4px;">
+          <div>Chat ID</div>
+          <div>Партнёр</div>
+          <div>Имя</div>
+          <div style="text-align:right;">Курс</div>
+          <div style="text-align:right;">% комиссия</div>
+          <div></div>
+        </div>
+        <template x-if="(outkupChats || []).length === 0">
+          <div style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 13px;">Пока ни одного партнёра не добавлено.</div>
+        </template>
+        <template x-for="c in outkupChats" :key="c.chat_id">
+          <div style="display: grid; grid-template-columns: 130px 1fr 1fr 100px 80px 60px; gap: 6px; padding: 8px; font-size: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="font-family: monospace; font-size: 10px;" x-text="c.chat_id"></span>
+            <span x-text="c.partner_username ? '@'+c.partner_username : '—'"></span>
+            <span x-text="c.partner_name || '—'"></span>
+            <input type="number" step="0.01" :value="c.rate_rub_per_usdt"
+                   @change="updateOutkupClientSettings(c.chat_id, 'rate_rub_per_usdt', $event.target.value)"
+                   :style="'width:100%; padding:4px; background:rgba(0,0,0,0.3); color:'+(c.is_personal_rate?'#4ade80':'#fff')+'; border:1px solid rgba(255,255,255,0.1); border-radius:3px; text-align:right; font-size:11px;'">
+            <input type="number" step="0.1" :value="c.pct_fee"
+                   @change="updateOutkupClientSettings(c.chat_id, 'pct_fee', $event.target.value)"
+                   :style="'width:100%; padding:4px; background:rgba(0,0,0,0.3); color:'+(c.is_personal_rate?'#4ade80':'#fff')+'; border:1px solid rgba(255,255,255,0.1); border-radius:3px; text-align:right; font-size:11px;'">
+            <button @click="removeOutkupChat(c.chat_id)" style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 4px; font-size: 11px; cursor: pointer;">✕</button>
+          </div>
+        </template>
+        <div style="font-size: 10px; color: var(--text-dim); margin-top: 10px; line-height: 1.5;">
+          🟢 Зелёное число = персональный override, белое = глобальное значение.
+          Меняй прямо в таблице — сохраняется автоматически.
+        </div>
+      </div>
+    </div>
+
     <div x-show="settingsActiveSection === 'asik_broadcasts'" x-init="if(settingsActiveSection==='asik_broadcasts') loadAsikBroadcasts()" class="jarvis-panel" style="padding: 20px; max-height: calc(100vh - 200px); overflow-y: auto;">
       <h3 style="margin: 0 0 8px 0;">🔔 Рассылки Асика</h3>
       <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5;">
@@ -7752,6 +7872,13 @@ function jarvis() {
     crmBalances: [],
     crmWithdrawals: [],
     crmWdFilter: '',
+    // === OUTKUP partners (Settings) ===
+    outkupGlobal: {
+      rate_rub_per_usdt: 100, pct_fee: 5, min_amount_rub: 5000,
+      max_amount_rub: 5000000, outkup_team_chat_id: 0, enabled: true,
+    },
+    outkupChats: [],
+    outkupNewChat: { chat_id: null, partner_username: '', partner_name: '' },
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -12503,6 +12630,86 @@ function jarvis() {
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         alert('✅ Настройки сохранены');
         await this.loadBalanceSettings();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+
+    // === OUTKUP partners settings ===
+    async loadOutkupAll() {
+      await Promise.all([this.loadOutkupGlobal(), this.loadOutkupChats()]);
+    },
+    async loadOutkupGlobal() {
+      try {
+        const r = await fetch('/api/settings/outkup', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          this.outkupGlobal = {
+            rate_rub_per_usdt: j.rate_rub_per_usdt || 100,
+            pct_fee: j.pct_fee || 5,
+            min_amount_rub: j.min_amount_rub || 5000,
+            max_amount_rub: j.max_amount_rub || 5000000,
+            outkup_team_chat_id: j.outkup_team_chat_id || 0,
+            enabled: !!j.enabled,
+          };
+        }
+      } catch (e) { console.warn('loadOutkupGlobal failed', e); }
+    },
+    async saveOutkupGlobal() {
+      try {
+        const r = await fetch('/api/settings/outkup', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.outkupGlobal),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        alert('✅ Глобальные настройки откупов сохранены');
+        await this.loadOutkupGlobal();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async loadOutkupChats() {
+      try {
+        const r = await fetch('/api/outkup/chats', { credentials: 'include' });
+        if (r.ok) this.outkupChats = (await r.json()).chats || [];
+      } catch (e) { console.warn('loadOutkupChats failed', e); }
+    },
+    async addOutkupChat() {
+      const c = this.outkupNewChat;
+      if (!c.chat_id) { alert('Введи Chat ID'); return; }
+      try {
+        const r = await fetch('/api/outkup/chats/add', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: c.chat_id,
+            partner_username: c.partner_username || '',
+            partner_name: c.partner_name || '',
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this.outkupNewChat = { chat_id: null, partner_username: '', partner_name: '' };
+        await this.loadOutkupChats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async removeOutkupChat(chatId) {
+      if (!confirm('Удалить партнёра ' + chatId + '? Заявки сохранятся, но новые сообщения в чате игнорируются.')) return;
+      try {
+        const r = await fetch('/api/outkup/chats/' + chatId, {
+          method: 'DELETE', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupChats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async updateOutkupClientSettings(chatId, field, value) {
+      const payload = {};
+      payload[field] = parseFloat(value) || 0;
+      try {
+        const r = await fetch('/api/outkup/client_settings/' + chatId, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupChats();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
 
