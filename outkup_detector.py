@@ -118,6 +118,7 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
     """
     settings = storage.get_outkup_settings()
     if not settings.get("enabled"):
+        logger.info("[outkup] disabled — skip chat=%s", event.chat_id)
         return False
     # v2: проверяем что чат зарегистрирован как outkup work-chat (per-партнёр).
     # Старый legacy: payments_chat_id (один общий чат) — поддерживаем как fallback.
@@ -129,15 +130,32 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
     if not is_outkup:
         from storage import _norm_chat_id
         legacy_chat = settings.get("payments_chat_id") or 0
-        if not legacy_chat or _norm_chat_id(event.chat_id) != _norm_chat_id(legacy_chat):
+        norm_event = _norm_chat_id(event.chat_id)
+        norm_legacy = _norm_chat_id(legacy_chat) if legacy_chat else 0
+        if not legacy_chat or norm_event != norm_legacy:
+            logger.info(
+                "[outkup] chat NOT registered: event=%s (norm=%s) is_outkup=%s legacy=%s (norm=%s) — skip",
+                event.chat_id, norm_event, is_outkup, legacy_chat, norm_legacy,
+            )
             return False
+        logger.info("[outkup] matched legacy chat: %s", legacy_chat)
+    else:
+        logger.info("[outkup] matched outkup_chats: %s", event.chat_id)
     # Игнорируем сообщения от самого userbot/админа
     if not event.message or not (event.message.text or "").strip():
         return False
     text = event.message.text.strip()
     parsed = parse_outkup_request(text)
     if not parsed:
+        logger.info(
+            "[outkup] parse_failed: chat=%s text=%r — нужны сумма + метод (СБП/карта/рек/реквизит)",
+            event.chat_id, text[:80],
+        )
         return False
+    logger.info(
+        "[outkup] parsed OK: chat=%s amount=%s method=%s",
+        event.chat_id, parsed.get("amount_rub"), parsed.get("method"),
+    )
     # Проверка sender (не worker / не сам userbot)
     sender_id = event.sender_id
     if userbot._me and sender_id == userbot._me.id:
