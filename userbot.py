@@ -758,6 +758,15 @@ class UserbotService:
         @self.client.on(events.NewMessage(incoming=True))
         async def _on_new_message(event):
             try:
+                # Самая первая строка — лог любого incoming сообщения для дебага
+                try:
+                    _t = (getattr(event.message, "text", "") or getattr(event.message, "message", "") or "")[:60]
+                    logger.info(
+                        "[INCOMING] chat_id=%s sender=%s text=%r",
+                        event.chat_id, getattr(event, "sender_id", "?"), _t,
+                    )
+                except Exception:
+                    pass
                 # Ideas-чат — отдельная обработка (сохраняем сообщения как идеи)
                 # ВАЖНО: chat_id у Telethon vs aiogram может отличаться по формату
                 # (-100xxx vs xxx), поэтому нормализуем оба через storage._norm_chat_id.

@@ -6191,34 +6191,128 @@
     </div>
 
     <template x-for="o in outkupFiltered()" :key="o.id">
-      <div class="crm-card" style="margin-bottom: 8px; padding: 12px;"
-           :style="o.status === 'completed' ? 'border-left: 3px solid #22c55e; opacity: 0.7;'
-                : o.status === 'cancelled' ? 'border-left: 3px solid #ef4444; opacity: 0.6;'
-                : o.status === 'paid' ? 'border-left: 3px solid #6ad8ff;'
-                : o.status === 'awaiting_payment' ? 'border-left: 3px solid #f59e0b;'
+      <div class="crm-card" style="margin-bottom: 10px; padding: 14px;"
+           :style="o.status === 'done' || o.status === 'completed' ? 'border-left: 3px solid #22c55e; opacity: 0.85;'
+                : o.status === 'cancelled' ? 'border-left: 3px solid #ef4444; opacity: 0.5;'
+                : o.status === 'awaiting_receipts' ? 'border-left: 3px solid #a855f7;'
+                : o.status === 'partial' ? 'border-left: 3px solid #6ad8ff;'
+                : o.status === 'confirmed' ? 'border-left: 3px solid #f59e0b;'
                 : 'border-left: 3px solid rgba(255,255,255,0.2);'">
-        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <code style="font-size: 11px; color: var(--text-dim);" x-text="o.id"></code>
-          <span style="font-weight: 700;" x-text="(o.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></span>
-          <span style="color: #22c55e;" x-text="'→ ' + (o.calculated_usdt || 0).toFixed(2) + ' USDT'"></span>
-          <span class="badge-mini" x-text="o.method?.toUpperCase()"></span>
+        <!-- Шапка карточки -->
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; cursor: pointer;"
+             @click="o._expanded = !o._expanded; if (o._expanded) loadOutkupPayments(o.id)">
+          <code style="font-size: 11px; color: var(--hud-primary); font-weight: 700;"
+                x-text="'#' + String(o.req_num || 0).padStart(4, '0')"></code>
+          <span style="font-weight: 700; font-size: 14px;" x-text="(o.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></span>
+          <span x-show="(o.amount_rub_remaining||0) > 0.01 && (o.amount_rub_remaining||0) < (o.amount_rub||0)" style="color: #fbbf24; font-size: 11px;">
+            (остаток <span x-text="(o.amount_rub_remaining || 0).toLocaleString('ru-RU') + ' ₽'"></span>)
+          </span>
+          <span style="color: #22c55e; font-weight: 700;" x-text="'→ ' + (o.payout_client_usdt || o.calculated_usdt || 0).toFixed(2) + ' USDT'"></span>
+          <span class="badge-mini" x-text="(o.method || '').toUpperCase()"></span>
+          <!-- Статусы -->
           <span x-show="o.status === 'pending_confirm'" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 3px;">⏳ ждёт подтв.</span>
-          <span x-show="o.status === 'awaiting_payment'" style="font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.18); color: #f59e0b; border-radius: 3px;">💰 ждёт оплаты</span>
-          <span x-show="o.status === 'paid'" style="font-size: 10px; padding: 2px 8px; background: rgba(106,216,255,0.18); color: #6ad8ff; border-radius: 3px;">✅ оплачено</span>
-          <span x-show="o.status === 'completed'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color: #22c55e; border-radius: 3px;">🎉 завершено</span>
+          <span x-show="o.status === 'confirmed'" style="font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.2); color: #fbbf24; border-radius: 3px;">🆕 принять</span>
+          <span x-show="o.status === 'partial'" style="font-size: 10px; padding: 2px 8px; background: rgba(106,216,255,0.18); color: #6ad8ff; border-radius: 3px;">💸 выдача</span>
+          <span x-show="o.status === 'awaiting_receipts'" style="font-size: 10px; padding: 2px 8px; background: rgba(168,85,247,0.2); color: #a855f7; border-radius: 3px;">📎 ждём чеки</span>
+          <span x-show="o.status === 'done' || o.status === 'completed'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color: #22c55e; border-radius: 3px;">🎉 завершено</span>
           <span x-show="o.status === 'cancelled'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color: #ef4444; border-radius: 3px;">❌ отменено</span>
           <span style="margin-left: auto; font-size: 11px; color: var(--text-dim);">
             👤 <span x-text="o.client_username ? '@'+o.client_username : 'id='+o.client_user_id"></span>
             <span x-show="o.assigned_to"> · 🔧 @<span x-text="o.assigned_to"></span></span>
+            <span style="margin-left: 8px;" x-text="o._expanded ? '▲' : '▼'"></span>
           </span>
         </div>
-        <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;">
-          <button x-show="o.status === 'awaiting_payment' && canAct('outkup_take') && !o.assigned_to" class="btn" @click="outkupTake(o.id)" style="font-size: 11px;">✋ Взять</button>
-          <button x-show="o.status === 'awaiting_payment' && canAct('outkup_mark_paid')" class="btn" @click="outkupMarkPaid(o.id)" style="font-size: 11px; background: rgba(245,158,11,0.18); color: #f59e0b;">💸 Клиент заплатил</button>
-          <button x-show="o.status === 'paid' && canAct('outkup_complete')" class="btn" @click="outkupComplete(o.id)" style="font-size: 11px; background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700;">✅ USDT отправлен</button>
-          <button x-show="['pending_confirm','awaiting_payment','paid'].includes(o.status) && canAct('outkup_cancel')" class="btn" @click="outkupCancel(o.id)" style="font-size: 11px; background: rgba(239,68,68,0.15); color:#ef4444;">❌ Отменить</button>
-          <span x-show="o.txid" style="margin-left: auto; font-size: 10px; color: var(--text-dim);">TXID: <code x-text="o.txid"></code></span>
-          <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);" x-text="new Date((o.created_at || 0) * 1000).toLocaleString('ru-RU')"></span>
+
+        <!-- Кнопка «Взять» (когда заявка confirmed и не взята) -->
+        <div style="margin-top: 8px; display: flex; gap: 6px;">
+          <button x-show="o.status === 'confirmed' && !o.assigned_to" class="btn" @click.stop="outkupTakeNew(o.id)"
+                  style="background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; padding: 6px 12px;">✋ Взять заявку</button>
+          <button x-show="['confirmed','partial','awaiting_receipts'].includes(o.status)" class="btn" @click.stop="outkupCancel(o.id)"
+                  style="font-size: 11px; background: rgba(239,68,68,0.15); color:#ef4444;">❌ Отменить</button>
+          <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);"
+                x-text="'Курс: ' + (o.rate || 0).toFixed(2) + ' ₽/USDT · комиссия ' + (o.pct_fee || 0).toFixed(1) + '%'"></span>
+        </div>
+
+        <!-- Развёрнутая часть: выданные реки + форма выдачи нового -->
+        <div x-show="o._expanded" x-transition style="margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px;">
+          <!-- Список выданных payments -->
+          <div style="margin-bottom: 10px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
+              💼 Выданные реквизиты (<span x-text="(o._payments || []).length"></span>):
+            </div>
+            <template x-if="(o._payments || []).length === 0">
+              <div style="font-size: 12px; color: var(--text-dim); padding: 6px;">— пока не выдано —</div>
+            </template>
+            <template x-for="p in (o._payments || [])" :key="p.id">
+              <div style="padding: 8px 10px; background: rgba(0,0,0,0.25); border-radius: 6px; margin-bottom: 6px; border-left: 2px solid;"
+                   :style="p.status === 'confirmed' ? 'border-left-color:#22c55e;'
+                         : p.status === 'rejected' ? 'border-left-color:#ef4444;'
+                         : p.status === 'receipt_received' ? 'border-left-color:#a855f7;'
+                         : 'border-left-color:#fbbf24;'">
+                <div style="display: flex; gap: 10px; align-items: center; font-size: 12px; flex-wrap: wrap;">
+                  <code style="color: var(--hud-primary);" x-text="p.id"></code>
+                  <span style="font-weight: 700;" x-text="(p.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></span>
+                  <span x-text="p.bank + ' · ' + p.phone"></span>
+                  <span style="padding: 2px 6px; font-size: 10px; border-radius: 3px;"
+                        :style="p.status === 'confirmed' ? 'background:rgba(34,197,94,0.2); color:#22c55e'
+                              : p.status === 'rejected' ? 'background:rgba(239,68,68,0.2); color:#ef4444'
+                              : p.status === 'receipt_received' ? 'background:rgba(168,85,247,0.2); color:#a855f7'
+                              : 'background:rgba(251,191,36,0.2); color:#fbbf24'"
+                        x-text="p.status === 'waiting_receipt' ? '⏳ ждём чек'
+                              : p.status === 'receipt_received' ? '📎 чек получен'
+                              : p.status === 'confirmed' ? '✅ подтверждено'
+                              : p.status === 'rejected' ? '❌ отклонено'
+                              : p.status"></span>
+                  <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);">@<span x-text="p.manager_username"></span></span>
+                </div>
+                <!-- Кнопки confirm/reject (только если чек получен) -->
+                <div x-show="p.status === 'receipt_received'" style="margin-top: 8px; display: flex; gap: 6px;">
+                  <button class="btn" @click="outkupConfirmPayment(o.id, p.id)"
+                          style="background: rgba(34,197,94,0.2); color:#22c55e; font-size: 11px;">✅ Подтвердить чек</button>
+                  <input type="text" :placeholder="'Причина отклонения...'" x-model="p._rejectReason"
+                         style="flex: 1; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+                  <button class="btn" @click="outkupRejectPayment(o.id, p.id, p._rejectReason || 'Пришлите новый чек')"
+                          style="background: rgba(239,68,68,0.15); color:#ef4444; font-size: 11px;">🔄 Запросить новый</button>
+                </div>
+                <!-- Комментарии -->
+                <template x-if="(p.comments || []).length > 0">
+                  <div style="margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 11px;">
+                    <template x-for="c in p.comments" :key="c.ts">
+                      <div style="margin-bottom: 3px; color: var(--text-dim);">
+                        <span style="color: #6ad8ff;" x-text="'@'+(c.by || '?').replace('client:','')+ ':'"></span>
+                        <span x-text="c.text"></span>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <!-- Отправить комментарий клиенту -->
+                <div style="margin-top: 6px; display: flex; gap: 6px;">
+                  <input type="text" x-model="p._newComment" placeholder="Сообщение клиенту под этим реком..."
+                         style="flex: 1; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;"
+                         @keydown.enter="outkupCommentPayment(o.id, p.id, p._newComment); p._newComment = ''">
+                  <button class="chip-btn" @click="outkupCommentPayment(o.id, p.id, p._newComment); p._newComment = ''" style="font-size: 11px;">💬</button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Форма выдачи нового реквизита (если есть остаток) -->
+          <div x-show="(o.amount_rub_remaining || 0) > 0.01 && o.assigned_to"
+               style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
+              📤 Выдать реквизит на сумму до <b x-text="(o.amount_rub_remaining || 0).toLocaleString('ru-RU') + ' ₽'"></b>:
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 100px auto; gap: 6px; align-items: center;">
+              <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)"
+                     style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
+              <input type="text" x-model="o._newPhone" placeholder="+7 999 123 4567"
+                     style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
+              <input type="number" x-model.number="o._newAmount" placeholder="Сумма ₽" :max="o.amount_rub_remaining"
+                     style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
+              <button class="btn success" @click="outkupIssuePayment(o.id, o._newBank, o._newPhone, o._newAmount)"
+                      style="padding: 6px 14px;">📤 Выдать</button>
+            </div>
+          </div>
         </div>
       </div>
     </template>
