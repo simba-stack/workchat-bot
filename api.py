@@ -2439,6 +2439,49 @@ async def api_tron_balance(me: dict = Depends(_get_me)):
         return {**diag, "error": str(e), "configured": False}
 
 
+# --- DEBUG: видит ли юзербот чат? ---
+@app.get("/api/admin/userbot_can_see_chat")
+async def api_userbot_can_see_chat(chat_id: int, me: dict = Depends(_get_me)):
+    """Debug: пытается через Telethon резолвить entity по chat_id.
+    Возвращает что юзербот может увидеть про этот чат (или ошибку).
+    Также пробует отправить тестовое сообщение если send=1."""
+    if me.get("role") != "owner":
+        raise HTTPException(403, "owner only")
+    out = {"input_chat_id": chat_id}
+    try:
+        # bot.userbot — singleton UserbotService (см. bot.py:41)
+        import bot as _bot_mod
+        ub = getattr(_bot_mod, "userbot", None)
+    except Exception as e:
+        out["lookup_err"] = str(e)
+        return out
+    if not ub or not getattr(ub, "client", None):
+        out["err"] = "userbot instance not initialized or not running"
+        return out
+    out["userbot_me_id"] = getattr(getattr(ub, "_me", None), "id", None)
+    # Пробуем резолвить чат
+    try:
+        ent = await ub.client.get_entity(chat_id)
+        out["entity_type"] = type(ent).__name__
+        out["entity_id"] = getattr(ent, "id", None)
+        out["entity_title"] = getattr(ent, "title", None) or (
+            (getattr(ent, "first_name", "") or "") + " " + (getattr(ent, "last_name", "") or "")
+        ).strip()
+        out["megagroup"] = getattr(ent, "megagroup", None)
+    except Exception as e:
+        out["get_entity_err"] = str(e)[:200]
+    # Пробуем получить последние 3 сообщения
+    try:
+        msgs = await ub.client.get_messages(chat_id, limit=5)
+        out["recent_messages"] = [
+            {"id": m.id, "text": (m.text or m.message or "")[:50], "from_id": getattr(m, "sender_id", None), "ts": m.date.isoformat() if m.date else None}
+            for m in msgs or []
+        ]
+    except Exception as e:
+        out["get_messages_err"] = str(e)[:200]
+    return out
+
+
 # --- 2FA: список pending запросов (для JARVIS owner view) ---
 @app.get("/api/2fa/pending")
 async def api_2fa_pending(me: dict = Depends(_get_me)):
