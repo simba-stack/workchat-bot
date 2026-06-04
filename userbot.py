@@ -4703,6 +4703,31 @@ class UserbotService:
         except Exception as e:
             await event.reply(f"⚠️ Не нашёл @{uname}: <code>{e}</code>", parse_mode="html")
             return
+        async def _send_invite_link_fallback(reason: str = ""):
+            """Если прямое приглашение упало — генерим invite-link и шлём в чат.
+            SIMBA / админ может переслать его юзеру вручную."""
+            try:
+                from telethon.tl.functions.messages import ExportChatInviteRequest
+                invite = await self.client(ExportChatInviteRequest(chat_id))
+                link = getattr(invite, "link", "") or ""
+                hint = (
+                    f"⚠️ Не могу пригласить <b>@{uname}</b> напрямую"
+                    + (f" ({reason})" if reason else "")
+                    + f".\n\n"
+                    f"🔗 Перешли ему эту ссылку — он сам присоединится:\n"
+                    f"<code>{link}</code>"
+                )
+                await event.reply(hint, parse_mode="html")
+                logger.info("[ai cmd invite] sent invite-link fallback for @%s", uname)
+            except Exception as fe:
+                logger.warning("invite-link fallback failed: %s", fe)
+                await event.reply(
+                    f"⚠️ Не смог пригласить @{uname}"
+                    + (f" ({reason})" if reason else "")
+                    + ". Добавь руками через приглашение Telegram.",
+                    parse_mode="html",
+                )
+
         try:
             await self.client(InviteToChannelRequest(chat_id, [user]))
             await event.reply(
@@ -4714,18 +4739,24 @@ class UserbotService:
         except UserAlreadyParticipantError:
             await event.reply(f"ℹ️ @{uname} уже в этом чате.")
         except UserPrivacyRestrictedError:
-            await event.reply(
-                f"⚠️ У <b>@{uname}</b> настройки приватности не позволяют его пригласить. "
-                f"Попроси его сначала написать боту/в этот чат, потом повтори команду.",
-                parse_mode="html",
-            )
+            # Приватность — invite-link обходит это ограничение
+            await _send_invite_link_fallback("у юзера закрыты приватные приглашения")
         except FloodWaitError as e:
-            await event.reply(f"⚠️ FloodWait {e.seconds}s — попробуй позже.")
+            # Жёсткий FloodWait от Telegram — нужно ждать столько секунд
+            mins = int(e.seconds / 60) if e.seconds > 60 else 0
+            wait_human = f"{mins} мин" if mins else f"{e.seconds} сек"
+            await _send_invite_link_fallback(f"FloodWait {wait_human}")
         except Exception as e:
-            await event.reply(
-                f"⚠️ Не смог пригласить @{uname}: <code>{e}</code>",
-                parse_mode="html",
-            )
+            err_text = str(e).lower()
+            # Telethon бросает разные ошибки на "too many requests" / PEER_FLOOD.
+            # Все они означают что Telegram временно банит юзербота на приглашения.
+            if "too many requests" in err_text or "peer_flood" in err_text or "flood" in err_text:
+                await _send_invite_link_fallback("Telegram rate-limit")
+            else:
+                await event.reply(
+                    f"⚠️ Не смог пригласить @{uname}: <code>{e}</code>",
+                    parse_mode="html",
+                )
             logger.warning("ai cmd invite failed: chat=%s user=%s err=%s",
                            chat_id, uname, e)
 
