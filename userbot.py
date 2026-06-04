@@ -1246,6 +1246,90 @@ class UserbotService:
 
         await self._send_welcome(event.chat_id, expected, source="event")
 
+    async def _handle_outkup_payment_reply(self, event) -> bool:
+        """Reply клиента на сообщение с реквизитом — либо фото-чек, либо
+        текстовый комментарий. Возвращает True если обработано.
+
+        Логика:
+          • Берём reply_to_msg_id и ищем outkup_payment где client_msg_id совпал
+          • Если фото/документ → attach receipt + status=receipt_received
+          • Если текст → добавляем comment
+        """
+        msg = event.message
+        if not msg:
+            return False
+        reply_to = getattr(msg, "reply_to_msg_id", None) or getattr(msg, "reply_to", None)
+        if not reply_to:
+            return False
+        # reply_to может быть int или объект ReplyHeader
+        if not isinstance(reply_to, int):
+            reply_to = getattr(reply_to, "reply_to_msg_id", None)
+        if not reply_to:
+            return False
+        # Ищем outkup_payment в этом чате с client_msg_id = reply_to
+        from storage import _norm_chat_id as _norm
+        target_pay = None
+        pays = storage.state.get("outkup_payments") or {}
+        for pid, p in pays.items():
+            if int(p.get("client_msg_id") or 0) == int(reply_to):
+                # сверим что order связан с этим work_chat
+                order = storage.get_outkup_order(p.get("order_id"))
+                if order and _norm(order.get("client_chat_id")) == _norm(event.chat_id):
+                    target_pay = p
+                    break
+        if not target_pay:
+            return False
+        pay_id = target_pay.get("id") or target_pay.get("pay_id")
+        # Это фото/документ — receipt
+        has_photo = bool(getattr(msg, "photo", None))
+        has_doc = bool(getattr(msg, "document", None))
+        text = (msg.text or msg.message or "").strip()
+        if has_photo or has_doc:
+            # File ID для последующего скачивания (через aiogram у нас нет — Telethon
+            # хранит как media). Сохраняем msg_id чтобы JARVIS мог загрузить фото
+            # через специальный endpoint.
+            await storage.update_outkup_payment(
+                pay_id,
+                status="receipt_received",
+                receipt_msg_id=int(msg.id),
+                receipt_file_id=str(getattr(msg, "id", "") or ""),
+            )
+            # Notify в JARVIS + лента
+            try:
+                await storage.add_notification(
+                    type="info",
+                    text=(
+                        f"📎 Чек получен по заявке #{target_pay.get('req_num', '?'):04d} "
+                        f"(сумма {target_pay.get('amount_rub'):,.0f} ₽). "
+                        f"Откройте JARVIS → Откупы → проверьте чек."
+                    ).replace(",", " "),
+                    dedup_key=f"outkup_receipt:{pay_id}",
+                )
+            except Exception:
+                pass
+            try:
+                await event.reply(
+                    "✅ Чек получен. Сейчас проверим и подтвердим перевод."
+                )
+            except Exception:
+                pass
+            return True
+        # Текст — комментарий клиента
+        if text:
+            await storage.add_outkup_payment_comment(
+                pay_id, by=f"client:{event.sender_id}", text=text,
+            )
+            try:
+                await storage.add_notification(
+                    type="info",
+                    text=f"💬 Клиент написал по заявке #{target_pay.get('req_num', '?'):04d}: {text[:120]}",
+                    dedup_key=f"outkup_comment:{pay_id}:{int(__import__('time').time())}",
+                )
+            except Exception:
+                pass
+            return True
+        return False
+
     async def _handle_client_left(self, event):
         """Клиент вышел/был кикнут из work_chat — invite-бот пишет ему в личку
         с предложением обсудить условия индивидуально (anti-churn)."""
@@ -1488,6 +1572,9 @@ class UserbotService:
         # или подтверждение/отказ. Если обработали — выходим (не идём в AI).
         try:
             from outkup_detector import handle_outkup_message, handle_outkup_confirm
+            # Сначала — receipt/comment reply на сообщение с реквизитом
+            if await self._handle_outkup_payment_reply(event):
+                return
             if await handle_outkup_confirm(event, self, storage):
                 return
             if await handle_outkup_message(event, self, storage):

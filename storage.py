@@ -325,6 +325,18 @@ def _default_state() -> dict:
         # method: sbp | card | full
         "outkup_orders": {},
         "outkup_orders_seq": 0,
+        # === Откупы v2 (июнь 2026) ===
+        # Per-client overrides: для каждого work_chat можно задать свой курс и %.
+        # {chat_id_str: {rate_rub_per_usdt, pct_fee, notes, updated_at, updated_by}}
+        "outkup_client_settings": {},
+        # Выданные реквизиты под заявку (partial payments).
+        # {pay_id: {order_id, req_num, bank, phone, amount_rub,
+        #           status: waiting_receipt|receipt_received|confirmed|rejected,
+        #           receipt_file_id, receipt_msg_id, manager_msg_id, client_msg_id,
+        #           manager_username, created_at, confirmed_at,
+        #           comments: [{ts, by, text}]}}
+        "outkup_payments": {},
+        "outkup_payments_seq": 0,
         # ==== CREDIT (Кредитование — параллельно CRM поставщиков) ====
         # Юристы готовят счета к подаче заявки на кредит.
         # Структура зеркалит crm_* для поставщиков, но изолирована.
@@ -5045,37 +5057,90 @@ class Storage:
             return None
         return (self.state.get("outkup_orders") or {}).get(str(order_id))
 
+    # === v2: per-client settings (курс и % комиссии могут отличаться) ===
+
+    def get_outkup_client_settings(self, client_chat_id) -> dict:
+        """Возвращает effective settings для конкретного work_chat:
+        per-client override → fallback на глобальные."""
+        glob = self.get_outkup_settings()
+        per = (self.state.get("outkup_client_settings") or {}).get(str(client_chat_id)) or {}
+        return {
+            "rate_rub_per_usdt": float(per.get("rate_rub_per_usdt") or glob["rate_rub_per_usdt"]),
+            "pct_fee": float(per.get("pct_fee") if per.get("pct_fee") is not None else glob["pct_fee"]),
+            "is_personal": bool(per),  # для UI чтобы показать «персональный курс»
+            "notes": per.get("notes") or "",
+            "updated_at": per.get("updated_at") or 0,
+            "updated_by": per.get("updated_by") or "",
+        }
+
+    async def set_outkup_client_settings(
+        self, client_chat_id, rate_rub_per_usdt: float = None,
+        pct_fee: float = None, notes: str = "", updated_by: str = "",
+    ) -> bool:
+        async with _lock:
+            d = self.state.setdefault("outkup_client_settings", {})
+            entry = d.setdefault(str(client_chat_id), {})
+            if rate_rub_per_usdt is not None:
+                try:
+                    entry["rate_rub_per_usdt"] = float(rate_rub_per_usdt)
+                except Exception:
+                    pass
+            if pct_fee is not None:
+                try:
+                    entry["pct_fee"] = float(pct_fee)
+                except Exception:
+                    pass
+            if notes:
+                entry["notes"] = notes
+            if updated_by:
+                entry["updated_by"] = updated_by
+            entry["updated_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    def list_outkup_client_settings(self) -> dict:
+        return dict(self.state.get("outkup_client_settings") or {})
+
     async def create_outkup_order(
         self, client_chat_id: int, client_user_id: int,
         client_username: str, client_msg_id: int,
         amount_rub: float, method: str,
     ) -> Optional[dict]:
-        """Создаёт заявку в статусе pending_confirm. Bot уже посчитал USDT."""
-        settings = self.get_outkup_settings()
-        rate = settings["rate_rub_per_usdt"]
+        """Создаёт заявку в статусе pending_confirm. Использует per-client rate/fee."""
+        eff = self.get_outkup_client_settings(client_chat_id)
+        glob = self.get_outkup_settings()
+        rate = eff["rate_rub_per_usdt"]
+        pct = eff["pct_fee"]
         if rate <= 0:
             return None
         try:
             amount = float(amount_rub or 0)
         except Exception:
             return None
-        if amount < settings["min_amount_rub"] or amount > settings["max_amount_rub"]:
+        if amount < glob["min_amount_rub"] or amount > glob["max_amount_rub"]:
             return None
-        usdt = round(amount / rate, 2)
+        usdt = round(amount / rate, 4)
+        payout_client_usdt = round(usdt * (1 - pct / 100.0), 4)
         async with _lock:
             self.state["outkup_orders_seq"] = int(self.state.get("outkup_orders_seq") or 0) + 1
-            oid = f"outk{self.state['outkup_orders_seq']}"
+            seq = self.state["outkup_orders_seq"]
+            oid = f"outk{seq}"
             now = time.time()
             order = {
                 "id": oid,
+                "req_num": seq,  # человеко-читаемый сквозной номер #N
                 "client_chat_id": int(client_chat_id or 0),
                 "client_user_id": int(client_user_id or 0),
                 "client_username": (client_username or "").lstrip("@").lower(),
                 "client_msg_id": int(client_msg_id or 0),
                 "amount_rub": amount,
+                "amount_rub_remaining": amount,  # сколько ещё надо выдать реков
                 "method": (method or "sbp").lower(),
                 "calculated_usdt": usdt,
                 "rate": rate,
+                "pct_fee": pct,
+                "payout_client_usdt": payout_client_usdt,
+                "is_personal_rate": eff.get("is_personal", False),
                 "status": "pending_confirm",
                 "created_at": now,
                 "confirmed_at": 0,
@@ -5086,10 +5151,147 @@ class Storage:
                 "cancelled_at": 0,
                 "txid": "",
                 "notes": "",
+                "payment_ids": [],
             }
             (self.state.setdefault("outkup_orders", {}))[oid] = order
             await self._save_unlocked()
             return order
+
+    # === v2: outkup_payments (выданные реквизиты под заявку) ===
+
+    async def add_outkup_payment(
+        self, order_id: str, bank: str, phone: str, amount_rub: float,
+        manager_username: str = "", manager_msg_id: int = 0,
+        client_msg_id: int = 0,
+    ) -> Optional[dict]:
+        """Создаёт payment под заявкой. Уменьшает amount_rub_remaining у order.
+        Возвращает payment dict."""
+        try:
+            amt = float(amount_rub or 0)
+        except Exception:
+            return None
+        if amt <= 0:
+            return None
+        async with _lock:
+            order = (self.state.get("outkup_orders") or {}).get(str(order_id))
+            if not order:
+                return None
+            remaining = float(order.get("amount_rub_remaining") or order.get("amount_rub") or 0)
+            if amt > remaining + 0.01:
+                return None  # превышение остатка
+            self.state["outkup_payments_seq"] = int(self.state.get("outkup_payments_seq") or 0) + 1
+            pay_id = f"pay{self.state['outkup_payments_seq']}"
+            now = time.time()
+            payment = {
+                "id": pay_id,
+                "pay_id": pay_id,
+                "order_id": str(order_id),
+                "req_num": int(order.get("req_num") or 0),
+                "bank": (bank or "").strip(),
+                "phone": (phone or "").strip(),
+                "amount_rub": amt,
+                "status": "waiting_receipt",
+                "receipt_file_id": "",
+                "receipt_msg_id": 0,
+                "manager_msg_id": int(manager_msg_id or 0),
+                "client_msg_id": int(client_msg_id or 0),
+                "manager_username": (manager_username or "").lstrip("@").lower(),
+                "created_at": now,
+                "confirmed_at": 0,
+                "rejected_at": 0,
+                "comments": [],
+            }
+            self.state.setdefault("outkup_payments", {})[pay_id] = payment
+            order["payment_ids"] = list(order.get("payment_ids") or []) + [pay_id]
+            order["amount_rub_remaining"] = remaining - amt
+            if order["status"] in ("pending_confirm", "confirmed", "awaiting_payment"):
+                order["status"] = "partial" if order["amount_rub_remaining"] > 0.01 else "awaiting_receipts"
+            await self._save_unlocked()
+            return payment
+
+    async def update_outkup_payment(self, pay_id: str, **fields) -> bool:
+        async with _lock:
+            p = (self.state.get("outkup_payments") or {}).get(str(pay_id))
+            if not p:
+                return False
+            for k, v in fields.items():
+                p[k] = v
+            await self._save_unlocked()
+            return True
+
+    async def confirm_outkup_payment(self, pay_id: str, by: str = "") -> bool:
+        """Подтверждает чек. Если все payments этого order подтверждены — order=done."""
+        async with _lock:
+            p = (self.state.get("outkup_payments") or {}).get(str(pay_id))
+            if not p:
+                return False
+            p["status"] = "confirmed"
+            p["confirmed_at"] = time.time()
+            order = (self.state.get("outkup_orders") or {}).get(p.get("order_id"))
+            if order:
+                # Проверка: все payments confirmed И остаток ≈ 0 → order=done
+                all_ids = list(order.get("payment_ids") or [])
+                all_confirmed = True
+                for pid in all_ids:
+                    sub = (self.state.get("outkup_payments") or {}).get(pid) or {}
+                    if sub.get("status") != "confirmed":
+                        all_confirmed = False
+                        break
+                if all_confirmed and float(order.get("amount_rub_remaining") or 0) < 0.01:
+                    order["status"] = "done"
+                    order["completed_at"] = time.time()
+            await self._save_unlocked()
+            return True
+
+    async def reject_outkup_payment(self, pay_id: str, reason: str = "", by: str = "") -> bool:
+        """Отклоняет чек — возвращает сумму в remaining у order, payment остаётся в логе."""
+        async with _lock:
+            p = (self.state.get("outkup_payments") or {}).get(str(pay_id))
+            if not p:
+                return False
+            if p.get("status") in ("confirmed",):
+                return False
+            p["status"] = "rejected"
+            p["rejected_at"] = time.time()
+            if reason:
+                p.setdefault("comments", []).append({
+                    "ts": time.time(), "by": by or "system",
+                    "text": f"❌ Отклонено: {reason}",
+                })
+            order = (self.state.get("outkup_orders") or {}).get(p.get("order_id"))
+            if order:
+                # возвращаем сумму в remaining
+                order["amount_rub_remaining"] = float(order.get("amount_rub_remaining") or 0) + float(p.get("amount_rub") or 0)
+                if order.get("status") == "awaiting_receipts":
+                    order["status"] = "partial"
+            await self._save_unlocked()
+            return True
+
+    async def add_outkup_payment_comment(
+        self, pay_id: str, by: str, text: str,
+    ) -> bool:
+        async with _lock:
+            p = (self.state.get("outkup_payments") or {}).get(str(pay_id))
+            if not p:
+                return False
+            p.setdefault("comments", []).append({
+                "ts": time.time(), "by": by or "",
+                "text": (text or "").strip(),
+            })
+            await self._save_unlocked()
+            return True
+
+    def list_outkup_payments_for_order(self, order_id: str) -> list:
+        pays = self.state.get("outkup_payments") or {}
+        result = []
+        for pid in (self.get_outkup_order(order_id) or {}).get("payment_ids") or []:
+            p = pays.get(pid)
+            if p:
+                result.append(p)
+        return result
+
+    def get_outkup_payment(self, pay_id: str) -> Optional[dict]:
+        return (self.state.get("outkup_payments") or {}).get(str(pay_id))
 
     async def update_outkup_order(self, order_id, **fields) -> Optional[dict]:
         async with _lock:

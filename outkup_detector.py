@@ -157,19 +157,22 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
     )
     if not order:
         return False
-    # Реплай клиенту с расчётом и кнопками confirm/cancel
+    # Реплай клиенту с расчётом v2 (per-client rate + payout с учётом комиссии)
     method_ru = METHOD_RU.get(order["method"], order["method"].upper())
     rate = order["rate"]
     usdt = order["calculated_usdt"]
     amount = order["amount_rub"]
+    pct = float(order.get("pct_fee") or 0)
+    payout = float(order.get("payout_client_usdt") or usdt)
+    req_num = int(order.get("req_num") or 0)
     text_reply = (
-        f"💱 <b>Заявка #{order['id']}</b>\n\n"
-        f"📥 Получите: <b>{usdt:.2f} USDT TRC20</b>\n"
-        f"💸 Заплатите: <b>{amount:,.0f} ₽</b> через {method_ru}\n"
-        f"📊 Курс: <b>{rate:.2f} ₽ / 1 USDT</b>\n\n"
-        f"Подтверждаете? Напишите <b>ДА</b> чтобы получить реквизиты "
-        f"или <b>НЕТ</b> чтобы отменить.\n\n"
-        f"<i>Заявка действует 30 минут.</i>"
+        f"💱 <b>Заявка #{req_num:04d}</b>\n\n"
+        f"💸 К приёму: <b>{amount:,.0f} ₽</b> ({method_ru})\n"
+        f"📊 Курс: <b>{rate:.2f} ₽/USDT</b>\n"
+        f"💰 USDT-эквивалент: {usdt:.2f}\n"
+        f"⚙️ Наша комиссия: <b>{pct:.1f}%</b>\n"
+        f"💵 К выплате: <b>{payout:.2f} USDT TRC20</b>\n\n"
+        f"<b>Подтверждаете?</b> Напишите «<b>подтверждаю</b>» reply на это сообщение."
     ).replace(",", " ")
     try:
         target = await userbot._resolve_chat_target(event.chat_id)

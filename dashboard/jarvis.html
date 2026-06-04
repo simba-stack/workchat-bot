@@ -5947,6 +5947,82 @@
 
   <!-- ЛК-секция (stats + 3 очереди) убрана — дублировала ЛК-отдел.
        JS (accountingData/accountingNotes/refreshAccounting) оставлен на случай если используется ещё где-то. -->
+
+  <!-- ═══════════ CRM БАЛАНСЫ (Phase 5: поставщики + работники) ═══════════ -->
+  <div class="jarvis-panel" style="padding: 14px; margin-bottom: 16px;" x-init="loadCrmBalances(); loadCrmWithdrawals('')">
+    <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+      <div class="panel-title" style="margin: 0;">💼 Балансы CRM (поставщики + работники)</div>
+      <span class="badge-mini" x-text="(crmBalances || []).length + ' юзеров'"></span>
+      <button class="chip-btn" @click="loadCrmBalances()" style="margin-left: auto; padding: 4px 10px;">↻ Обновить</button>
+    </div>
+    <div style="max-height: 360px; overflow-y: auto;">
+      <template x-if="(crmBalances || []).length === 0">
+        <div style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 12px;">Балансы пока пусты</div>
+      </template>
+      <div style="display: grid; grid-template-columns: 24px 1fr 110px 110px 90px 110px 110px; gap: 6px; padding: 4px 8px; font-size: 11px; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 4px;" x-show="(crmBalances || []).length > 0">
+        <div></div>
+        <div>User</div>
+        <div style="text-align: right;">Available</div>
+        <div style="text-align: right;">Pending</div>
+        <div style="text-align: right;">Earned</div>
+        <div style="text-align: right;">Withdrawn</div>
+        <div>Address</div>
+      </div>
+      <template x-for="b in crmBalances" :key="b.user_key">
+        <div style="display: grid; grid-template-columns: 24px 1fr 110px 110px 90px 110px 110px; gap: 6px; padding: 6px 8px; font-size: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.04);">
+          <span x-text="b.kind === 'owner' ? '🤝' : '👷'" :title="b.kind"></span>
+          <span style="font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="b.id"></span>
+          <span style="text-align: right; font-weight: 700; color: #4ade80;" x-text="(b.available_usdt || 0).toFixed(2) + '$'"></span>
+          <span style="text-align: right; color: #fbbf24;" x-text="(b.pending_usdt || 0).toFixed(2) + '$'"></span>
+          <span style="text-align: right; color: var(--text-dim);" x-text="(b.total_earned || 0).toFixed(2) + '$'"></span>
+          <span style="text-align: right; color: var(--text-dim);" x-text="(b.total_withdrawn || 0).toFixed(2) + '$'"></span>
+          <span style="font-family: monospace; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="b.usdt_address || '—'"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ═══════════ ЗАЯВКИ НА ВЫВОД ═══════════ -->
+  <div class="jarvis-panel" style="padding: 14px; margin-bottom: 16px;">
+    <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+      <div class="panel-title" style="margin: 0;">🏦 Заявки на вывод</div>
+      <span class="badge-mini" x-text="(crmWithdrawals || []).length + ' шт.'"></span>
+      <select x-model="crmWdFilter" @change="loadCrmWithdrawals(crmWdFilter)" style="margin-left: 8px; padding: 4px 8px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
+        <option value="">все</option>
+        <option value="pending">pending</option>
+        <option value="awaiting_2fa">awaiting 2FA</option>
+        <option value="paid">paid</option>
+        <option value="rejected">rejected</option>
+        <option value="failed">failed</option>
+      </select>
+      <button class="chip-btn" @click="loadCrmWithdrawals(crmWdFilter)" style="margin-left: auto; padding: 4px 10px;">↻</button>
+    </div>
+    <div style="max-height: 320px; overflow-y: auto;">
+      <template x-if="(crmWithdrawals || []).length === 0">
+        <div style="text-align: center; padding: 20px; color: var(--text-dim); font-size: 12px;">Заявок нет</div>
+      </template>
+      <template x-for="w in crmWithdrawals" :key="w.req_id">
+        <div style="padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); display: grid; grid-template-columns: 80px 1fr 100px 1fr auto auto auto; gap: 8px; align-items: center; font-size: 12px;">
+          <span style="font-family: monospace; color: var(--hud-primary);" x-text="w.req_id"></span>
+          <span style="font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="w.user_key"></span>
+          <span style="font-weight: 700; text-align: right;" x-text="(w.amount_usdt || 0).toFixed(2) + '$'"></span>
+          <span style="font-family: monospace; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" x-text="w.address"></span>
+          <span style="padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;"
+                :style="{
+                  pending: 'background:rgba(251,191,36,0.2); color:#fbbf24',
+                  awaiting_2fa: 'background:rgba(168,85,247,0.2); color:#a855f7',
+                  paid: 'background:rgba(74,222,128,0.2); color:#4ade80',
+                  rejected: 'background:rgba(148,163,184,0.2); color:#94a3b8',
+                  failed: 'background:rgba(239,68,68,0.2); color:#f87171',
+                }[w.status] || 'background:rgba(255,255,255,0.08); color:#fff'"
+                x-text="w.status"></span>
+          <button x-show="w.status === 'pending' || w.status === 'awaiting_2fa'" class="chip-btn" style="background: rgba(74,222,128,0.15); color:#4ade80;" @click="approveCrmWithdrawal(w.req_id)">✓ Approve</button>
+          <button x-show="w.status === 'pending' || w.status === 'awaiting_2fa'" class="chip-btn" style="background: rgba(239,68,68,0.15); color:#f87171;" @click="cancelCrmWithdrawal(w.req_id)">✕</button>
+          <a x-show="w.tx_hash" :href="'https://tronscan.org/#/transaction/' + w.tx_hash" target="_blank" class="chip-btn" style="background: rgba(106,216,255,0.15); color:var(--hud-primary); text-decoration:none;">TX ↗</a>
+        </div>
+      </template>
+    </div>
+  </div>
 </section>
 
 <!-- ===== 👑 OWNER PANEL — только для owner ===== -->
@@ -7675,6 +7751,7 @@ function jarvis() {
     // === CRM Balances (для Бухгалтерии) ===
     crmBalances: [],
     crmWithdrawals: [],
+    crmWdFilter: '',
     // === OWNER PANEL ===
     ownerRoles: {},        // {role_name: {label, views, edit_actions}}
     ownerAllViews: [],     // список всех известных view-ids для UI
@@ -7870,6 +7947,13 @@ function jarvis() {
       exchange_rate: 0,
       commission_usdt: 0,
       _margin_preview: null,
+      // v3 (июнь 2026 — новая отчётность):
+      report_date: '',           // YYYY-MM-DD
+      report_type: '',           // из storage.operational_report_types
+      payout_rate_partner: 0,    // курс выплаты партнёру (отдельно от exchange_rate)
+      losses: [],                // [{amount_rub, reason}]
+      commissions: [],           // [{amount_rub, where}]
+      remains: [],               // [{amount_rub, where}]
     },
     fioSearchIn: '',
     fioSearchResultsIn: [],
@@ -8600,24 +8684,50 @@ function jarvis() {
       });
     },
     // ===== ФИКС ЗАЯВОК =====
-    openExchangeModal() {
+    async openExchangeModal() {
+      const today = new Date().toISOString().slice(0, 10);
       this.exchangeForm = {
         bank_in: '',
         fio_in: '',
         lk_card_id_in: '',
         amount_in: 0,
         lk_in_price_usdt: 0,
-        lk_in_status: 'ОТРАБОТАН',  // статус который поставим ЛК ВХОДА после фикса
-        outs: [{ bank: '', fio: '', lk_card_id: '', amount_out: 0, lk_out_price_usdt: 0, status_after: 'ОТРАБОТАН', _search: '', _results: [], jur_jur_receivers: [] }],
+        lk_in_status: 'ОТРАБОТАН',
+        outs: [{
+          bank: '', fio: '', lk_card_id: '', amount_out: 0,
+          lk_out_price_usdt: 0,
+          op_status: 'DONE',           // IN_WORK_RELEASE | IN_WORK_HOLD | DONE | BLOCK
+          block_amount_rub: 0,
+          block_note: '',
+          status_after: 'ОТРАБОТАН',   // legacy fallback
+          _search: '', _results: [],
+          jur_jur_receivers: [],
+        }],
         partner_pct: 0,
         exchange_rate: 0,
-        commission_usdt: 0,  // комиссия откупа в %
+        commission_usdt: 0,
         _margin_preview: null,
+        // v3 поля:
+        report_date: today,
+        report_type: '',
+        payout_rate_partner: 0,
+        losses: [],
+        commissions: [],
+        remains: [],
       };
       this.fioSearchIn = '';
       this.fioSearchResultsIn = [];
+      // подтянем актуальные типы отчётности
+      try { await this.loadOpReportTypes(); } catch (_e) {}
       this.showExchangeModal = true;
     },
+    // === losses / commissions / remains ===
+    addExchangeLoss() { this.exchangeForm.losses.push({ amount_rub: 0, reason: '' }); },
+    removeExchangeLoss(i) { this.exchangeForm.losses.splice(i, 1); },
+    addExchangeCommission() { this.exchangeForm.commissions.push({ amount_rub: 0, where: '' }); },
+    removeExchangeCommission(i) { this.exchangeForm.commissions.splice(i, 1); },
+    addExchangeRemain() { this.exchangeForm.remains.push({ amount_rub: 0, where: '' }); },
+    removeExchangeRemain(i) { this.exchangeForm.remains.splice(i, 1); },
     closeExchangeModal() {
       this.showExchangeModal = false;
     },
@@ -8906,16 +9016,28 @@ function jarvis() {
           amount_out: parseFloat(o.amount_out) || 0,
           lk_out_price_usdt: parseFloat(o.lk_out_price_usdt) || 0,
           status_after: o.status_after || 'ОТРАБОТАН',
+          // v3 поля
+          op_status: o.op_status || 'DONE',
+          block_amount_rub: parseFloat(o.block_amount_rub) || 0,
+          block_note: o.block_note || '',
           jur_jur_receivers: (o.jur_jur_receivers || []).map(jj => ({
             bank: jj.bank, fio: jj.fio,
             lk_card_id: jj.lk_card_id || '',
             lk_price_usdt: parseFloat(jj.lk_price_usdt) || 0,
             status_after: jj.status_after || 'ОТРАБОТАН',
+            op_status: jj.op_status || 'DONE',
           })),
         })),
         partner_pct: parseFloat(this.exchangeForm.partner_pct) || 0,
         exchange_rate: parseFloat(this.exchangeForm.exchange_rate) || 0,
         commission_usdt: parseFloat(this.exchangeForm.commission_usdt) || 0,
+        // v3 поля
+        report_date: this.exchangeForm.report_date || '',
+        report_type: this.exchangeForm.report_type || '',
+        payout_rate_partner: parseFloat(this.exchangeForm.payout_rate_partner) || 0,
+        losses: this.exchangeForm.losses || [],
+        commissions: this.exchangeForm.commissions || [],
+        remains: this.exchangeForm.remains || [],
       };
       try {
         const r = await fetch('/api/operational/exchange_request', {
@@ -13876,8 +13998,41 @@ function jarvis() {
 <div x-show="showExchangeModal" x-cloak
      style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;overflow:auto;padding:20px;"
      @click.self="closeExchangeModal()">
-  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;">
+  <div style="background: var(--bg-card, #1a1a1a); border: 1px solid var(--hud-primary); border-radius: 8px; padding: 20px; max-width: 820px; width: 100%; max-height: 90vh; overflow-y: auto;">
     <h3 style="margin: 0 0 12px 0; color: var(--hud-primary);">➕ Новая заявка на обмен</h3>
+
+    <!-- v3 ШАПКА ОТЧЁТА (дата + тип + 2 курса) -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; padding: 10px; background: rgba(106,216,255,0.04); border: 1px solid rgba(106,216,255,0.12); border-radius: 6px;">
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">📅 Дата отчёта</label>
+        <input type="date" x-model="exchangeForm.report_date" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+      </div>
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">📁 Тип отчётности</label>
+        <select x-model="exchangeForm.report_type" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+          <option value="">— выберите тип —</option>
+          <template x-for="t in (opReportTypes || [])" :key="t">
+            <option :value="t" x-text="t"></option>
+          </template>
+        </select>
+      </div>
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">💱 Курс вывода (₽/USDT)</label>
+        <input type="number" step="0.01" x-model.number="exchangeForm.exchange_rate" placeholder="90" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+      </div>
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">💵 Курс выплаты партнёру (₽/USDT)</label>
+        <input type="number" step="0.01" x-model.number="exchangeForm.payout_rate_partner" placeholder="80" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+      </div>
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">🏦 % партнёра</label>
+        <input type="number" step="0.1" x-model.number="exchangeForm.partner_pct" placeholder="37" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+      </div>
+      <div>
+        <label style="display:block; font-size:10px; color:var(--text-dim); margin-bottom:2px;">🔄 % откупа</label>
+        <input type="number" step="0.1" x-model.number="exchangeForm.commission_usdt" placeholder="2" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
+      </div>
+    </div>
 
     <!-- BANK ВХОДА -->
     <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 10px;">
@@ -13952,6 +14107,31 @@ function jarvis() {
           </div>
           <input type="number" x-model.number="out.amount_out" placeholder="Сумма ВЫХОДА (₽)"
                  style="width: 100%; margin-top: 4px; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          <!-- v3: статус ЛК-выхода -->
+          <div style="margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px;">
+            <div style="font-size:10px; color:var(--text-dim); margin-bottom:4px;">Статус ЛК:</div>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <label style="font-size:11px; padding:4px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px; cursor:pointer;" :style="out.op_status === 'IN_WORK_RELEASE' ? 'background:rgba(74,222,128,0.15); border-color:#4ade80; color:#4ade80;' : ''">
+                <input type="radio" :value="'IN_WORK_RELEASE'" x-model="out.op_status" style="display:none;">🟢 В работе — отпустить
+              </label>
+              <label style="font-size:11px; padding:4px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px; cursor:pointer;" :style="out.op_status === 'IN_WORK_HOLD' ? 'background:rgba(251,191,36,0.15); border-color:#fbbf24; color:#fbbf24;' : ''">
+                <input type="radio" :value="'IN_WORK_HOLD'" x-model="out.op_status" style="display:none;">🟡 В работе — держать
+              </label>
+              <label style="font-size:11px; padding:4px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px; cursor:pointer;" :style="out.op_status === 'DONE' ? 'background:rgba(106,216,255,0.15); border-color:var(--hud-primary); color:var(--hud-primary);' : ''">
+                <input type="radio" :value="'DONE'" x-model="out.op_status" style="display:none;">✅ Отработан
+              </label>
+              <label style="font-size:11px; padding:4px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px; cursor:pointer;" :style="out.op_status === 'BLOCK' ? 'background:rgba(239,68,68,0.15); border-color:#f87171; color:#f87171;' : ''">
+                <input type="radio" :value="'BLOCK'" x-model="out.op_status" style="display:none;">🔴 БЛОК
+              </label>
+            </div>
+            <!-- BLOCK поля -->
+            <div x-show="out.op_status === 'BLOCK'" style="margin-top:6px; display:grid; grid-template-columns:1fr 2fr; gap:4px;">
+              <input type="number" x-model.number="out.block_amount_rub" placeholder="Сумма блока ₽"
+                     style="padding:4px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(239,68,68,0.3); border-radius:4px;">
+              <input type="text" x-model="out.block_note" placeholder="Примечание (что делать)"
+                     style="padding:4px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(239,68,68,0.3); border-radius:4px;">
+            </div>
+          </div>
           <!-- юр-юр получатели -->
           <div style="margin-top: 8px; padding-left: 10px; border-left: 2px solid rgba(255,255,255,0.1);">
             <div style="font-size: 10px; color: var(--text-dim); display: flex; align-items: center;">
@@ -13996,6 +14176,52 @@ function jarvis() {
         <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
         <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
                style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+      </div>
+    </div>
+
+    <!-- v3: Дополнительные модификаторы (потери / комиссии / остатки) -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+      <!-- Потери -->
+      <div style="padding: 8px; background: rgba(239,68,68,0.05); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <span style="font-size:11px; color:#f87171;">💸 Потери</span>
+          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeLoss()">+</button>
+        </div>
+        <template x-for="(l, i) in exchangeForm.losses" :key="i">
+          <div style="display:flex; gap:4px; margin-bottom:4px;">
+            <input type="number" x-model.number="l.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <input type="text" x-model="l.reason" placeholder="причина" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeLoss(i)">✕</button>
+          </div>
+        </template>
+      </div>
+      <!-- Комиссии -->
+      <div style="padding: 8px; background: rgba(251,191,36,0.05); border: 1px solid rgba(251,191,36,0.15); border-radius: 6px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <span style="font-size:11px; color:#fbbf24;">💰 Комиссии</span>
+          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeCommission()">+</button>
+        </div>
+        <template x-for="(c, i) in exchangeForm.commissions" :key="i">
+          <div style="display:flex; gap:4px; margin-bottom:4px;">
+            <input type="number" x-model.number="c.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <input type="text" x-model="c.where" placeholder="где" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeCommission(i)">✕</button>
+          </div>
+        </template>
+      </div>
+      <!-- Остатки -->
+      <div style="padding: 8px; background: rgba(74,222,128,0.05); border: 1px solid rgba(74,222,128,0.15); border-radius: 6px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <span style="font-size:11px; color:#4ade80;">💵 Остатки</span>
+          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeRemain()">+</button>
+        </div>
+        <template x-for="(r, i) in exchangeForm.remains" :key="i">
+          <div style="display:flex; gap:4px; margin-bottom:4px;">
+            <input type="number" x-model.number="r.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <input type="text" x-model="r.where" placeholder="где" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
+            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeRemain(i)">✕</button>
+          </div>
+        </template>
       </div>
     </div>
 

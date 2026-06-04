@@ -2448,6 +2448,150 @@ async def api_2fa_pending(me: dict = Depends(_get_me)):
     return {"requests": storage.list_2fa_requests(status="pending")}
 
 
+# --- Откупы v2: per-client settings + payments lifecycle ---
+@app.get("/api/outkup/client_settings/{chat_id}")
+async def api_outkup_client_settings_get(chat_id: int, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    return storage.get_outkup_client_settings(chat_id)
+
+
+@app.post("/api/outkup/client_settings/{chat_id}")
+async def api_outkup_client_settings_set(chat_id: int, request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    await storage.set_outkup_client_settings(
+        chat_id,
+        rate_rub_per_usdt=body.get("rate_rub_per_usdt"),
+        pct_fee=body.get("pct_fee"),
+        notes=body.get("notes") or "",
+        updated_by=me.get("username") or "",
+    )
+    return {"ok": True, "settings": storage.get_outkup_client_settings(chat_id)}
+
+
+@app.get("/api/outkup/client_settings")
+async def api_outkup_client_settings_list(me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    return {"items": storage.list_outkup_client_settings()}
+
+
+@app.post("/api/outkup/orders/{order_id}/take")
+async def api_outkup_order_take(order_id: str, me: dict = Depends(_get_me)):
+    """Менеджер 'берёт' заявку — фиксирует assigned_to (первый кто нажал)."""
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    order = storage.get_outkup_order(order_id)
+    if not order:
+        raise HTTPException(404, "order not found")
+    if order.get("assigned_to"):
+        return {"ok": False, "reason": "уже взята", "by": order["assigned_to"]}
+    await storage.update_outkup_order(
+        order_id,
+        assigned_to=me.get("username") or "",
+        assigned_at=__import__("time").time(),
+        status="confirmed" if order.get("status") == "pending_confirm" else order.get("status"),
+    )
+    return {"ok": True, "order": storage.get_outkup_order(order_id)}
+
+
+@app.post("/api/outkup/orders/{order_id}/issue_payment")
+async def api_outkup_issue_payment(order_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Менеджер выдаёт реквизит под заявку. Body: {bank, phone, amount_rub}.
+    Создаёт outkup_payment, шлёт реквизит клиенту в work-чат через юзербота."""
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    bank = (body.get("bank") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    try:
+        amount = float(body.get("amount_rub") or 0)
+    except Exception:
+        amount = 0
+    if not bank or not phone or amount <= 0:
+        raise HTTPException(400, "bank/phone/amount_rub required")
+    payment = await storage.add_outkup_payment(
+        order_id, bank=bank, phone=phone, amount_rub=amount,
+        manager_username=me.get("username") or "",
+    )
+    if not payment:
+        raise HTTPException(400, "issue failed (превышение остатка?)")
+    # Enqueue юзерботу — отправить реквизит клиенту
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__outkup_send_req {order_id} {payment['id']}"
+        )
+    except Exception:
+        pass
+    return {"ok": True, "payment": payment}
+
+
+@app.post("/api/outkup/payments/{pay_id}/confirm")
+async def api_outkup_confirm_payment(pay_id: str, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist", "accounting"):
+        raise HTTPException(403, "forbidden")
+    ok = await storage.confirm_outkup_payment(pay_id, by=me.get("username") or "")
+    if not ok:
+        raise HTTPException(404, "payment not found")
+    # Notify клиента: чек подтверждён
+    try:
+        await storage.enqueue_dashboard_command(f"__outkup_notify_confirmed {pay_id}")
+    except Exception:
+        pass
+    return {"ok": True, "payment": storage.get_outkup_payment(pay_id)}
+
+
+@app.post("/api/outkup/payments/{pay_id}/reject")
+async def api_outkup_reject_payment(pay_id: str, request: Request, me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    reason = (body.get("reason") or "Чек неверен — пришлите новый").strip()
+    ok = await storage.reject_outkup_payment(pay_id, reason=reason, by=me.get("username") or "")
+    if not ok:
+        raise HTTPException(404, "payment not found")
+    try:
+        await storage.enqueue_dashboard_command(f"__outkup_request_new_receipt {pay_id}")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/outkup/payments/{pay_id}/comment")
+async def api_outkup_payment_comment(pay_id: str, request: Request, me: dict = Depends(_get_me)):
+    """Менеджер пишет комментарий клиенту под реком (улетает в work-чат)."""
+    if me.get("role") not in ("owner", "manager", "outkup_specialist", "accounting"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text required")
+    ok = await storage.add_outkup_payment_comment(
+        pay_id, by=me.get("username") or "", text=text,
+    )
+    if not ok:
+        raise HTTPException(404, "payment not found")
+    # Шлём клиенту через юзербот
+    try:
+        await storage.enqueue_dashboard_command(
+            f"__outkup_comment_to_client {pay_id}"
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.get("/api/outkup/orders/{order_id}/payments")
+async def api_outkup_order_payments(order_id: str, me: dict = Depends(_get_me)):
+    storage.reload_sync()
+    return {"payments": storage.list_outkup_payments_for_order(order_id)}
+
+
 # --- Аудит всех чатов где есть ассистент ---
 @app.get("/api/admin/chats_audit")
 async def api_admin_chats_audit(me: dict = Depends(_get_me)):
