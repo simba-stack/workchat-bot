@@ -5029,6 +5029,7 @@ class Storage:
         s = self.state.get("outkup_settings") or {}
         return {
             "rate_rub_per_usdt": float(s.get("rate_rub_per_usdt") or 100.0),
+            "pct_fee": float(s.get("pct_fee") if s.get("pct_fee") is not None else 5.0),
             "payments_chat_id": int(s.get("payments_chat_id") or 0),
             "outkup_team_chat_id": int(s.get("outkup_team_chat_id") or 0),
             "min_amount_rub": int(s.get("min_amount_rub") or 5000),
