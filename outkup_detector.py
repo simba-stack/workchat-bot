@@ -192,7 +192,7 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
     req_num = int(order.get("req_num") or 0)
     text_reply = (
         f"💱 <b>Заявка #{req_num:04d}</b>\n\n"
-        f"💸 К приёму: <b>{amount:,.0f} ₽</b> ({method_ru})\n"
+        f"💸 К приёму: <b>{amount:,.0f} ₽</b>\n"
         f"📊 Курс: <b>{rate:.2f} ₽/USDT</b>\n"
         f"💰 USDT-эквивалент: {usdt:.2f}\n"
         f"⚙️ Наша комиссия: <b>{pct:.1f}%</b>\n"
@@ -240,18 +240,44 @@ async def handle_outkup_confirm(event, userbot, storage) -> bool:
     if text not in ("да", "+", "yes", "ок", "ок!", "ок.", "подтверждаю", "верно",
                     "нет", "no", "-", "отмена", "не надо", "отменить"):
         return False
-    sender_id = event.sender_id
-    # Ищем последнюю pending_confirm заявку этого юзера в этом чате
+    try:
+        sender_id = int(event.sender_id) if event.sender_id else 0
+    except Exception:
+        sender_id = 0
+    # Ищем последнюю pending_confirm заявку этого юзера в этом чате.
+    # Раньше client_user_id сравнивался с sender_id напрямую: Telethon мог вернуть
+    # Peer или строку — int!=Peer и матчинг падал. Теперь обе стороны приводим к int.
     orders = storage.list_outkup_orders()
-    matching = [
+    pending_in_chat = [
         o for o in orders.values()
         if o.get("status") == "pending_confirm"
-        and o.get("client_user_id") == sender_id
         and _norm_chat_id(o.get("client_chat_id")) == _norm_chat_id(event.chat_id)
         and (time.time() - (o.get("created_at") or 0)) < 30 * 60  # 30 мин TTL
     ]
+    matching = [
+        o for o in pending_in_chat
+        if int(o.get("client_user_id") or 0) == sender_id
+    ]
+    if not matching and pending_in_chat:
+        # Fallback: если в чате одна pending заявка и sender — owner/admin,
+        # подтверждаем без жёсткой привязки к user_id (полезно когда заявку
+        # создаёт ассистент по команде владельца, а подтверждает он сам).
+        logger.info(
+            "[outkup_confirm] no exact user-match (sender=%s) — fallback to "
+            "single pending in chat=%s", sender_id, event.chat_id,
+        )
+        matching = pending_in_chat
     if not matching:
+        logger.info(
+            "[outkup_confirm] NO MATCH: text=%r sender=%s chat=%s total_pending=%d",
+            text, sender_id, event.chat_id,
+            sum(1 for o in orders.values() if o.get("status") == "pending_confirm"),
+        )
         return False
+    logger.info(
+        "[outkup_confirm] MATCH: text=%r sender=%s chat=%s matched=%d",
+        text, sender_id, event.chat_id, len(matching),
+    )
     matching.sort(key=lambda x: -(x.get("created_at") or 0))
     order = matching[0]
     is_yes = text in ("да", "+", "yes", "ок", "ок!", "ок.", "подтверждаю", "верно")
