@@ -4406,12 +4406,46 @@ class UserbotService:
             # Команды не от уполномоченного — игнорируем
             return False
 
-        # FORGET
+        # FORGET — kill switch. AI отвечает не только из managed_chats,
+        # а ещё из credit/outsource/outkup/work_chats и т.п. — поэтому
+        # глобально мутим чат через mute_chat_ai, плюс снимаем awaiting-флаги
+        # и убираем из managed_chats если был. Так гарантированно AI замолкает.
         if self._AI_CMD_FORGET_RE.search(text):
-            if not chat_info:
-                await event.reply("ℹ️ Этот чат и так не под AI.", parse_mode="html")
-                return True
-            await self._cmd_forget_chat(event, chat_id)
+            removed_from_managed = False
+            try:
+                await storage.mute_chat_ai(chat_id, True)
+            except Exception as e:
+                logger.warning("FORGET: mute_chat_ai failed chat=%s: %s", chat_id, e)
+            # Снимем welcome-v2 awaiting flag если стоял
+            try:
+                if hasattr(storage, "is_awaiting_track_choice") and \
+                        storage.is_awaiting_track_choice(chat_id):
+                    await storage.set_chat_track(chat_id, "ip")
+            except Exception as e:
+                logger.warning("FORGET: clear awaiting_track_choice failed: %s", e)
+            # Уберём из managed_chats если был
+            if chat_info:
+                try:
+                    removed_from_managed = bool(
+                        await storage.remove_managed_chat(chat_id)
+                    )
+                except Exception as e:
+                    logger.warning("FORGET: remove_managed_chat failed: %s", e)
+            logger.info(
+                "ai cmd forget: chat=%s by sender=%s "
+                "(was_managed=%s, removed_from_managed=%s)",
+                chat_id, event.sender_id, bool(chat_info), removed_from_managed,
+            )
+            try:
+                await event.reply(
+                    "🔇 <b>Ассистент замолчал в этом чате.</b>\n"
+                    "Я больше не отвечаю на сообщения клиента.\n\n"
+                    "<i>Чтобы снова включить AI — напиши:</i> "
+                    "<code>Ассистент возьми этот чат для @клиент</code>",
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
             return True
 
         # TAKEOVER
