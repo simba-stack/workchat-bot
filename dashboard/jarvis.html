@@ -6168,7 +6168,7 @@
 
 <!-- ===== SETTINGS — полноценный раздел настроек ===== -->
 <!-- ═══════════ ОТКУПЫ — RUB → USDT обмен ═══════════ -->
-<section x-show="currentView === 'outkup'" x-init="$watch('currentView', v => { if (v === 'outkup') refreshOutkup() })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
+<section x-show="currentView === 'outkup'" x-init="$watch('currentView', v => { if (v === 'outkup') { refreshOutkup(); if (this.outkupAutoTimer) clearInterval(this.outkupAutoTimer); this.outkupAutoTimer = setInterval(() => { if (this.currentView === 'outkup') refreshOutkup(); else { clearInterval(this.outkupAutoTimer); this.outkupAutoTimer = null; } }, 5000); } else if (this.outkupAutoTimer) { clearInterval(this.outkupAutoTimer); this.outkupAutoTimer = null; } })" style="padding: 20px; max-width: 1400px; margin: 0 auto;">
   <div class="jarvis-panel" style="padding: 20px;">
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <h3 style="margin: 0;">💱 Откупы — RUB → USDT TRC20</h3>
