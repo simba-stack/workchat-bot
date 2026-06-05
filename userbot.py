@@ -819,6 +819,32 @@ class UserbotService:
         if not text:
             return False
 
+        # SHORTCUT: если клиент сразу пишет КОММЕРЧЕСКИЙ запрос (упоминает банк,
+        # реки, заявку, цену, оборот, выкуп и т.п.) — направление и так понятно
+        # (ИП/ООО), хватит дёргать его «выберите 1/2/3». Автоматически ставим
+        # track=ip, снимаем awaiting-флаг и пускаем сообщение в AI, чтобы он
+        # ответил по сути. Это починка реального кейса: клиент пишет «есть ИП:
+        # уралсиб, озон, газпром — за сколько заберёте», а welcome-FSM кладёт
+        # это в «не понял выбор» и блокирует AI.
+        commercial_re = re.compile(
+            r"уралсиб|сбер|тинькоф|альфа|\bвтб\b|почта\s*банк|открыти|"
+            r"райффайз|совкомбанк|росбанк|газпром|озон|точка|локо|"
+            r"\bрек\w*\b|\bреков\b|заявк\w*|\bоборот\w*\b|\bвыкуп\w*\b|"
+            r"\bцен\w*\b|\bсколько\b|\bрс\b|расчётн\w*|расчетн\w*|"
+            r"продаём?|продаю|забер[её]те|\bлим[иы]т\w*\b|обнал",
+            re.IGNORECASE,
+        )
+        if commercial_re.search(text):
+            try:
+                await storage.set_chat_track(chat_id, "ip")
+            except Exception as e:
+                logger.warning("commercial-shortcut set_chat_track failed: %s", e)
+            logger.info(
+                "Welcome v2: commercial shortcut → track=ip, AI continues (chat=%s)",
+                chat_id,
+            )
+            return False  # пускаем сообщение в обычный AI-handler
+
         # Собираем МНОЖЕСТВО треков из одного сообщения (поддержка «1 и 2», «ИП и Дебет»)
         tracks = set()
         if re.search(r"\b1\b|\bип\b|\booo\b|\bооо\b|\bip\b", text):
@@ -1456,9 +1482,46 @@ class UserbotService:
                 await storage.mark_welcome_sent(chat_id)
                 # Помечаем что ждём выбора направления — router в _on_new_message
                 # перехватит первое сообщение и определит track.
+                # НО: если клиент УЖЕ написал коммерческое сообщение ДО welcome
+                # (race condition «приветствие + ИП Уралсиб» в одной волне),
+                # то направление и так понятно (ИП). Не дёргаем «выберите 1/2/3»,
+                # ставим track=ip и оставляем флаг сброшенным — AI продолжит сам.
                 try:
-                    await storage.mark_awaiting_track_choice(chat_id)
-                    logger.info("Welcome v2: awaiting track choice in chat=%s", chat_id)
+                    already_commercial = False
+                    try:
+                        async for hist_msg in self.client.iter_messages(chat_id, limit=10):
+                            if not hist_msg or not getattr(hist_msg, "sender_id", None):
+                                continue
+                            # пропускаем наши собственные сообщения
+                            if hist_msg.sender_id == (await self.client.get_me()).id:
+                                continue
+                            htext = (hist_msg.text or hist_msg.message or "").lower()
+                            if not htext:
+                                continue
+                            if re.search(
+                                r"уралсиб|сбер|тинькоф|альфа|\bвтб\b|почта\s*банк|"
+                                r"открыти|райффайз|совкомбанк|росбанк|газпром|озон|"
+                                r"точка|локо|\bрек\w*\b|заявк\w*|\bоборот\w*\b|"
+                                r"\bвыкуп\w*\b|\bцен\w*\b|\bсколько\b|\bрс\b|"
+                                r"расч[её]тн\w*|продаём?|продаю|забер[её]те|обнал",
+                                htext, re.IGNORECASE,
+                            ):
+                                already_commercial = True
+                                break
+                    except Exception as _he:
+                        logger.warning("welcome history check failed: %s", _he)
+                    if already_commercial:
+                        try:
+                            await storage.set_chat_track(chat_id, "ip")
+                            logger.info(
+                                "Welcome v2: client wrote commercial msg pre-welcome → "
+                                "auto track=ip, no awaiting flag (chat=%s)", chat_id,
+                            )
+                        except Exception as _se:
+                            logger.warning("auto set_chat_track=ip failed: %s", _se)
+                    else:
+                        await storage.mark_awaiting_track_choice(chat_id)
+                        logger.info("Welcome v2: awaiting track choice in chat=%s", chat_id)
                 except Exception as e:
                     logger.warning("mark_awaiting_track_choice failed: %s", e)
                 logger.info(
@@ -9723,7 +9786,6 @@ class UserbotService:
                         msg = await self.client.send_message(
                             target, text_card, parse_mode="html", link_preview=False,
                         )
-                        # Сохраним msg_id для последующих edit'ов
                         try:
                             await storage.update_lk_card(
                                 cid, lk_group_msg_id=msg.id,
@@ -9769,4 +9831,3 @@ class UserbotService:
                 return f"⚠️ #{cid}: block_no_work exception {e!r}"
 
         return f"⚠️ unknown command: {text[:60]}"
-
