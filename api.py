@@ -2689,6 +2689,61 @@ async def api_outkup_order_payments(order_id: str, me: dict = Depends(_get_me)):
     return {"payments": storage.list_outkup_payments_for_order(order_id)}
 
 
+# --- Превью чека: скачиваем фото через Telethon-юзербот и стримим браузеру ---
+@app.get("/api/outkup/payments/{pay_id}/receipt")
+async def api_outkup_payment_receipt(pay_id: str, me: dict = Depends(_get_me)):
+    """Скачивает фото-чек из Telegram (msg_id хранится в outkup_payments.receipt_msg_id)
+    и стримит браузеру как image/jpeg. Чтобы менеджер видел чек прямо в JARVIS."""
+    if me.get("role") not in ("owner", "manager", "outkup_specialist", "accounting"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    pay = storage.get_outkup_payment(pay_id) if hasattr(storage, "get_outkup_payment") else None
+    if not pay:
+        raise HTTPException(404, "payment not found")
+    msg_id = int(pay.get("receipt_msg_id") or 0)
+    if not msg_id:
+        raise HTTPException(404, "receipt not received yet")
+    order = storage.get_outkup_order(pay.get("order_id"))
+    if not order:
+        raise HTTPException(404, "order not found")
+    chat_id = int(order.get("client_chat_id") or 0)
+    if not chat_id:
+        raise HTTPException(404, "client chat unknown")
+    # Берём userbot из bot-модуля (singleton, см. /api/admin/userbot_can_see_chat)
+    try:
+        import bot as _bot_mod
+        ub = getattr(_bot_mod, "userbot", None)
+    except Exception:
+        ub = None
+    if not ub or not getattr(ub, "client", None) or not ub.client.is_connected():
+        raise HTTPException(503, "userbot not available")
+    # Скачиваем фото из Telegram
+    try:
+        tg_msg = await ub.client.get_messages(chat_id, ids=msg_id)
+    except Exception as e:
+        raise HTTPException(502, f"telegram get_messages failed: {e}")
+    if not tg_msg or not (getattr(tg_msg, "photo", None) or getattr(tg_msg, "document", None)):
+        raise HTTPException(404, "message has no photo/document")
+    try:
+        import io
+        buf = io.BytesIO()
+        await ub.client.download_media(tg_msg, file=buf)
+        data = buf.getvalue()
+    except Exception as e:
+        raise HTTPException(502, f"download failed: {e}")
+    if not data:
+        raise HTTPException(404, "empty receipt")
+    # Определяем mime: для документа берём mime_type, для photo — jpeg
+    mime = "image/jpeg"
+    if getattr(tg_msg, "document", None):
+        mime = getattr(tg_msg.document, "mime_type", None) or "image/jpeg"
+    return StreamingResponse(
+        iter([data]),
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 # --- Аудит всех чатов где есть ассистент ---
 @app.get("/api/admin/chats_audit")
 async def api_admin_chats_audit(me: dict = Depends(_get_me)):
