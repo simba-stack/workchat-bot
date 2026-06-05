@@ -220,6 +220,10 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
 
 async def handle_outkup_confirm(event, userbot, storage) -> bool:
     """Если клиент пишет 'да' / 'подтверждаю' / 'нет' в ответ на заявку."""
+    # Импортим _norm_chat_id безусловно — используется и в legacy-проверке,
+    # и в сравнении chat_id заявок ниже. Без этого при is_outkup=True
+    # был UnboundLocalError и handler молча падал.
+    from storage import _norm_chat_id
     settings = storage.get_outkup_settings()
     if not settings.get("enabled"):
         return False
@@ -230,7 +234,6 @@ async def handle_outkup_confirm(event, userbot, storage) -> bool:
     except Exception:
         pass
     if not is_outkup:
-        from storage import _norm_chat_id
         legacy_chat = settings.get("payments_chat_id") or 0
         if not legacy_chat or _norm_chat_id(event.chat_id) != _norm_chat_id(legacy_chat):
             return False
