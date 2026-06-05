@@ -6302,6 +6302,17 @@
                          onerror="this.style.display='none'">
                   </a>
                 </div>
+                <!-- Превью чека (фото скачивается через юзербот из Telegram) -->
+                <div x-show="['receipt_received','confirmed','rejected'].includes(p.status) && p.receipt_msg_id"
+                     style="margin-top: 8px;">
+                  <a :href="'/api/outkup/payments/' + p.id + '/receipt'" target="_blank"
+                     style="display: inline-block; text-decoration: none;">
+                    <img :src="'/api/outkup/payments/' + p.id + '/receipt'"
+                         alt="чек"
+                         style="max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); cursor: zoom-in; background: rgba(0,0,0,0.3);"
+                         onerror="this.style.display='none'">
+                  </a>
+                </div>
                 <!-- Кнопки confirm/reject (только если чек получен) -->
                 <div x-show="p.status === 'receipt_received'" style="margin-top: 8px; display: flex; gap: 6px;">
                   <button class="btn" @click="outkupConfirmPayment(o.id, p.id)"
@@ -8372,6 +8383,20 @@ function jarvis() {
         if (this._globalSyncInterval) clearInterval(this._globalSyncInterval);
         this._globalSyncInterval = setInterval(() => { this._globalSync(); }, 4000);
       } catch (e) {}
+
+      // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
+      // дёргает API только когда юзер на view 'outkup' и окно активно.
+      try {
+        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
+        this._outkupAutoTimer = setInterval(() => {
+          if (this.currentView === 'outkup'
+              && typeof this.refreshOutkup === 'function'
+              && !document.hidden
+              && !this.outkupLoading) {
+            this.refreshOutkup();
+          }
+        }, 5000);
+      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
 
       // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
       // дёргает API только когда юзер на view 'outkup' и окно активно.
@@ -12496,7 +12521,27 @@ function jarvis() {
       this.outkupLoading = true;
       try {
         const r = await fetch('/api/outkup/orders', { credentials: 'include' });
-        if (r.ok) { const j = await r.json(); this.outkupOrders = j.items || []; }
+        if (r.ok) {
+          const j = await r.json();
+          const fresh = j.items || [];
+          // СОХРАНЯЕМ local-state (expanded / payments / inputs формы) от
+          // предыдущего render — иначе автообновление каждые 5 сек схлопывает
+          // развёрнутые карточки и стирает введённые в форму данные.
+          const prevById = {};
+          for (const o of (this.outkupOrders || [])) {
+            if (o && o.id) prevById[o.id] = o;
+          }
+          for (const o of fresh) {
+            const prev = prevById[o.id];
+            if (prev) {
+              // переносим только UI-only поля (начинаются на _)
+              for (const k of Object.keys(prev)) {
+                if (k.startsWith('_')) o[k] = prev[k];
+              }
+            }
+          }
+          this.outkupOrders = fresh;
+        }
         const r2 = await fetch('/api/settings/outkup', { credentials: 'include' });
         if (r2.ok) {
           const s = await r2.json();
@@ -12583,6 +12628,70 @@ function jarvis() {
         });
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async loadOutkupPayments(orderId) {
+      try {
+        const r = await fetch(`/api/outkup/orders/${orderId}/payments`, { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const order = (this.outkupOrders || []).find(o => o.id === orderId);
+        if (order) { order._payments = j.payments || j.items || []; }
+      } catch (e) { console.error('loadOutkupPayments', e); }
+    },
+    async outkupIssuePayment(orderId, bank, phone, amount) {
+      bank = (bank || '').trim();
+      phone = (phone || '').trim();
+      amount = Number(amount || 0);
+      if (!bank) { alert('Введи банк'); return; }
+      if (!phone) { alert('Введи телефон/карту'); return; }
+      if (!amount || amount <= 0) { alert('Введи сумму'); return; }
+      try {
+        const r = await fetch(`/api/outkup/orders/${orderId}/issue_payment`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bank, phone, amount_rub: amount }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        const order = (this.outkupOrders || []).find(o => o.id === orderId);
+        if (order) { order._newBank = ''; order._newPhone = ''; order._newAmount = null; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupConfirmPayment(orderId, payId) {
+      if (!confirm('Подтвердить что оплата по этому реквизиту получена?')) return;
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/confirm`, { method: 'POST', credentials: 'include' });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupRejectPayment(orderId, payId, reason) {
+      reason = (reason || '').trim() || 'Пришлите новый чек';
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/reject`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async outkupCommentPayment(orderId, payId, text) {
+      text = (text || '').trim();
+      if (!text) return;
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/comment`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async loadOutkupPayments(orderId) {
