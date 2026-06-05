@@ -6227,7 +6227,7 @@
         <!-- Backend ставит status='awaiting_payment' после confirm_outkup_order. -->
         <!-- Раньше тут было только 'confirmed' — кнопка не появлялась никогда. -->
         <div style="margin-top: 8px; display: flex; gap: 6px;">
-          <button x-show="['confirmed','awaiting_payment','partial'].includes(o.status) && !o.assigned_to" class="btn" @click.stop="outkupTakeNew(o.id)"
+          <button x-show="['confirmed','awaiting_payment','partial'].includes(o.status) && !o.assigned_to" class="btn" @click.stop="outkupTake(o.id)"
                   style="background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; padding: 6px 12px;">✋ Взять заявку</button>
           <button x-show="['confirmed','awaiting_payment','partial','awaiting_receipts'].includes(o.status)" class="btn" @click.stop="outkupCancel(o.id)"
                   style="font-size: 11px; background: rgba(239,68,68,0.15); color:#ef4444;">❌ Отменить</button>
@@ -12517,6 +12517,81 @@ function jarvis() {
         });
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Загрузка списка реквизитов (payments) под заявку — вызывается при expand карточки
+    async loadOutkupPayments(orderId) {
+      try {
+        const r = await fetch(`/api/outkup/orders/${orderId}/payments`, { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const order = (this.outkupOrders || []).find(o => o.id === orderId);
+        if (order) {
+          order._payments = j.items || j.payments || [];
+        }
+      } catch (e) { console.error('loadOutkupPayments', e); }
+    },
+    // Выдать новый реквизит (банк + телефон/карта + сумма ₽).
+    // Ассистент сам зарепостит это клиенту в work-чат как reply на заявку.
+    async outkupIssuePayment(orderId, bank, phone, amount) {
+      bank = (bank || '').trim();
+      phone = (phone || '').trim();
+      amount = Number(amount || 0);
+      if (!bank) { alert('Введи банк'); return; }
+      if (!phone) { alert('Введи телефон/карту'); return; }
+      if (!amount || amount <= 0) { alert('Введи сумму'); return; }
+      try {
+        const r = await fetch(`/api/outkup/orders/${orderId}/issue_payment`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bank, phone, amount_rub: amount }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        // очищаем форму + перечитываем
+        const order = (this.outkupOrders || []).find(o => o.id === orderId);
+        if (order) { order._newBank = ''; order._newPhone = ''; order._newAmount = null; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Подтвердить полученный чек (клиент отправил оплату, мы её приняли)
+    async outkupConfirmPayment(orderId, payId) {
+      if (!confirm('Подтвердить что оплата по этому реквизиту получена?')) return;
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/confirm`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Отклонить чек (просим клиента переслать или отменяем)
+    async outkupRejectPayment(orderId, payId) {
+      const reason = window.prompt ? (window.prompt('Причина отказа от этого чека:') || '') : '';
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/reject`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Комментарий менеджера → улетит клиенту в work-чат как reply на реквизит
+    async outkupCommentPayment(orderId, payId, text) {
+      text = (text || '').trim();
+      if (!text) return;
+      try {
+        const r = await fetch(`/api/outkup/payments/${payId}/comment`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupPayments(orderId);
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async saveSettingsChats() {
