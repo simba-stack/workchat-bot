@@ -454,10 +454,27 @@ async def _require_pride(message: Message) -> bool:
 
 
 async def ephemeral(message: Message, text: str, ttl: int = EPHEMERAL_TTL):
+    """Отправляет эфемерное сообщение (само удалится через ttl сек).
+    Сначала пробует reply; если оригинал уже удалён (часто после _safe_delete)
+    — fallback на обычный send_message в тот же чат. Иначе ответ
+    «потеряется» и пользователь подумает что команда «просто исчезла».
+    """
+    msg = None
     try:
         msg = await message.reply(text)
-    except Exception:
-        return
+    except Exception as e:
+        # fallback: original message deleted / not found / etc.
+        try:
+            msg = await message.bot.send_message(message.chat.id, text)
+        except Exception as e2:
+            try:
+                logger.warning(
+                    "ephemeral failed chat=%s reply_err=%s send_err=%s",
+                    message.chat.id, e, e2,
+                )
+            except Exception:
+                pass
+            return
     await asyncio.sleep(ttl)
     try:
         await msg.delete()
