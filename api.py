@@ -2700,6 +2700,27 @@ async def api_outkup_payment_receipt(pay_id: str, me: dict = Depends(_get_me)):
     pay = storage.get_outkup_payment(pay_id) if hasattr(storage, "get_outkup_payment") else None
     if not pay:
         raise HTTPException(404, "payment not found")
+    # 1. ПРИОРИТЕТ: локальный файл сохранённый userbot'ом при reception.
+    # Это надёжнее чем on-demand fetch (Telethon в FastAPI loop часто падает).
+    local_path_rel = (pay.get("receipt_local_path") or "").strip()
+    if local_path_rel:
+        from pathlib import Path as _P
+        # Защита от path traversal — резолвим относительно api.py
+        base_dir = _P(__file__).parent.resolve()
+        candidate = (base_dir / local_path_rel).resolve()
+        if str(candidate).startswith(str(base_dir)) and candidate.exists() and candidate.is_file():
+            ext = candidate.suffix.lower()
+            mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                        ".png": "image/png", ".webp": "image/webp",
+                        ".pdf": "application/pdf"}
+            mime = mime_map.get(ext, "image/jpeg")
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                str(candidate), media_type=mime,
+                headers={"Cache-Control": "private, max-age=300"},
+            )
+    # 2. FALLBACK: on-demand fetch через юзербот (если локального файла нет —
+    # например, чек пришёл до того как мы добавили auto-save).
     msg_id = int(pay.get("receipt_msg_id") or 0)
     if not msg_id:
         raise HTTPException(404, "receipt not received yet")
@@ -2709,28 +2730,32 @@ async def api_outkup_payment_receipt(pay_id: str, me: dict = Depends(_get_me)):
     chat_id = int(order.get("client_chat_id") or 0)
     if not chat_id:
         raise HTTPException(404, "client chat unknown")
-    # Берём userbot из bot-модуля (singleton, см. /api/admin/userbot_can_see_chat)
+    # Берём userbot из bot-модуля (singleton, см. /api/admin/userbot_can_see_chat).
+    # Не проверяем is_connected() — Telethon в FastAPI-loop часто врёт False
+    # хотя юзербот реально работает (event loop mismatch). Если он не подключён —
+    # get_messages сам кинет ConnectionError, мы поймаем.
     try:
         import bot as _bot_mod
         ub = getattr(_bot_mod, "userbot", None)
     except Exception:
         ub = None
-    if not ub or not getattr(ub, "client", None) or not ub.client.is_connected():
-        raise HTTPException(503, "userbot not available")
-    # Скачиваем фото из Telegram
+    if not ub or not getattr(ub, "client", None):
+        raise HTTPException(503, "userbot not initialized")
+    # Скачиваем фото из Telegram (одной try-веткой, чтобы не разделять get/download).
     try:
         tg_msg = await ub.client.get_messages(chat_id, ids=msg_id)
-    except Exception as e:
-        raise HTTPException(502, f"telegram get_messages failed: {e}")
-    if not tg_msg or not (getattr(tg_msg, "photo", None) or getattr(tg_msg, "document", None)):
-        raise HTTPException(404, "message has no photo/document")
-    try:
+        if not tg_msg or not (getattr(tg_msg, "photo", None) or getattr(tg_msg, "document", None)):
+            raise HTTPException(404, "message has no photo/document")
         import io
         buf = io.BytesIO()
         await ub.client.download_media(tg_msg, file=buf)
         data = buf.getvalue()
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(502, f"download failed: {e}")
+        # Чаще всего "Cannot send requests while disconnected" — loop mismatch.
+        # Возвращаем 502 с понятным сообщением для клиента.
+        raise HTTPException(502, f"telegram fetch failed: {type(e).__name__}: {str(e)[:200]}")
     if not data:
         raise HTTPException(404, "empty receipt")
     # Определяем mime: для документа берём mime_type, для photo — jpeg

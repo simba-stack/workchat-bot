@@ -9,3 +9,6 @@ venv/
 .vscode/
 .DS_Store
 .obsidian/
+receipts/
+apply_outkup_ui_fix.py
+apply_outkup_ui_fix.ps1

@@ -1320,14 +1320,38 @@ class UserbotService:
         has_doc = bool(getattr(msg, "document", None))
         text = (msg.text or msg.message or "").strip()
         if has_photo or has_doc:
-            # File ID для последующего скачивания (через aiogram у нас нет — Telethon
-            # хранит как media). Сохраняем msg_id чтобы JARVIS мог загрузить фото
-            # через специальный endpoint.
+            # Сразу скачиваем фото в локальный файл — api.py отдаст его через
+            # FileResponse. Это надёжнее чем on-demand download из api.py,
+            # потому что Telethon в FastAPI-loop часто падает с "Cannot send
+            # requests while disconnected" (loop mismatch). Здесь userbot
+            # работает в своём loop где connection живой.
+            saved_path = ""
+            try:
+                import os
+                receipts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "receipts")
+                os.makedirs(receipts_dir, exist_ok=True)
+                # Расширение: jpg для фото, у документов берём из mime
+                ext = ".jpg"
+                if has_doc and getattr(msg.document, "mime_type", None):
+                    m = (msg.document.mime_type or "").lower()
+                    if "png" in m: ext = ".png"
+                    elif "pdf" in m: ext = ".pdf"
+                    elif "webp" in m: ext = ".webp"
+                target_path = os.path.join(receipts_dir, f"{pay_id}{ext}")
+                await self.client.download_media(msg, file=target_path)
+                if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    saved_path = f"receipts/{pay_id}{ext}"
+                    logger.info("[outkup] receipt saved: pay=%s path=%s size=%d",
+                                pay_id, saved_path, os.path.getsize(target_path))
+            except Exception as e:
+                logger.warning("[outkup] receipt download failed pay=%s: %s", pay_id, e)
+            # File ID + локальный путь — оба пишем в storage
             await storage.update_outkup_payment(
                 pay_id,
                 status="receipt_received",
                 receipt_msg_id=int(msg.id),
                 receipt_file_id=str(getattr(msg, "id", "") or ""),
+                receipt_local_path=saved_path,
             )
             # Notify в JARVIS + лента
             try:
