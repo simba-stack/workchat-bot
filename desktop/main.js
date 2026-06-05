@@ -440,6 +440,17 @@ autoUpdater.on("error", (err) => {
 
 // === Lifecycle ===
 app.whenReady().then(() => {
+  // Clear HTTP cache на старте — иначе после деплоя нового jarvis.html
+  // Electron может месяцами держать в кеше старую версию даже при no-cache
+  // заголовках от сервера. Cookies/session/localStorage остаются.
+  try {
+    const sess = session.fromPartition("persist:pride");
+    sess.clearCache().then(() => {
+      log.info("[startup] HTTP cache cleared (jarvis.html will be fetched fresh)");
+    }).catch(e => log.warn("[startup] clearCache failed:", e?.message || e));
+  } catch (e) {
+    log.warn("[startup] clearCache init failed:", e?.message || e);
+  }
   // === Screen share (getDisplayMedia) handler ===
   // Открывает кастомный пикер (picker.html), пользователь выбирает экран/окно,
   // мы резолвим callback со выбранным source.
