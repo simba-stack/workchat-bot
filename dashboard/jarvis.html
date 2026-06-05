@@ -6223,11 +6223,13 @@
           </span>
         </div>
 
-        <!-- Кнопка «Взять» (когда заявка confirmed и не взята) -->
+        <!-- Кнопка «Взять» (когда заявка подтверждена клиентом и не взята менеджером) -->
+        <!-- Backend ставит status='awaiting_payment' после confirm_outkup_order. -->
+        <!-- Раньше тут было только 'confirmed' — кнопка не появлялась никогда. -->
         <div style="margin-top: 8px; display: flex; gap: 6px;">
-          <button x-show="o.status === 'confirmed' && !o.assigned_to" class="btn" @click.stop="outkupTakeNew(o.id)"
+          <button x-show="['confirmed','awaiting_payment','partial'].includes(o.status) && !o.assigned_to" class="btn" @click.stop="outkupTakeNew(o.id)"
                   style="background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; padding: 6px 12px;">✋ Взять заявку</button>
-          <button x-show="['confirmed','partial','awaiting_receipts'].includes(o.status)" class="btn" @click.stop="outkupCancel(o.id)"
+          <button x-show="['confirmed','awaiting_payment','partial','awaiting_receipts'].includes(o.status)" class="btn" @click.stop="outkupCancel(o.id)"
                   style="font-size: 11px; background: rgba(239,68,68,0.15); color:#ef4444;">❌ Отменить</button>
           <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);"
                 x-text="'Курс: ' + (o.rate || 0).toFixed(2) + ' ₽/USDT · комиссия ' + (o.pct_fee || 0).toFixed(1) + '%'"></span>
@@ -6296,20 +6298,27 @@
             </template>
           </div>
 
-          <!-- Форма выдачи нового реквизита (если есть остаток) -->
-          <div x-show="(o.amount_rub_remaining || 0) > 0.01 && o.assigned_to"
+          <!-- Форма выдачи нового реквизита.
+               Раньше прятали при !assigned_to — было непонятно куда жать.
+               Теперь форма всегда видна когда есть остаток. Если менеджер
+               ещё не взял заявку — выдача автоматически захватывает её
+               (см. outkupIssuePayment ниже). amount_rub_remaining fallback
+               на amount_rub чтобы при только-что-подтверждённой заявке
+               max= вычислялся корректно. -->
+          <div x-show="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0) > 0.01 && ['confirmed','awaiting_payment','partial'].includes(o.status)"
                style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
-              📤 Выдать реквизит на сумму до <b x-text="(o.amount_rub_remaining || 0).toLocaleString('ru-RU') + ' ₽'"></b>:
+              📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>:
+              <span x-show="!o.assigned_to" style="color: #f59e0b; margin-left: 8px;">(нажми «Взять заявку» сначала)</span>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 100px auto; gap: 6px; align-items: center;">
-              <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)"
+            <div style="display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 6px; align-items: center;">
+              <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
-              <input type="text" x-model="o._newPhone" placeholder="+7 999 123 4567"
+              <input type="text" x-model="o._newPhone" placeholder="+7 999 123 4567 или номер карты" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
-              <input type="number" x-model.number="o._newAmount" placeholder="Сумма ₽" :max="o.amount_rub_remaining"
+              <input type="number" x-model.number="o._newAmount" placeholder="Сумма ₽" :max="(o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
-              <button class="btn success" @click="outkupIssuePayment(o.id, o._newBank, o._newPhone, o._newAmount)"
+              <button class="btn success" @click="outkupIssuePayment(o.id, o._newBank, o._newPhone, o._newAmount)" :disabled="!o.assigned_to"
                       style="padding: 6px 14px;">📤 Выдать</button>
             </div>
           </div>
