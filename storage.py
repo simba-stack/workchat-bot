@@ -5063,6 +5063,47 @@ class Storage:
             return None
         return (self.state.get("outkup_orders") or {}).get(str(order_id))
 
+    def get_outkup_client_stats(self, client_chat_id) -> dict:
+        """Аггрегирует все откуп-заявки по client_chat_id.
+        Возвращает: completed/in_progress/cancelled, total_rub, total_usdt_paid,
+        last_done_at. Используется handler-ом «стата» в outkup-чате клиента."""
+        all_orders = (self.state.get("outkup_orders") or {})
+        cid_norm = _norm_chat_id(client_chat_id)
+        completed = 0
+        in_progress = 0
+        cancelled = 0
+        total_rub = 0.0
+        total_usdt = 0.0
+        last_done_at = 0.0
+        for o in all_orders.values():
+            try:
+                if _norm_chat_id(o.get("client_chat_id")) != cid_norm:
+                    continue
+            except Exception:
+                continue
+            st = (o.get("status") or "").lower()
+            amt = float(o.get("amount_rub") or 0)
+            usdt = float(o.get("payout_client_usdt") or o.get("calculated_usdt") or 0)
+            if st in ("done", "completed"):
+                completed += 1
+                total_rub += amt
+                total_usdt += usdt
+                ts = float(o.get("completed_at") or o.get("done_at") or 0)
+                if ts > last_done_at:
+                    last_done_at = ts
+            elif st == "cancelled":
+                cancelled += 1
+            else:
+                in_progress += 1
+        return {
+            "completed": completed,
+            "in_progress": in_progress,
+            "cancelled": cancelled,
+            "total_rub": total_rub,
+            "total_usdt": total_usdt,
+            "last_done_at": last_done_at,
+        }
+
     # === v2: outkup_chats — регистрация чатов фин-партнёров ===
 
     def is_outkup_chat(self, chat_id) -> bool:
@@ -5404,10 +5445,14 @@ class Storage:
     async def complete_outkup_order(
         self, order_id, txid: str = "", by: str = "",
     ) -> Optional[dict]:
-        """Откупщик отправил USDT → завершено."""
+        """Откупщик отправил USDT → завершено.
+        Разрешены: paid / awaiting_payment / awaiting_receipts / partial —
+        раньше было только paid/awaiting_payment и кнопка «🎉 Завершить» в UI
+        падала на типичном финале (awaiting_receipts когда все чеки получены)."""
         async with _lock:
             o = (self.state.get("outkup_orders") or {}).get(str(order_id))
-            if not o or o.get("status") not in ("paid", "awaiting_payment"):
+            allowed = ("paid", "awaiting_payment", "awaiting_receipts", "partial")
+            if not o or o.get("status") not in allowed:
                 return None
             o["status"] = "completed"
             o["completed_at"] = time.time()

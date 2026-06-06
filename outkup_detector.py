@@ -337,3 +337,48 @@ async def handle_outkup_confirm(event, userbot, storage) -> bool:
             logger.warning("outkup cancel-reply failed: %s", e)
         logger.info("outkup: заявка %s отменена клиентом", order["id"])
     return True
+
+
+async def handle_outkup_stats(event, userbot, storage) -> bool:
+    """Клиент-партнёр в outkup-чате пишет «стата» / «статистика» / «баланс»
+    → ассистент выдаёт сводку по его откупам."""
+    if not event or not event.message:
+        return False
+    try:
+        if not storage.is_outkup_chat(event.chat_id):
+            return False
+    except Exception:
+        return False
+    text = (event.message.text or event.message.message or "").strip().lower()
+    if text not in (
+        "стата", "статистика", "баланс", "/стата", "/статистика", "/баланс",
+        "/stats", "stats", "сколько откупил", "сколько откупили", "моя стата",
+    ):
+        return False
+    stats = storage.get_outkup_client_stats(event.chat_id)
+    import datetime as _dt
+    last = ""
+    if stats.get("last_done_at"):
+        try:
+            last = _dt.datetime.fromtimestamp(stats["last_done_at"]).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            pass
+    msg = (
+        f"\U0001f4ca <b>Ваша статистика по откупам</b>\n\n"
+        f"✅ Завершено заявок: <b>{stats['completed']}</b>\n"
+        f"⏳ В работе: <b>{stats['in_progress']}</b>\n"
+        f"❌ Отменено: <b>{stats['cancelled']}</b>\n\n"
+        f"\U0001f4b8 Всего принято: <b>{stats['total_rub']:,.0f} ₽</b>\n"
+        f"\U0001f4b5 Выплачено USDT: <b>{stats['total_usdt']:.2f}</b>"
+        + (f"\n\n\U0001f552 Последняя выплата: {last}" if last else "")
+    ).replace(",", " ")
+    try:
+        target = await userbot._resolve_chat_target(event.chat_id)
+        await userbot.client.send_message(
+            target, msg, parse_mode="html",
+            reply_to=event.message.id if event.message else None,
+        )
+    except Exception as e:
+        logger.warning("outkup stats reply failed: %s", e)
+    logger.info("outkup: stats sent to chat=%s", event.chat_id)
+    return True
