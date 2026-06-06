@@ -6376,7 +6376,7 @@
       <button class="dept-tab" :class="outkupFilter === 'all' ? 'active' : ''" @click="outkupFilter='all'">Все</button>
       <button class="dept-tab" :class="outkupFilter === 'pending_confirm' ? 'active' : ''" @click="outkupFilter='pending_confirm'">⏳ Ждут подтверждения</button>
       <button class="dept-tab" :class="outkupFilter === 'awaiting_payment' ? 'active' : ''" @click="outkupFilter='awaiting_payment'">💰 Ждут оплаты</button>
-      <button class="dept-tab" :class="outkupFilter === 'partial' ? 'active' : ''" @click="outkupFilter='partial'">💸 Частично выдано</button>
+      <button class="dept-tab" :class="outkupFilter === 'partial' ? 'active' : ''" @click="outkupFilter='partial'">💸 Остатки по заявкам</button>
       <button class="dept-tab" :class="outkupFilter === 'awaiting_receipts' ? 'active' : ''" @click="outkupFilter='awaiting_receipts'">📎 Ждём чеки</button>
       <button class="dept-tab" :class="outkupFilter === 'done' ? 'active' : ''" @click="outkupFilter='done'">🎉 Завершено</button>
       <button class="dept-tab" :class="outkupFilter === 'cancelled' ? 'active' : ''" @click="outkupFilter='cancelled'">❌ Отменено</button>
@@ -6408,7 +6408,7 @@
           <!-- Статусы -->
           <span x-show="o.status === 'pending_confirm'" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.08); border-radius: 3px;">⏳ ждёт подтв.</span>
           <span x-show="o.status === 'confirmed'" style="font-size: 10px; padding: 2px 8px; background: rgba(245,158,11,0.2); color: #fbbf24; border-radius: 3px;">🆕 принять</span>
-          <span x-show="o.status === 'partial'" style="font-size: 10px; padding: 2px 8px; background: rgba(106,216,255,0.18); color: #6ad8ff; border-radius: 3px;">💸 выдача</span>
+          <span x-show="o.status === 'partial'" style="font-size: 10px; padding: 2px 8px; background: rgba(106,216,255,0.18); color: #6ad8ff; border-radius: 3px;">💸 остаток</span>
           <span x-show="o.status === 'awaiting_receipts'" style="font-size: 10px; padding: 2px 8px; background: rgba(168,85,247,0.2); color: #a855f7; border-radius: 3px;">📎 ждём чеки</span>
           <span x-show="o.status === 'done' || o.status === 'completed'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color: #22c55e; border-radius: 3px;">🎉 завершено</span>
           <span x-show="o.status === 'cancelled'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color: #ef4444; border-radius: 3px;">❌ отменено</span>

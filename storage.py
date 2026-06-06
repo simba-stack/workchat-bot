@@ -5158,12 +5158,14 @@ class Storage:
             (self.state.get("outkup_settings") or {}).get("manager_salary_pct") or 1.0
         )
 
-        # by_client
+        # by_client — счётчики заявок
         by_client = {}
+        order_to_client = {}
         for o in orders.values():
             cid = _norm_chat_id(o.get("client_chat_id"))
             if not cid:
                 continue
+            order_to_client[o.get("id")] = cid
             slot = by_client.setdefault(cid, {
                 "chat_id": int(o.get("client_chat_id") or 0),
                 "completed": 0, "in_progress": 0, "cancelled": 0,
@@ -5171,16 +5173,29 @@ class Storage:
                 "total_usdt_paid": 0.0, "balance_usdt": 0.0,
             })
             st = (o.get("status") or "").lower()
-            amt_rub = float(o.get("amount_rub") or 0)
-            usdt = float(o.get("payout_client_usdt") or o.get("calculated_usdt") or 0)
             if st in ("done", "completed"):
                 slot["completed"] += 1
-                slot["total_rub"] += amt_rub
-                slot["total_usdt_due"] += usdt
             elif st == "cancelled":
                 slot["cancelled"] += 1
             else:
                 slot["in_progress"] += 1
+        # Суммы — по CONFIRMED payments (каждый подтверждённый чек засчитан сразу)
+        for p in payments.values():
+            if (p.get("status") or "").lower() != "confirmed":
+                continue
+            cid = order_to_client.get(p.get("order_id"))
+            if not cid:
+                continue
+            slot = by_client.get(cid)
+            if not slot:
+                continue
+            amt = float(p.get("amount_rub") or 0)
+            o = orders.get(str(p.get("order_id"))) or {}
+            rate = float(o.get("rate") or 100)
+            pct = float(o.get("pct_fee") or 0)
+            usdt_eq = (amt / max(rate, 1)) * (1 - pct / 100.0)
+            slot["total_rub"] += amt
+            slot["total_usdt_due"] += usdt_eq
         # Прибавим уже выплаченное USDT
         for p in all_payouts.values():
             cid = _norm_chat_id(p.get("client_chat_id"))
@@ -5261,30 +5276,30 @@ class Storage:
         }
 
     def get_outkup_client_stats(self, client_chat_id) -> dict:
-        """Аггрегирует все откуп-заявки по client_chat_id.
-        Возвращает: completed/in_progress/cancelled, total_rub, total_usdt_paid,
-        last_done_at. Используется handler-ом «стата» в outkup-чате клиента."""
+        """Аггрегирует откупы по client_chat_id.
+        Счётчики заявок — по их статусам (done/cancelled/прочее).
+        Суммы (total_rub/total_usdt) — по CONFIRMED PAYMENTS (каждый
+        подтверждённый чек сразу засчитывается клиенту, даже если вся
+        заявка ещё в partial)."""
         all_orders = (self.state.get("outkup_orders") or {})
+        all_payments = (self.state.get("outkup_payments") or {})
         cid_norm = _norm_chat_id(client_chat_id)
         completed = 0
         in_progress = 0
         cancelled = 0
-        total_rub = 0.0
-        total_usdt = 0.0
         last_done_at = 0.0
+        my_order_ids = set()
+        # Сначала собираем заявки клиента + счётчики
         for o in all_orders.values():
             try:
                 if _norm_chat_id(o.get("client_chat_id")) != cid_norm:
                     continue
             except Exception:
                 continue
+            my_order_ids.add(o.get("id"))
             st = (o.get("status") or "").lower()
-            amt = float(o.get("amount_rub") or 0)
-            usdt = float(o.get("payout_client_usdt") or o.get("calculated_usdt") or 0)
             if st in ("done", "completed"):
                 completed += 1
-                total_rub += amt
-                total_usdt += usdt
                 ts = float(o.get("completed_at") or o.get("done_at") or 0)
                 if ts > last_done_at:
                     last_done_at = ts
@@ -5292,12 +5307,27 @@ class Storage:
                 cancelled += 1
             else:
                 in_progress += 1
+        # Теперь — суммы по CONFIRMED payments для этих заявок
+        total_rub = 0.0
+        total_usdt = 0.0
+        for p in all_payments.values():
+            if p.get("order_id") not in my_order_ids:
+                continue
+            if (p.get("status") or "").lower() != "confirmed":
+                continue
+            total_rub += float(p.get("amount_rub") or 0)
+            # USDT-эквивалент по курсу/комиссии конкретной заявки
+            o = all_orders.get(str(p.get("order_id"))) or {}
+            rate = float(o.get("rate") or 100)
+            pct = float(o.get("pct_fee") or 0)
+            usdt_eq = (float(p.get("amount_rub") or 0) / max(rate, 1)) * (1 - pct / 100.0)
+            total_usdt += usdt_eq
         return {
             "completed": completed,
             "in_progress": in_progress,
             "cancelled": cancelled,
-            "total_rub": total_rub,
-            "total_usdt": total_usdt,
+            "total_rub": round(total_rub, 2),
+            "total_usdt": round(total_usdt, 2),
             "last_done_at": last_done_at,
         }
 
