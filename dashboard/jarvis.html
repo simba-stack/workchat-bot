@@ -6254,6 +6254,7 @@
                          : p.status === 'rejected' ? 'border-left-color:#ef4444;'
                          : p.status === 'receipt_received' ? 'border-left-color:#a855f7;'
                          : 'border-left-color:#fbbf24;'">
+                <!-- Header payment: id / сумма / банк·телефон / статус / менеджер -->
                 <div style="display: flex; gap: 10px; align-items: center; font-size: 12px; flex-wrap: wrap;">
                   <code style="color: var(--hud-primary);" x-text="p.id"></code>
                   <span style="font-weight: 700;" x-text="(p.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></span>
@@ -6270,6 +6271,20 @@
                               : p.status"></span>
                   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);">@<span x-text="p.manager_username"></span></span>
                 </div>
+                <!-- Превью чека через fetch+blob (cookies в Electron) -->
+                <div x-show="['receipt_received','confirmed','rejected'].includes(p.status) && p.receipt_msg_id"
+                     style="margin-top: 8px;"
+                     x-init="if (!p._receiptBlob && !p._receiptError) loadOutkupReceipt(p)">
+                  <template x-if="p._receiptBlob">
+                    <a :href="p._receiptBlob" target="_blank" style="display: inline-block;">
+                      <img :src="p._receiptBlob" alt="чек"
+                           style="max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); cursor: zoom-in; background: rgba(0,0,0,0.3);">
+                    </a>
+                  </template>
+                  <template x-if="p._receiptError">
+                    <div style="font-size: 11px; color: #ef4444;">⚠️ <span x-text="p._receiptError"></span>
+                      <button class="chip-btn" @click="p._receiptError=null; p._receiptBlob=null; loadOutkupReceipt(p)" style="font-size: 10px; padding: 2px 6px; margin-left: 4px;">↻ повторить</button>
+                    </div>
                   </template>
                   <template x-if="!p._receiptBlob && !p._receiptError">
                     <div style="font-size: 11px; color: var(--text-dim);">⏳ загружаем чек…</div>
@@ -6317,19 +6332,12 @@
                Видна ВСЕГДА если статус не финальный (done/cancelled/completed).
                Если менеджер ещё не взял (!assigned_to) — поверх лежит жёлтая
                подсказка с кнопкой «✋ Взять заявку», поля заблокированы. -->
-          <!-- ФОРМА ВЫДАЧИ — БЕЗ x-show. Видна ВСЕГДА когда карточка развёрнута.
-               UI-VERSION: 2026-06-06-form-always
-               Если статус финальный или нет остатка — поля disabled.
-               Если не взято — поверх лежит жёлтая заглушка с кнопкой Взять. -->
-          <div style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px; position: relative;">
-            <!-- Заглушка пока не взято -->
-            <div x-show="!o.assigned_to" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border-radius: 6px; z-index: 2;">
-              <div style="font-size: 12px; color: #fbbf24;">⚠️ Сначала возьми заявку</div>
-              <button class="btn" @click.stop="outkupTake(o.id)" style="background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; padding: 6px 14px;">✋ Взять заявку</button>
-            </div>
+          <!-- Форма выдачи: ТОЛЬКО когда заявка взята менеджером и не завершена.
+               До нажатия «Взять» — формы нет (кнопка Взять сверху над списком). -->
+          <div x-show="o.assigned_to && !['done','completed','cancelled'].includes(o.status) && ((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0) > 0.01"
+               style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
               📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>
-              <span style="color: #6ad8ff; margin-left: 4px;">[форма ВСЕГДА видна v2026.06.06]</span>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 6px; align-items: center;">
               <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)" :disabled="!o.assigned_to"
