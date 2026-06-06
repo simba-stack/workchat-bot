@@ -6270,79 +6270,51 @@
 
     <!-- ============ Под-вкладка ВЫПЛАТЫ КЛИЕНТАМ ============ -->
     <div x-show="outkupTab === 'payouts'" style="display: flex; flex-direction: column; gap: 14px;">
+      <!-- ЕДИНАЯ таблица К выплате: pending-запросы + клиенты с балансом без запроса.
+           Без дублирования: если у клиента есть pending — берём его, иначе строка из by_client.
+           Сумма к выплате — ВСЕГДА текущий balance_usdt, чтобы не было разнобоя со старыми pending. -->
       <div class="jarvis-panel" style="padding: 14px;">
-        <h4 style="margin: 0 0 10px 0;">💸 Клиенты с балансом к выплате</h4>
+        <h4 style="margin: 0 0 10px 0;">💸 К выплате клиентам</h4>
         <div style="overflow-x: auto;">
           <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
             <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
-              <th style="padding: 6px;">Партнёр</th><th>Баланс USDT</th>
-              <th>TRC20-адрес</th><th>Действие</th>
+              <th style="padding: 6px;">Партнёр</th><th>Сумма USDT</th>
+              <th>TRC20-адрес</th><th>Статус</th><th>TXID</th><th>Действие</th>
             </tr></thead>
             <tbody>
-              <template x-for="c in (outkupFullStats?.by_client || []).filter(x => x.balance_usdt > 0.01)" :key="c.chat_id">
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <template x-for="row in outkupPayoutRows()" :key="row.key">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);"
+                    :style="row.pending ? 'background: rgba(251,191,36,0.05);' : ''">
                   <td style="padding: 6px;">
-                    <span x-text="c.partner_name || ('@'+c.partner_username) || ('chat='+c.chat_id)"></span>
+                    <span x-text="row.partner_name || ('@'+row.partner_username) || ('chat='+row.chat_id)"></span>
+                    <div style="font-size: 10px; color: var(--text-dim);" x-text="'id: '+row.chat_id"></div>
                   </td>
-                  <td style="color: #fbbf24; font-weight: 700;" x-text="(c.balance_usdt || 0).toFixed(2) + ' USDT'"></td>
+                  <td style="color: #fbbf24; font-weight: 700;" x-text="(row.amount_usdt || 0).toFixed(2) + ' USDT'"></td>
                   <td>
-                    <input type="text" :value="c.trc20_address || ''"
-                           @blur="saveOutkupClientWallet(c.chat_id, $event.target.value)"
+                    <input type="text" :value="row.trc20_address || ''"
+                           @blur="saveOutkupClientWallet(row.chat_id, $event.target.value); row.trc20_address = $event.target.value"
                            placeholder="TR..."
                            style="width: 280px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
                   </td>
                   <td>
-                    <div style="display: flex; gap: 4px; align-items: center;">
-                      <input type="text" x-model="c._payoutTxid" placeholder="TXID (опц.)"
-                             style="width: 140px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
-                      <button class="btn" @click="payoutOutkupClient(c)"
-                              :disabled="!c.trc20_address"
-                              style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 6px 12px; font-size: 11px;">
-                        💸 Выплатить
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </template>
-              <tr x-show="(outkupFullStats?.by_client || []).filter(x => x.balance_usdt > 0.01).length === 0">
-                <td colspan="4" style="padding: 14px; text-align: center; color: var(--text-dim);">— все выплачено —</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Pending запросы от клиентов (клиент написал «выплата TR…») -->
-      <div class="jarvis-panel" style="padding: 14px; border-left: 3px solid #fbbf24;">
-        <h4 style="margin: 0 0 10px 0;">⏳ Запросы на выплату от клиентов</h4>
-        <div style="overflow-x: auto;">
-          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
-              <th style="padding: 6px;">Когда</th><th>Клиент</th><th>USDT</th>
-              <th>Кошелёк</th><th>TXID</th><th>Действие</th>
-            </tr></thead>
-            <tbody>
-              <template x-for="p in (outkupClientPayouts || []).filter(x => x.status === 'pending')" :key="p.id">
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
-                  <td style="padding: 6px;" x-text="p.paid_at ? new Date(p.paid_at*1000).toLocaleString('ru-RU') : '—'"></td>
-                  <td x-text="p.client_chat_id"></td>
-                  <td style="color: #fbbf24; font-weight: 700;" x-text="(p.amount_usdt || 0).toFixed(2)"></td>
-                  <td style="font-family: monospace; font-size: 10px; max-width: 220px; word-break: break-all;" x-text="p.trc20_address || (p.note || '').replace('REQUEST → ', '')"></td>
-                  <!-- Inline input для TXID — window.prompt в Electron не работает -->
-                  <td>
-                    <input type="text" x-model="p._txidInput" placeholder="TXID транзакции…"
-                           style="width: 240px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
+                    <span x-show="row.pending" style="font-size: 10px; padding: 2px 6px; background: rgba(251,191,36,0.2); color: #fbbf24; border-radius: 3px;">⏳ запрос клиента</span>
+                    <span x-show="!row.pending" style="font-size: 10px; padding: 2px 6px; background: rgba(106,216,255,0.15); color: #6ad8ff; border-radius: 3px;">💼 баланс</span>
                   </td>
                   <td>
-                    <button class="btn" @click="confirmOutkupPayoutRequest(p)"
+                    <input type="text" x-model="row._txidInput" placeholder="TXID транзакции…"
+                           style="width: 200px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
+                  </td>
+                  <td>
+                    <button class="btn" @click="payoutOutkupRow(row)"
+                            :disabled="!row.trc20_address || (row.amount_usdt||0) < 0.01"
                             style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 4px 10px; font-size: 11px;">
-                      ✅ Подтвердить
+                      ✅ Выплатить
                     </button>
                   </td>
                 </tr>
               </template>
-              <tr x-show="(outkupClientPayouts || []).filter(x => x.status === 'pending').length === 0">
-                <td colspan="6" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет запросов —</td>
+              <tr x-show="outkupPayoutRows().length === 0">
+                <td colspan="6" style="padding: 14px; text-align: center; color: var(--text-dim);">— все выплачено —</td>
               </tr>
             </tbody>
           </table>
@@ -12835,6 +12807,84 @@ function jarvis() {
           body: JSON.stringify({ trc20_address: address }),
         });
         if (!r.ok) { alert('Ошибка сохранения адреса: ' + await r.text()); return; }
+        await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Объединённый список «к выплате»: pending запросы клиентов + клиенты
+    // с балансом без запроса. Без дубликатов. Сумма ВСЕГДА = текущий balance_usdt.
+    outkupPayoutRows() {
+      const clients = (this.outkupFullStats?.by_client) || [];
+      const pendings = (this.outkupClientPayouts || []).filter(p => p.status === 'pending');
+      const pendingByCid = {};
+      for (const p of pendings) pendingByCid[String(p.client_chat_id)] = p;
+      const rows = [];
+      for (const c of clients) {
+        if ((c.balance_usdt || 0) < 0.01) continue;
+        const pending = pendingByCid[String(c.chat_id)];
+        rows.push({
+          key: 'c' + c.chat_id,
+          chat_id: c.chat_id,
+          partner_name: c.partner_name,
+          partner_username: c.partner_username,
+          trc20_address: (pending && pending.trc20_address) || c.trc20_address || '',
+          amount_usdt: c.balance_usdt,  // ВСЕГДА текущий баланс
+          pending: !!pending,
+          pending_id: pending ? pending.id : null,
+          _txidInput: '',
+        });
+      }
+      // Добавим pending без клиента в by_client (на всякий случай — баланс был сброшен)
+      for (const p of pendings) {
+        if (!rows.find(r => String(r.chat_id) === String(p.client_chat_id))) {
+          rows.push({
+            key: 'p' + p.id,
+            chat_id: p.client_chat_id,
+            partner_name: '',
+            partner_username: '',
+            trc20_address: p.trc20_address || '',
+            amount_usdt: p.amount_usdt,
+            pending: true,
+            pending_id: p.id,
+            _txidInput: '',
+          });
+        }
+      }
+      return rows;
+    },
+    async payoutOutkupRow(row) {
+      if (!row || !row.chat_id) return;
+      if (!row.trc20_address) { alert('Нет TRC20-адреса клиента'); return; }
+      const amount = Number(row.amount_usdt || 0);
+      if (amount < 0.01) { alert('Нечего выплачивать'); return; }
+      const txid = (row._txidInput || '').trim();
+      const msg = txid
+        ? `Выплатить ${amount.toFixed(2)} USDT с TXID ${txid.slice(0,20)}…?`
+        : `Выплатить ${amount.toFixed(2)} USDT БЕЗ TXID?`;
+      if (!confirm(msg)) return;
+      try {
+        if (row.pending && row.pending_id) {
+          // Закрываем существующий pending-запрос
+          const r = await fetch(`/api/outkup/client_payouts/${row.pending_id}/mark_paid`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txid }),
+          });
+          if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        } else {
+          // Создаём новую запись сразу как paid
+          const r = await fetch('/api/outkup/client_payouts', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_chat_id: row.chat_id,
+              amount_usdt: amount,
+              txid: txid,
+              note: `→ ${row.trc20_address}`,
+            }),
+          });
+          if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        }
+        row._txidInput = '';
         await this.loadOutkupFullStats();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
