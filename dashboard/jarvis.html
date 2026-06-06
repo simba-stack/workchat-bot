@@ -8453,6 +8453,20 @@ function jarvis() {
         }, 5000);
       } catch (e) { console.warn('outkup auto-refresh init failed', e); }
 
+      // OUTKUP auto-refresh — глобальный таймер 5 сек, дёргает API только
+      // когда юзер на view 'outkup' и окно активно.
+      try {
+        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
+        this._outkupAutoTimer = setInterval(() => {
+          if (this.currentView === 'outkup'
+              && typeof this.refreshOutkup === 'function'
+              && !document.hidden
+              && !this.outkupLoading) {
+            this.refreshOutkup();
+          }
+        }, 5000);
+      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
+
       // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
       // дёргает API только когда юзер на view 'outkup' и окно активно.
       try {
@@ -12780,6 +12794,26 @@ function jarvis() {
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.loadOutkupPayments(orderId);
       } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
+    async loadOutkupReceipt(p) {
+      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
+      p._receiptLoading = true;
+      try {
+        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
+        if (!r.ok) {
+          const txt = await r.text();
+          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
+          return;
+        }
+        const blob = await r.blob();
+        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
+        p._receiptBlob = URL.createObjectURL(blob);
+      } catch (e) {
+        p._receiptError = e.message || 'ошибка сети';
+      } finally {
+        p._receiptLoading = false;
+      }
     },
     // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
     async loadOutkupReceipt(p) {

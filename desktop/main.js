@@ -102,7 +102,10 @@ function createMainWindow() {
     },
   });
 
-  mainWindow.loadURL(DASHBOARD_URL);
+  // Cache-bust: timestamp в URL чтобы Electron не отдавал кеш jarvis.html.
+  // Без этого после deploy юзер видит старый UI пока не нажмёт Ctrl+Shift+R.
+  const cacheBustUrl = DASHBOARD_URL + (DASHBOARD_URL.includes('?') ? '&' : '?') + '_v=' + Date.now();
+  mainWindow.loadURL(cacheBustUrl);
 
   const revealMain = () => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
