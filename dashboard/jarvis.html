@@ -6292,11 +6292,15 @@
                            style="width: 280px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
                   </td>
                   <td>
-                    <button class="btn" @click="payoutOutkupClient(c)"
-                            :disabled="!c.trc20_address"
-                            style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 6px 12px; font-size: 11px;">
-                      💸 Выплатить <span x-text="(c.balance_usdt || 0).toFixed(2)"></span> USDT
-                    </button>
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                      <input type="text" x-model="c._payoutTxid" placeholder="TXID (опц.)"
+                             style="width: 140px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
+                      <button class="btn" @click="payoutOutkupClient(c)"
+                              :disabled="!c.trc20_address"
+                              style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 6px 12px; font-size: 11px;">
+                        💸 Выплатить
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </template>
@@ -6315,7 +6319,7 @@
           <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
             <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
               <th style="padding: 6px;">Когда</th><th>Клиент</th><th>USDT</th>
-              <th>Кошелёк</th><th>Действие</th>
+              <th>Кошелёк</th><th>TXID</th><th>Действие</th>
             </tr></thead>
             <tbody>
               <template x-for="p in (outkupClientPayouts || []).filter(x => x.status === 'pending')" :key="p.id">
@@ -6323,17 +6327,22 @@
                   <td style="padding: 6px;" x-text="p.paid_at ? new Date(p.paid_at*1000).toLocaleString('ru-RU') : '—'"></td>
                   <td x-text="p.client_chat_id"></td>
                   <td style="color: #fbbf24; font-weight: 700;" x-text="(p.amount_usdt || 0).toFixed(2)"></td>
-                  <td style="font-family: monospace; font-size: 10px;" x-text="p.trc20_address || (p.note || '').replace('REQUEST → ', '')"></td>
+                  <td style="font-family: monospace; font-size: 10px; max-width: 220px; word-break: break-all;" x-text="p.trc20_address || (p.note || '').replace('REQUEST → ', '')"></td>
+                  <!-- Inline input для TXID — window.prompt в Electron не работает -->
+                  <td>
+                    <input type="text" x-model="p._txidInput" placeholder="TXID транзакции…"
+                           style="width: 240px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
+                  </td>
                   <td>
                     <button class="btn" @click="confirmOutkupPayoutRequest(p)"
                             style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 4px 10px; font-size: 11px;">
-                      ✅ Подтвердить (с TXID)
+                      ✅ Подтвердить
                     </button>
                   </td>
                 </tr>
               </template>
               <tr x-show="(outkupClientPayouts || []).filter(x => x.status === 'pending').length === 0">
-                <td colspan="5" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет запросов —</td>
+                <td colspan="6" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет запросов —</td>
               </tr>
             </tbody>
           </table>
@@ -12831,10 +12840,13 @@ function jarvis() {
     },
     async confirmOutkupPayoutRequest(p) {
       if (!p || !p.id) return;
-      const txid = window.prompt
-        ? (window.prompt(`TXID транзакции (отправил ${(p.amount_usdt||0).toFixed(2)} USDT на ${p.trc20_address || (p.note || '').replace('REQUEST → ', '')}):`) || '')
-        : '';
-      if (!txid) { if (!confirm('Подтвердить выплату БЕЗ TXID? (не рекомендуется)')) return; }
+      // TXID берётся из inline-input p._txidInput (window.prompt в Electron не работает)
+      const txid = (p._txidInput || '').trim();
+      if (!txid) {
+        if (!confirm('Вы не ввели TXID — подтвердить выплату без него?')) return;
+      } else {
+        if (!confirm(`Подтвердить выплату ${(p.amount_usdt||0).toFixed(2)} USDT с TXID ${txid.slice(0,20)}…?`)) return;
+      }
       try {
         const r = await fetch(`/api/outkup/client_payouts/${p.id}/mark_paid`, {
           method: 'POST', credentials: 'include',
@@ -12852,10 +12864,12 @@ function jarvis() {
       }
       const amount = Number(c.balance_usdt || 0);
       if (amount < 0.01) { alert('Нечего выплачивать'); return; }
-      const txid = window.prompt
-        ? (window.prompt(`TXID транзакции (отправил ${amount.toFixed(2)} USDT на ${c.trc20_address}):`) || '')
-        : '';
-      if (!confirm(`Зафиксировать выплату ${amount.toFixed(2)} USDT клиенту?`)) return;
+      // TXID берём из inline-input (Electron не поддерживает window.prompt)
+      const txid = (c._payoutTxid || '').trim();
+      const msg = txid
+        ? `Зафиксировать выплату ${amount.toFixed(2)} USDT клиенту с TXID ${txid.slice(0,20)}…?`
+        : `Зафиксировать выплату ${amount.toFixed(2)} USDT БЕЗ TXID? (можно дополнить потом)`;
+      if (!confirm(msg)) return;
       try {
         const r = await fetch('/api/outkup/client_payouts', {
           method: 'POST', credentials: 'include',
@@ -12868,8 +12882,8 @@ function jarvis() {
           }),
         });
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        c._payoutTxid = '';
         await this.loadOutkupFullStats();
-        alert('✅ Выплата зафиксирована');
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async outkupCancel(id) {
