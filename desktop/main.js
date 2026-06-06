@@ -436,6 +436,20 @@ autoUpdater.on("update-downloaded", (info) => {
 });
 
 autoUpdater.on("error", (err) => {
+  // Глушим типичные 404/502 на latest.yml — релиз ещё не загружен на GitHub.
+  // Это НЕ ошибка для пользователя, не показываем баннер.
+  const msg = String(err || "");
+  const isReleaseNotFound = (
+    /HttpError:\s*(404|502)/i.test(msg)
+    || /latest\.yml/i.test(msg)
+    || /Cannot find latest\.yml/i.test(msg)
+  );
+  if (isReleaseNotFound) {
+    log.info("[updater] release not published yet — silenced:", msg.slice(0, 200));
+    updateState = { status: "idle", percent: 0, version: null };
+    sendUpdateState();
+    return;
+  }
   log.error("[updater] error:", err);
   updateState = { status: "error", percent: 0, version: null, error: String(err) };
   sendUpdateState();
