@@ -2730,6 +2730,23 @@ async def api_outkup_client_payouts_add(request: Request, me: dict = Depends(_ge
     return {"ok": True, "payout": rec}
 
 
+@app.post("/api/outkup/client_payouts/{payout_id}/mark_paid")
+async def api_outkup_client_payout_mark_paid(
+    payout_id: str, request: Request, me: dict = Depends(_get_me),
+):
+    """Менеджер обрабатывает pending-запрос: ставит txid → status=paid."""
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    txid = (body.get("txid") or "").strip()
+    rec = await storage.mark_outkup_client_payout_paid(
+        payout_id, txid=txid, by=me.get("username") or "",
+    )
+    if not rec:
+        raise HTTPException(404, "payout not found")
+    return {"ok": True, "payout": rec}
+
+
 @app.post("/api/outkup/client_wallets/{client_chat_id}")
 async def api_outkup_client_wallet_set(
     client_chat_id: int, request: Request, me: dict = Depends(_get_me),

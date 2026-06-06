@@ -1674,11 +1674,17 @@ class UserbotService:
         # Если сообщение в payments_chat_id — пытаемся распознать заявку
         # или подтверждение/отказ. Если обработали — выходим (не идём в AI).
         try:
-            from outkup_detector import handle_outkup_message, handle_outkup_confirm, handle_outkup_stats
+            from outkup_detector import (
+                handle_outkup_message, handle_outkup_confirm,
+                handle_outkup_stats, handle_outkup_payout_request,
+            )
             # Сначала — receipt/comment reply на сообщение с реквизитом
             if await self._handle_outkup_payment_reply(event):
                 return
             if await handle_outkup_confirm(event, self, storage):
+                return
+            # «выплата TR…» — запрос вывода от клиента
+            if await handle_outkup_payout_request(event, self, storage):
                 return
             # «стата» / «статистика» / «баланс» в outkup-чате — выдаём сводку
             if await handle_outkup_stats(event, self, storage):

@@ -5098,10 +5098,40 @@ class Storage:
                 "paid_by": (by or "").lstrip("@").lower(),
                 "paid_at": time.time(),
                 "note": (note or "").strip(),
+                # pending = запрос от клиента, paid = подтверждённая выплата с txid
+                "status": "paid" if (txid or "").strip() else "pending",
+                "trc20_address": "",
             }
             self.state.setdefault("outkup_client_payouts", {})[pid] = rec
             await self._save_unlocked()
             return rec
+
+    async def _update_payout_status(self, payout_id: str, status: str, trc20_address: str = "") -> bool:
+        async with _lock:
+            d = self.state.setdefault("outkup_client_payouts", {})
+            p = d.get(payout_id)
+            if not p:
+                return False
+            p["status"] = status
+            if trc20_address:
+                p["trc20_address"] = trc20_address
+            await self._save_unlocked()
+            return True
+
+    async def mark_outkup_client_payout_paid(
+        self, payout_id: str, txid: str = "", by: str = "",
+    ) -> Optional[dict]:
+        """Менеджер обрабатывает pending-запрос: ставит txid, status=paid, paid_by."""
+        async with _lock:
+            p = (self.state.get("outkup_client_payouts") or {}).get(payout_id)
+            if not p:
+                return None
+            p["status"] = "paid"
+            p["txid"] = (txid or "").strip()
+            p["paid_by"] = (by or "").lstrip("@").lower()
+            p["paid_at"] = time.time()
+            await self._save_unlocked()
+            return p
 
     def list_outkup_client_payouts(self, client_chat_id=None) -> list:
         d = (self.state.get("outkup_client_payouts") or {})
@@ -5496,15 +5526,23 @@ class Storage:
             p["confirmed_at"] = time.time()
             order = (self.state.get("outkup_orders") or {}).get(p.get("order_id"))
             if order:
-                # Проверка: все payments confirmed И остаток ≈ 0 → order=done
+                # Проверка: все НЕОТКЛОНЁННЫЕ payments confirmed И остаток ≈ 0
+                # → order=done. Rejected игнорируем (это история, не учитывается).
                 all_ids = list(order.get("payment_ids") or [])
                 all_confirmed = True
+                has_any_confirmed = False
                 for pid in all_ids:
                     sub = (self.state.get("outkup_payments") or {}).get(pid) or {}
-                    if sub.get("status") != "confirmed":
-                        all_confirmed = False
-                        break
-                if all_confirmed and float(order.get("amount_rub_remaining") or 0) < 0.01:
+                    st = sub.get("status")
+                    if st == "confirmed":
+                        has_any_confirmed = True
+                        continue
+                    if st == "rejected":
+                        continue  # пропускаем — отклонённые не учитываем
+                    all_confirmed = False
+                    break
+                if (all_confirmed and has_any_confirmed
+                        and float(order.get("amount_rub_remaining") or 0) < 0.01):
                     order["status"] = "done"
                     order["completed_at"] = time.time()
             await self._save_unlocked()

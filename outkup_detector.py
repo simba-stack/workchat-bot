@@ -355,22 +355,42 @@ async def handle_outkup_stats(event, userbot, storage) -> bool:
         "/stats", "stats", "сколько откупил", "сколько откупили", "моя стата",
     ):
         return False
-    stats = storage.get_outkup_client_stats(event.chat_id)
-    import datetime as _dt
-    last = ""
-    if stats.get("last_done_at"):
-        try:
-            last = _dt.datetime.fromtimestamp(stats["last_done_at"]).strftime("%d.%m.%Y %H:%M")
-        except Exception:
-            pass
+    # Берём ПОЛНЫЕ агрегаты — оттуда видим баланс к выплате
+    full = storage.get_outkup_full_stats()
+    from storage import _norm_chat_id
+    cid_norm = _norm_chat_id(event.chat_id)
+    my = None
+    for c in (full.get("by_client") or []):
+        if _norm_chat_id(c.get("chat_id")) == cid_norm:
+            my = c
+            break
+    # Per-client курс и комиссия
+    eff = storage.get_outkup_client_settings(event.chat_id) or {}
+    rate = float(eff.get("rate_rub_per_usdt") or 100)
+    pct = float(eff.get("pct_fee") or 5)
+    # Базовая стата (счётчики заявок)
+    base = storage.get_outkup_client_stats(event.chat_id)
+    completed = (my and my.get("completed")) or base.get("completed") or 0
+    in_progress = (my and my.get("in_progress")) or base.get("in_progress") or 0
+    cancelled = (my and my.get("cancelled")) or base.get("cancelled") or 0
+    total_rub = (my and my.get("total_rub")) or base.get("total_rub") or 0
+    usdt_due = (my and my.get("total_usdt_due")) or base.get("total_usdt") or 0
+    usdt_paid = (my and my.get("total_usdt_paid")) or 0
+    balance_usdt = (my and my.get("balance_usdt")) or 0
+    # Для дисплея «принято с учётом нашей комиссии»
+    payout_rub_eq = total_rub * (1 - pct / 100.0)
+    payout_usdt_calc = payout_rub_eq / max(rate, 1)
     msg = (
         f"\U0001f4ca <b>Ваша статистика по откупам</b>\n\n"
-        f"✅ Завершено заявок: <b>{stats['completed']}</b>\n"
-        f"⏳ В работе: <b>{stats['in_progress']}</b>\n"
-        f"❌ Отменено: <b>{stats['cancelled']}</b>\n\n"
-        f"\U0001f4b8 Всего принято: <b>{stats['total_rub']:,.0f} ₽</b>\n"
-        f"\U0001f4b5 Выплачено USDT: <b>{stats['total_usdt']:.2f}</b>"
-        + (f"\n\n\U0001f552 Последняя выплата: {last}" if last else "")
+        f"✅ Завершено: <b>{completed}</b>  ⏳ В работе: <b>{in_progress}</b>  ❌ Отменено: <b>{cancelled}</b>\n\n"
+        f"<b>📥 Принято всего:</b>\n"
+        f"   {total_rub:,.0f} ₽  →  {(total_rub / max(rate, 1)):.2f} USDT (по курсу {rate:.2f})\n\n"
+        f"<b>💸 К выплате вам (−{pct:.1f}% наша комиссия):</b>\n"
+        f"   {payout_rub_eq:,.0f} ₽  →  <b>{payout_usdt_calc:.2f} USDT</b>\n\n"
+        f"<b>📤 Уже выплачено:</b> {usdt_paid:.2f} USDT\n"
+        f"<b>💼 Остаток на счёте:</b> <code>{balance_usdt:.2f} USDT</code>\n\n"
+        f"<i>Чтобы запросить выплату — напишите:</i>\n"
+        f"<code>выплата TR…ВашКошелёк</code>"
     ).replace(",", " ")
     try:
         target = await userbot._resolve_chat_target(event.chat_id)
@@ -381,4 +401,92 @@ async def handle_outkup_stats(event, userbot, storage) -> bool:
     except Exception as e:
         logger.warning("outkup stats reply failed: %s", e)
     logger.info("outkup: stats sent to chat=%s", event.chat_id)
+    return True
+
+
+# Регулярка «выплата TR…» / «вывод TR…» / «withdraw TR…»
+_PAYOUT_REQUEST_RE = re.compile(
+    r"^\s*(?:выплат\w*|вывод|withdraw)\s+(T[A-Za-z0-9]{20,40})\b",
+    re.IGNORECASE,
+)
+
+
+async def handle_outkup_payout_request(event, userbot, storage) -> bool:
+    """Клиент в outkup-чате пишет «выплата TR…» → создаём pending-запрос
+    в outkup_client_payouts (status=pending) + сохраняем адрес. Менеджер
+    увидит в JARVIS → Откупы → Выплаты клиентам."""
+    if not event or not event.message:
+        return False
+    try:
+        if not storage.is_outkup_chat(event.chat_id):
+            return False
+    except Exception:
+        return False
+    text = (event.message.text or event.message.message or "").strip()
+    m = _PAYOUT_REQUEST_RE.search(text)
+    if not m:
+        return False
+    address = m.group(1)
+    # Считаем текущий баланс клиента
+    full = storage.get_outkup_full_stats()
+    from storage import _norm_chat_id
+    cid_norm = _norm_chat_id(event.chat_id)
+    balance = 0.0
+    for c in (full.get("by_client") or []):
+        if _norm_chat_id(c.get("chat_id")) == cid_norm:
+            balance = float(c.get("balance_usdt") or 0)
+            break
+    target = await userbot._resolve_chat_target(event.chat_id)
+    if balance < 0.01:
+        try:
+            await userbot.client.send_message(
+                target, "❌ У вас нет средств к выплате.",
+                reply_to=event.message.id,
+            )
+        except Exception:
+            pass
+        return True
+    # Сохраняем адрес + создаём pending payout-запрос
+    try:
+        await storage.set_outkup_client_wallet(
+            event.chat_id, trc20_address=address, by="client",
+        )
+    except Exception as e:
+        logger.warning("set_outkup_client_wallet failed: %s", e)
+    try:
+        rec = await storage.add_outkup_client_payout(
+            event.chat_id, amount_usdt=balance, txid="",
+            by="", note=f"REQUEST → {address}",
+        )
+        # Помечаем как pending request — отдельным полем
+        if rec:
+            await storage._update_payout_status(rec["id"], "pending", address)
+    except Exception as e:
+        logger.warning("add_outkup_client_payout REQUEST failed: %s", e)
+    # Уведомление клиенту
+    try:
+        await userbot.client.send_message(
+            target,
+            (
+                f"✅ <b>Запрос на выплату принят</b>\n\n"
+                f"💼 Сумма: <b>{balance:.2f} USDT</b>\n"
+                f"📍 Кошелёк: <code>{address}</code>\n\n"
+                f"<i>Откупщик обработает запрос в ближайшее время.</i>"
+            ),
+            parse_mode="html",
+            reply_to=event.message.id,
+        )
+    except Exception as e:
+        logger.warning("outkup payout-request ack failed: %s", e)
+    # Уведомление в JARVIS
+    try:
+        await storage.add_notification(
+            type="warning",
+            text=f"💸 Клиент chat={event.chat_id} запросил выплату {balance:.2f} USDT на {address[:12]}…",
+            dedup_key=f"outkup_payout_request:{event.chat_id}:{int(__import__('time').time())}",
+        )
+    except Exception:
+        pass
+    logger.info("outkup: payout request chat=%s amount=%.2f addr=%s",
+                event.chat_id, balance, address)
     return True

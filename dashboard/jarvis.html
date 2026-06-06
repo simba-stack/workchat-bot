@@ -6308,7 +6308,39 @@
         </div>
       </div>
 
-      <!-- История выплат -->
+      <!-- Pending запросы от клиентов (клиент написал «выплата TR…») -->
+      <div class="jarvis-panel" style="padding: 14px; border-left: 3px solid #fbbf24;">
+        <h4 style="margin: 0 0 10px 0;">⏳ Запросы на выплату от клиентов</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Когда</th><th>Клиент</th><th>USDT</th>
+              <th>Кошелёк</th><th>Действие</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="p in (outkupClientPayouts || []).filter(x => x.status === 'pending')" :key="p.id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;" x-text="p.paid_at ? new Date(p.paid_at*1000).toLocaleString('ru-RU') : '—'"></td>
+                  <td x-text="p.client_chat_id"></td>
+                  <td style="color: #fbbf24; font-weight: 700;" x-text="(p.amount_usdt || 0).toFixed(2)"></td>
+                  <td style="font-family: monospace; font-size: 10px;" x-text="p.trc20_address || (p.note || '').replace('REQUEST → ', '')"></td>
+                  <td>
+                    <button class="btn" @click="confirmOutkupPayoutRequest(p)"
+                            style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 4px 10px; font-size: 11px;">
+                      ✅ Подтвердить (с TXID)
+                    </button>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="(outkupClientPayouts || []).filter(x => x.status === 'pending').length === 0">
+                <td colspan="5" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет запросов —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- История выплат (paid) -->
       <div class="jarvis-panel" style="padding: 14px;">
         <h4 style="margin: 0 0 10px 0;">📜 История выплат клиентам</h4>
         <div style="overflow-x: auto;">
@@ -6318,7 +6350,7 @@
               <th>TXID</th><th>Кем</th>
             </tr></thead>
             <tbody>
-              <template x-for="p in (outkupClientPayouts || [])" :key="p.id">
+              <template x-for="p in (outkupClientPayouts || []).filter(x => x.status !== 'pending')" :key="p.id">
                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
                   <td style="padding: 6px;" x-text="p.paid_at ? new Date(p.paid_at*1000).toLocaleString('ru-RU') : '—'"></td>
                   <td x-text="p.client_chat_id"></td>
@@ -6327,7 +6359,7 @@
                   <td x-text="'@'+(p.paid_by || '?')"></td>
                 </tr>
               </template>
-              <tr x-show="(outkupClientPayouts || []).length === 0">
+              <tr x-show="(outkupClientPayouts || []).filter(x => x.status !== 'pending').length === 0">
                 <td colspan="5" style="padding: 14px; text-align: center; color: var(--text-dim);">— пока выплат не было —</td>
               </tr>
             </tbody>
@@ -12794,6 +12826,22 @@ function jarvis() {
           body: JSON.stringify({ trc20_address: address }),
         });
         if (!r.ok) { alert('Ошибка сохранения адреса: ' + await r.text()); return; }
+        await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async confirmOutkupPayoutRequest(p) {
+      if (!p || !p.id) return;
+      const txid = window.prompt
+        ? (window.prompt(`TXID транзакции (отправил ${(p.amount_usdt||0).toFixed(2)} USDT на ${p.trc20_address || (p.note || '').replace('REQUEST → ', '')}):`) || '')
+        : '';
+      if (!txid) { if (!confirm('Подтвердить выплату БЕЗ TXID? (не рекомендуется)')) return; }
+      try {
+        const r = await fetch(`/api/outkup/client_payouts/${p.id}/mark_paid`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ txid }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.loadOutkupFullStats();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
