@@ -6277,10 +6277,20 @@
                 <div x-show="['receipt_received','confirmed','rejected'].includes(p.status) && p.receipt_msg_id"
                      style="margin-top: 8px;">
                   <template x-if="p._receiptBlob">
-                    <a :href="p._receiptBlob" target="_blank" style="display: inline-block;">
-                      <img :src="p._receiptBlob" alt="чек"
-                           style="max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); cursor: zoom-in; background: rgba(0,0,0,0.3);">
-                    </a>
+                    <div style="display: inline-block;">
+                      <!-- IMAGE: клик открывает lightbox внутри JARVIS (не системный браузер) -->
+                      <template x-if="(p._receiptType || '').startsWith('image/')">
+                        <img :src="p._receiptBlob" alt="чек" @click="outkupOpenReceipt(p)"
+                             style="max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); cursor: zoom-in; background: rgba(0,0,0,0.3);">
+                      </template>
+                      <!-- PDF: иконка-карточка + кнопка открыть в lightbox с <embed> -->
+                      <template x-if="(p._receiptType || '') === 'application/pdf'">
+                        <div @click="outkupOpenReceipt(p)" style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.35); border-radius: 6px; cursor: pointer; min-width: 220px;">
+                          <span style="font-size: 22px;">📄</span>
+                          <span style="font-size: 12px; color: #d8b4fe;">Чек (PDF) — нажми чтобы открыть</span>
+                        </div>
+                      </template>
+                    </div>
                   </template>
                   <template x-if="p._receiptError">
                     <div style="font-size: 11px; color: #ef4444;">⚠️ <span x-text="p._receiptError"></span>
@@ -6354,6 +6364,22 @@
         </div>
       </div>
     </template>
+  </div>
+
+  <!-- Lightbox для просмотра чека (image/pdf) внутри JARVIS -->
+  <div x-show="receiptLightbox" @click.self="outkupCloseReceipt()" @keydown.escape.window="outkupCloseReceipt()"
+       style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 40px;">
+    <div style="position: relative; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; gap: 12px;">
+      <button @click="outkupCloseReceipt()" style="position: absolute; top: -36px; right: 0; background: rgba(255,255,255,0.1); border: none; color: white; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 14px;">✕ закрыть (Esc)</button>
+      <template x-if="receiptLightbox && (receiptLightbox.type || '').startsWith('image/')">
+        <img :src="receiptLightbox?.blob" alt="чек"
+             style="max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 8px; background: rgba(0,0,0,0.4);">
+      </template>
+      <template x-if="receiptLightbox && (receiptLightbox.type || '') === 'application/pdf'">
+        <embed :src="receiptLightbox?.blob" type="application/pdf"
+               style="width: 90vw; height: 85vh; border-radius: 8px;">
+      </template>
+    </div>
   </div>
 </section>
 
@@ -8089,6 +8115,7 @@ function jarvis() {
     outkupOrders: [],
     outkupLoading: false,
     outkupFilter: 'all',
+    receiptLightbox: null,  // {blob, type, pay_id} когда открыто превью чека
     outkupSettings: {
       rate_rub_per_usdt: 100,
       payments_chat_id: 0,
@@ -12831,7 +12858,7 @@ function jarvis() {
         await this.loadOutkupPayments(orderId);
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
+    // Грузит чек через fetch+blob. Поддерживает image/* и application/pdf.
     async loadOutkupReceipt(p) {
       if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
       p._receiptLoading = true;
@@ -12844,6 +12871,7 @@ function jarvis() {
         }
         const blob = await r.blob();
         if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
+        p._receiptType = blob.type || 'image/jpeg';
         p._receiptBlob = URL.createObjectURL(blob);
       } catch (e) {
         p._receiptError = e.message || 'ошибка сети';
@@ -12851,126 +12879,17 @@ function jarvis() {
         p._receiptLoading = false;
       }
     },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
+    // Lightbox — открывает чек в полноэкранной модалке внутри JARVIS
+    // (не через target=_blank, иначе Windows не понимает blob: URL и кричит про MS Store).
+    outkupOpenReceipt(p) {
+      if (!p || !p._receiptBlob) return;
+      this.receiptLightbox = {
+        blob: p._receiptBlob,
+        type: p._receiptType || 'image/jpeg',
+        pay_id: p.id,
+      };
     },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
-    },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
-    },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
-    },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
-    },
-    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
-    async loadOutkupReceipt(p) {
-      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
-      p._receiptLoading = true;
-      try {
-        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
-        if (!r.ok) {
-          const txt = await r.text();
-          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
-          return;
-        }
-        const blob = await r.blob();
-        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptBlob = URL.createObjectURL(blob);
-      } catch (e) {
-        p._receiptError = e.message || 'ошибка сети';
-      } finally {
-        p._receiptLoading = false;
-      }
-    },
+    outkupCloseReceipt() { this.receiptLightbox = null; },
     async saveSettingsChats() {
       this.settingsSaving = true;
       try {
