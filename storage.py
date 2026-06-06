@@ -5063,6 +5063,173 @@ class Storage:
             return None
         return (self.state.get("outkup_orders") or {}).get(str(order_id))
 
+    # === outkup_client_wallets — TRC20-адрес куда платим клиенту-партнёру ===
+    def get_outkup_client_wallet(self, chat_id) -> str:
+        d = self.state.get("outkup_client_wallets") or {}
+        info = d.get(str(chat_id)) or d.get(str(abs(int(chat_id or 0))))
+        return (info or {}).get("trc20_address") or ""
+
+    async def set_outkup_client_wallet(self, chat_id, trc20_address: str, by: str = "") -> bool:
+        async with _lock:
+            d = self.state.setdefault("outkup_client_wallets", {})
+            d[str(chat_id)] = {
+                "trc20_address": (trc20_address or "").strip(),
+                "updated_at": time.time(),
+                "updated_by": (by or "").lstrip("@").lower(),
+            }
+            await self._save_unlocked()
+            return True
+
+    # === outkup_client_payouts — журнал выплат USDT клиентам-партнёрам ===
+    async def add_outkup_client_payout(
+        self, client_chat_id, amount_usdt: float, txid: str = "",
+        by: str = "", note: str = "",
+    ) -> Optional[dict]:
+        async with _lock:
+            self.state["outkup_client_payouts_seq"] = int(
+                self.state.get("outkup_client_payouts_seq") or 0
+            ) + 1
+            pid = f"cpay{self.state['outkup_client_payouts_seq']}"
+            rec = {
+                "id": pid,
+                "client_chat_id": int(client_chat_id or 0),
+                "amount_usdt": float(amount_usdt or 0),
+                "txid": (txid or "").strip(),
+                "paid_by": (by or "").lstrip("@").lower(),
+                "paid_at": time.time(),
+                "note": (note or "").strip(),
+            }
+            self.state.setdefault("outkup_client_payouts", {})[pid] = rec
+            await self._save_unlocked()
+            return rec
+
+    def list_outkup_client_payouts(self, client_chat_id=None) -> list:
+        d = (self.state.get("outkup_client_payouts") or {})
+        if client_chat_id is None:
+            return list(d.values())
+        cid = _norm_chat_id(client_chat_id)
+        return [p for p in d.values() if _norm_chat_id(p.get("client_chat_id")) == cid]
+
+    # === Полная стата откупов: по клиентам, по менеджерам, маржа ===
+    def get_outkup_full_stats(self) -> dict:
+        """Аггрегирует ВСЁ для аналитики Откупов:
+          • by_client: список {chat_id, partner_name, completed, in_progress,
+            cancelled, total_rub, total_usdt_due, total_usdt_paid, balance_usdt}
+          • by_manager: {manager_username: {payments_done, amount_rub, salary_usdt}}
+          • margin: суммарная маржа компании в USDT (наша pct_fee * объём)
+          • totals: общие суммы
+        """
+        orders = self.state.get("outkup_orders") or {}
+        payments = self.state.get("outkup_payments") or {}
+        outkup_chats = self.state.get("outkup_chats") or {}
+        all_payouts = self.state.get("outkup_client_payouts") or {}
+        # Зарплата откупщика — % от объёма выплат USDT (по умолчанию 1%)
+        manager_salary_pct = float(
+            (self.state.get("outkup_settings") or {}).get("manager_salary_pct") or 1.0
+        )
+
+        # by_client
+        by_client = {}
+        for o in orders.values():
+            cid = _norm_chat_id(o.get("client_chat_id"))
+            if not cid:
+                continue
+            slot = by_client.setdefault(cid, {
+                "chat_id": int(o.get("client_chat_id") or 0),
+                "completed": 0, "in_progress": 0, "cancelled": 0,
+                "total_rub": 0.0, "total_usdt_due": 0.0,
+                "total_usdt_paid": 0.0, "balance_usdt": 0.0,
+            })
+            st = (o.get("status") or "").lower()
+            amt_rub = float(o.get("amount_rub") or 0)
+            usdt = float(o.get("payout_client_usdt") or o.get("calculated_usdt") or 0)
+            if st in ("done", "completed"):
+                slot["completed"] += 1
+                slot["total_rub"] += amt_rub
+                slot["total_usdt_due"] += usdt
+            elif st == "cancelled":
+                slot["cancelled"] += 1
+            else:
+                slot["in_progress"] += 1
+        # Прибавим уже выплаченное USDT
+        for p in all_payouts.values():
+            cid = _norm_chat_id(p.get("client_chat_id"))
+            slot = by_client.get(cid)
+            if not slot:
+                slot = by_client.setdefault(cid, {
+                    "chat_id": int(p.get("client_chat_id") or 0),
+                    "completed": 0, "in_progress": 0, "cancelled": 0,
+                    "total_rub": 0.0, "total_usdt_due": 0.0,
+                    "total_usdt_paid": 0.0, "balance_usdt": 0.0,
+                })
+            slot["total_usdt_paid"] += float(p.get("amount_usdt") or 0)
+        # Балансы + дополним partner_name + wallet из outkup_chats/wallets
+        wallets = self.state.get("outkup_client_wallets") or {}
+        for cid_key, slot in by_client.items():
+            slot["balance_usdt"] = round(
+                slot["total_usdt_due"] - slot["total_usdt_paid"], 2
+            )
+            slot["total_rub"] = round(slot["total_rub"], 2)
+            slot["total_usdt_due"] = round(slot["total_usdt_due"], 2)
+            slot["total_usdt_paid"] = round(slot["total_usdt_paid"], 2)
+            # partner_name из outkup_chats
+            chat_info = outkup_chats.get(str(slot["chat_id"])) or outkup_chats.get(
+                str(abs(int(slot["chat_id"] or 0)))
+            ) or {}
+            slot["partner_name"] = chat_info.get("partner_name") or ""
+            slot["partner_username"] = chat_info.get("partner_username") or ""
+            # TRC20-адрес для выплаты
+            w = wallets.get(str(slot["chat_id"])) or wallets.get(
+                str(abs(int(slot["chat_id"] or 0)))
+            ) or {}
+            slot["trc20_address"] = w.get("trc20_address") or ""
+
+        # by_manager — кто из откупщиков сколько выдал реквизитов
+        by_manager = {}
+        for pay in payments.values():
+            if (pay.get("status") or "").lower() not in ("confirmed", "receipt_received"):
+                continue
+            mgr = (pay.get("manager_username") or "").lstrip("@").lower() or "—"
+            slot = by_manager.setdefault(mgr, {
+                "manager_username": mgr,
+                "payments_done": 0, "amount_rub": 0.0, "salary_usdt": 0.0,
+            })
+            slot["payments_done"] += 1
+            slot["amount_rub"] += float(pay.get("amount_rub") or 0)
+        # Зарплата = manager_salary_pct% от RUB-объёма / средний курс
+        avg_rate = float(
+            (self.state.get("outkup_settings") or {}).get("rate_rub_per_usdt") or 100
+        )
+        for slot in by_manager.values():
+            slot["salary_usdt"] = round(
+                (slot["amount_rub"] * manager_salary_pct / 100.0) / max(avg_rate, 1),
+                2,
+            )
+            slot["amount_rub"] = round(slot["amount_rub"], 2)
+
+        # Маржа компании = разница между принятым RUB-объёмом и USDT выплатам клиенту
+        # = sum(amount_rub) - sum(payout_client_usdt × rate) → но это сложно при разных
+        # курсах. Просто = sum(payments.amount_rub) × pct_fee / 100 / rate.
+        # Используем глобальный pct_fee и средний rate.
+        glob_pct = float(
+            (self.state.get("outkup_settings") or {}).get("pct_fee") or 5.0
+        )
+        total_rub_in = sum(float(p.get("amount_rub") or 0) for p in payments.values()
+                           if (p.get("status") or "").lower() == "confirmed")
+        margin_usdt = round((total_rub_in * glob_pct / 100.0) / max(avg_rate, 1), 2)
+
+        return {
+            "by_client": sorted(by_client.values(), key=lambda x: -x["balance_usdt"]),
+            "by_manager": sorted(by_manager.values(), key=lambda x: -x["payments_done"]),
+            "margin_usdt": margin_usdt,
+            "manager_salary_pct": manager_salary_pct,
+            "totals": {
+                "total_rub_in": round(total_rub_in, 2),
+                "clients_count": len(by_client),
+                "managers_count": len(by_manager),
+            },
+        }
+
     def get_outkup_client_stats(self, client_chat_id) -> dict:
         """Аггрегирует все откуп-заявки по client_chat_id.
         Возвращает: completed/in_progress/cancelled, total_rub, total_usdt_paid,

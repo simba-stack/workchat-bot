@@ -6176,6 +6176,169 @@
       <button class="btn" @click="_doRefresh('outkup', refreshOutkup)" :disabled="_refreshing.outkup || outkupLoading" :class="_refreshing.outkup ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.outkup ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
+    <!-- Tab переключатель: Заявки / Стата / Выплаты клиентам -->
+    <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px;">
+      <button class="dept-tab" :class="outkupTab === 'orders' ? 'active' : ''" @click="outkupTab='orders'">📋 Заявки</button>
+      <button class="dept-tab" :class="outkupTab === 'stats' ? 'active' : ''" @click="outkupTab='stats'; loadOutkupFullStats()">📊 Стата</button>
+      <button class="dept-tab" :class="outkupTab === 'payouts' ? 'active' : ''" @click="outkupTab='payouts'; loadOutkupFullStats()">💸 Выплаты клиентам</button>
+    </div>
+
+    <!-- ============ Под-вкладка СТАТА ============ -->
+    <div x-show="outkupTab === 'stats'" style="display: flex; flex-direction: column; gap: 14px;">
+      <!-- Top карточки -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+        <div class="jarvis-panel" style="padding: 14px;">
+          <div style="font-size: 11px; color: var(--text-dim);">💸 Принято RUB</div>
+          <div style="font-size: 20px; font-weight: 700;" x-text="(outkupFullStats?.totals?.total_rub_in || 0).toLocaleString('ru-RU') + ' ₽'"></div>
+        </div>
+        <div class="jarvis-panel" style="padding: 14px;">
+          <div style="font-size: 11px; color: var(--text-dim);">💵 Маржа компании</div>
+          <div style="font-size: 20px; font-weight: 700; color: #22c55e;" x-text="(outkupFullStats?.margin_usdt || 0).toFixed(2) + ' USDT'"></div>
+        </div>
+        <div class="jarvis-panel" style="padding: 14px;">
+          <div style="font-size: 11px; color: var(--text-dim);">👥 Клиентов</div>
+          <div style="font-size: 20px; font-weight: 700;" x-text="outkupFullStats?.totals?.clients_count || 0"></div>
+        </div>
+        <div class="jarvis-panel" style="padding: 14px;">
+          <div style="font-size: 11px; color: var(--text-dim);">🔧 Откупщиков</div>
+          <div style="font-size: 20px; font-weight: 700;" x-text="outkupFullStats?.totals?.managers_count || 0"></div>
+        </div>
+      </div>
+
+      <!-- По клиентам -->
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">👥 По клиентам-партнёрам</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Партнёр</th><th>Завершено</th><th>В работе</th>
+              <th>RUB принято</th><th>USDT начислено</th><th>USDT выплачено</th>
+              <th style="color: #fbbf24;">Баланс к выплате</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="c in (outkupFullStats?.by_client || [])" :key="c.chat_id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;">
+                    <span x-text="c.partner_name || ('@'+c.partner_username) || ('chat='+c.chat_id)"></span>
+                    <div style="font-size: 10px; color: var(--text-dim);" x-text="'id: '+c.chat_id"></div>
+                  </td>
+                  <td x-text="c.completed"></td>
+                  <td x-text="c.in_progress"></td>
+                  <td x-text="(c.total_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                  <td x-text="(c.total_usdt_due || 0).toFixed(2)"></td>
+                  <td x-text="(c.total_usdt_paid || 0).toFixed(2)"></td>
+                  <td style="color: #fbbf24; font-weight: 700;" x-text="(c.balance_usdt || 0).toFixed(2) + ' USDT'"></td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.by_client || []).length === 0">
+                <td colspan="7" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет данных —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ЗП откупщиков -->
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">🔧 ЗП откупщиков
+          <span style="font-size: 11px; color: var(--text-dim); font-weight: 400;"
+                x-text="'(ставка: '+(outkupFullStats?.manager_salary_pct || 1)+'%)'"></span>
+        </h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Откупщик</th><th>Реквизитов выдано</th>
+              <th>Объём RUB</th><th style="color: #22c55e;">ЗП USDT</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="m in (outkupFullStats?.by_manager || [])" :key="m.manager_username">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;" x-text="'@'+m.manager_username"></td>
+                  <td x-text="m.payments_done"></td>
+                  <td x-text="(m.amount_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                  <td style="color: #22c55e; font-weight: 700;" x-text="(m.salary_usdt || 0).toFixed(2) + ' USDT'"></td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.by_manager || []).length === 0">
+                <td colspan="4" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет данных —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Под-вкладка ВЫПЛАТЫ КЛИЕНТАМ ============ -->
+    <div x-show="outkupTab === 'payouts'" style="display: flex; flex-direction: column; gap: 14px;">
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">💸 Клиенты с балансом к выплате</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Партнёр</th><th>Баланс USDT</th>
+              <th>TRC20-адрес</th><th>Действие</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="c in (outkupFullStats?.by_client || []).filter(x => x.balance_usdt > 0.01)" :key="c.chat_id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;">
+                    <span x-text="c.partner_name || ('@'+c.partner_username) || ('chat='+c.chat_id)"></span>
+                  </td>
+                  <td style="color: #fbbf24; font-weight: 700;" x-text="(c.balance_usdt || 0).toFixed(2) + ' USDT'"></td>
+                  <td>
+                    <input type="text" :value="c.trc20_address || ''"
+                           @blur="saveOutkupClientWallet(c.chat_id, $event.target.value)"
+                           placeholder="TR..."
+                           style="width: 280px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
+                  </td>
+                  <td>
+                    <button class="btn" @click="payoutOutkupClient(c)"
+                            :disabled="!c.trc20_address"
+                            style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 6px 12px; font-size: 11px;">
+                      💸 Выплатить <span x-text="(c.balance_usdt || 0).toFixed(2)"></span> USDT
+                    </button>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.by_client || []).filter(x => x.balance_usdt > 0.01).length === 0">
+                <td colspan="4" style="padding: 14px; text-align: center; color: var(--text-dim);">— все выплачено —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- История выплат -->
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">📜 История выплат клиентам</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Дата</th><th>Клиент chat_id</th><th>Сумма USDT</th>
+              <th>TXID</th><th>Кем</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="p in (outkupClientPayouts || [])" :key="p.id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;" x-text="p.paid_at ? new Date(p.paid_at*1000).toLocaleString('ru-RU') : '—'"></td>
+                  <td x-text="p.client_chat_id"></td>
+                  <td style="color: #22c55e; font-weight: 700;" x-text="(p.amount_usdt || 0).toFixed(2)"></td>
+                  <td style="font-family: monospace; font-size: 10px;" x-text="(p.txid || '').slice(0,20) + ((p.txid || '').length > 20 ? '...' : '')"></td>
+                  <td x-text="'@'+(p.paid_by || '?')"></td>
+                </tr>
+              </template>
+              <tr x-show="(outkupClientPayouts || []).length === 0">
+                <td colspan="5" style="padding: 14px; text-align: center; color: var(--text-dim);">— пока выплат не было —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Под-вкладка ЗАЯВКИ (старая, default) ============ -->
+    <div x-show="outkupTab === 'orders' || !outkupTab">
+
     <!-- Фильтр статуса -->
     <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
       <button class="dept-tab" :class="outkupFilter === 'all' ? 'active' : ''" @click="outkupFilter='all'">Все</button>
@@ -8123,6 +8286,9 @@ function jarvis() {
     outkupOrders: [],
     outkupLoading: false,
     outkupFilter: 'all',
+    outkupTab: 'orders',  // 'orders' / 'stats' / 'payouts'
+    outkupFullStats: null,  // { by_client, by_manager, margin_usdt, totals }
+    outkupClientPayouts: [],  // история выплат клиентам
     receiptLightbox: null,  // {blob, type, pay_id} когда открыто превью чека
     outkupSettings: {
       rate_rub_per_usdt: 100,
@@ -12606,6 +12772,58 @@ function jarvis() {
         await this.refreshOutkup();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
+    // === ПОДРАЗДЕЛЫ ОТКУПОВ: Стата + Выплаты клиентам ===
+    async loadOutkupFullStats() {
+      try {
+        const r = await fetch('/api/outkup/stats/full', { credentials: 'include' });
+        if (r.ok) this.outkupFullStats = await r.json();
+        const r2 = await fetch('/api/outkup/client_payouts', { credentials: 'include' });
+        if (r2.ok) {
+          const j = await r2.json();
+          this.outkupClientPayouts = j.items || [];
+        }
+      } catch (e) { console.error('loadOutkupFullStats', e); }
+    },
+    async saveOutkupClientWallet(chatId, address) {
+      address = (address || '').trim();
+      if (!address) return;
+      try {
+        const r = await fetch(`/api/outkup/client_wallets/${chatId}`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trc20_address: address }),
+        });
+        if (!r.ok) { alert('Ошибка сохранения адреса: ' + await r.text()); return; }
+        await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async payoutOutkupClient(c) {
+      if (!c || !c.chat_id || !c.trc20_address) {
+        alert('Сначала вбей TRC20-адрес клиента');
+        return;
+      }
+      const amount = Number(c.balance_usdt || 0);
+      if (amount < 0.01) { alert('Нечего выплачивать'); return; }
+      const txid = window.prompt
+        ? (window.prompt(`TXID транзакции (отправил ${amount.toFixed(2)} USDT на ${c.trc20_address}):`) || '')
+        : '';
+      if (!confirm(`Зафиксировать выплату ${amount.toFixed(2)} USDT клиенту?`)) return;
+      try {
+        const r = await fetch('/api/outkup/client_payouts', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_chat_id: c.chat_id,
+            amount_usdt: amount,
+            txid: txid,
+            note: `→ ${c.trc20_address}`,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupFullStats();
+        alert('✅ Выплата зафиксирована');
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
     async outkupCancel(id) {
       // window.prompt в Electron не работает (всегда возвращает undefined) —
       // используем confirm для подтверждения, причина по умолчанию.
@@ -12731,9 +12949,13 @@ function jarvis() {
           p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
           return;
         }
+        // Тип берём из Content-Type заголовка — он надёжнее blob.type
+        // (в Electron blob.type иногда пустой → дефолтил в image/jpeg
+        // и PDF показывался как сломанная картинка).
+        const ctypeHeader = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
         const blob = await r.blob();
         if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
-        p._receiptType = blob.type || 'image/jpeg';
+        p._receiptType = ctypeHeader || blob.type || 'image/jpeg';
         p._receiptBlob = URL.createObjectURL(blob);
       } catch (e) {
         p._receiptError = e.message || 'ошибка сети';

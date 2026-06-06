@@ -2689,6 +2689,63 @@ async def api_outkup_order_payments(order_id: str, me: dict = Depends(_get_me)):
     return {"payments": storage.list_outkup_payments_for_order(order_id)}
 
 
+# === Аналитика и выплаты клиентам Откупов ===
+@app.get("/api/outkup/stats/full")
+async def api_outkup_stats_full(me: dict = Depends(_get_me)):
+    if me.get("role") not in ("owner", "manager", "accounting", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    return storage.get_outkup_full_stats()
+
+
+@app.get("/api/outkup/client_payouts")
+async def api_outkup_client_payouts_list(
+    client_chat_id: Optional[int] = None,
+    me: dict = Depends(_get_me),
+):
+    if me.get("role") not in ("owner", "manager", "accounting", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    items = storage.list_outkup_client_payouts(client_chat_id)
+    items.sort(key=lambda x: -(x.get("paid_at") or 0))
+    return {"items": items, "count": len(items)}
+
+
+@app.post("/api/outkup/client_payouts")
+async def api_outkup_client_payouts_add(request: Request, me: dict = Depends(_get_me)):
+    """Body: {client_chat_id, amount_usdt, txid?, note?}"""
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    cid = int(body.get("client_chat_id") or 0)
+    amt = float(body.get("amount_usdt") or 0)
+    if not cid or amt <= 0:
+        raise HTTPException(400, "client_chat_id и amount_usdt > 0 обязательны")
+    rec = await storage.add_outkup_client_payout(
+        cid, amount_usdt=amt,
+        txid=body.get("txid") or "",
+        by=me.get("username") or "",
+        note=body.get("note") or "",
+    )
+    return {"ok": True, "payout": rec}
+
+
+@app.post("/api/outkup/client_wallets/{client_chat_id}")
+async def api_outkup_client_wallet_set(
+    client_chat_id: int, request: Request, me: dict = Depends(_get_me),
+):
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    addr = (body.get("trc20_address") or "").strip()
+    if not addr:
+        raise HTTPException(400, "trc20_address required")
+    await storage.set_outkup_client_wallet(
+        client_chat_id, trc20_address=addr, by=me.get("username") or "",
+    )
+    return {"ok": True, "address": addr}
+
+
 # --- Превью чека: скачиваем фото через Telethon-юзербот и стримим браузеру ---
 @app.get("/api/outkup/payments/{pay_id}/receipt")
 async def api_outkup_payment_receipt(pay_id: str, me: dict = Depends(_get_me)):
