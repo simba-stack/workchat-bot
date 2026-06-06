@@ -2702,23 +2702,36 @@ async def api_outkup_payment_receipt(pay_id: str, me: dict = Depends(_get_me)):
         raise HTTPException(404, "payment not found")
     # 1. ПРИОРИТЕТ: локальный файл сохранённый userbot'ом при reception.
     # Это надёжнее чем on-demand fetch (Telethon в FastAPI loop часто падает).
-    local_path_rel = (pay.get("receipt_local_path") or "").strip()
-    if local_path_rel:
+    # receipt_local_path может быть АБСОЛЮТНЫМ (новые чеки, в Railway volume
+    # /app/data/receipts/) или ОТНОСИТЕЛЬНЫМ (старые, "receipts/pay5.jpg").
+    local_path_raw = (pay.get("receipt_local_path") or "").strip()
+    if local_path_raw:
         from pathlib import Path as _P
-        # Защита от path traversal — резолвим относительно api.py
-        base_dir = _P(__file__).parent.resolve()
-        candidate = (base_dir / local_path_rel).resolve()
-        if str(candidate).startswith(str(base_dir)) and candidate.exists() and candidate.is_file():
-            ext = candidate.suffix.lower()
-            mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                        ".png": "image/png", ".webp": "image/webp",
-                        ".pdf": "application/pdf"}
-            mime = mime_map.get(ext, "image/jpeg")
-            from fastapi.responses import FileResponse
-            return FileResponse(
-                str(candidate), media_type=mime,
-                headers={"Cache-Control": "private, max-age=300"},
-            )
+        candidates = []
+        p = _P(local_path_raw)
+        if p.is_absolute():
+            candidates.append(p)
+        else:
+            # Относительный — пробуем 2 базы: dir(STORAGE_PATH) и dir(api.py)
+            try:
+                import config as _cfg
+                storage_dir = _P(_cfg.STORAGE_PATH or "/app/data/state.json").parent.resolve()
+                candidates.append((storage_dir / local_path_raw).resolve())
+            except Exception:
+                pass
+            candidates.append((_P(__file__).parent.resolve() / local_path_raw).resolve())
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+                ext = candidate.suffix.lower()
+                mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                            ".png": "image/png", ".webp": "image/webp",
+                            ".pdf": "application/pdf"}
+                mime = mime_map.get(ext, "image/jpeg")
+                from fastapi.responses import FileResponse
+                return FileResponse(
+                    str(candidate), media_type=mime,
+                    headers={"Cache-Control": "private, max-age=300"},
+                )
     # 2. FALLBACK: on-demand fetch через юзербот (если локального файла нет —
     # например, чек пришёл до того как мы добавили auto-save).
     msg_id = int(pay.get("receipt_msg_id") or 0)

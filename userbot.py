@@ -1328,7 +1328,12 @@ class UserbotService:
             saved_path = ""
             try:
                 import os
-                receipts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "receipts")
+                # Сохраняем чеки в Railway volume (где state.json) — иначе при каждом
+                # деплое контейнер пересоздаётся и чеки пропадают.
+                # Берём dir от config.STORAGE_PATH (/app/data/) + receipts/.
+                import config as _cfg
+                storage_dir = os.path.dirname(os.path.abspath(_cfg.STORAGE_PATH or "/app/data/state.json"))
+                receipts_dir = os.path.join(storage_dir, "receipts")
                 os.makedirs(receipts_dir, exist_ok=True)
                 # Расширение: jpg для фото, у документов берём из mime
                 ext = ".jpg"
@@ -1340,8 +1345,10 @@ class UserbotService:
                 target_path = os.path.join(receipts_dir, f"{pay_id}{ext}")
                 await self.client.download_media(msg, file=target_path)
                 if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-                    saved_path = f"receipts/{pay_id}{ext}"
-                    logger.info("[outkup] receipt saved: pay=%s path=%s size=%d",
+                    # Сохраняем АБСОЛЮТНЫЙ путь, чтобы api.py мог отдать файл
+                    # независимо от cwd процесса.
+                    saved_path = target_path
+                    logger.info("[outkup] receipt saved (persistent): pay=%s path=%s size=%d",
                                 pay_id, saved_path, os.path.getsize(target_path))
             except Exception as e:
                 logger.warning("[outkup] receipt download failed pay=%s: %s", pay_id, e)
