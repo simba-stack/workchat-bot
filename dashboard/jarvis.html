@@ -6317,16 +6317,19 @@
                Видна ВСЕГДА если статус не финальный (done/cancelled/completed).
                Если менеджер ещё не взял (!assigned_to) — поверх лежит жёлтая
                подсказка с кнопкой «✋ Взять заявку», поля заблокированы. -->
-          <div x-show="!['done','completed','cancelled'].includes(o.status) && ((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0) > 0.01"
-               style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px; position: relative;">
+          <!-- ФОРМА ВЫДАЧИ — БЕЗ x-show. Видна ВСЕГДА когда карточка развёрнута.
+               UI-VERSION: 2026-06-06-form-always
+               Если статус финальный или нет остатка — поля disabled.
+               Если не взято — поверх лежит жёлтая заглушка с кнопкой Взять. -->
+          <div style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px; position: relative;">
             <!-- Заглушка пока не взято -->
             <div x-show="!o.assigned_to" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border-radius: 6px; z-index: 2;">
               <div style="font-size: 12px; color: #fbbf24;">⚠️ Сначала возьми заявку</div>
               <button class="btn" @click.stop="outkupTake(o.id)" style="background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; padding: 6px 14px;">✋ Взять заявку</button>
             </div>
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
-              📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>:
-              <span x-show="!o.assigned_to" style="color: #f59e0b; margin-left: 8px;">(нажми «Взять заявку» сначала)</span>
+              📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>
+              <span style="color: #6ad8ff; margin-left: 4px;">[форма ВСЕГДА видна v2026.06.06]</span>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 6px; align-items: center;">
               <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)" :disabled="!o.assigned_to"
