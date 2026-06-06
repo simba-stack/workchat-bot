@@ -5063,6 +5063,77 @@ class Storage:
             return None
         return (self.state.get("outkup_orders") or {}).get(str(order_id))
 
+    # === ЕДИНЫЙ источник truth для расчёта баланса клиента-партнёра ===
+    def _compute_client_balance(self, client_chat_id) -> dict:
+        """Считает баланс одного клиента по single source of truth.
+        Используется и в чат-стате, и в JARVIS, и в /стата handler-е.
+
+        Логика:
+          completed/in_progress/cancelled = счётчики по статусам order'ов
+          total_rub = сумма amount_rub всех CONFIRMED payments этого клиента
+          total_usdt_due = сколько USDT мы ДОЛЖНЫ клиенту = sum(amount_rub × (1−pct)/rate) по confirmed payments (per-order rate/pct)
+          total_usdt_paid = sum(amount_usdt) всех payouts (включая pending — pending тоже есть в очереди)
+          balance_usdt = max(0, due − paid)
+        """
+        cid_norm = _norm_chat_id(client_chat_id)
+        orders = self.state.get("outkup_orders") or {}
+        payments = self.state.get("outkup_payments") or {}
+        payouts = self.state.get("outkup_client_payouts") or {}
+        completed = 0; in_progress = 0; cancelled = 0
+        last_done_at = 0.0
+        my_order_ids = set()
+        for o in orders.values():
+            try:
+                if _norm_chat_id(o.get("client_chat_id")) != cid_norm:
+                    continue
+            except Exception:
+                continue
+            my_order_ids.add(o.get("id"))
+            st = (o.get("status") or "").lower()
+            if st in ("done", "completed"):
+                completed += 1
+                ts = float(o.get("completed_at") or o.get("done_at") or 0)
+                if ts > last_done_at:
+                    last_done_at = ts
+            elif st == "cancelled":
+                cancelled += 1
+            else:
+                in_progress += 1
+        total_rub = 0.0
+        total_usdt_due = 0.0
+        for p in payments.values():
+            if p.get("order_id") not in my_order_ids:
+                continue
+            if (p.get("status") or "").lower() != "confirmed":
+                continue
+            amt = float(p.get("amount_rub") or 0)
+            o = orders.get(str(p.get("order_id"))) or {}
+            rate = float(o.get("rate") or 100)
+            pct = float(o.get("pct_fee") or 0)
+            total_rub += amt
+            total_usdt_due += (amt / max(rate, 1)) * (1 - pct / 100.0)
+        # Все payouts (paid И pending — оба уменьшают баланс к выплате)
+        total_usdt_paid = 0.0
+        for p in payouts.values():
+            try:
+                if _norm_chat_id(p.get("client_chat_id")) != cid_norm:
+                    continue
+            except Exception:
+                continue
+            total_usdt_paid += float(p.get("amount_usdt") or 0)
+        balance_usdt = max(0.0, total_usdt_due - total_usdt_paid)
+        return {
+            "chat_id": int(client_chat_id or 0),
+            "completed": completed,
+            "in_progress": in_progress,
+            "cancelled": cancelled,
+            "total_rub": round(total_rub, 2),
+            "total_usdt_due": round(total_usdt_due, 2),
+            "total_usdt_paid": round(total_usdt_paid, 2),
+            "balance_usdt": round(balance_usdt, 2),
+            "last_done_at": last_done_at,
+        }
+
     # === outkup_client_wallets — TRC20-адрес куда платим клиенту-партнёру ===
     def get_outkup_client_wallet(self, chat_id) -> str:
         d = self.state.get("outkup_client_wallets") or {}
@@ -5158,44 +5229,19 @@ class Storage:
             (self.state.get("outkup_settings") or {}).get("manager_salary_pct") or 1.0
         )
 
-        # by_client — счётчики заявок
-        by_client = {}
-        order_to_client = {}
+        # by_client — единый расчёт через _compute_client_balance.
+        # Все клиенты у которых есть хоть один order ИЛИ хоть один payout.
+        all_cids = set()
         for o in orders.values():
             cid = _norm_chat_id(o.get("client_chat_id"))
-            if not cid:
-                continue
-            order_to_client[o.get("id")] = cid
-            slot = by_client.setdefault(cid, {
-                "chat_id": int(o.get("client_chat_id") or 0),
-                "completed": 0, "in_progress": 0, "cancelled": 0,
-                "total_rub": 0.0, "total_usdt_due": 0.0,
-                "total_usdt_paid": 0.0, "balance_usdt": 0.0,
-            })
-            st = (o.get("status") or "").lower()
-            if st in ("done", "completed"):
-                slot["completed"] += 1
-            elif st == "cancelled":
-                slot["cancelled"] += 1
-            else:
-                slot["in_progress"] += 1
-        # Суммы — по CONFIRMED payments (каждый подтверждённый чек засчитан сразу)
-        for p in payments.values():
-            if (p.get("status") or "").lower() != "confirmed":
-                continue
-            cid = order_to_client.get(p.get("order_id"))
-            if not cid:
-                continue
-            slot = by_client.get(cid)
-            if not slot:
-                continue
-            amt = float(p.get("amount_rub") or 0)
-            o = orders.get(str(p.get("order_id"))) or {}
-            rate = float(o.get("rate") or 100)
-            pct = float(o.get("pct_fee") or 0)
-            usdt_eq = (amt / max(rate, 1)) * (1 - pct / 100.0)
-            slot["total_rub"] += amt
-            slot["total_usdt_due"] += usdt_eq
+            if cid: all_cids.add((cid, int(o.get("client_chat_id") or 0)))
+        for p in (self.state.get("outkup_client_payouts") or {}).values():
+            cid = _norm_chat_id(p.get("client_chat_id"))
+            if cid: all_cids.add((cid, int(p.get("client_chat_id") or 0)))
+        by_client = {}
+        for cid_norm, raw_cid in all_cids:
+            bal = self._compute_client_balance(raw_cid)
+            by_client[cid_norm] = bal
         # Прибавим уже выплаченное USDT
         for p in all_payouts.values():
             cid = _norm_chat_id(p.get("client_chat_id"))
@@ -5276,59 +5322,19 @@ class Storage:
         }
 
     def get_outkup_client_stats(self, client_chat_id) -> dict:
-        """Аггрегирует откупы по client_chat_id.
-        Счётчики заявок — по их статусам (done/cancelled/прочее).
-        Суммы (total_rub/total_usdt) — по CONFIRMED PAYMENTS (каждый
-        подтверждённый чек сразу засчитывается клиенту, даже если вся
-        заявка ещё в partial)."""
-        all_orders = (self.state.get("outkup_orders") or {})
-        all_payments = (self.state.get("outkup_payments") or {})
-        cid_norm = _norm_chat_id(client_chat_id)
-        completed = 0
-        in_progress = 0
-        cancelled = 0
-        last_done_at = 0.0
-        my_order_ids = set()
-        # Сначала собираем заявки клиента + счётчики
-        for o in all_orders.values():
-            try:
-                if _norm_chat_id(o.get("client_chat_id")) != cid_norm:
-                    continue
-            except Exception:
-                continue
-            my_order_ids.add(o.get("id"))
-            st = (o.get("status") or "").lower()
-            if st in ("done", "completed"):
-                completed += 1
-                ts = float(o.get("completed_at") or o.get("done_at") or 0)
-                if ts > last_done_at:
-                    last_done_at = ts
-            elif st == "cancelled":
-                cancelled += 1
-            else:
-                in_progress += 1
-        # Теперь — суммы по CONFIRMED payments для этих заявок
-        total_rub = 0.0
-        total_usdt = 0.0
-        for p in all_payments.values():
-            if p.get("order_id") not in my_order_ids:
-                continue
-            if (p.get("status") or "").lower() != "confirmed":
-                continue
-            total_rub += float(p.get("amount_rub") or 0)
-            # USDT-эквивалент по курсу/комиссии конкретной заявки
-            o = all_orders.get(str(p.get("order_id"))) or {}
-            rate = float(o.get("rate") or 100)
-            pct = float(o.get("pct_fee") or 0)
-            usdt_eq = (float(p.get("amount_rub") or 0) / max(rate, 1)) * (1 - pct / 100.0)
-            total_usdt += usdt_eq
+        """Backward-compatible wrapper: возвращает поля старой схемы,
+        но считает через _compute_client_balance (single source of truth)."""
+        b = self._compute_client_balance(client_chat_id)
         return {
-            "completed": completed,
-            "in_progress": in_progress,
-            "cancelled": cancelled,
-            "total_rub": round(total_rub, 2),
-            "total_usdt": round(total_usdt, 2),
-            "last_done_at": last_done_at,
+            "completed": b["completed"],
+            "in_progress": b["in_progress"],
+            "cancelled": b["cancelled"],
+            "total_rub": b["total_rub"],
+            "total_usdt": b["total_usdt_due"],  # старое имя
+            "total_usdt_due": b["total_usdt_due"],
+            "total_usdt_paid": b["total_usdt_paid"],
+            "balance_usdt": b["balance_usdt"],
+            "last_done_at": b["last_done_at"],
         }
 
     # === v2: outkup_chats — регистрация чатов фин-партнёров ===
