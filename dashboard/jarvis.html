@@ -6272,9 +6272,10 @@
                   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);">@<span x-text="p.manager_username"></span></span>
                 </div>
                 <!-- Превью чека через fetch+blob (cookies в Electron).
-                     loadOutkupReceipt(p) вызывается в loadOutkupPayments при первом
-                     открытии — x-init убран чтобы не дёргать при каждом ререндере. -->
-                <div x-show="['receipt_received','confirmed','rejected'].includes(p.status) && p.receipt_msg_id"
+                     Показываем ВСЕГДА когда есть receipt_msg_id — даже если payment
+                     перешёл в rejected/waiting_receipt после «Запросить новый»,
+                     чтобы видеть историю что присылал клиент. -->
+                <div x-show="p.receipt_msg_id"
                      style="margin-top: 8px;">
                   <template x-if="p._receiptBlob">
                     <div style="display: inline-block;">
@@ -8402,9 +8403,8 @@ function jarvis() {
       } catch (e) {}
 
       // OUTKUP auto-refresh — каждые 3 секунды когда юзер на view 'outkup'.
-      // refreshOutkup внутри дотягивает loadOutkupPayments для развёрнутых
-      // карточек, а loadOutkupPayments сам запускает loadOutkupReceipt для
-      // payments с новым receipt_msg_id. Так чек появляется без свернуть/развернуть.
+      // refreshOutkup → loadOutkupPayments для _expanded → loadOutkupReceipt
+      // для новых receipt_msg_id. Чек появляется сам без свернуть/развернуть.
       try {
         if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
         this._outkupAutoTimer = setInterval(() => {
@@ -8415,73 +8415,6 @@ function jarvis() {
             this.refreshOutkup();
           }
         }, 3000);
-      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
-
-
-
-
-
-
-
-
-
-      // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
-      // дёргает API только когда юзер на view 'outkup' и окно активно.
-      try {
-        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
-        this._outkupAutoTimer = setInterval(() => {
-          if (this.currentView === 'outkup'
-              && typeof this.refreshOutkup === 'function'
-              && !document.hidden
-              && !this.outkupLoading) {
-            this.refreshOutkup();
-          }
-        }, 5000);
-      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
-
-      // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
-      // дёргает API только когда юзер на view 'outkup' и окно активно.
-      try {
-        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
-        this._outkupAutoTimer = setInterval(() => {
-          if (this.currentView === 'outkup'
-              && typeof this.refreshOutkup === 'function'
-              && !document.hidden
-              && !this.outkupLoading) {
-            this.refreshOutkup();
-          }
-        }, 5000);
-      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
-
-      // OUTKUP auto-refresh глобальный таймер — тикает раз в 5 сек ВСЕГДА,
-      // дёргает API только когда юзер на view 'outkup' и окно активно.
-      try {
-        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
-        this._outkupAutoTimer = setInterval(() => {
-          if (this.currentView === 'outkup'
-              && typeof this.refreshOutkup === 'function'
-              && !document.hidden
-              && !this.outkupLoading) {
-            this.refreshOutkup();
-          }
-        }, 5000);
-      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
-
-      // OUTKUP auto-refresh — глобальный таймер, тикает раз в 5 сек ВСЕГДА,
-      // но реально дёргает API только когда юзер на view 'outkup' и окно
-      // активно (не свёрнуто). Этот подход надёжнее x-init на section
-      // потому что section x-init может не сработать если currentView уже
-      // === 'outkup' на момент загрузки (no view change → no $watch trigger).
-      try {
-        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
-        this._outkupAutoTimer = setInterval(() => {
-          if (this.currentView === 'outkup'
-              && typeof this.refreshOutkup === 'function'
-              && !document.hidden
-              && !this.outkupLoading) {
-            this.refreshOutkup();
-          }
-        }, 5000);
       } catch (e) { console.warn('outkup auto-refresh init failed', e); }
 
       // Voice floating window: восстановить позицию + автооткрытие при входе в звонок
@@ -12701,18 +12634,26 @@ function jarvis() {
           if (p && p.id) prevById[p.id] = p;
         }
         // Инициализируем ВСЕ reactive поля заранее — Alpine не реактивен к новым ключам.
+        // Если receipt_msg_id изменился (клиент прислал НОВЫЙ чек после «Запросить новый») —
+        // сбрасываем blob/error/type, чтобы фетчнулась свежая картинка.
         order._payments = fresh.map(p => {
           const prev = prevById[p.id] || {};
+          const sameReceipt = prev.receipt_msg_id && prev.receipt_msg_id === p.receipt_msg_id;
+          // Освобождаем старый blob URL чтобы не текло
+          if (!sameReceipt && prev._receiptBlob) {
+            try { URL.revokeObjectURL(prev._receiptBlob); } catch (_) {}
+          }
           return Object.assign({}, p, {
-            _receiptBlob: prev._receiptBlob || null,
-            _receiptError: prev._receiptError || null,
+            _receiptBlob: sameReceipt ? (prev._receiptBlob || null) : null,
+            _receiptError: sameReceipt ? (prev._receiptError || null) : null,
+            _receiptType: sameReceipt ? (prev._receiptType || null) : null,
             _receiptLoading: false,
             _newComment: prev._newComment || '',
             _rejectReason: prev._rejectReason || '',
           });
         });
         // Сразу запускаем загрузку чеков для payments у которых есть receipt_msg_id.
-        // Если blob уже был загружен раньше — переиспользуем (skip внутри loadOutkupReceipt).
+        // Если blob уже загружен и receipt не менялся — skip внутри loadOutkupReceipt.
         for (const p of order._payments) {
           if (p.receipt_msg_id && !p._receiptBlob && !p._receiptError) {
             this.loadOutkupReceipt(p);
@@ -14744,436 +14685,4 @@ function jarvis() {
               <div style="display: flex; gap: 4px; margin-top: 4px;">
                 <select x-model="jj.bank" style="flex: 1; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
                   <option value="">— банк —</option>
-                  <option value="ОЗОН">ОЗОН</option>
-                  <option value="РАЙФ">РАЙФ</option>
-                  <option value="ТОЧКА">ТОЧКА</option>
-                  <option value="УРАЛ">УРАЛ</option>
-                  <option value="ПСБ">ПСБ</option>
-                  <option value="АЛЬФА">АЛЬФА</option>
-                  <option value="ВТБ">ВТБ</option>
-                </select>
-                <input type="text" x-model="jj.fio" placeholder="ФИО получателя"
-                       style="flex: 2; padding: 4px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px;">
-                <button class="chip-btn" style="padding: 2px 6px;" @click="removeJurJur(idx, jjIdx)">✕</button>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-
-    <!-- Курс / комиссия / % партнёра -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px;">
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">% партнёру</div>
-        <input type="number" step="0.1" x-model.number="exchangeForm.partner_pct"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">Курс вывода ₽/USDT</div>
-        <input type="number" step="0.01" x-model.number="exchangeForm.exchange_rate"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-      <div>
-        <div style="font-size: 11px; color: var(--text-dim);">Комиссия (USDT)</div>
-        <input type="number" step="0.01" x-model.number="exchangeForm.commission_usdt"
-               style="width: 100%; padding: 6px; background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
-      </div>
-    </div>
-
-    <!-- v3: Дополнительные модификаторы (потери / комиссии / остатки) -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
-      <!-- Потери -->
-      <div style="padding: 8px; background: rgba(239,68,68,0.05); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-          <span style="font-size:11px; color:#f87171;">💸 Потери</span>
-          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeLoss()">+</button>
-        </div>
-        <template x-for="(l, i) in exchangeForm.losses" :key="i">
-          <div style="display:flex; gap:4px; margin-bottom:4px;">
-            <input type="number" x-model.number="l.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <input type="text" x-model="l.reason" placeholder="причина" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeLoss(i)">✕</button>
-          </div>
-        </template>
-      </div>
-      <!-- Комиссии -->
-      <div style="padding: 8px; background: rgba(251,191,36,0.05); border: 1px solid rgba(251,191,36,0.15); border-radius: 6px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-          <span style="font-size:11px; color:#fbbf24;">💰 Комиссии</span>
-          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeCommission()">+</button>
-        </div>
-        <template x-for="(c, i) in exchangeForm.commissions" :key="i">
-          <div style="display:flex; gap:4px; margin-bottom:4px;">
-            <input type="number" x-model.number="c.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <input type="text" x-model="c.where" placeholder="где" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeCommission(i)">✕</button>
-          </div>
-        </template>
-      </div>
-      <!-- Остатки -->
-      <div style="padding: 8px; background: rgba(74,222,128,0.05); border: 1px solid rgba(74,222,128,0.15); border-radius: 6px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-          <span style="font-size:11px; color:#4ade80;">💵 Остатки</span>
-          <button class="chip-btn" style="padding:2px 8px; font-size:11px;" @click="addExchangeRemain()">+</button>
-        </div>
-        <template x-for="(r, i) in exchangeForm.remains" :key="i">
-          <div style="display:flex; gap:4px; margin-bottom:4px;">
-            <input type="number" x-model.number="r.amount_rub" placeholder="₽" style="width:70px; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <input type="text" x-model="r.where" placeholder="где" style="flex:1; padding:3px; font-size:11px; background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius:3px;">
-            <button class="chip-btn" style="padding:2px 6px;" @click="removeExchangeRemain(i)">✕</button>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- Маржа preview (поля совпадают с calcMargin() — формула v2 май 2026) -->
-    <div style="padding: 10px; background: rgba(0, 200, 100, 0.05); border-radius: 6px; margin-bottom: 10px;" x-show="exchangeForm._margin_preview">
-      <div style="font-size: 11px; color: var(--text-dim);">Расчёт:</div>
-      <template x-if="exchangeForm._margin_preview">
-        <div style="font-size: 12px; line-height: 1.6;">
-          ВВОД: <span x-text="Math.round(exchangeForm._margin_preview.in_rub).toLocaleString('ru')"></span>₽ ·
-          ВЫВОД: <span x-text="Math.round(exchangeForm._margin_preview.out_rub).toLocaleString('ru')"></span>₽
-          <br>
-          Получили мы: <span x-text="exchangeForm._margin_preview.we_received_usdt.toFixed(2)"></span>$ ·
-          Партнёру: <span x-text="exchangeForm._margin_preview.partner_payout_usdt.toFixed(2)"></span>$ ·
-          Стоимость ЛК: <span x-text="exchangeForm._margin_preview.lk_prices_usdt.toFixed(2)"></span>$
-          <br>
-          <b style="color: var(--hud-emerald); font-size: 16px;">МАРЖА: <span x-text="exchangeForm._margin_preview.margin_usdt.toFixed(2)"></span>$</b>
-        </div>
-      </template>
-    </div>
-
-    <div style="display: flex; gap: 8px;">
-      <button class="chip-btn" @click="calcMargin()">🧮 Рассчитать маржу</button>
-      <button x-show="canAct('exchange_request')" class="chip-btn"
-              :style="'background: var(--hud-emerald); color: #000; flex: 1;' + (submittingExchange ? ' opacity: 0.5; cursor: not-allowed;' : '')"
-              :disabled="submittingExchange"
-              @click="submitExchangeRequest()"
-              x-text="submittingExchange ? '⏳ Отправка…' : '✅ Зафиксировать заявку'"></button>
-      <button class="chip-btn" :disabled="submittingExchange" @click="closeExchangeModal()">Отмена</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== FLOATING VOICE CALL WINDOW (TG-style) ===== -->
-<!-- Свёрнутая версия — пузырь с пульсом -->
-<div class="voice-floating-window minimized"
-     x-show="dcCurrentVoiceChannel && voiceFloatingOpen && voiceFloatingMinimized"
-     x-cloak
-     :style="'left: ' + voiceFloatingPos.x + 'px; top: ' + voiceFloatingPos.y + 'px;'"
-     @click="minimizeVoiceFloating()"
-     title="Развернуть звонок">
-  <div class="vf-min-icon">🎙</div>
-</div>
-
-<!-- Полное окошко -->
-<div class="voice-floating-window"
-     x-show="dcCurrentVoiceChannel && voiceFloatingOpen && !voiceFloatingMinimized"
-     x-cloak
-     :style="'left: ' + voiceFloatingPos.x + 'px; top: ' + voiceFloatingPos.y + 'px;'">
-  <div class="vf-header" @mousedown="startVoiceDrag($event)">
-    <span class="pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #28b463; box-shadow: 0 0 6px #28b463; flex-shrink: 0;"></span>
-    <div class="vf-title" x-text="(discordChannels || []).find(c => c.id === dcCurrentVoiceChannel)?.name || 'Голосовой звонок'"></div>
-    <span class="vf-meta" x-text="(dcVoiceParticipants?.length || 0) + ' уч.'"></span>
-    <button x-show="callPopoutAvailable && !callPopoutOpen" @click="openCallPopout()"
-            title="Открыть в отдельном окне (можно вынести за пределы JARVIS)">⇱</button>
-    <button x-show="callPopoutAvailable && callPopoutOpen" @click="closeCallPopout()"
-            title="Закрыть отдельное окно (вернуть звонок в JARVIS)">⇲</button>
-    <button @click="minimizeVoiceFloating()" title="свернуть">—</button>
-    <button @click="voiceFloatingOpen = false" title="закрыть окошко (звонок продолжается)">✕</button>
-  </div>
-  <div class="vf-body">
-    <div class="vf-participants">
-      <template x-for="p in (dcVoiceParticipants || [])" :key="p.session_id">
-        <div class="vf-user"
-             :class="{ 'speaking': (p.session_id === dcSessionId
-                ? (isSpeaking('__local__') && !p.muted)
-                : isSpeaking(p.session_id)) }">
-          <div class="vf-avatar">
-            <template x-if="p.photo_url">
-              <img :src="p.photo_url" :alt="p.username || p.first_name"/>
-            </template>
-            <template x-if="!p.photo_url">
-              <span x-text="((p.username || p.first_name || '?')[0] || '?').toUpperCase()"></span>
-            </template>
-          </div>
-          <div class="vf-name" x-text="p.session_id === dcSessionId ? 'Вы' : (p.username || p.first_name || 'guest')"></div>
-          <div class="vf-flag" x-show="p.muted">🔇</div>
-        </div>
-      </template>
-      <template x-if="(dcVoiceParticipants?.length || 0) === 0">
-        <div style="grid-column: 1/-1; text-align: center; padding: 20px 0; color: rgba(255,255,255,0.5); font-size: 11px;">Пусто</div>
-      </template>
-    </div>
-    <div class="vf-controls">
-      <button class="vf-ctrl-btn" :class="dcMuted ? 'active' : ''" @click="toggleMute()" :title="dcMuted ? 'unmute' : 'mute'">
-        <span x-text="dcMuted ? '🔇' : '🎙'"></span>
-      </button>
-      <button class="vf-ctrl-btn" :class="dcDeafened ? 'active' : ''" @click="toggleDeafen()" :title="dcDeafened ? 'undeaf' : 'deafen'">
-        <span x-text="dcDeafened ? '🔕' : '🔊'"></span>
-      </button>
-      <button class="vf-ctrl-btn" @click="goToActiveCallChannel()" title="перейти в Хаб (видео/чат/настройки)">⚙</button>
-      <button class="vf-ctrl-btn danger" @click="leaveDiscordVoice()" title="выйти из звонка">🚪</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== BULK MOVE MODAL (массовый перенос выбранных ЛК в другой отдел) ===== -->
-<div x-show="bulkMoveModalOpen" x-cloak
-     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
-     @click.self="closeBulkMoveModal()">
-  <div style="background: #14182c; border: 1px solid rgba(106,216,255,0.35); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
-    <div style="display: flex; align-items: center; margin-bottom: 14px;">
-      <h3 style="margin: 0; flex: 1; color: var(--hud-primary);">📤 Массовый перенос</h3>
-      <button @click="closeBulkMoveModal()" :disabled="bulkMoveLoading"
-              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
-    </div>
-    <div style="padding: 10px; background: rgba(106,216,255,0.08); border-radius: 6px; margin-bottom: 14px; font-size: 12px;">
-      <b style="color: var(--hud-primary);" x-text="sysSelCount(bulkMoveSection) + ' ЛК будут перенесены.'"></b><br>
-      <span style="color: var(--text-dim);">Каждая карточка отправится поочерёдно. Результат покажу после.</span>
-    </div>
-
-    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Куда переносим:</div>
-    <select x-model="bulkMoveTarget" :disabled="bulkMoveLoading"
-            style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px;">
-      <option value="credit">💳 КРЕДИТОВАНИЕ (нужен username юриста)</option>
-      <option value="outsource">🏢 АУТСОРС (общий пул бота, указать цену)</option>
-      <option value="supplier">🤝 ПОСТАВЩИКИ (вернуть в CRM)</option>
-    </select>
-
-    <template x-if="bulkMoveTarget === 'credit'">
-      <div>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Юрист (username без @), один на все:</div>
-        <input type="text" x-model="bulkMoveUsername" :disabled="bulkMoveLoading"
-               placeholder="ivan_lawyer"
-               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-      </div>
-    </template>
-
-    <template x-if="bulkMoveTarget === 'outsource'">
-      <div>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Цена за каждую ЛК (USDT) в пуле бота:</div>
-        <input type="number" min="1" step="1" x-model.number="bulkMovePrice" :disabled="bulkMoveLoading"
-               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-      </div>
-    </template>
-
-    <template x-if="bulkMoveTarget === 'supplier'">
-      <div>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">ID поставщика (owner_id) — пустым = создать draft:</div>
-        <input type="text" x-model="bulkMoveOwnerId" :disabled="bulkMoveLoading"
-               placeholder="(пусто)"
-               style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-      </div>
-    </template>
-
-    <!-- Прогресс -->
-    <div x-show="bulkMoveLoading || bulkMoveProgress.done > 0" x-cloak
-         style="margin-bottom: 14px; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; font-size: 12px;">
-      <div>Прогресс: <b x-text="bulkMoveProgress.done + ' / ' + bulkMoveProgress.total"></b></div>
-      <div x-show="bulkMoveProgress.errors.length > 0" style="color: #ef4444; margin-top: 4px;">
-        Ошибок: <span x-text="bulkMoveProgress.errors.length"></span>
-      </div>
-    </div>
-
-    <div style="display: flex; gap: 8px;">
-      <button x-show="canAct('move_lk_to_credit') || canAct('move_lk_to_outsource') || canAct('move_lk_to_supplier')" :disabled="bulkMoveLoading" @click="submitBulkMove()"
-              style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
-              x-text="bulkMoveLoading ? '⏳ Переношу…' : ('📤 Перенести ' + sysSelCount(bulkMoveSection) + ' ЛК')"></button>
-      <button :disabled="bulkMoveLoading" @click="closeBulkMoveModal()"
-              style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== CREATE BUNDLE MODAL (объединить выбранные ЛК в связку) ===== -->
-<div x-show="createBundleModalOpen" x-cloak
-     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
-     @click.self="closeCreateBundleModal()">
-  <div style="background: #14182c; border: 1px solid rgba(34,197,94,0.35); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
-    <div style="display: flex; align-items: center; margin-bottom: 14px;">
-      <h3 style="margin: 0; flex: 1; color: #22c55e;">🔗 Создать связку</h3>
-      <button @click="closeCreateBundleModal()" :disabled="createBundleLoading"
-              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
-    </div>
-    <div style="padding: 10px; background: rgba(34,197,94,0.08); border-radius: 6px; margin-bottom: 14px; font-size: 12px;">
-      <b style="color:#22c55e;" x-text="selectedOutsourceLkIds.length + ' ЛК будут объединены в один пакет.'"></b><br>
-      <span style="color: var(--text-dim);">Управляющий сможет купить ТОЛЬКО всю связку целиком за указанную цену. По отдельности эти ЛК будут недоступны.</span>
-    </div>
-    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Название (опционально):</div>
-    <input type="text" x-model="createBundleName" :disabled="createBundleLoading"
-           placeholder="например: «Топ-3 банка для Москвы»"
-           style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-    <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Цена за весь пакет (USDT):</div>
-    <input type="number" min="1" step="1" x-model.number="createBundlePrice" :disabled="createBundleLoading"
-           placeholder="100"
-           style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-    <div style="display: flex; gap: 8px;">
-      <button x-show="canAct('bundle_create')" :disabled="createBundleLoading" @click="submitCreateBundle()"
-              style="flex: 1; padding: 12px; background: linear-gradient(135deg, #22c55e, #16a34a); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
-              x-text="createBundleLoading ? '⏳ Создаю…' : '🔗 Создать связку'"></button>
-      <button :disabled="createBundleLoading" @click="closeCreateBundleModal()"
-              style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== MOVE LK MODAL (перенос ЛК между отделами CRM↔Credit↔Outsource, замена prompt) ===== -->
-<div x-show="moveLkModalOpen" x-cloak
-     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
-     @click.self="closeMoveLkModal()">
-  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 480px; width: 100%; padding: 18px;">
-    <div style="display: flex; align-items: center; margin-bottom: 14px;">
-      <h3 style="margin: 0; flex: 1;"
-          x-text="moveLkModalTarget === 'credit' ? '💳 Перенос в КРЕДИТОВАНИЕ' : moveLkModalTarget === 'outsource' ? '🏢 Перенос в АУТСОРС' : '🤝 Возврат в ПОСТАВЩИКИ'"></h3>
-      <button @click="closeMoveLkModal()" :disabled="moveLkModalLoading"
-              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
-    </div>
-    <template x-if="moveLkModalLk">
-      <div>
-        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-bottom: 14px; padding: 10px; background: rgba(255,255,255,0.04); border-radius: 6px;">
-          ЛК: <b style="color: var(--hud-primary);" x-text="(moveLkModalLk.bank || '—').toUpperCase()"></b>
-          / <span x-text="moveLkModalLk.fio || '—'"></span>
-          <br>
-          <code style="font-size: 10px; color: rgba(255,255,255,0.4);" x-text="moveLkModalLk.droplk_id"></code>
-        </div>
-
-        <!-- CREDIT: username юриста -->
-        <template x-if="moveLkModalTarget === 'credit'">
-          <div>
-            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Юрист (username без @):</div>
-            <input type="text" x-model="moveLkModalUsername" :disabled="moveLkModalLoading"
-                   placeholder="например: ivan_lawyer"
-                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-          </div>
-        </template>
-
-        <!-- OUTSOURCE: цена -->
-        <template x-if="moveLkModalTarget === 'outsource'">
-          <div>
-            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
-              Цена за управление (USDT):
-            </div>
-            <input type="number" min="1" step="1" x-model.number="moveLkModalPrice" :disabled="moveLkModalLoading"
-                   placeholder="50"
-                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.2); border-radius: 6px;">
-              ℹ ЛК пойдёт в общий пул @marketplace_PRIDE_BOT. Управляющий заплатит эту сумму и заберёт его из каталога бота.
-            </div>
-          </div>
-        </template>
-
-        <!-- SUPPLIER: owner_id (опционально) -->
-        <template x-if="moveLkModalTarget === 'supplier'">
-          <div>
-            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
-              ID поставщика (owner_id) — пустым = создать draft:
-            </div>
-            <input type="text" x-model="moveLkModalOwnerId" :disabled="moveLkModalLoading"
-                   placeholder="оставьте пустым"
-                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; margin-bottom: 14px; box-sizing: border-box;">
-          </div>
-        </template>
-
-        <div style="display: flex; gap: 8px;">
-          <button :disabled="moveLkModalLoading" @click="submitMoveLk()"
-                  style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
-                  x-text="moveLkModalLoading ? '⏳ Переношу…' : '➡️ Перенести'"></button>
-          <button :disabled="moveLkModalLoading" @click="closeMoveLkModal()"
-                  style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
-        </div>
-      </div>
-    </template>
-  </div>
-</div>
-
-<!-- ===== KUC REQUEST MODAL (ввод текста инструкции, замена prompt) ===== -->
-<div x-show="kucReqModalOpen" x-cloak
-     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
-     @click.self="closeKucRequestModal()">
-  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 520px; width: 100%; padding: 18px;">
-    <div style="display: flex; align-items: center; margin-bottom: 14px;">
-      <h3 style="margin: 0; flex: 1;">📹 Запросить КУЦ</h3>
-      <button @click="closeKucRequestModal()" :disabled="kucReqModalLoading"
-              style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
-    </div>
-    <template x-if="kucReqModalLk">
-      <div>
-        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-bottom: 10px;">
-          ЛК: <b style="color: var(--hud-primary);" x-text="(kucReqModalLk.bank || '—').toUpperCase()"></b>
-          / <span x-text="kucReqModalLk.fio || '—'"></span>
-          · <code style="font-size: 10px; color: rgba(255,255,255,0.4);" x-text="kucReqModalLk.droplk_id"></code>
-        </div>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">
-          Текст инструкции клиенту (можно поправить):
-        </div>
-        <textarea x-model="kucReqModalText"
-                  :disabled="kucReqModalLoading"
-                  placeholder="Введите что клиент должен сказать в видео…"
-                  style="width: 100%; min-height: 110px; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; line-height: 1.5; resize: vertical; margin-bottom: 14px; box-sizing: border-box;"></textarea>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 14px; padding: 10px; background: rgba(106,216,255,0.08); border: 1px solid rgba(106,216,255,0.2); border-radius: 6px;">
-          ℹ После отправки бот напишет клиенту в его рабочий чат: <b>«Пройдите проверку: &lt;одноразовая ссылка&gt;»</b>. Клиент откроет ссылку и запишет 10-секундный видео-кружок. Вы получите его в этой же карточке.
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <button x-show="canAct('request_kuc')" :disabled="kucReqModalLoading" @click="submitKucRequest()"
-                  style="flex: 1; padding: 12px; background: linear-gradient(135deg, #6ad8ff, #4a9fff); color: #0a0e1a; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px;"
-                  x-text="kucReqModalLoading ? '⏳ Отправка…' : '📤 Отправить запрос'"></button>
-          <button :disabled="kucReqModalLoading" @click="closeKucRequestModal()"
-                  style="padding: 12px 20px; background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-weight: 600; cursor: pointer;">Отмена</button>
-        </div>
-      </div>
-    </template>
-  </div>
-</div>
-
-<!-- ===== KUC MODAL (просмотр видео + approve/reject) ===== -->
-<div x-show="kucModalOpen" x-cloak
-     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px;"
-     @click.self="closeKucModal()">
-  <div style="background: #14182c; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 18px;">
-    <div style="display: flex; align-items: center; margin-bottom: 14px;">
-      <h3 style="margin: 0; flex: 1;">📹 Проверка КУЦ</h3>
-      <button @click="closeKucModal()" style="background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 22px; cursor: pointer;">✕</button>
-    </div>
-
-    <template x-if="kucModalToken && kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]">
-      <div>
-        <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">
-          Token: <code x-text="kucModalToken.slice(0, 16) + '...'"></code>
-        </div>
-        <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'pending'"
-             style="padding: 14px; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; margin-bottom: 12px; font-size: 13px; color: #fbbf24;">
-          ⏳ Клиент ещё не записал видео. Ссылка отправлена в его рабочий чат.
-        </div>
-        <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'submitted'">
-          <video :src="'/api/system/kuc/' + kucModalToken + '/video'" controls
-                 style="width: 100%; max-height: 360px; background: #000; border-radius: 8px; margin-bottom: 12px;"></video>
-          <textarea x-model="kucModalNote"
-                    placeholder="Заметка по решению (опционально)…"
-                    style="width: 100%; min-height: 60px; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; margin-bottom: 12px;"></textarea>
-          <div style="display: flex; gap: 8px;">
-            <button x-show="canAct('decide_kuc')" class="btn success" :disabled="kucModalLoading" @click="decideKuc('approved')"
-                    style="flex: 1; padding: 12px; background: #22c55e; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">✅ Одобрить</button>
-            <button x-show="canAct('decide_kuc')" class="btn danger" :disabled="kucModalLoading" @click="decideKuc('rejected')"
-                    style="flex: 1; padding: 12px; background: #ef4444; color: #fff; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">❌ Отклонить</button>
-          </div>
-        </div>
-        <template x-if="['approved','rejected'].includes(kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status)">
-          <div>
-            <video :src="'/api/system/kuc/' + kucModalToken + '/video'" controls
-                   style="width: 100%; max-height: 360px; background: #000; border-radius: 8px; margin-bottom: 12px;"></video>
-            <div style="padding: 14px; border-radius: 8px; font-size: 13px;"
-                 :style="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'approved'
-                   ? 'background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.3);'
-                   : 'background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'">
-              <div style="font-weight: 700; margin-bottom: 6px;"
-                   x-text="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.status === 'approved' ? '✅ ОДОБРЕНО' : '❌ ОТКЛОНЕНО'"></div>
-              <div x-text="'Решил: @' + (kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_by || '—')"></div>
-              <div x-show="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"
-                   style="margin-top: 6px; font-style: italic;"
-                   x-text="kucByDroplk[Object.keys(kucByDroplk).find(k => kucByDroplk[k]?.token === kucModalToken)]?.decision_note"></div>
-            </div>
-            <!-- Запросить повторно (для rejected/approved) -->
-            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <button x-show                                                                                                                                                                                                                 
+                  <option value="ОЗОН">ОЗОН
