@@ -574,6 +574,21 @@ app.whenReady().then(() => {
     else showMainWindow();
   });
 
+  // Принудительный hard-reload без кеша — Ctrl+Shift+R работает только когда
+  // окно в фокусе (стандартный Electron shortcut), но это глобальная страховка.
+  // Юзер может нажать когда увидит старый UI после deploy.
+  globalShortcut.register("CommandOrControl+Shift+F5", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const sess = session.fromPartition("persist:pride");
+      sess.clearCache().finally(() => {
+        try { mainWindow.webContents.reloadIgnoringCache(); } catch (_) {}
+      });
+    } catch (_) {
+      try { mainWindow.webContents.reloadIgnoringCache(); } catch (_) {}
+    }
+  });
+
   // Первая проверка обновлений через 10 секунд, потом каждые 30 минут.
   // Скачивание идёт в фоне (autoDownload=true), установка при следующем
   // выходе из приложения (autoInstallOnAppQuit=true) — silent.
