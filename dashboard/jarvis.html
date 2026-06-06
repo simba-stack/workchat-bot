@@ -6271,10 +6271,11 @@
                               : p.status"></span>
                   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);">@<span x-text="p.manager_username"></span></span>
                 </div>
-                <!-- Превью чека через fetch+blob (cookies в Electron) -->
+                <!-- Превью чека через fetch+blob (cookies в Electron).
+                     loadOutkupReceipt(p) вызывается в loadOutkupPayments при первом
+                     открытии — x-init убран чтобы не дёргать при каждом ререндере. -->
                 <div x-show="['receipt_received','confirmed','rejected'].includes(p.status) && p.receipt_msg_id"
-                     style="margin-top: 8px;"
-                     x-init="if (!p._receiptBlob && !p._receiptError) loadOutkupReceipt(p)">
+                     style="margin-top: 8px;">
                   <template x-if="p._receiptBlob">
                     <a :href="p._receiptBlob" target="_blank" style="display: inline-block;">
                       <img :src="p._receiptBlob" alt="чек"
@@ -12744,7 +12745,31 @@ function jarvis() {
         if (!r.ok) return;
         const j = await r.json();
         const order = (this.outkupOrders || []).find(o => o.id === orderId);
-        if (order) { order._payments = j.payments || j.items || []; }
+        if (!order) return;
+        const fresh = j.payments || j.items || [];
+        // Сохраняем blob URL'ы из старых payments чтобы не перезагружать чеки.
+        const prevById = {};
+        for (const p of (order._payments || [])) {
+          if (p && p.id) prevById[p.id] = p;
+        }
+        // Инициализируем ВСЕ reactive поля заранее — Alpine не реактивен к новым ключам.
+        order._payments = fresh.map(p => {
+          const prev = prevById[p.id] || {};
+          return Object.assign({}, p, {
+            _receiptBlob: prev._receiptBlob || null,
+            _receiptError: prev._receiptError || null,
+            _receiptLoading: false,
+            _newComment: prev._newComment || '',
+            _rejectReason: prev._rejectReason || '',
+          });
+        });
+        // Сразу запускаем загрузку чеков для payments у которых есть receipt_msg_id.
+        // Если blob уже был загружен раньше — переиспользуем (skip внутри loadOutkupReceipt).
+        for (const p of order._payments) {
+          if (p.receipt_msg_id && !p._receiptBlob && !p._receiptError) {
+            this.loadOutkupReceipt(p);
+          }
+        }
       } catch (e) { console.error('loadOutkupPayments', e); }
     },
     async outkupIssuePayment(orderId, bank, phone, amount) {
