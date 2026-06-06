@@ -6217,6 +6217,8 @@
           <span x-show="o.status === 'awaiting_receipts'" style="font-size: 10px; padding: 2px 8px; background: rgba(168,85,247,0.2); color: #a855f7; border-radius: 3px;">📎 ждём чеки</span>
           <span x-show="o.status === 'done' || o.status === 'completed'" style="font-size: 10px; padding: 2px 8px; background: rgba(34,197,94,0.22); color: #22c55e; border-radius: 3px;">🎉 завершено</span>
           <span x-show="o.status === 'cancelled'" style="font-size: 10px; padding: 2px 8px; background: rgba(239,68,68,0.18); color: #ef4444; border-radius: 3px;">❌ отменено</span>
+          <!-- DEBUG: показываем неизвестные статусы текстом чтобы не ловить молчаливые проблемы -->
+          <span x-show="!['pending_confirm','confirmed','awaiting_payment','partial','awaiting_receipts','done','completed','cancelled'].includes(o.status)" style="font-size: 10px; padding: 2px 8px; background: rgba(168,85,247,0.2); color: #a855f7; border-radius: 3px;" x-text="'? ' + o.status"></span>
           <span style="margin-left: auto; font-size: 11px; color: var(--text-dim);">
             👤 <span x-text="o.client_username ? '@'+o.client_username : 'id='+o.client_user_id"></span>
             <span x-show="o.assigned_to"> · 🔧 @<span x-text="o.assigned_to"></span></span>
@@ -6311,7 +6313,9 @@
                (см. outkupIssuePayment ниже). amount_rub_remaining fallback
                на amount_rub чтобы при только-что-подтверждённой заявке
                max= вычислялся корректно. -->
-          <div x-show="!['done','completed','cancelled'].includes(o.status)"
+          <!-- Форма видна когда заявка взята менеджером (assigned_to) и есть остаток для выдачи.
+               Остаток считаем с fallback: если remaining=null (только что взяли, ни одного payment не выдано) → полная сумма amount_rub. -->
+          <div x-show="o.assigned_to && ((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0) > 0.01"
                style="padding: 10px; background: rgba(106,216,255,0.05); border: 1px solid rgba(106,216,255,0.15); border-radius: 6px;">
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
               📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>:
@@ -8343,6 +8347,20 @@ function jarvis() {
         if (this._globalSyncInterval) clearInterval(this._globalSyncInterval);
         this._globalSyncInterval = setInterval(() => { this._globalSync(); }, 4000);
       } catch (e) {}
+
+      // OUTKUP auto-refresh — глобальный таймер 5 сек, дёргает API только
+      // когда юзер на view 'outkup' и окно активно.
+      try {
+        if (this._outkupAutoTimer) clearInterval(this._outkupAutoTimer);
+        this._outkupAutoTimer = setInterval(() => {
+          if (this.currentView === 'outkup'
+              && typeof this.refreshOutkup === 'function'
+              && !document.hidden
+              && !this.outkupLoading) {
+            this.refreshOutkup();
+          }
+        }, 5000);
+      } catch (e) { console.warn('outkup auto-refresh init failed', e); }
 
       // OUTKUP auto-refresh — глобальный таймер 5 сек, дёргает API только
       // когда юзер на view 'outkup' и окно активно.
@@ -12741,6 +12759,26 @@ function jarvis() {
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.loadOutkupPayments(orderId);
       } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
+    async loadOutkupReceipt(p) {
+      if (!p || !p.id || p._receiptBlob || p._receiptLoading) return;
+      p._receiptLoading = true;
+      try {
+        const r = await fetch(`/api/outkup/payments/${p.id}/receipt`, { credentials: 'include' });
+        if (!r.ok) {
+          const txt = await r.text();
+          p._receiptError = 'HTTP ' + r.status + (txt ? ': ' + txt.slice(0, 80) : '');
+          return;
+        }
+        const blob = await r.blob();
+        if (!blob || blob.size === 0) { p._receiptError = 'пустой ответ'; return; }
+        p._receiptBlob = URL.createObjectURL(blob);
+      } catch (e) {
+        p._receiptError = e.message || 'ошибка сети';
+      } finally {
+        p._receiptLoading = false;
+      }
     },
     // Грузит фото чека через fetch+blob (в Electron <img src> не шлёт cookies → 403).
     async loadOutkupReceipt(p) {
