@@ -3924,17 +3924,30 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
                     f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
                 )
             else:
-                # Цены не было — предлагаем согласовать (стартовая = card_price, обычно дефолт min)
+                # Цены не было — мы ПОКУПАЕМ ЛК у клиента. Старт с минималки 400$.
+                # ⚠️ В тексте клиенту НИКОГДА не упоминаем потолок 650 и шаг +50 —
+                # иначе все будут торговаться сразу до максимума.
                 handoff = (
                     f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
                     f"📋 Карточка: #{card_id or '—'}\n"
                     f"💳 Метод оплаты: {pay_line}\n\n"
-                    f"{tag}, цена за ЛК <b>{bank}</b> ещё не согласована.\n"
-                    f"💰 Предлагаемая стартовая цена: <b>{card_price:.2f}$</b>.\n"
-                    f"<i>Подтвердите эту цену или предложите свою — обсудим. "
-                    f"Ассистент учтёт ваше предложение, и финальную цифру утвердит менеджер.</i>"
+                    f"{tag}, по выкупу ЛК <b>{bank}</b>:\n"
+                    f"💰 Готовы выкупить за <b>{int(card_price)}$</b>."
                 )
             await _notify_work_chat(bot, owner, handoff)
+        except Exception:
+            pass
+        # Сохраним в карточку статус торга, чтобы userbot мог реагировать на ответы клиента
+        try:
+            if card_id and needs_price_negotiation and hasattr(crm_storage, "update_lk_card"):
+                await crm_storage.update_lk_card(
+                    card_id,
+                    price_status="negotiating",
+                    price_offer_current=price,
+                    price_min=400,
+                    price_max=650,
+                    price_step=50,
+                )
         except Exception:
             pass
         await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
@@ -4117,13 +4130,13 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                         f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
                     )
                 else:
+                    # ⚠️ Без упоминания потолка/шага — иначе все торгуются до максимума.
                     handoff = (
                         f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
                         f"📋 Карточка: #{card_id or '—'}\n"
                         f"💳 Метод оплаты: {pay_line}\n\n"
-                        f"{tag}, цена за ЛК <b>{bank}</b> ещё не согласована.\n"
-                        f"💰 Предлагаемая стартовая цена: <b>{card_price:.2f}$</b>.\n"
-                        f"<i>Подтвердите цену или предложите свою — обсудим.</i>"
+                        f"{tag}, по выкупу ЛК <b>{bank}</b>:\n"
+                        f"💰 Готовы выкупить за <b>{int(card_price)}$</b>."
                     )
                 await _notify_work_chat(bot, owner, handoff)
             except Exception:
@@ -4519,27 +4532,28 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
     pricing = crm_storage.state.get("pricing") or {}
     bank = (lk.get("bank") or "").upper()
     price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
-    # PRICE NEGOTIATION:
-    # • Cap всегда 650$ — выше не торгуемся.
-    # • Если в pricing[bank] есть цена — clamp её в [min_pricing, 650] и используем.
-    # • Если bank в pricing нет — стартуем с МИНИМАЛЬНОЙ цены из всего прайса
-    #   (а не с фикс 1$) и шлём клиенту запрос согласования.
-    PRICE_CAP_USDT = 650.0
+    # PRICE NEGOTIATION (правила SIMBA, июнь 2026):
+    # • Жёсткий диапазон 400-650$.
+    # • Стартовая цена = 400$ (минимальная). Поднимаем только при торге, до 650$ max.
+    # • Если в pricing[bank] есть цена — clamp её в [400, 650] (на случай если кто-то
+    #   вписал левое значение в JARVIS).
+    PRICE_MIN_USDT = 400.0
+    PRICE_MAX_USDT = 650.0
     needs_price_negotiation = False
-    # Считаем min из прайса (только положительные значения)
-    pricing_positive = [float(v) for v in (pricing.values() if isinstance(pricing, dict) else []) if (v and float(v) > 0)]
-    min_from_pricing = min(pricing_positive) if pricing_positive else 50.0
     if price <= 0:
-        price = min_from_pricing
+        price = PRICE_MIN_USDT
         needs_price_negotiation = True
         logger.info(
-            "post-perevyaz lk_card: pricing[%s] empty → start from min_from_pricing=%.2f$, will tag client",
-            bank, min_from_pricing,
+            "post-perevyaz lk_card: pricing[%s] empty → старт с минималки %.0f$, тегаем клиента",
+            bank, PRICE_MIN_USDT,
         )
-    # Clamp к потолку 650$
-    if price > PRICE_CAP_USDT:
-        logger.warning("price for %s was %.2f, capping at %.2f", bank, price, PRICE_CAP_USDT)
-        price = PRICE_CAP_USDT
+    # Clamp к жёсткому диапазону 400-650
+    if price < PRICE_MIN_USDT:
+        logger.warning("price for %s was %.2f$, поднимаем к минимуму %.0f$", bank, price, PRICE_MIN_USDT)
+        price = PRICE_MIN_USDT
+    elif price > PRICE_MAX_USDT:
+        logger.warning("price for %s was %.2f$, capping at %.0f$", bank, price, PRICE_MAX_USDT)
+        price = PRICE_MAX_USDT
     # Авто-выбор метода: сначала смотрим client_preferences по @username
     # поставщика; если пусто — дефолт GUARANTOR_AFTER_WORK.
     supplier_uname = (owner.get("username") or "").lstrip("@").strip()
