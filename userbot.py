@@ -1656,6 +1656,21 @@ class UserbotService:
 
         from storage import _norm_chat_id
 
+        # КРИТИЧНО: slash-команды (/clients, /start, /crm_register_chat и т.д.) —
+        # это команды для bot'ов (crm_bot, main bot, invite_bot). AI userbot НЕ
+        # должен на них реагировать ни welcome'ом, ни (silence), ни AI-ответом.
+        # Если бот, который должен обработать команду, не в чате — пользователь
+        # увидит «команда не работает», но это лучше чем спам welcome'ом от AI.
+        try:
+            raw_text = (getattr(event, "raw_text", "") or getattr(event, "text", "") or "").strip()
+        except Exception:
+            raw_text = ""
+        if raw_text.startswith("/"):
+            logger.info(
+                "AI: chat=%s — skip slash command (%.40s)", chat_id, raw_text,
+            )
+            return
+
         try:
             sender_id_dbg = event.sender_id
         except Exception:
@@ -3035,6 +3050,12 @@ class UserbotService:
         # Markdown → HTML: Claude иногда шлёт **bold** и *italic* — Telethon с
         # parse_mode=html их не парсит и они показываются как текст.
         # Конвертируем безопасно: ` → <code>, ** → <b>, * → <i>.
+        # КРИТИЧНО: если AI вернул пустоту/пробелы (meta-silence фильтр сработал) —
+        # НЕ отправляем только hint в чат. Иначе клиент видит «Если я вам понадоблюсь...»
+        # без всякого ответа AI — выглядит как мусор от бота.
+        if not (reply or "").strip():
+            logger.info("AI: reply пустой после фильтра, hint без content не отправляем chat=%s", chat_id)
+            return
         reply_with_hint = reply + hint
         try:
             converted = reply_with_hint
