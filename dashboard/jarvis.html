@@ -6305,11 +6305,18 @@
                            style="width: 200px; padding: 4px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 11px; font-family: monospace;">
                   </td>
                   <td>
-                    <button class="btn" @click="payoutOutkupRow(row)"
-                            :disabled="!row.trc20_address || (row.amount_usdt||0) < 0.01"
-                            style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 4px 10px; font-size: 11px;">
-                      ✅ Выплатить
-                    </button>
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                      <button class="btn" @click="payoutOutkupRow(row)"
+                              :disabled="!row.trc20_address || (row.amount_usdt||0) < 0.01"
+                              style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; padding: 4px 10px; font-size: 11px;">
+                        ✅ Выплатить
+                      </button>
+                      <button x-show="row.pending" @click="cancelOutkupPayoutRequestById(row.pending_id)"
+                              style="background: rgba(239,68,68,0.15); color:#ef4444; padding: 4px 8px; font-size: 11px; border: 1px solid rgba(239,68,68,0.4); border-radius: 4px; cursor: pointer;"
+                              title="Отменить устаревший pending-запрос">
+                        ❌ Отменить
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </template>
@@ -12839,7 +12846,8 @@ function jarvis() {
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
     // Объединённый список «к выплате»: pending запросы клиентов + клиенты
-    // с балансом без запроса. Без дубликатов. Сумма ВСЕГДА = текущий balance_usdt.
+    // с балансом без запроса. Без дубликатов. Сумма = свободный balance + pending,
+    // т.е. сколько на самом деле надо выплатить клиенту, включая зарезервированное.
     outkupPayoutRows() {
       const clients = (this.outkupFullStats?.by_client) || [];
       const pendings = (this.outkupClientPayouts || []).filter(p => p.status === 'pending');
@@ -12847,21 +12855,23 @@ function jarvis() {
       for (const p of pendings) pendingByCid[String(p.client_chat_id)] = p;
       const rows = [];
       for (const c of clients) {
-        if ((c.balance_usdt || 0) < 0.01) continue;
         const pending = pendingByCid[String(c.chat_id)];
+        const reservedPending = Number((c.pending_usdt) || 0);
+        const totalDue = Number(c.balance_usdt || 0) + reservedPending;
+        if (totalDue < 0.01 && !pending) continue;
         rows.push({
           key: 'c' + c.chat_id,
           chat_id: c.chat_id,
           partner_name: c.partner_name,
           partner_username: c.partner_username,
           trc20_address: (pending && pending.trc20_address) || c.trc20_address || '',
-          amount_usdt: c.balance_usdt,  // ВСЕГДА текущий баланс
+          amount_usdt: totalDue,  // balance + pending (полная сумма к выплате)
           pending: !!pending,
           pending_id: pending ? pending.id : null,
           _txidInput: '',
         });
       }
-      // Добавим pending без клиента в by_client (на всякий случай — баланс был сброшен)
+      // Pending без клиента в by_client (на крайний случай)
       for (const p of pendings) {
         if (!rows.find(r => String(r.chat_id) === String(p.client_chat_id))) {
           rows.push({
@@ -12878,6 +12888,18 @@ function jarvis() {
         }
       }
       return rows;
+    },
+    // Удаление одного pending-запроса по id (для зомби-записей)
+    async cancelOutkupPayoutRequestById(payoutId) {
+      if (!payoutId) return;
+      if (!confirm('Отменить этот pending-запрос (запись из истории не удалится)?')) return;
+      try {
+        const r = await fetch(`/api/outkup/client_payouts/${payoutId}/cancel`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async payoutOutkupRow(row) {
       if (!row || !row.chat_id) return;
