@@ -2730,6 +2730,17 @@ async def api_outkup_client_payouts_add(request: Request, me: dict = Depends(_ge
     return {"ok": True, "payout": rec}
 
 
+@app.post("/api/outkup/client_payouts/{payout_id}/cancel")
+async def api_outkup_client_payout_cancel(payout_id: str, me: dict = Depends(_get_me)):
+    """Отменить pending-запрос (например клиент написал «выплата» по ошибке)."""
+    if me.get("role") not in ("owner", "manager"):
+        raise HTTPException(403, "forbidden")
+    rec = await storage._update_payout_status(payout_id, "cancelled")
+    if not rec:
+        raise HTTPException(404, "payout not found")
+    return {"ok": True}
+
+
 @app.post("/api/outkup/client_payouts/{payout_id}/mark_paid")
 async def api_outkup_client_payout_mark_paid(
     payout_id: str, request: Request, me: dict = Depends(_get_me),

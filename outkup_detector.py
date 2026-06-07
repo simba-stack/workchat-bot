@@ -373,25 +373,33 @@ async def handle_outkup_stats(event, userbot, storage) -> bool:
     completed = (my and my.get("completed")) or base.get("completed") or 0
     in_progress = (my and my.get("in_progress")) or base.get("in_progress") or 0
     cancelled = (my and my.get("cancelled")) or base.get("cancelled") or 0
-    total_rub = (my and my.get("total_rub")) or base.get("total_rub") or 0
-    usdt_due = (my and my.get("total_usdt_due")) or base.get("total_usdt") or 0
-    usdt_paid = (my and my.get("total_usdt_paid")) or 0
-    balance_usdt = (my and my.get("balance_usdt")) or 0
-    # Для дисплея «принято с учётом нашей комиссии»
-    payout_rub_eq = total_rub * (1 - pct / 100.0)
-    payout_usdt_calc = payout_rub_eq / max(rate, 1)
-    msg = (
-        f"\U0001f4ca <b>Ваша статистика по откупам</b>\n\n"
-        f"✅ Завершено: <b>{completed}</b>  ⏳ В работе: <b>{in_progress}</b>  ❌ Отменено: <b>{cancelled}</b>\n\n"
-        f"<b>📥 Принято всего:</b>\n"
-        f"   {total_rub:,.0f} ₽  →  {(total_rub / max(rate, 1)):.2f} USDT (по курсу {rate:.2f})\n\n"
-        f"<b>💸 К выплате вам (−{pct:.1f}% наша комиссия):</b>\n"
-        f"   {payout_rub_eq:,.0f} ₽  →  <b>{payout_usdt_calc:.2f} USDT</b>\n\n"
-        f"<b>📤 Уже выплачено:</b> {usdt_paid:.2f} USDT\n"
-        f"<b>💼 Остаток на счёте:</b> <code>{balance_usdt:.2f} USDT</code>\n\n"
-        f"<i>Чтобы запросить выплату — напишите:</i>\n"
-        f"<code>выплата TR…ВашКошелёк</code>"
-    ).replace(",", " ")
+    total_rub = float((my and my.get("total_rub")) or base.get("total_rub") or 0)
+    usdt_due = float((my and my.get("total_usdt_due")) or base.get("total_usdt") or 0)
+    usdt_paid = float((my and my.get("total_usdt_paid")) or 0)
+    pending_usdt = float((my and my.get("pending_usdt")) or 0)
+    balance_usdt = float((my and my.get("balance_usdt")) or 0)
+    parts = [
+        f"\U0001f4ca <b>Ваша статистика по откупам</b>",
+        "",
+        f"✅ Завершено: <b>{completed}</b>  ⏳ В работе: <b>{in_progress}</b>  ❌ Отменено: <b>{cancelled}</b>",
+        "",
+        f"<b>📥 Принято всего:</b>",
+        f"   {total_rub:,.0f} ₽  →  {(total_rub / max(rate, 1)):.2f} USDT (по курсу {rate:.2f})",
+        "",
+        f"<b>💸 К выплате вам (−{pct:.1f}% наша комиссия):</b>",
+        f"   <b>{usdt_due:.2f} USDT</b>",
+        "",
+        f"<b>📤 Уже выплачено:</b> {usdt_paid:.2f} USDT",
+    ]
+    if pending_usdt > 0.01:
+        parts.append(f"<b>⏳ В обработке (запрос):</b> {pending_usdt:.2f} USDT")
+    parts += [
+        f"<b>💼 Свободный остаток:</b> <code>{balance_usdt:.2f} USDT</code>",
+        "",
+        f"<i>Чтобы запросить выплату — напишите:</i>",
+        f"<code>выплата TR…ВашКошелёк</code>",
+    ]
+    msg = "\n".join(parts).replace(",", " ")
     try:
         target = await userbot._resolve_chat_target(event.chat_id)
         await userbot.client.send_message(

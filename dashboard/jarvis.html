@@ -12753,10 +12753,38 @@ function jarvis() {
       } catch (e) { alert('Ошибка: ' + e.message); }
       finally { this.outkupSettingsLoading = false; }
     },
+    // Считаем сумму confirmed payments для заявки (через _payments если загружены)
+    _outkupOrderConfirmedRub(o) {
+      const pays = (o && o._payments) || [];
+      let sum = 0;
+      for (const p of pays) {
+        if ((p.status || '').toLowerCase() === 'confirmed') sum += Number(p.amount_rub || 0);
+      }
+      return sum;
+    },
     outkupFiltered() {
       const arr = this.outkupOrders || [];
-      if (this.outkupFilter === 'all') return arr;
-      return arr.filter(o => (o.status || '') === this.outkupFilter);
+      const f = this.outkupFilter;
+      if (f === 'all') return arr;
+      if (f === 'done') {
+        // «Завершено» — status=done ИЛИ есть хоть один confirmed payment.
+        // SIMBA хочет видеть здесь и частично закрытые заявки.
+        return arr.filter(o =>
+          (o.status || '') === 'done' ||
+          (o.status || '') === 'completed' ||
+          (this._outkupOrderConfirmedRub(o) > 0)
+        );
+      }
+      if (f === 'partial') {
+        // «Остатки по заявкам» — есть остаток к выдаче (не done/cancelled)
+        return arr.filter(o => {
+          const st = (o.status || '');
+          if (['done', 'completed', 'cancelled'].includes(st)) return false;
+          const remaining = (o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0;
+          return remaining > 0.01;
+        });
+      }
+      return arr.filter(o => (o.status || '') === f);
     },
     async outkupTake(id) {
       try {
@@ -12862,29 +12890,41 @@ function jarvis() {
         : `Выплатить ${amount.toFixed(2)} USDT БЕЗ TXID?`;
       if (!confirm(msg)) return;
       try {
-        if (row.pending && row.pending_id) {
-          // Закрываем существующий pending-запрос
-          const r = await fetch(`/api/outkup/client_payouts/${row.pending_id}/mark_paid`, {
-            method: 'POST', credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ txid }),
-          });
-          if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
-        } else {
-          // Создаём новую запись сразу как paid
-          const r = await fetch('/api/outkup/client_payouts', {
-            method: 'POST', credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_chat_id: row.chat_id,
-              amount_usdt: amount,
-              txid: txid,
-              note: `→ ${row.trc20_address}`,
-            }),
-          });
-          if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        // 1) Cancel ВСЕ pending-запросы этого клиента (не накапливать историю)
+        const pendings = (this.outkupClientPayouts || []).filter(
+          p => p.status === 'pending' && String(p.client_chat_id) === String(row.chat_id)
+        );
+        for (const p of pendings) {
+          try {
+            await fetch(`/api/outkup/client_payouts/${p.id}/cancel`, {
+              method: 'POST', credentials: 'include',
+            });
+          } catch (_) {}
         }
+        // 2) Создаём новую paid-запись
+        const r = await fetch('/api/outkup/client_payouts', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_chat_id: row.chat_id,
+            amount_usdt: amount,
+            txid: txid,
+            note: `→ ${row.trc20_address}`,
+          }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         row._txidInput = '';
+        await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async cancelOutkupPayoutRequest(p) {
+      if (!p || !p.id) return;
+      if (!confirm('Отменить этот запрос на выплату?')) return;
+      try {
+        const r = await fetch(`/api/outkup/client_payouts/${p.id}/cancel`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         await this.loadOutkupFullStats();
       } catch (e) { alert('Ошибка: ' + e.message); }
     },

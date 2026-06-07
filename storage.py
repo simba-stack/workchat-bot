@@ -5112,16 +5112,24 @@ class Storage:
             pct = float(o.get("pct_fee") or 0)
             total_rub += amt
             total_usdt_due += (amt / max(rate, 1)) * (1 - pct / 100.0)
-        # Все payouts (paid И pending — оба уменьшают баланс к выплате)
-        total_usdt_paid = 0.0
+        # Payouts: paid / pending / cancelled — все отдельно.
+        total_usdt_paid = 0.0   # реально отправлено (status=paid)
+        pending_usdt = 0.0      # запросы клиента, ещё не закрыты
         for p in payouts.values():
             try:
                 if _norm_chat_id(p.get("client_chat_id")) != cid_norm:
                     continue
             except Exception:
                 continue
-            total_usdt_paid += float(p.get("amount_usdt") or 0)
-        balance_usdt = max(0.0, total_usdt_due - total_usdt_paid)
+            amt = float(p.get("amount_usdt") or 0)
+            st = (p.get("status") or "paid").lower()  # legacy без status = paid
+            if st == "pending":
+                pending_usdt += amt
+            elif st == "paid":
+                total_usdt_paid += amt
+            # cancelled → игнорируем полностью (не вычитается из баланса)
+        # Свободный баланс = всё что должны − реально выплачено − зарезервировано pending
+        balance_usdt = max(0.0, total_usdt_due - total_usdt_paid - pending_usdt)
         return {
             "chat_id": int(client_chat_id or 0),
             "completed": completed,
@@ -5130,6 +5138,7 @@ class Storage:
             "total_rub": round(total_rub, 2),
             "total_usdt_due": round(total_usdt_due, 2),
             "total_usdt_paid": round(total_usdt_paid, 2),
+            "pending_usdt": round(pending_usdt, 2),
             "balance_usdt": round(balance_usdt, 2),
             "last_done_at": last_done_at,
         }
