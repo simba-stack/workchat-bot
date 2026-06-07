@@ -1677,9 +1677,13 @@ class UserbotService:
             from outkup_detector import (
                 handle_outkup_message, handle_outkup_confirm,
                 handle_outkup_stats, handle_outkup_payout_request,
+                handle_outkup_address_reply,
             )
             # Сначала — receipt/comment reply на сообщение с реквизитом
             if await self._handle_outkup_payment_reply(event):
+                return
+            # Reply клиента на запрос адреса от менеджера
+            if await handle_outkup_address_reply(event, self, storage):
                 return
             if await handle_outkup_confirm(event, self, storage):
                 return
@@ -9703,6 +9707,64 @@ class UserbotService:
                 return f"✅ outkup new-receipt requested: pay={pay_id}"
             except Exception as e:
                 return f"⚠️ outkup_request_new_receipt: {e}"
+
+        # ===== __outkup_ask_address <request_id> =====
+        # Менеджер из JARVIS попросил адрес — идём в чат клиента и спрашиваем.
+        m = re.match(r"^__outkup_ask_address\s+(\S+)\s*$", text, re.I)
+        if m:
+            rid = m.group(1)
+            try:
+                reqs = storage.list_outkup_address_requests()
+                req = next((r for r in reqs if r.get("id") == rid), None)
+                if not req:
+                    return f"⚠️ addr request {rid} not found"
+                chat_id = int(req.get("client_chat_id") or 0)
+                target = await self._resolve_chat_target(chat_id)
+                msg = (
+                    "💼 <b>Бухгалтер запрашивает актуальный TRC20-адрес</b>\n\n"
+                    "Для выплаты вашего баланса USDT — введите ваш кошелёк <b>reply на это сообщение</b>.\n\n"
+                    "<i>После ввода будет ещё один шаг подтверждения.</i>"
+                )
+                sent = await self.client.send_message(target, msg, parse_mode="html")
+                if sent:
+                    await storage.update_outkup_address_request(
+                        rid, ask_msg_id=int(sent.id),
+                    )
+                return f"✅ address ask sent for {rid}"
+            except Exception as e:
+                return f"⚠️ ask_address: {e}"
+
+        # ===== __outkup_payout_done <payout_id> =====
+        # После mark_paid с txid — отправляем клиенту уведомление с tronscan.
+        m = re.match(r"^__outkup_payout_done\s+(\S+)\s*$", text, re.I)
+        if m:
+            pid = m.group(1)
+            try:
+                p = storage.get_outkup_payment(pid) if hasattr(storage, "get_outkup_payment") else None
+                # для payout это другая сущность — берём из outkup_client_payouts
+                payouts = storage.state.get("outkup_client_payouts") or {}
+                rec = payouts.get(pid)
+                if not rec:
+                    return f"⚠️ payout {pid} not found"
+                chat_id = int(rec.get("client_chat_id") or 0)
+                target = await self._resolve_chat_target(chat_id)
+                amt = float(rec.get("amount_usdt") or 0)
+                txid = (rec.get("txid") or "").strip()
+                addr = rec.get("trc20_address") or (rec.get("note") or "").replace("REQUEST → ", "")
+                tronscan = f"https://tronscan.org/#/transaction/{txid}" if txid else ""
+                msg = (
+                    f"✅ <b>Выплата выполнена</b>\n\n"
+                    f"💵 Сумма: <b>{amt:.2f} USDT</b>\n"
+                    f"📍 Адрес: <code>{addr}</code>\n"
+                )
+                if txid:
+                    msg += f"🔗 TXID: <a href='{tronscan}'>{txid[:24]}…</a>\n"
+                msg += "\n<i>Баланс обновлён. Спасибо за работу!</i>"
+                await self.client.send_message(target, msg, parse_mode="html",
+                                                link_preview=False)
+                return f"✅ payout done notify sent to {chat_id}"
+            except Exception as e:
+                return f"⚠️ payout_done notify: {e}"
 
         # ===== __outkup_comment_to_client <pay_id> =====
         m = re.match(r"^__outkup_comment_to_client\s+(\S+)\s*$", text, re.I)

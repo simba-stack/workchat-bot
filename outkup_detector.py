@@ -215,6 +215,19 @@ async def handle_outkup_message(event, userbot, storage) -> bool:
         "outkup: новая заявка %s от %s — %.0f₽ %s → %.2f USDT",
         order["id"], client_username or sender_id, amount, method_ru, usdt,
     )
+    # JARVIS-уведомление 🔔 + опциональная отправка в team-чат откупщиков
+    try:
+        await storage.add_notification(
+            type="info",
+            text=(
+                f"💱 Новая заявка откупа #{int(order.get('req_num') or 0):04d}: "
+                f"{amount:,.0f} ₽ → {usdt:.2f} USDT от "
+                f"@{client_username if client_username else sender_id}"
+            ).replace(",", " "),
+            dedup_key=f"outkup_new_order:{order['id']}",
+        )
+    except Exception:
+        pass
     return True
 
 
@@ -417,6 +430,99 @@ _PAYOUT_REQUEST_RE = re.compile(
     r"^\s*(?:выплат\w*|вывод|withdraw)\s+(T[A-Za-z0-9]{20,40})\b",
     re.IGNORECASE,
 )
+
+
+async def handle_outkup_address_reply(event, userbot, storage) -> bool:
+    """Reply клиента на запрос адреса от менеджера. Двухшаговый flow:
+       1. ждём адрес → парсим TR…, шлём «точно туда? да / заменить»
+       2. ждём да/заменить → сохраняем в wallets + уведомляем менеджера."""
+    if not event or not event.message:
+        return False
+    try:
+        if not storage.is_outkup_chat(event.chat_id):
+            return False
+    except Exception:
+        return False
+    req = storage.get_outkup_active_address_request(event.chat_id)
+    if not req:
+        return False
+    msg = event.message
+    reply_to = getattr(msg, "reply_to_msg_id", None) or getattr(msg, "reply_to", None)
+    if not isinstance(reply_to, int):
+        reply_to = getattr(reply_to, "reply_to_msg_id", None) if reply_to else None
+    if not reply_to or int(reply_to) != int(req.get("ask_msg_id") or 0):
+        return False  # reply не на наше сообщение → не наш ответ
+    text = (msg.text or msg.message or "").strip()
+    target = await userbot._resolve_chat_target(event.chat_id)
+    state = req.get("state")
+    if state == "waiting_address":
+        # Извлечь TRC20-адрес
+        m = re.search(r"\b(T[A-Za-z0-9]{20,40})\b", text)
+        if not m:
+            await userbot.client.send_message(
+                target,
+                "❌ Не распознал TRC20-адрес. Адрес должен начинаться с <b>T</b> и содержать 25-44 символа.\n\nОтправьте корректный адрес <b>reply</b> на исходное сообщение.",
+                parse_mode="html",
+                reply_to=int(req.get("ask_msg_id") or 0) or None,
+            )
+            return True
+        addr = m.group(1)
+        confirm_msg = (
+            f"📍 Адрес получен: <code>{addr}</code>\n\n"
+            f"⚠️ <b>Точно на этот адрес?</b>\n"
+            f"<i>После выплаты транзакцию НЕЛЬЗЯ отменить.</i>\n\n"
+            f"Ответьте <b>«да»</b> чтобы подтвердить, или <b>«заменить»</b> чтобы ввести другой.\n"
+            f"<i>Reply на это сообщение.</i>"
+        )
+        sent = await userbot.client.send_message(target, confirm_msg, parse_mode="html")
+        if sent:
+            await storage.update_outkup_address_request(
+                req["id"], state="waiting_confirm", address=addr, ask_msg_id=int(sent.id),
+            )
+        return True
+    if state == "waiting_confirm":
+        tl = text.lower().strip()
+        if tl in ("да", "+", "yes", "ок", "ок!", "подтверждаю", "верно"):
+            # Сохраняем адрес
+            await storage.set_outkup_client_wallet(
+                event.chat_id, trc20_address=req["address"], by="client",
+            )
+            await storage.update_outkup_address_request(req["id"], state="confirmed")
+            await userbot.client.send_message(
+                target,
+                f"✅ Адрес <code>{req['address']}</code> сохранён. Бухгалтер выполнит выплату.",
+                parse_mode="html",
+                reply_to=int(req.get("ask_msg_id") or 0) or None,
+            )
+            # Уведомление менеджеру
+            try:
+                await storage.add_notification(
+                    type="info",
+                    text=f"📍 Клиент chat={event.chat_id} подтвердил TRC20-адрес: {req['address'][:12]}…",
+                    dedup_key=f"outkup_addr_confirmed:{req['id']}",
+                )
+            except Exception:
+                pass
+        elif tl in ("заменить", "замен", "нет", "no", "отмена"):
+            # Сбрасываем — попробуем снова
+            sent = await userbot.client.send_message(
+                target,
+                "🔄 Ок, введите новый TRC20-адрес <b>reply на это сообщение</b>.",
+                parse_mode="html",
+            )
+            if sent:
+                await storage.update_outkup_address_request(
+                    req["id"], state="waiting_address", address="", ask_msg_id=int(sent.id),
+                )
+        else:
+            await userbot.client.send_message(
+                target,
+                "Не понял. Ответьте <b>«да»</b> или <b>«заменить»</b>.",
+                parse_mode="html",
+                reply_to=int(req.get("ask_msg_id") or 0) or None,
+            )
+        return True
+    return False
 
 
 async def handle_outkup_payout_request(event, userbot, storage) -> bool:

@@ -6176,11 +6176,63 @@
       <button class="btn" @click="_doRefresh('outkup', refreshOutkup)" :disabled="_refreshing.outkup || outkupLoading" :class="_refreshing.outkup ? 'jarvis-loading' : ''" style="margin-left: auto;"><span :class="_refreshing.outkup ? 'jarvis-spinning' : ''">↻</span> Обновить</button>
     </div>
 
-    <!-- Tab переключатель: Заявки / Стата / Выплаты клиентам -->
+    <!-- Tab переключатель: 4 подраздела согласно ТЗ -->
     <div style="display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px;">
-      <button class="dept-tab" :class="outkupTab === 'orders' ? 'active' : ''" @click="outkupTab='orders'">📋 Заявки</button>
+      <button class="dept-tab" :class="outkupTab === 'orders' ? 'active' : ''" @click="outkupTab='orders'">📋 Заявки на откуп</button>
       <button class="dept-tab" :class="outkupTab === 'stats' ? 'active' : ''" @click="outkupTab='stats'; loadOutkupFullStats()">📊 Стата</button>
-      <button class="dept-tab" :class="outkupTab === 'payouts' ? 'active' : ''" @click="outkupTab='payouts'; loadOutkupFullStats()">💸 Выплаты клиентам</button>
+      <button class="dept-tab" :class="outkupTab === 'payouts' ? 'active' : ''" @click="outkupTab='payouts'; loadOutkupFullStats()">💸 Заявки на выплаты</button>
+      <button class="dept-tab" :class="outkupTab === 'balances' ? 'active' : ''" @click="outkupTab='balances'; loadOutkupFullStats()">👥 Балансы клиентов</button>
+    </div>
+
+    <!-- ============ Под-вкладка БАЛАНСЫ КЛИЕНТОВ ============ -->
+    <!-- Список всех клиентов с балансом. Здесь можно запросить адрес и выплатить
+         без существующего pending-запроса (по инициативе менеджера). -->
+    <div x-show="outkupTab === 'balances'" style="display: flex; flex-direction: column; gap: 14px;">
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">👥 Балансы клиентов</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Партнёр</th><th>Принято RUB</th><th>Должны USDT</th>
+              <th>Выплачено</th><th style="color:#fbbf24;">Свободно к выплате</th>
+              <th>TRC20-адрес</th><th>Действие</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="c in (outkupFullStats?.by_client || [])" :key="c.chat_id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;">
+                    <span x-text="c.partner_name || ('@'+c.partner_username) || ('chat='+c.chat_id)"></span>
+                    <div style="font-size: 10px; color: var(--text-dim);" x-text="'id: '+c.chat_id"></div>
+                  </td>
+                  <td x-text="(c.total_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                  <td x-text="(c.total_usdt_due || 0).toFixed(2)"></td>
+                  <td x-text="(c.total_usdt_paid || 0).toFixed(2)"></td>
+                  <td style="color:#fbbf24; font-weight:700;" x-text="(c.balance_usdt || 0).toFixed(2) + ' USDT'"></td>
+                  <td style="font-family: monospace; font-size: 10px; max-width: 200px; word-break: break-all;"
+                      x-text="c.trc20_address || '—'"></td>
+                  <td>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                      <button class="btn" @click="requestClientAddress(c.chat_id)"
+                              style="background: rgba(106,216,255,0.2); color:#6ad8ff; font-size: 10px; padding: 4px 8px;"
+                              title="Ассистент спросит у клиента актуальный адрес">
+                        📍 Уточнить адрес
+                      </button>
+                      <button class="btn" @click="payoutOutkupRow({chat_id: c.chat_id, partner_name: c.partner_name, partner_username: c.partner_username, trc20_address: c.trc20_address, amount_usdt: (c.balance_usdt + (c.pending_usdt || 0)), pending: false, pending_id: null, _txidInput: c._payoutTxid || ''})"
+                              :disabled="!c.trc20_address || ((c.balance_usdt + (c.pending_usdt || 0)) < 0.01)"
+                              style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; font-size: 10px; padding: 4px 10px;">
+                        💸 Выплатить
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.by_client || []).length === 0">
+                <td colspan="7" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет клиентов —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ============ Под-вкладка СТАТА ============ -->
@@ -12937,6 +12989,19 @@ function jarvis() {
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
         row._txidInput = '';
         await this.loadOutkupFullStats();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    async requestClientAddress(chatId) {
+      if (!chatId) return;
+      if (!confirm('Запросить у клиента актуальный TRC20-адрес? Ассистент задаст вопрос в его чате.')) return;
+      try {
+        const r = await fetch(`/api/outkup/client_wallets/${chatId}/request_address`, {
+          method: 'POST', credentials: 'include',
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        const j = await r.json();
+        if (j.ok === false) alert(j.reason || 'Уже есть активный запрос');
+        else alert('✅ Запрос отправлен клиенту в TG');
       } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async cancelOutkupPayoutRequest(p) {

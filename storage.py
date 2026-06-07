@@ -5143,6 +5143,52 @@ class Storage:
             "last_done_at": last_done_at,
         }
 
+    # === outkup_address_requests — flow подтверждения адреса от клиента ===
+    # state: 'waiting_address' (ждём адрес) / 'waiting_confirm' (ждём да/заменить) /
+    #         'confirmed' (готов для выплаты) / 'cancelled'
+    async def create_outkup_address_request(self, client_chat_id, requested_by: str = "") -> dict:
+        async with _lock:
+            self.state["outkup_addr_req_seq"] = int(self.state.get("outkup_addr_req_seq") or 0) + 1
+            rid = f"addrreq{self.state['outkup_addr_req_seq']}"
+            rec = {
+                "id": rid,
+                "client_chat_id": int(client_chat_id or 0),
+                "requested_by": (requested_by or "").lstrip("@").lower(),
+                "state": "waiting_address",
+                "address": "",
+                "ask_msg_id": 0,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+            self.state.setdefault("outkup_address_requests", {})[rid] = rec
+            await self._save_unlocked()
+            return rec
+
+    def list_outkup_address_requests(self, client_chat_id=None) -> list:
+        d = (self.state.get("outkup_address_requests") or {})
+        if client_chat_id is None:
+            return list(d.values())
+        cid = _norm_chat_id(client_chat_id)
+        return [r for r in d.values() if _norm_chat_id(r.get("client_chat_id")) == cid]
+
+    def get_outkup_active_address_request(self, client_chat_id):
+        for r in self.list_outkup_address_requests(client_chat_id):
+            if r.get("state") in ("waiting_address", "waiting_confirm"):
+                return r
+        return None
+
+    async def update_outkup_address_request(self, request_id, **fields) -> Optional[dict]:
+        async with _lock:
+            d = self.state.setdefault("outkup_address_requests", {})
+            r = d.get(request_id)
+            if not r:
+                return None
+            for k, v in fields.items():
+                r[k] = v
+            r["updated_at"] = time.time()
+            await self._save_unlocked()
+            return r
+
     # === outkup_client_wallets — TRC20-адрес куда платим клиенту-партнёру ===
     def get_outkup_client_wallet(self, chat_id) -> str:
         d = self.state.get("outkup_client_wallets") or {}

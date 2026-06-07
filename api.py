@@ -2755,7 +2755,32 @@ async def api_outkup_client_payout_mark_paid(
     )
     if not rec:
         raise HTTPException(404, "payout not found")
+    # Шлём клиенту уведомление о выплате с tronscan-ссылкой
+    try:
+        await storage.enqueue_dashboard_command(f"__outkup_payout_done {payout_id}")
+    except Exception:
+        pass
     return {"ok": True, "payout": rec}
+
+
+@app.post("/api/outkup/client_wallets/{client_chat_id}/request_address")
+async def api_outkup_request_address(client_chat_id: int, me: dict = Depends(_get_me)):
+    """Менеджер запрашивает у клиента актуальный TRC20-адрес для выплаты.
+    Ассистент идёт в чат клиента, шлёт 'введите адрес reply на это сообщение',
+    после ответа — спрашивает подтверждение, после 'да' → сохраняет в wallets."""
+    if me.get("role") not in ("owner", "manager", "accounting"):
+        raise HTTPException(403, "forbidden")
+    # Проверим что нет активной заявки
+    if storage.get_outkup_active_address_request(client_chat_id):
+        return {"ok": False, "reason": "уже есть активный запрос"}
+    rec = await storage.create_outkup_address_request(
+        client_chat_id, requested_by=me.get("username") or "",
+    )
+    # Юзербот пошлёт сообщение в чат клиента
+    await storage.enqueue_dashboard_command(
+        f"__outkup_ask_address {rec['id']}"
+    )
+    return {"ok": True, "request": rec}
 
 
 @app.post("/api/outkup/client_wallets/{client_chat_id}")
