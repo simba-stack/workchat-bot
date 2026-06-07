@@ -589,6 +589,41 @@ async def _periodic_cleanup():
             logger.warning("Periodic cleanup failed: %s", e)
 
 
+async def _outkup_timer_loop():
+    """Каждые 30 сек проверяет таймеры реквизитов:
+      • <=5мин до истечения и warning_sent=false → шлём предупреждение клиенту
+      • уже истёк → шлём "время вышло" один раз и помечаем expired_notified=true."""
+    import time
+    await asyncio.sleep(20)  # ждём warm-up userbot/storage
+    while True:
+        try:
+            await asyncio.sleep(30)
+            payments = (storage.state.get("outkup_payments") or {})
+            now = time.time()
+            for pid, p in list(payments.items()):
+                exp = float(p.get("expires_at") or 0)
+                if exp <= 0:
+                    continue
+                st = (p.get("status") or "").lower()
+                if st in ("confirmed", "rejected"):
+                    continue
+                # Предупреждение за 5 минут до истечения
+                if (not p.get("warning_sent")) and now > exp - 5 * 60 and now < exp:
+                    try:
+                        await storage.enqueue_dashboard_command(f"__outkup_timer_warn {pid}")
+                    except Exception:
+                        pass
+                # Истёк — уведомление одно
+                if now >= exp and not p.get("expired_notified"):
+                    try:
+                        await storage.enqueue_dashboard_command(f"__outkup_timer_expired {pid}")
+                        await storage.update_outkup_payment(pid, expired_notified=True)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning("[outkup_timer_loop] tick error: %s", e)
+
+
 async def main():
     missing = []
     if not config.BOT_TOKEN: missing.append("BOT_TOKEN")
@@ -639,6 +674,11 @@ async def main():
 
     # Запускаем фоновую очистку storage
     asyncio.create_task(_periodic_cleanup())
+
+    # Outkup payment timer loop — каждые 30 сек проверяет:
+    # • payments которым осталось ≤5 мин и warning_sent=False → ставит __outkup_timer_warn
+    # • payments которые уже истекли → ставит __outkup_timer_expired (один раз)
+    asyncio.create_task(_outkup_timer_loop())
 
     # FastAPI дашборд — запускаем параллельно. При любой ошибке/отсутствии
     # модулей дашборд просто не стартует, бот продолжает работать как обычно.

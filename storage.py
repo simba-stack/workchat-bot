@@ -5143,6 +5143,62 @@ class Storage:
             "last_done_at": last_done_at,
         }
 
+    # === outkup_extension_requests — клиент просит продлить таймер реквизита ===
+    async def create_outkup_extension_request(
+        self, payment_id: str, requested_minutes: int, client_chat_id,
+    ) -> Optional[dict]:
+        async with _lock:
+            self.state["outkup_ext_seq"] = int(self.state.get("outkup_ext_seq") or 0) + 1
+            rid = f"ext{self.state['outkup_ext_seq']}"
+            rec = {
+                "id": rid,
+                "payment_id": str(payment_id or ""),
+                "client_chat_id": int(client_chat_id or 0),
+                "requested_minutes": int(requested_minutes or 0),
+                "status": "pending",
+                "decided_by": "",
+                "decided_at": 0.0,
+                "approved_minutes": 0,
+                "created_at": time.time(),
+            }
+            self.state.setdefault("outkup_extension_requests", {})[rid] = rec
+            await self._save_unlocked()
+            return rec
+
+    def list_outkup_extension_requests(self, payment_id=None, only_pending=False) -> list:
+        d = (self.state.get("outkup_extension_requests") or {})
+        items = list(d.values())
+        if payment_id is not None:
+            items = [r for r in items if str(r.get("payment_id")) == str(payment_id)]
+        if only_pending:
+            items = [r for r in items if r.get("status") == "pending"]
+        return items
+
+    async def decide_outkup_extension(
+        self, request_id, decision: str, approved_minutes: int = 0, by: str = "",
+    ) -> Optional[dict]:
+        """decision: 'approved' | 'rejected'. При approved продлевает expires_at в payment."""
+        async with _lock:
+            d = self.state.setdefault("outkup_extension_requests", {})
+            r = d.get(request_id)
+            if not r:
+                return None
+            r["status"] = decision
+            r["decided_by"] = (by or "").lstrip("@").lower()
+            r["decided_at"] = time.time()
+            r["approved_minutes"] = int(approved_minutes or 0)
+            if decision == "approved":
+                payments = self.state.get("outkup_payments") or {}
+                p = payments.get(r.get("payment_id"))
+                if p:
+                    current_exp = float(p.get("expires_at") or time.time())
+                    # Если уже истёк — продлеваем от now, иначе от текущего
+                    base = max(current_exp, time.time())
+                    p["expires_at"] = base + int(approved_minutes) * 60
+                    p["warning_sent"] = False  # повторим уведомление за 5 мин
+            await self._save_unlocked()
+            return r
+
     # === outkup_address_requests — flow подтверждения адреса от клиента ===
     # state: 'waiting_address' (ждём адрес) / 'waiting_confirm' (ждём да/заменить) /
     #         'confirmed' (готов для выплаты) / 'cancelled'
@@ -5331,39 +5387,90 @@ class Storage:
             slot["trc20_address"] = w.get("trc20_address") or ""
 
         # by_manager — кто из откупщиков сколько выдал реквизитов
+        # ЗП считается из CONFIRMED payments × manager_salary_pct% (от USDT-объёма)
         by_manager = {}
+        avg_rate = float(
+            (self.state.get("outkup_settings") or {}).get("rate_rub_per_usdt") or 100
+        )
         for pay in payments.values():
-            if (pay.get("status") or "").lower() not in ("confirmed", "receipt_received"):
+            if (pay.get("status") or "").lower() != "confirmed":
                 continue
             mgr = (pay.get("manager_username") or "").lstrip("@").lower() or "—"
             slot = by_manager.setdefault(mgr, {
                 "manager_username": mgr,
-                "payments_done": 0, "amount_rub": 0.0, "salary_usdt": 0.0,
+                "payments_done": 0, "amount_rub": 0.0,
+                "amount_usdt": 0.0, "salary_usdt": 0.0,
             })
             slot["payments_done"] += 1
-            slot["amount_rub"] += float(pay.get("amount_rub") or 0)
-        # Зарплата = manager_salary_pct% от RUB-объёма / средний курс
-        avg_rate = float(
-            (self.state.get("outkup_settings") or {}).get("rate_rub_per_usdt") or 100
-        )
+            amt_rub = float(pay.get("amount_rub") or 0)
+            # USDT-эквивалент по курсу заявки
+            o = orders.get(str(pay.get("order_id"))) or {}
+            rate = float(o.get("rate") or avg_rate)
+            slot["amount_rub"] += amt_rub
+            slot["amount_usdt"] += amt_rub / max(rate, 1)
         for slot in by_manager.values():
-            slot["salary_usdt"] = round(
-                (slot["amount_rub"] * manager_salary_pct / 100.0) / max(avg_rate, 1),
-                2,
-            )
+            slot["salary_usdt"] = round(slot["amount_usdt"] * manager_salary_pct / 100.0, 2)
             slot["amount_rub"] = round(slot["amount_rub"], 2)
+            slot["amount_usdt"] = round(slot["amount_usdt"], 2)
 
-        # Маржа компании = разница между принятым RUB-объёмом и USDT выплатам клиенту
-        # = sum(amount_rub) - sum(payout_client_usdt × rate) → но это сложно при разных
-        # курсах. Просто = sum(payments.amount_rub) × pct_fee / 100 / rate.
-        # Используем глобальный pct_fee и средний rate.
-        glob_pct = float(
-            (self.state.get("outkup_settings") or {}).get("pct_fee") or 5.0
-        )
-        total_rub_in = sum(float(p.get("amount_rub") or 0) for p in payments.values()
-                           if (p.get("status") or "").lower() == "confirmed")
-        margin_usdt = round((total_rub_in * glob_pct / 100.0) / max(avg_rate, 1), 2)
+        # Маржа компании = pct_fee × объём (USDT) − ЗП откупщиков
+        # Используем per-order pct_fee (не глобальный).
+        margin_usdt_raw = 0.0
+        total_volume_usdt = 0.0
+        total_rub_in = 0.0
+        # Маржа по периодам: day / week / month / by_client
+        from collections import defaultdict
+        import datetime as _dt
+        margin_by_day = defaultdict(float)
+        margin_by_week = defaultdict(float)
+        margin_by_month = defaultdict(float)
+        margin_by_client = defaultdict(float)
+        turnover_by_client = defaultdict(float)  # обороты в RUB
+        for pay in payments.values():
+            if (pay.get("status") or "").lower() != "confirmed":
+                continue
+            amt_rub = float(pay.get("amount_rub") or 0)
+            o = orders.get(str(pay.get("order_id"))) or {}
+            rate = float(o.get("rate") or avg_rate)
+            pct = float(o.get("pct_fee") or 0)
+            cid = _norm_chat_id(o.get("client_chat_id"))
+            vol_usdt = amt_rub / max(rate, 1)
+            # Маржа на этом payment = pct × vol − salary_pct × vol
+            margin = vol_usdt * max(0, pct - manager_salary_pct) / 100.0
+            total_rub_in += amt_rub
+            total_volume_usdt += vol_usdt
+            margin_usdt_raw += margin
+            ts = float(pay.get("confirmed_at") or pay.get("created_at") or 0)
+            if ts > 0:
+                d = _dt.datetime.fromtimestamp(ts)
+                day_key = d.strftime("%Y-%m-%d")
+                # ISO неделя
+                year, week, _wd = d.isocalendar()
+                week_key = f"{year}-W{week:02d}"
+                month_key = d.strftime("%Y-%m")
+                margin_by_day[day_key] += margin
+                margin_by_week[week_key] += margin
+                margin_by_month[month_key] += margin
+            if cid:
+                margin_by_client[cid] += margin
+                turnover_by_client[cid] += amt_rub
+        margin_usdt = round(margin_usdt_raw, 2)
 
+        # Сортируем периоды для UI (новые сначала)
+        def _sorted_kv(d):
+            return [{"period": k, "margin_usdt": round(v, 2)} for k, v in sorted(d.items(), reverse=True)]
+        # by-client margin/turnover в готовый список
+        by_client_margin = []
+        for cid, m in margin_by_client.items():
+            chat_id = next((c["chat_id"] for c in by_client.values() if _norm_chat_id(c["chat_id"]) == cid), 0)
+            partner = next((c.get("partner_name") or "@"+(c.get("partner_username") or "") for c in by_client.values() if _norm_chat_id(c["chat_id"]) == cid), str(chat_id))
+            by_client_margin.append({
+                "chat_id": chat_id,
+                "partner": partner,
+                "margin_usdt": round(m, 2),
+                "turnover_rub": round(turnover_by_client.get(cid, 0), 2),
+            })
+        by_client_margin.sort(key=lambda x: -x["margin_usdt"])
         return {
             "by_client": sorted(by_client.values(), key=lambda x: -x["balance_usdt"]),
             "by_manager": sorted(by_manager.values(), key=lambda x: -x["payments_done"]),
@@ -5371,9 +5478,14 @@ class Storage:
             "manager_salary_pct": manager_salary_pct,
             "totals": {
                 "total_rub_in": round(total_rub_in, 2),
+                "total_volume_usdt": round(total_volume_usdt, 2),
                 "clients_count": len(by_client),
                 "managers_count": len(by_manager),
             },
+            "margin_by_day": _sorted_kv(margin_by_day),
+            "margin_by_week": _sorted_kv(margin_by_week),
+            "margin_by_month": _sorted_kv(margin_by_month),
+            "margin_by_client": by_client_margin,
         }
 
     def get_outkup_client_stats(self, client_chat_id) -> dict:
@@ -5550,7 +5662,7 @@ class Storage:
     async def add_outkup_payment(
         self, order_id: str, bank: str, phone: str, amount_rub: float,
         manager_username: str = "", manager_msg_id: int = 0,
-        client_msg_id: int = 0,
+        client_msg_id: int = 0, duration_minutes: int = 0,
     ) -> Optional[dict]:
         """Создаёт payment под заявкой. Уменьшает amount_rub_remaining у order.
         Возвращает payment dict."""
@@ -5588,6 +5700,9 @@ class Storage:
                 "confirmed_at": 0,
                 "rejected_at": 0,
                 "comments": [],
+                "duration_minutes": int(duration_minutes or 0),
+                "expires_at": (now + int(duration_minutes) * 60) if duration_minutes else 0,
+                "warning_sent": False,
             }
             self.state.setdefault("outkup_payments", {})[pay_id] = payment
             order["payment_ids"] = list(order.get("payment_ids") or []) + [pay_id]

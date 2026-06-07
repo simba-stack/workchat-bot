@@ -2145,7 +2145,8 @@ async def api_outkup_settings_update(
     if not hasattr(storage, "update_outkup_settings"):
         raise HTTPException(500, "outkup not available")
     allowed = ("rate_rub_per_usdt", "payments_chat_id", "outkup_team_chat_id",
-               "min_amount_rub", "max_amount_rub", "enabled")
+               "min_amount_rub", "max_amount_rub", "enabled",
+               "pct_fee", "manager_salary_pct")
     fields = {k: body[k] for k in allowed if k in body}
     s = await storage.update_outkup_settings(**fields)
     return {"ok": True, "settings": s}
@@ -2610,11 +2611,16 @@ async def api_outkup_issue_payment(order_id: str, request: Request, me: dict = D
         amount = float(body.get("amount_rub") or 0)
     except Exception:
         amount = 0
+    try:
+        duration_minutes = int(body.get("duration_minutes") or 0)
+    except Exception:
+        duration_minutes = 0
     if not bank or not phone or amount <= 0:
         raise HTTPException(400, "bank/phone/amount_rub required")
     payment = await storage.add_outkup_payment(
         order_id, bank=bank, phone=phone, amount_rub=amount,
         manager_username=me.get("username") or "",
+        duration_minutes=duration_minutes,
     )
     if not payment:
         raise HTTPException(400, "issue failed (превышение остатка?)")
@@ -2687,6 +2693,48 @@ async def api_outkup_payment_comment(pay_id: str, request: Request, me: dict = D
 async def api_outkup_order_payments(order_id: str, me: dict = Depends(_get_me)):
     storage.reload_sync()
     return {"payments": storage.list_outkup_payments_for_order(order_id)}
+
+
+# === Extension requests — клиент просит продлить таймер реквизита ===
+@app.get("/api/outkup/extension_requests")
+async def api_outkup_extension_requests_list(
+    only_pending: int = 0, me: dict = Depends(_get_me),
+):
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    storage.reload_sync()
+    items = storage.list_outkup_extension_requests(only_pending=bool(only_pending))
+    items.sort(key=lambda x: -(x.get("created_at") or 0))
+    return {"items": items, "count": len(items)}
+
+
+@app.post("/api/outkup/extension_requests/{request_id}/decide")
+async def api_outkup_extension_decide(
+    request_id: str, request: Request, me: dict = Depends(_get_me),
+):
+    """Body: {decision: 'approved'|'rejected', minutes?}"""
+    if me.get("role") not in ("owner", "manager", "outkup_specialist"):
+        raise HTTPException(403, "forbidden")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    decision = (body.get("decision") or "").lower()
+    if decision not in ("approved", "rejected"):
+        raise HTTPException(400, "decision must be approved/rejected")
+    try:
+        minutes = int(body.get("minutes") or 0)
+    except Exception:
+        minutes = 0
+    rec = await storage.decide_outkup_extension(
+        request_id, decision=decision, approved_minutes=minutes,
+        by=me.get("username") or "",
+    )
+    if not rec:
+        raise HTTPException(404, "extension request not found")
+    # Уведомить клиента
+    try:
+        await storage.enqueue_dashboard_command(f"__outkup_extension_decided {request_id}")
+    except Exception:
+        pass
+    return {"ok": True, "request": rec}
 
 
 # === Аналитика и выплаты клиентам Откупов ===

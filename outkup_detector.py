@@ -432,6 +432,71 @@ _PAYOUT_REQUEST_RE = re.compile(
 )
 
 
+_EXTEND_RE = re.compile(
+    r"(?:продл\w*|хочу\s+продлить|продли)[^0-9]*?(\d{1,3})\s*мин",
+    re.IGNORECASE,
+)
+
+
+async def handle_outkup_extension_request(event, userbot, storage) -> bool:
+    """Клиент: «хочу продлить реквизит на N минут» (reply на warning или сам).
+    Должен быть reply на warning_msg_id или client_msg_id payment."""
+    if not event or not event.message:
+        return False
+    try:
+        if not storage.is_outkup_chat(event.chat_id):
+            return False
+    except Exception:
+        return False
+    text = (event.message.text or event.message.message or "").strip()
+    m = _EXTEND_RE.search(text)
+    if not m:
+        return False
+    minutes = int(m.group(1))
+    if minutes < 1 or minutes > 180:
+        return False
+    # Найти payment по reply_to msg_id
+    msg = event.message
+    reply_to = getattr(msg, "reply_to_msg_id", None) or getattr(msg, "reply_to", None)
+    if not isinstance(reply_to, int):
+        reply_to = getattr(reply_to, "reply_to_msg_id", None) if reply_to else None
+    if not reply_to:
+        return False
+    target_pay = None
+    payments = storage.state.get("outkup_payments") or {}
+    for pid, p in payments.items():
+        if int(p.get("client_msg_id") or 0) == int(reply_to) \
+                or int(p.get("warning_msg_id") or 0) == int(reply_to):
+            target_pay = p
+            break
+    if not target_pay:
+        return False
+    # Создаём extension request
+    rec = await storage.create_outkup_extension_request(
+        payment_id=target_pay["id"],
+        requested_minutes=minutes,
+        client_chat_id=event.chat_id,
+    )
+    target = await userbot._resolve_chat_target(event.chat_id)
+    await userbot.client.send_message(
+        target,
+        f"⏳ Запрос на продление принят (<b>+{minutes} минут</b>).\n"
+        f"Откупщик примет решение — ожидайте.",
+        parse_mode="html",
+        reply_to=msg.id,
+    )
+    try:
+        await storage.add_notification(
+            type="warning",
+            text=f"⏰ Клиент chat={event.chat_id} просит продлить реквизит pay={target_pay['id']} на +{minutes} мин",
+            dedup_key=f"outkup_extension_request:{rec['id']}",
+        )
+    except Exception:
+        pass
+    logger.info("outkup: extension request pay=%s +%dmin", target_pay["id"], minutes)
+    return True
+
+
 async def handle_outkup_address_reply(event, userbot, storage) -> bool:
     """Reply клиента на запрос адреса от менеджера. Двухшаговый flow:
        1. ждём адрес → парсим TR…, шлём «точно туда? да / заменить»

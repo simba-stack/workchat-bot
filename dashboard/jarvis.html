@@ -6318,6 +6318,129 @@
           </table>
         </div>
       </div>
+
+      <!-- ====== Stage 5: настройка ЗП откупщика (manager_salary_pct) + comission ====== -->
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">💼 Формула</h4>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; font-size: 12px;">
+          <div>
+            <label style="display: block; color: var(--text-dim); font-size: 11px; margin-bottom: 4px;">Комиссия клиента (% общая)</label>
+            <input type="number" step="0.01" x-model.number="outkupSettings.pct_fee"
+                   style="width: 100%; padding: 6px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; color: var(--text-dim); font-size: 11px; margin-bottom: 4px;">ЗП откупщика (% от объёма)</label>
+            <input type="number" step="0.01" x-model.number="outkupSettings.manager_salary_pct"
+                   style="width: 100%; padding: 6px 8px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+          </div>
+          <div style="display: flex; align-items: flex-end;">
+            <button class="btn primary" @click="saveOutkupSettings()" style="padding: 6px 16px;">💾 Сохранить</button>
+          </div>
+        </div>
+        <div style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">
+          Маржа компании = объём × (комиссия − ЗП). По умолчанию 3.5% − 1.5% = 2%.
+        </div>
+      </div>
+
+      <!-- ====== Stage 6: Маржа по периодам ====== -->
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">📈 Маржа по дням</h4>
+        <div style="overflow-x: auto; max-height: 240px;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Дата</th><th>Объём ₽</th><th style="color: #22c55e;">Маржа USDT</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="row in (outkupFullStats?.margin_by_day || [])" :key="row.period">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;" x-text="row.period"></td>
+                  <td x-text="(row.volume_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                  <td style="color: #22c55e; font-weight: 700;" x-text="(row.margin_usdt || 0).toFixed(2) + ' USDT'"></td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.margin_by_day || []).length === 0">
+                <td colspan="3" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет данных —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+        <div class="jarvis-panel" style="padding: 14px;">
+          <h4 style="margin: 0 0 10px 0;">📅 По неделям</h4>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+              <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <th style="padding: 6px;">Неделя</th><th>Объём ₽</th><th style="color: #22c55e;">Маржа</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="row in (outkupFullStats?.margin_by_week || [])" :key="row.period">
+                  <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                    <td style="padding: 6px;" x-text="row.period"></td>
+                    <td x-text="(row.volume_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                    <td style="color: #22c55e; font-weight: 700;" x-text="(row.margin_usdt || 0).toFixed(2)"></td>
+                  </tr>
+                </template>
+                <tr x-show="(outkupFullStats?.margin_by_week || []).length === 0">
+                  <td colspan="3" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет —</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="jarvis-panel" style="padding: 14px;">
+          <h4 style="margin: 0 0 10px 0;">📆 По месяцам</h4>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+              <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <th style="padding: 6px;">Месяц</th><th>Объём ₽</th><th style="color: #22c55e;">Маржа</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="row in (outkupFullStats?.margin_by_month || [])" :key="row.period">
+                  <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                    <td style="padding: 6px;" x-text="row.period"></td>
+                    <td x-text="(row.volume_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                    <td style="color: #22c55e; font-weight: 700;" x-text="(row.margin_usdt || 0).toFixed(2)"></td>
+                  </tr>
+                </template>
+                <tr x-show="(outkupFullStats?.margin_by_month || []).length === 0">
+                  <td colspan="3" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет —</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="jarvis-panel" style="padding: 14px;">
+        <h4 style="margin: 0 0 10px 0;">👥 Маржа по клиентам</h4>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+            <thead><tr style="text-align: left; color: var(--text-dim); border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <th style="padding: 6px;">Клиент</th><th>Заявок</th>
+              <th>Объём ₽</th><th>Объём USDT</th><th style="color: #22c55e;">Маржа USDT</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="row in (outkupFullStats?.margin_by_client || [])" :key="row.chat_id">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                  <td style="padding: 6px;">
+                    <span x-text="row.partner_name || ('@'+row.partner_username) || ('chat='+row.chat_id)"></span>
+                  </td>
+                  <td x-text="row.orders_count || 0"></td>
+                  <td x-text="(row.volume_rub || 0).toLocaleString('ru-RU') + ' ₽'"></td>
+                  <td x-text="(row.volume_usdt || 0).toFixed(2)"></td>
+                  <td style="color: #22c55e; font-weight: 700;" x-text="(row.margin_usdt || 0).toFixed(2) + ' USDT'"></td>
+                </tr>
+              </template>
+              <tr x-show="(outkupFullStats?.margin_by_client || []).length === 0">
+                <td colspan="5" style="padding: 14px; text-align: center; color: var(--text-dim);">— нет данных —</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ============ Под-вкладка ВЫПЛАТЫ КЛИЕНТАМ ============ -->
@@ -6506,6 +6629,24 @@
                               : p.status"></span>
                   <span style="margin-left: auto; font-size: 10px; color: var(--text-dim);">@<span x-text="p.manager_username"></span></span>
                 </div>
+                <!-- Таймер реквизита (если установлен) — countdown -->
+                <div x-show="p.expires_at && p.expires_at > 0 && !['confirmed','rejected'].includes(p.status)"
+                     style="margin-top: 4px; font-size: 11px; font-family: monospace;">
+                  <span :style="(p.expires_at - (nowTs/1000)) < 300 ? 'color:#ef4444; font-weight: 700;' : 'color:#fbbf24;'"
+                        x-text="formatTimeLeft(p.expires_at)"></span>
+                </div>
+                <!-- Pending extension requests от клиента — кнопки принять/отклонить -->
+                <template x-for="ext in outkupPendingExtensionsFor(p.id)" :key="ext.id">
+                  <div style="margin-top: 6px; padding: 8px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 4px; font-size: 11px;">
+                    ⏳ Клиент просит продлить на <b x-text="ext.requested_minutes"></b> мин.
+                    <div style="display: flex; gap: 4px; margin-top: 4px;">
+                      <button class="btn" @click="decideOutkupExtension(ext.id, 'approved', ext.requested_minutes)"
+                              style="background: rgba(34,197,94,0.2); color:#22c55e; font-size: 11px; padding: 3px 8px;">✅ Одобрить +<span x-text="ext.requested_minutes"></span> мин</button>
+                      <button class="btn" @click="decideOutkupExtension(ext.id, 'rejected')"
+                              style="background: rgba(239,68,68,0.15); color:#ef4444; font-size: 11px; padding: 3px 8px;">❌ Отклонить</button>
+                    </div>
+                  </div>
+                </template>
                 <!-- Превью чека через fetch+blob (cookies в Electron).
                      Показываем ВСЕГДА когда есть receipt_msg_id — даже если payment
                      перешёл в rejected/waiting_receipt после «Запросить новый»,
@@ -6586,14 +6727,17 @@
             <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
               📤 Выдать реквизит на сумму до <b x-text="((o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0).toLocaleString('ru-RU') + ' ₽'"></b>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 6px; align-items: center;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 100px 80px auto; gap: 6px; align-items: center;">
               <input type="text" x-model="o._newBank" placeholder="Банк (Тинькофф)" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
               <input type="text" x-model="o._newPhone" placeholder="+7 999 123 4567 или номер карты" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
               <input type="number" x-model.number="o._newAmount" placeholder="Сумма ₽" :max="(o.amount_rub_remaining != null ? o.amount_rub_remaining : o.amount_rub) || 0" :disabled="!o.assigned_to"
                      style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
-              <button class="btn success" @click="outkupIssuePayment(o.id, o._newBank, o._newPhone, o._newAmount)" :disabled="!o.assigned_to"
+              <input type="number" x-model.number="o._newDuration" placeholder="мин" :disabled="!o.assigned_to" min="0" max="180"
+                     style="padding: 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;"
+                     title="Время действия реквизита в минутах (0 = без таймера)">
+              <button class="btn success" @click="outkupIssuePayment(o.id, o._newBank, o._newPhone, o._newAmount, o._newDuration)" :disabled="!o.assigned_to"
                       style="padding: 6px 14px;">📤 Выдать</button>
             </div>
           </div>
@@ -8361,6 +8505,8 @@ function jarvis() {
     outkupTab: 'orders',  // 'orders' / 'stats' / 'payouts'
     outkupFullStats: null,  // { by_client, by_manager, margin_usdt, totals }
     outkupClientPayouts: [],  // история выплат клиентам
+    outkupExtensions: [],  // pending extension requests от клиентов
+    nowTs: Date.now(),  // глобальный реактивный таймер (обновляется в init)
     receiptLightbox: null,  // {blob, type, pay_id} когда открыто превью чека
     outkupSettings: {
       rate_rub_per_usdt: 100,
@@ -8651,9 +8797,15 @@ function jarvis() {
               && !document.hidden
               && !this.outkupLoading) {
             this.refreshOutkup();
+            if (typeof this.loadOutkupExtensions === 'function') this.loadOutkupExtensions();
           }
         }, 3000);
       } catch (e) { console.warn('outkup auto-refresh init failed', e); }
+      // Stage 7: глобальный тик для countdown (раз в секунду)
+      try {
+        if (this._nowTsTimer) clearInterval(this._nowTsTimer);
+        this._nowTsTimer = setInterval(() => { this.nowTs = Date.now(); }, 1000);
+      } catch (e) {}
 
       // Voice floating window: восстановить позицию + автооткрытие при входе в звонок
       this._restoreVoicePos();
@@ -12778,7 +12930,16 @@ function jarvis() {
             min_amount_rub: s.min_amount_rub ?? 5000,
             max_amount_rub: s.max_amount_rub ?? 5000000,
             enabled: s.enabled ?? true,
+            pct_fee: s.pct_fee ?? 3.5,
+            manager_salary_pct: s.manager_salary_pct ?? 1.5,
           };
+        }
+        // Подгружаем payments для развёрнутых карточек — чтобы countdown timer
+        // и extension request UI рендерились без необходимости свернуть/развернуть.
+        for (const o of (this.outkupOrders || [])) {
+          if (o && o._expanded && typeof this.loadOutkupPayments === 'function') {
+            this.loadOutkupPayments(o.id);
+          }
         }
       } catch (e) { console.error('refreshOutkup', e); }
       finally { this.outkupLoading = false; }
@@ -13118,10 +13279,11 @@ function jarvis() {
         }
       } catch (e) { console.error('loadOutkupPayments', e); }
     },
-    async outkupIssuePayment(orderId, bank, phone, amount) {
+    async outkupIssuePayment(orderId, bank, phone, amount, duration) {
       bank = (bank || '').trim();
       phone = (phone || '').trim();
       amount = Number(amount || 0);
+      duration = Number(duration || 0);
       if (!bank) { alert('Введи банк'); return; }
       if (!phone) { alert('Введи телефон/карту'); return; }
       if (!amount || amount <= 0) { alert('Введи сумму'); return; }
@@ -13130,17 +13292,77 @@ function jarvis() {
       if (order && order._issuing) return;
       if (order) order._issuing = true;
       try {
+        const payload = { bank, phone, amount_rub: amount };
+        if (duration > 0) payload.duration_minutes = duration;
         const r = await fetch(`/api/outkup/orders/${orderId}/issue_payment`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bank, phone, amount_rub: amount }),
+          body: JSON.stringify(payload),
         });
         if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
-        if (order) { order._newBank = ''; order._newPhone = ''; order._newAmount = null; }
+        if (order) { order._newBank = ''; order._newPhone = ''; order._newAmount = null; order._newDuration = null; }
         await this.loadOutkupPayments(orderId);
         await this.refreshOutkup();
       } catch (e) { alert('Ошибка: ' + e.message); }
       finally { if (order) order._issuing = false; }
+    },
+    // ===== Stage 7: Countdown timer for реквизит =====
+    formatTimeLeft(expiresAt) {
+      const exp = Number(expiresAt || 0);
+      if (!exp) return '';
+      const left = Math.floor(exp - (Date.now() / 1000));
+      if (left <= 0) return '⏱️ Истёк';
+      const m = Math.floor(left / 60);
+      const s = left % 60;
+      const mm = m.toString().padStart(2, '0');
+      const ss = s.toString().padStart(2, '0');
+      const warn = left < 300 ? ' ⚠️' : '';
+      return `⏱️ Осталось ${mm}:${ss}${warn}`;
+    },
+    // ===== Stage 8: Extension requests =====
+    outkupPendingExtensionsFor(payId) {
+      const all = this.outkupExtensions || [];
+      return all.filter(e => e.payment_id === payId && (e.status || 'pending') === 'pending');
+    },
+    async loadOutkupExtensions() {
+      try {
+        const r = await fetch('/api/outkup/extension_requests?only_pending=1', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json();
+        this.outkupExtensions = j.items || [];
+      } catch (e) { console.error('loadOutkupExtensions', e); }
+    },
+    async decideOutkupExtension(reqId, decision, minutes) {
+      if (decision === 'approved' && (!minutes || minutes <= 0)) {
+        alert('Не указаны минуты для продления');
+        return;
+      }
+      try {
+        const body = { decision };
+        if (decision === 'approved') body.minutes = Number(minutes || 0);
+        const r = await fetch(`/api/outkup/extension_requests/${reqId}/decide`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        await this.loadOutkupExtensions();
+        await this.refreshOutkup();
+      } catch (e) { alert('Ошибка: ' + e.message); }
+    },
+    // ===== Stage 5: Manager salary % setting =====
+    async saveManagerSalaryPct(value) {
+      const pct = Number(value || 0);
+      if (pct < 0 || pct > 100) { alert('% должен быть 0-100'); return; }
+      try {
+        const r = await fetch('/api/settings/outkup', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ manager_salary_pct: pct }),
+        });
+        if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+        this._toast && this._toast('✅ ЗП откупа сохранена: ' + pct + '%');
+      } catch (e) { alert('Ошибка: ' + e.message); }
     },
     async outkupConfirmPayment(orderId, payId) {
       if (!confirm('Подтвердить что оплата по этому реквизиту получена?')) return;

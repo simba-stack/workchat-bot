@@ -1677,13 +1677,16 @@ class UserbotService:
             from outkup_detector import (
                 handle_outkup_message, handle_outkup_confirm,
                 handle_outkup_stats, handle_outkup_payout_request,
-                handle_outkup_address_reply,
+                handle_outkup_address_reply, handle_outkup_extension_request,
             )
             # Сначала — receipt/comment reply на сообщение с реквизитом
             if await self._handle_outkup_payment_reply(event):
                 return
             # Reply клиента на запрос адреса от менеджера
             if await handle_outkup_address_reply(event, self, storage):
+                return
+            # «хочу продлить реквизит на N минут»
+            if await handle_outkup_extension_request(event, self, storage):
                 return
             if await handle_outkup_confirm(event, self, storage):
                 return
@@ -9707,6 +9710,88 @@ class UserbotService:
                 return f"✅ outkup new-receipt requested: pay={pay_id}"
             except Exception as e:
                 return f"⚠️ outkup_request_new_receipt: {e}"
+
+        # ===== __outkup_extension_decided <request_id> =====
+        m = re.match(r"^__outkup_extension_decided\s+(\S+)\s*$", text, re.I)
+        if m:
+            rid = m.group(1)
+            try:
+                reqs = storage.list_outkup_extension_requests()
+                req = next((r for r in reqs if r.get("id") == rid), None)
+                if not req:
+                    return f"⚠️ ext {rid} not found"
+                wc = int(req.get("client_chat_id") or 0)
+                target = await self._resolve_chat_target(wc)
+                if req.get("status") == "approved":
+                    msg = (
+                        f"✅ Запрос на продление одобрен.\n"
+                        f"Реквизит продлён на <b>+{req.get('approved_minutes', 0)} минут</b>."
+                    )
+                else:
+                    msg = "❌ К сожалению, продление реквизита отклонено."
+                await self.client.send_message(target, msg, parse_mode="html")
+                return f"✅ extension notify sent: {rid}"
+            except Exception as e:
+                return f"⚠️ extension_decided: {e}"
+
+        # ===== __outkup_timer_warn <pay_id> =====
+        # Отправка клиенту "осталось 5 минут" — вызывается из background loop.
+        m = re.match(r"^__outkup_timer_warn\s+(\S+)\s*$", text, re.I)
+        if m:
+            pay_id = m.group(1)
+            try:
+                pay = storage.get_outkup_payment(pay_id) if hasattr(storage, "get_outkup_payment") else None
+                if not pay:
+                    return f"⚠️ pay {pay_id} not found"
+                order = storage.get_outkup_order(pay.get("order_id"))
+                if not order:
+                    return f"⚠️ order not found"
+                wc = int(order.get("client_chat_id") or 0)
+                target = await self._resolve_chat_target(wc)
+                amt = float(pay.get("amount_rub") or 0)
+                msg = (
+                    f"⏰ <b>Внимание!</b> На перевод осталось <b>~5 минут</b>.\n\n"
+                    f"💸 Сумма: <b>{amt:,.0f} ₽</b>\n"
+                    f"🏦 {pay.get('bank','')} · <code>{pay.get('phone','')}</code>\n\n"
+                    f"⚠️ Если совершите перевод <b>после указанного времени</b> — "
+                    f"средства могут быть утеряны.\n\n"
+                    f"Если нужно продлить — ответьте <b>reply на это сообщение</b>:\n"
+                    f"<code>хочу продлить на 10 минут</code>"
+                ).replace(",", " ")
+                sent = await self.client.send_message(target, msg, parse_mode="html",
+                                                       reply_to=int(pay.get("client_msg_id") or 0) or None)
+                if sent:
+                    await storage.update_outkup_payment(
+                        pay_id, warning_sent=True, warning_msg_id=int(sent.id),
+                    )
+                return f"✅ timer warn sent: pay={pay_id}"
+            except Exception as e:
+                return f"⚠️ timer_warn: {e}"
+
+        # ===== __outkup_timer_expired <pay_id> =====
+        m = re.match(r"^__outkup_timer_expired\s+(\S+)\s*$", text, re.I)
+        if m:
+            pay_id = m.group(1)
+            try:
+                pay = storage.get_outkup_payment(pay_id) if hasattr(storage, "get_outkup_payment") else None
+                if not pay:
+                    return f"⚠️ pay {pay_id} not found"
+                order = storage.get_outkup_order(pay.get("order_id"))
+                if not order:
+                    return f"⚠️ order not found"
+                wc = int(order.get("client_chat_id") or 0)
+                target = await self._resolve_chat_target(wc)
+                msg = (
+                    f"⛔ <b>Время реквизита истекло.</b>\n\n"
+                    f"Не совершайте перевод по этому реквизиту — "
+                    f"средства могут быть утеряны.\n\n"
+                    f"Дождитесь нового реквизита от откупщика."
+                )
+                await self.client.send_message(target, msg, parse_mode="html",
+                                                reply_to=int(pay.get("client_msg_id") or 0) or None)
+                return f"✅ timer expired notify sent: pay={pay_id}"
+            except Exception as e:
+                return f"⚠️ timer_expired: {e}"
 
         # ===== __outkup_ask_address <request_id> =====
         # Менеджер из JARVIS попросил адрес — идём в чат клиента и спрашиваем.
