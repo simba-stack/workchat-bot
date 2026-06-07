@@ -6211,16 +6211,26 @@
                   <td style="font-family: monospace; font-size: 10px; max-width: 200px; word-break: break-all;"
                       x-text="c.trc20_address || '—'"></td>
                   <td>
-                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
                       <button class="btn" @click="requestClientAddress(c.chat_id)"
                               style="background: rgba(106,216,255,0.2); color:#6ad8ff; font-size: 10px; padding: 4px 8px;"
                               title="Ассистент спросит у клиента актуальный адрес">
                         📍 Уточнить адрес
                       </button>
-                      <button class="btn" @click="payoutOutkupRow({chat_id: c.chat_id, partner_name: c.partner_name, partner_username: c.partner_username, trc20_address: c.trc20_address, amount_usdt: (c.balance_usdt + (c.pending_usdt || 0)), pending: false, pending_id: null, _txidInput: c._payoutTxid || ''})"
-                              :disabled="!c.trc20_address || ((c.balance_usdt + (c.pending_usdt || 0)) < 0.01)"
-                              style="background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; font-size: 10px; padding: 4px 10px;">
-                        💸 Выплатить
+                      <!-- Сумма для выплаты — редактируется. Дефолт: balance+pending (или 0 если минус). -->
+                      <input type="number" step="0.01" min="0"
+                             :value="c._payAmount != null ? c._payAmount : Math.max(0, (c.balance_usdt || 0) + (c.pending_usdt || 0)).toFixed(2)"
+                             @input="c._payAmount = $event.target.value"
+                             style="width: 80px; padding: 3px 6px; background: rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.1); border-radius: 3px; font-size: 11px;"
+                             title="Сумма USDT к выплате (можно изменить вручную)"
+                             placeholder="USDT">
+                      <button class="btn"
+                              @click="payoutOutkupRow({chat_id: c.chat_id, partner_name: c.partner_name, partner_username: c.partner_username, trc20_address: c.trc20_address, amount_usdt: Number(c._payAmount != null ? c._payAmount : ((c.balance_usdt||0) + (c.pending_usdt||0))), pending: false, pending_id: null, _txidInput: c._payoutTxid || '', force: ((c.balance_usdt||0) + (c.pending_usdt||0)) < 0.01})"
+                              :disabled="!c.trc20_address || Number(c._payAmount != null ? c._payAmount : ((c.balance_usdt||0) + (c.pending_usdt||0))) < 0.01"
+                              :style="((c.balance_usdt||0) + (c.pending_usdt||0)) < 0.01 ? 'background: linear-gradient(135deg,#f59e0b,#d97706); color:#0a0e1a; font-weight: 700; font-size: 10px; padding: 4px 10px;' : 'background: linear-gradient(135deg,#22c55e,#16a34a); color:#0a0e1a; font-weight: 700; font-size: 10px; padding: 4px 10px;'"
+                              :title="((c.balance_usdt||0) + (c.pending_usdt||0)) < 0.01 ? 'Баланс ≤ 0 (переплата прошлых выплат). Force-выплата — будет двойное подтверждение.' : 'Выплатить указанную сумму'">
+                        <span x-show="((c.balance_usdt||0) + (c.pending_usdt||0)) >= 0.01">💸 Выплатить</span>
+                        <span x-show="((c.balance_usdt||0) + (c.pending_usdt||0)) < 0.01">⚠️ Force-выплата</span>
                       </button>
                     </div>
                   </td>
@@ -13120,6 +13130,17 @@ function jarvis() {
       const amount = Number(row.amount_usdt || 0);
       if (amount < 0.01) { alert('Нечего выплачивать'); return; }
       const txid = (row._txidInput || '').trim();
+      // FORCE-режим: баланс уже ≤ 0 (переплата прошлых выплат), но менеджер
+      // всё равно хочет проплатить новую заявку — двойное подтверждение.
+      if (row.force) {
+        const warn = `⚠️ ВНИМАНИЕ — Force-выплата\n\n`
+          + `Баланс клиента ≤ 0 USDT (по истории ему уже переплачено).\n`
+          + `Ты собираешься выплатить ЕЩЁ ${amount.toFixed(2)} USDT.\n\n`
+          + `Это валидно если есть НОВАЯ заявка, не учтённая в балансе. `
+          + `Иначе — двойная выплата. Уверен?`;
+        if (!confirm(warn)) return;
+        if (!confirm(`Подтверди ещё раз: выплатить ${amount.toFixed(2)} USDT клиенту chat=${row.chat_id}?`)) return;
+      }
       const msg = txid
         ? `Выплатить ${amount.toFixed(2)} USDT с TXID ${txid.slice(0,20)}…?`
         : `Выплатить ${amount.toFixed(2)} USDT БЕЗ TXID?`;

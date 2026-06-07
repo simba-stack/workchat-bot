@@ -2,6 +2,58 @@
 
 > Живой документ. Обновляется после каждой задачи в сессии Claude — чтобы при крэше или новой сессии всё было на руках.
 
+## 🆕 Июнь-7 — Откупы P2P (этапы 1-8) + CRM критический фикс
+
+**Релиз `c2c288f`-`<hotfix>` — Откупы P2P полный пайплайн + CRM-бот реанимация после многочасового downtime.**
+
+### Откупы Этап 1-4 (4 подраздела, балансы, Уточнить адрес, Tronscan)
+- JARVIS Откупы: 4 субвкладки — Заявки / Стата / Заявки на выплаты / Балансы клиентов
+- `storage._compute_client_balance(chat_id)` — единый источник истины (chat-стата = JARVIS, без расхождений)
+- Разделение `paid` vs `pending` — раньше задваивалось, баланс уходил в минус
+- `outkup_address_requests` — flow «Уточнить адрес» (2-step confirm в TG-чате клиента через `handle_outkup_address_reply`)
+- `outkup_client_wallets` — сохранение TRC20-адреса клиента (правится прямо в строке таблицы)
+- API `POST /api/outkup/client_payouts/{id}/mark_paid` → enqueue `__outkup_payout_done <id>` → userbot шлёт клиенту Tronscan-ссылку
+- `outkupPayoutRows()` — единая таблица К выплате: pending + clients-with-balance без дублей
+- Отдельная кнопка ❌ Отменить для pending-запросов
+
+### Откупы Этап 5-8 (формула ЗП, маржа по периодам, таймер реквизита, продление)
+- `get_outkup_full_stats` расширен: `margin_by_day`, `margin_by_week`, `margin_by_month`, `margin_by_client` (отсортировано), `manager_salary_pct`
+- Формула маржи: `vol_usdt × (pct_fee − manager_salary_pct) / 100` (по умолчанию 3.5% − 1.5% = 2%)
+- В Стате — карточка «💼 Формула» (правка pct_fee + manager_salary_pct) + 4 таблицы маржи (день/неделя/месяц/клиент)
+- `add_outkup_payment(duration_minutes=...)` → `expires_at`, `warning_sent`
+- Поле «мин» рядом с Сумма ₽ в форме выдачи реквизита
+- Countdown timer под payment (`formatTimeLeft`): зелёный, за 5 мин до конца — красный
+- `_outkup_timer_loop` background task в bot.py каждые 30 сек: предупреждение клиенту за 5 мин, уведомление «истёк»
+- `outkup_extension_requests` модель + `handle_outkup_extension_request` (parses "хочу продлить на N минут")
+- В JARVIS под payment — жёлтый блок с кнопками ✅ Одобрить +N мин / ❌ Отклонить
+- API `POST /api/outkup/extension_requests/{id}/decide` + userbot уведомляет клиента о решении
+
+### CRM-бот критический фикс — `IndentationError` killed startup
+- **Симптом:** `/clients` молчит. AI-userbot тоже молчит. CRM-команды все мертвы. Telegram update вообще не доходит до CRM aiogram dispatcher.
+- **Корень:** в `crm_bot.py:6505-6525` висел **мёртвый дубликат функции `cmd_tron_balance`** — copy-paste'нутый блок БЕЗ `async def` и `@router.message`, прямо в module scope с битыми отступами. Python падал с `IndentationError: unindent does not match any outer indentation level`. CRM-модуль не загружался много часов.
+- **Где видно:** Railway → Deploy Logs → `[WARNING] __main__: CRM bot module load failed: unindent does not match any outer indentation level (crm_bot.py, line 6511)`. Только в логах Railway. Локально `python -c "import ast..."` мог не показывать из-за mount-кеша.
+- **Урок:** при «бот не реагирует» — **сначала Railway-логи**, потом Privacy mode/middleware/handlers. Все симптомы (молчание, отсутствие в логах handler'а) ровно совпадают с тем что бот crash на старте.
+- **Урок 2:** периодически в crm_bot.py / userbot.py / api.py всплывают orphan-блоки от старых copy-paste. Перед Edit на эти файлы — читать ~20 строк вокруг места, искать дубликаты.
+
+### Дополнительные фиксы CRM в этой сессии
+- **AI больше не реагирует на slash-команды** — добавлен skip в `_handle_ai_message` (raw_text.startswith("/")). Раньше `/clients` падал в AI welcome + `(silence)` плейсхолдер.
+- **(silence) фильтр** в `brain.py._META_SILENCE_PATTERNS`: добавлены `(silence)`, `[silence]`, `<silence>`, `*silence*`, `молчание.`, `(тишина)` — AI выдавал буквальный текст вместо пустой строки.
+- **Пустой reply без hint** — если фильтр зачистил AI-ответ, hint «если что напишите Ассистент» больше не отправляется одиночно.
+- **Auto-delete служебных СМС-сообщений** (helper `_schedule_delete` + `_send_ephemeral`) — «📩 Предоставьте СМС-код», «✅ Код XXXX отправлен на обработку», «✅ Готовность подтверждена», «📩 Пришлите СМС-код следующим сообщением» — все исчезают через 25-30 сек после доставки.
+- **Дубль карточки ЛК** — добавлена idempotency в `_create_single_lk_card`: проверка `lk.lk_card_id` + по `deal_id+bank`. Двойной триггер (TG-кнопка + JARVIS) возвращает существующий card_id вместо создания второго.
+- **Цена 0$ в карточке** — если в `pricing[bank]` нет цены, используется **400$** (минимум). Cap **650$** (максимум). Clamp всегда в диапазоне.
+- **AI больше не пишет «мы продаём»** — knowledge/deals.md + scenarios.md переписаны: «МЫ ПОКУПАЕМ ЛК у клиента». Добавлено правило торга 400→650 шаг +50$, **внутреннее, клиенту НЕ озвучивать** (иначе все попросят максимум).
+- **debug-логирование `/clients`** — `[/clients] received chat_id=... is_credit=... chat_info=...` + не silent-удалять команду до того как ответ доставлен (двойной fallback reply→send_message).
+
+### Mount-десинк / Cowork ограничения (известное)
+- Linux mount-копия в Cowork периодически отстаёт от Windows-side на сотни строк.
+- `git diff/status` через bash может показывать обрезанный файл — push с такого состояния = broken.
+- **Решение:** все коммиты делать через PowerShell на стороне SIMBA. Read tool на Windows-абсолютном пути показывает реальное состояние.
+- **Bypass git index.lock:** Linux mount не может удалить `.git/index.lock` (Permission denied). SIMBA в PowerShell: `Remove-Item -Force .git\index.lock -ErrorAction SilentlyContinue`.
+- **Доступ к Railway через Chrome MCP** работает — `list_connected_browsers` → `select_browser` → `navigate` → читать логи прямо из браузера. Использовать когда SIMBA говорит «сам смотри логи».
+
+---
+
 **Снимок:** обновлено **2026-05-31** (ночная сессия Claude автономно пока SIMBA спит).
 **Что в проде сейчас (Railway active deploy):** все этапы кредитования + КУЦ MVP без AI + async-safe storage + AsyncPersistentFSMStorage + welcome v2 (multi-track) + native scroll fix + рассылка через инвайт-бот + автоматизация бухгалтерии v2 + Tron auto-payouts.
 
