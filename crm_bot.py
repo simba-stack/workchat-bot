@@ -3722,15 +3722,19 @@ def _schedule_delete(msg, after: int = 25):
         pass
 
 
-async def _send_ephemeral(chat_id: int, text: str, *, reply_markup=None, delete_after: int = 25, parse_mode: str = "HTML"):
+async def _send_ephemeral(bot_inst, chat_id: int, text: str, *, reply_markup=None, delete_after: int = 25, parse_mode: str = "HTML"):
     """Отправить служебное сообщение в чат и удалить через delete_after секунд.
 
     Используется для СМС-флоу: «Предоставьте код», «Код отправлен на обработку»,
     «Готовность подтверждена», «Запрос СМС-кода для перевязки» и пр. — чтобы
-    не загрязнять чат после того, как операция выполнена.
-    Возвращает Message.
+    не загрязнять чат после того, как операция выполнена. Возвращает Message.
+
+    КРИТИЧНО: ВСЕГДА передавать `bot` явно первым параметром. Внутри
+    callback handler — `call.message.bot`. Внутри обычной функции с
+    параметром `bot` — `bot`. Глобального `bot` в crm_bot.py НЕТ (он живёт
+    внутри `crm_main()`), поэтому без явной передачи будет NameError.
     """
-    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    msg = await bot_inst.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     _schedule_delete(msg, delete_after)
     return msg
 
@@ -3855,7 +3859,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             await call.answer("📩 Запрос отправлен клиенту")
         except Exception as e:
@@ -3882,7 +3886,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             await call.answer("📩 Запрошен код входа")
         except Exception as e:
@@ -3908,7 +3912,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             await call.answer("📩 Запрошен код перевязки")
         except Exception as e:
@@ -4099,7 +4103,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
             kb = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
             ]])
-            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             result = "📩 Запрос готовности отправлен клиенту"
         elif stage == "ready_confirmed":
@@ -4114,7 +4118,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:login",
                 ),
             ]])
-            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             result = "📩 Запрошен код входа"
         elif stage == "login_received":
@@ -4129,7 +4133,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:perevyaz",
                 ),
             ]])
-            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             result = "📩 Запрошен код перевязки"
         elif stage == "perevyaz_received":
