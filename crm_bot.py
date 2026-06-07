@@ -1431,37 +1431,82 @@ async def cmd_credit_chat_capture(message: Message, matched=None):
 
 @router.message(Command("clients"))
 async def cmd_clients(message: Message):
+    # ⚡ DEBUG: жёсткое логирование — чтобы видеть в Railway что handler сработал
+    try:
+        _u = message.from_user
+        logger.info(
+            "[/clients] received chat_id=%s chat_type=%s from_user=%s @%s msg_id=%s",
+            message.chat.id, message.chat.type,
+            _u.id if _u else "?", _u.username if _u else "?",
+            message.message_id,
+        )
+    except Exception:
+        pass
     # === CREDIT branch: если чат закреплён за кредитованием — другой flow ===
-    if message.chat.type != "private" and crm_storage.is_credit_chat(message.chat.id):
-        await _safe_delete(message.bot, message.chat.id, message.message_id)
+    try:
+        is_credit = (message.chat.type != "private"
+                     and crm_storage.is_credit_chat(message.chat.id))
+    except Exception as e:
+        logger.warning("[/clients] is_credit_chat crash: %s", e)
+        is_credit = False
+    logger.info("[/clients] is_credit=%s", is_credit)
+    if is_credit:
         credit_chat = crm_storage.get_credit_chat(message.chat.id) or {}
         manager = credit_chat.get("manager_username") or ""
         if not manager:
-            await ephemeral(
-                message,
-                "❌ Чат помечен как кредитный, но менеджер не назначен.\n"
-                "Выполни заново: «Ассистент возьми этот чат под кредитование - менеджер @ник»"
-            )
+            # ⚠️ НЕ удаляем команду до того как ответили — чтоб юзер увидел ошибку
+            try:
+                await message.reply(
+                    "❌ Чат помечен как кредитный, но менеджер не назначен.\n"
+                    "Выполни заново: «Ассистент возьми этот чат под кредитование - менеджер @ник»"
+                )
+            except Exception as e:
+                logger.warning("[/clients] credit no-manager reply failed: %s", e)
             return
+        await _safe_delete(message.bot, message.chat.id, message.message_id)
         await _show_credit_clients(message, manager)
         return
     # === CRM branch (оригинал — поставщики) ===
     if message.chat.type == "private":
         if not await _require_pride(message):
+            logger.info("[/clients] private: not pride-registered")
             return
     owner = await _ensure_owner(message)
     if not owner:
+        logger.warning("[/clients] _ensure_owner returned None — пользователь без from_user?")
+        try:
+            await message.reply("❌ Не могу определить тебя в системе. Напиши /start.")
+        except Exception:
+            pass
         return
     if message.chat.type != "private":
-        await _safe_delete(message.bot, message.chat.id, message.message_id)
-        chat_info = crm_storage.get_crm_chat(message.chat.id)
+        try:
+            chat_info = crm_storage.get_crm_chat(message.chat.id)
+        except Exception as e:
+            logger.warning("[/clients] get_crm_chat crash: %s", e)
+            chat_info = None
+        logger.info("[/clients] chat_info=%s", bool(chat_info))
         if not chat_info:
-            await ephemeral(
-                message,
-                "❌ Эта группа не закреплена за партнёром.\n"
-                "Владелец должен использовать /crm_register_chat",
-            )
+            # ⚠️ НЕ удаляем команду — иначе юзер видит пустоту вместо ошибки.
+            # Отвечаем reply'ем напрямую (без ephemeral который удаляет себя).
+            try:
+                await message.reply(
+                    "❌ Эта группа не закреплена за партнёром.\n"
+                    "Владелец должен использовать /crm_register_chat в этой группе."
+                )
+            except Exception as e:
+                logger.warning("[/clients] reply 'not registered' failed: %s — fallback send_message", e)
+                try:
+                    await message.bot.send_message(
+                        message.chat.id,
+                        "❌ Эта группа не закреплена за партнёром.\n"
+                        "Владелец должен использовать /crm_register_chat в этой группе."
+                    )
+                except Exception as e2:
+                    logger.error("[/clients] send_message fallback also failed: %s", e2)
             return
+        # Чат зарегистрирован — теперь можно удалить команду
+        await _safe_delete(message.bot, message.chat.id, message.message_id)
         if chat_info.get("is_admin") or chat_info.get("is_password"):
             await ephemeral(message, "ℹ Это служебный чат.")
             return
