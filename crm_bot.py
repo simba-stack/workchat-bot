@@ -3661,6 +3661,35 @@ def _client_lk_anketa(drop: dict, lk: dict) -> str:
     return f"ФИО: <b>{fio}</b>\nБанк: <b>{bank}</b>"
 
 
+def _schedule_delete(msg, after: int = 25):
+    """Запланировать удаление сообщения через after секунд (best-effort)."""
+    if not msg:
+        return
+    async def _delayed():
+        try:
+            await asyncio.sleep(max(5, int(after)))
+            await msg.delete()
+        except Exception:
+            pass
+    try:
+        asyncio.create_task(_delayed())
+    except Exception:
+        pass
+
+
+async def _send_ephemeral(chat_id: int, text: str, *, reply_markup=None, delete_after: int = 25, parse_mode: str = "HTML"):
+    """Отправить служебное сообщение в чат и удалить через delete_after секунд.
+
+    Используется для СМС-флоу: «Предоставьте код», «Код отправлен на обработку»,
+    «Готовность подтверждена», «Запрос СМС-кода для перевязки» и пр. — чтобы
+    не загрязнять чат после того, как операция выполнена.
+    Возвращает Message.
+    """
+    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    _schedule_delete(msg, delete_after)
+    return msg
+
+
 def _resolve_work_chat(drop: dict = None, lk: dict = None, owner: dict = None) -> int:
     """Резолвит актуальный work_chat_id для отправки сообщения клиенту.
 
@@ -3781,7 +3810,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await bot.send_message(target_chat, text, reply_markup=kb)
+            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             await call.answer("📩 Запрос отправлен клиенту")
         except Exception as e:
@@ -3808,7 +3837,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await bot.send_message(target_chat, text, reply_markup=kb)
+            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             await call.answer("📩 Запрошен код входа")
         except Exception as e:
@@ -3834,7 +3863,7 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await bot.send_message(target_chat, text, reply_markup=kb)
+            await _send_ephemeral(target_chat, text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             await call.answer("📩 Запрошен код перевязки")
         except Exception as e:
@@ -3876,12 +3905,35 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
         try:
             pay_line = _resolve_payment_method_line(owner, drop)
-            handoff = (
-                f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                f"📋 Карточка: #{card_id or '—'}\n"
-                f"💳 Метод оплаты: {pay_line}\n\n"
-                f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
-            )
+            # PRICE NEGOTIATION: если карточка создана без согласованной цены —
+            # тегаем клиента в чате и предлагаем стартовую цену для торга.
+            try:
+                card_obj = crm_storage.get_lk_card(card_id) if (card_id and hasattr(crm_storage, "get_lk_card")) else None
+                card_price = float(card_obj.get("price_usdt") or 0) if card_obj else 0
+            except Exception:
+                card_price = 0
+            client_uname = (owner.get("username") or "").lstrip("@")
+            tag = f"@{client_uname}" if client_uname else "клиент"
+            if card_price > 0 and (crm_storage.state.get("pricing") or {}).get(bank.upper()):
+                # Цена была в прайсе — стандартный handoff
+                handoff = (
+                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                    f"📋 Карточка: #{card_id or '—'}\n"
+                    f"💰 Цена: <b>{card_price:.2f}$</b>\n"
+                    f"💳 Метод оплаты: {pay_line}\n\n"
+                    f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
+                )
+            else:
+                # Цены не было — предлагаем согласовать (стартовая = card_price, обычно дефолт min)
+                handoff = (
+                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                    f"📋 Карточка: #{card_id or '—'}\n"
+                    f"💳 Метод оплаты: {pay_line}\n\n"
+                    f"{tag}, цена за ЛК <b>{bank}</b> ещё не согласована.\n"
+                    f"💰 Предлагаемая стартовая цена: <b>{card_price:.2f}$</b>.\n"
+                    f"<i>Подтвердите эту цену или предложите свою — обсудим. "
+                    f"Ассистент учтёт ваше предложение, и финальную цифру утвердит менеджер.</i>"
+                )
             await _notify_work_chat(bot, owner, handoff)
         except Exception:
             pass
@@ -3907,7 +3959,11 @@ async def cb_client_ready(call: CallbackQuery):
     except Exception:
         pass
     try:
-        await call.message.reply("✅ Готовность подтверждена. Ждите запрос кода.")
+        try:
+            _ack_msg = await call.message.reply("✅ Готовность подтверждена. Ждите запрос кода.")
+            _schedule_delete(_ack_msg, 25)
+        except Exception:
+            pass
     except Exception:
         pass
     await _post_or_update_sms_tracker(call.message.bot, droplk_id)
@@ -3933,10 +3989,11 @@ async def cb_client_givecode(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     try:
-        await call.message.reply(
+        _ask_msg = await call.message.reply(
             "📩 <b>Пришлите СМС-код следующим сообщением</b>\n"
             "<i>(только цифры)</i>"
         )
+        _schedule_delete(_ask_msg, 30)
     except Exception:
         pass
 
@@ -3984,7 +4041,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
             kb = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
             ]])
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             result = "📩 Запрос готовности отправлен клиенту"
         elif stage == "ready_confirmed":
@@ -3999,7 +4056,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:login",
                 ),
             ]])
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             result = "📩 Запрошен код входа"
         elif stage == "login_received":
@@ -4014,7 +4071,7 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:perevyaz",
                 ),
             ]])
-            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb)
+            await _send_ephemeral(owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             result = "📩 Запрошен код перевязки"
         elif stage == "perevyaz_received":
@@ -4044,12 +4101,30 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
             )
             try:
                 pay_line = _resolve_payment_method_line(owner, drop)
-                handoff = (
-                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                    f"📋 Карточка: #{card_id or '—'}\n"
-                    f"💳 Метод оплаты: {pay_line}\n\n"
-                    f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
-                )
+                try:
+                    card_obj = crm_storage.get_lk_card(card_id) if (card_id and hasattr(crm_storage, "get_lk_card")) else None
+                    card_price = float(card_obj.get("price_usdt") or 0) if card_obj else 0
+                except Exception:
+                    card_price = 0
+                client_uname = (owner.get("username") or "").lstrip("@")
+                tag = f"@{client_uname}" if client_uname else "клиент"
+                if card_price > 0 and (crm_storage.state.get("pricing") or {}).get((bank or "").upper()):
+                    handoff = (
+                        f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                        f"📋 Карточка: #{card_id or '—'}\n"
+                        f"💰 Цена: <b>{card_price:.2f}$</b>\n"
+                        f"💳 Метод оплаты: {pay_line}\n\n"
+                        f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
+                    )
+                else:
+                    handoff = (
+                        f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                        f"📋 Карточка: #{card_id or '—'}\n"
+                        f"💳 Метод оплаты: {pay_line}\n\n"
+                        f"{tag}, цена за ЛК <b>{bank}</b> ещё не согласована.\n"
+                        f"💰 Предлагаемая стартовая цена: <b>{card_price:.2f}$</b>.\n"
+                        f"<i>Подтвердите цену или предложите свою — обсудим.</i>"
+                    )
                 await _notify_work_chat(bot, owner, handoff)
             except Exception:
                 pass
@@ -4193,12 +4268,13 @@ async def handle_sms_code(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
-    # Подтверждение в чат клиента
+    # Подтверждение в чат клиента — auto-delete через 25 сек, чтобы не засорять чат
     try:
-        await message.bot.send_message(
+        _ack = await message.bot.send_message(
             message.chat.id,
             f"✅ Код <b>{code}</b> отправлен на обработку. Ожидайте.",
         )
+        _schedule_delete(_ack, 25)
     except Exception:
         pass
     # Уведомление в админ-чат CRM с кодом + кнопки управления.
@@ -4415,9 +4491,51 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         return None
     if owner is None:
         owner = crm_storage.get_crm_owner(drop.get("owner_id", "")) or {}
+    # IDEMPOTENCY: если карточка для этого droplk_id уже создана — не дублируем.
+    # Иначе при двойном тригере (TG-кнопка + JARVIS) получались две одинаковые карточки.
+    try:
+        droplk_id = lk.get("droplk_id") or ""
+        existing_card_id = lk.get("lk_card_id") or ""
+        if existing_card_id:
+            logger.info(
+                "post-perevyaz lk_card: SKIP duplicate, droplk=%s already has card=%s",
+                droplk_id, existing_card_id,
+            )
+            return existing_card_id
+        # Дополнительная защита: проверяем по deal_id + bank в lk_cards
+        deal = lk.get("deal") or ""
+        if deal and hasattr(crm_storage, "list_lk_cards"):
+            for c in (crm_storage.list_lk_cards() or {}).values():
+                if c.get("deal_id") == deal and (c.get("bank") or "").upper() == (lk.get("bank") or "").upper():
+                    cid = c.get("card_id") or c.get("id")
+                    logger.info("post-perevyaz lk_card: SKIP duplicate by deal=%s bank=%s found=%s", deal, lk.get("bank"), cid)
+                    try:
+                        await crm_storage.update_drop_lk_any(droplk_id, lk_card_id=cid)
+                    except Exception:
+                        pass
+                    return cid
+    except Exception as e:
+        logger.warning("idempotency check failed: %s", e)
     pricing = crm_storage.state.get("pricing") or {}
     bank = (lk.get("bank") or "").upper()
     price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
+    # PRICE NEGOTIATION: если в pricing[bank] нет цены — берём дефолт из settings
+    # (или 1.0) и помечаем карточку нуждающейся в согласовании. Bot тегнет
+    # клиента в work-чате и попросит согласовать. Менеджер сможет вручную
+    # обновить цену в JARVIS, либо клиент пришлёт своё контр-предложение.
+    needs_price_negotiation = False
+    if price <= 0:
+        try:
+            settings_pricing = (crm_storage.state.get("settings") or {}).get("pricing") or {}
+            default_price = float(settings_pricing.get("default_min_usdt") or 1.0)
+        except Exception:
+            default_price = 1.0
+        price = default_price
+        needs_price_negotiation = True
+        logger.info(
+            "post-perevyaz lk_card: pricing[%s] is empty → using default=%.2f$, will tag client",
+            bank, default_price,
+        )
     # Авто-выбор метода: сначала смотрим client_preferences по @username
     # поставщика; если пусто — дефолт GUARANTOR_AFTER_WORK.
     supplier_uname = (owner.get("username") or "").lstrip("@").strip()
@@ -4446,6 +4564,13 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             "post-perevyaz lk_card: drop=%s crm_lk=%s → lk_card=%s",
             drop.get("drop_id"), lk.get("droplk_id"), card_id,
         )
+        # IDEMPOTENCY: сохраняем lk_card_id в drop_lk чтобы повторный вызов не создавал дубль
+        try:
+            droplk_id_save = lk.get("droplk_id") or ""
+            if droplk_id_save and card_id:
+                await crm_storage.update_drop_lk_any(droplk_id_save, lk_card_id=card_id)
+        except Exception:
+            pass
         return card_id
     except Exception as e:
         logger.warning("create single lk_card failed: %s", e)
@@ -6294,6 +6419,27 @@ async def cmd_tron_balance(message: Message):
     try:
         from tron_payouts import is_configured, get_hot_wallet_balance, get_hot_wallet_address
         if not is_configured():
+            await message.reply(
+                "❌ TRON не сконфигурирован.\n"
+                "Нужны env vars: <code>TRON_PRIVATE_KEY</code>, <code>TRON_HOT_WALLET_ADDRESS</code>."
+            )
+            return
+        addr = get_hot_wallet_address()
+        bal = await get_hot_wallet_balance()
+        if bal.get("error"):
+            await message.reply(f"❌ {bal.get('error')}")
+            return
+        await message.reply(
+            f"💼 <b>Hot wallet</b>\n"
+            f"Адрес: <code>{addr}</code>\n\n"
+            f"USDT: <b>{bal.get('usdt', 0):.4f}</b>\n"
+            f"TRX: <b>{bal.get('trx', 0):.4f}</b> (для network fee)\n\n"
+            f"<a href='https://tronscan.org/#/address/{addr}'>📊 Tronscan</a>",
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        await message.reply(f"❌ {e}")
+    if not is_configured():
             await message.reply(
                 "❌ TRON не сконфигурирован.\n"
                 "Нужны env vars: <code>TRON_PRIVATE_KEY</code>, <code>TRON_HOT_WALLET_ADDRESS</code>."
