@@ -4519,23 +4519,27 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
     pricing = crm_storage.state.get("pricing") or {}
     bank = (lk.get("bank") or "").upper()
     price = float(pricing.get(bank, drop.get("price_usdt", 0)) or 0)
-    # PRICE NEGOTIATION: если в pricing[bank] нет цены — берём дефолт из settings
-    # (или 1.0) и помечаем карточку нуждающейся в согласовании. Bot тегнет
-    # клиента в work-чате и попросит согласовать. Менеджер сможет вручную
-    # обновить цену в JARVIS, либо клиент пришлёт своё контр-предложение.
+    # PRICE NEGOTIATION:
+    # • Cap всегда 650$ — выше не торгуемся.
+    # • Если в pricing[bank] есть цена — clamp её в [min_pricing, 650] и используем.
+    # • Если bank в pricing нет — стартуем с МИНИМАЛЬНОЙ цены из всего прайса
+    #   (а не с фикс 1$) и шлём клиенту запрос согласования.
+    PRICE_CAP_USDT = 650.0
     needs_price_negotiation = False
+    # Считаем min из прайса (только положительные значения)
+    pricing_positive = [float(v) for v in (pricing.values() if isinstance(pricing, dict) else []) if (v and float(v) > 0)]
+    min_from_pricing = min(pricing_positive) if pricing_positive else 50.0
     if price <= 0:
-        try:
-            settings_pricing = (crm_storage.state.get("settings") or {}).get("pricing") or {}
-            default_price = float(settings_pricing.get("default_min_usdt") or 1.0)
-        except Exception:
-            default_price = 1.0
-        price = default_price
+        price = min_from_pricing
         needs_price_negotiation = True
         logger.info(
-            "post-perevyaz lk_card: pricing[%s] is empty → using default=%.2f$, will tag client",
-            bank, default_price,
+            "post-perevyaz lk_card: pricing[%s] empty → start from min_from_pricing=%.2f$, will tag client",
+            bank, min_from_pricing,
         )
+    # Clamp к потолку 650$
+    if price > PRICE_CAP_USDT:
+        logger.warning("price for %s was %.2f, capping at %.2f", bank, price, PRICE_CAP_USDT)
+        price = PRICE_CAP_USDT
     # Авто-выбор метода: сначала смотрим client_preferences по @username
     # поставщика; если пусто — дефолт GUARANTOR_AFTER_WORK.
     supplier_uname = (owner.get("username") or "").lstrip("@").strip()
