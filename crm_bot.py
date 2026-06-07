@@ -6502,24 +6502,4 @@ async def cmd_tron_balance(message: Message):
         )
     except Exception as e:
         await message.reply(f"❌ {e}")
-    if not is_configured():
-            await message.reply(
-                "❌ TRON не сконфигурирован.\n"
-                "Нужны env vars: <code>TRON_PRIVATE_KEY</code>, <code>TRON_HOT_WALLET_ADDRESS</code>."
-            )
-            return
-        addr = get_hot_wallet_address()
-        bal = await get_hot_wallet_balance()
-        if bal.get("error"):
-            await message.reply(f"❌ {bal.get('error')}")
-            return
-        await message.reply(
-            f"💼 <b>Hot wallet</b>\n"
-            f"Адрес: <code>{addr}</code>\n\n"
-            f"USDT: <b>{bal.get('usdt', 0):.4f}</b>\n"
-            f"TRX: <b>{bal.get('trx', 0):.4f}</b> (для network fee)\n\n"
-            f"<a href='https://tronscan.org/#/address/{addr}'>📊 Tronscan</a>",
-            disable_web_page_preview=True,
-        )
-    except Exception as e:
-        await message.reply(f"❌ {e}")
+
