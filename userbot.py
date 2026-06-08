@@ -9737,6 +9737,85 @@ class UserbotService:
             except Exception as e:
                 return f"⚠️ outkup_request_new_receipt: {e}"
 
+        # ===== __wipe_user @username =====
+        # Полностью выкидываем юзера из проекта: из storage (workers,
+        # worker_roles, tg_users_with_roles, операторы welcome v2,
+        # outsource_managers, outkup_partners по username) + kick из
+        # всех managed_chats где userbot админ. Использовать с ОСТОРОЖНОСТЬЮ —
+        # это не отменяемая операция.
+        m = re.match(r"^__wipe_user\s+@?(\w+)\s*$", text, re.I)
+        if m:
+            uname = m.group(1).lower().lstrip("@")
+            if not uname or len(uname) < 2:
+                return f"⚠️ wipe_user: бессмысленный username"
+            removed = {"workers": 0, "roles": 0, "operators": 0, "chats_kicked": 0, "chats_failed": 0}
+            try:
+                # 1) Storage cleanup
+                async with storage._lock:
+                    state = storage.state
+                    # workers
+                    workers = state.get("workers") or {}
+                    for k in list(workers.keys()):
+                        if k.lstrip("@").lower() == uname:
+                            del workers[k]
+                            removed["workers"] += 1
+                    # worker_roles
+                    wr = state.get("worker_roles") or {}
+                    if uname in wr:
+                        del wr[uname]
+                        removed["roles"] += 1
+                    # tg_users_with_roles
+                    tur = state.get("tg_users_with_roles") or {}
+                    for tg_id, info in list(tur.items()):
+                        if (info.get("username") or "").lstrip("@").lower() == uname:
+                            del tur[tg_id]
+                    # Welcome v2 операторы
+                    for k in ("voip_operator_username", "debet_operator_username"):
+                        v = (state.get(k) or "").lstrip("@").lower()
+                        if v == uname:
+                            state[k] = ""
+                            removed["operators"] += 1
+                    # outsource_managers
+                    osm = state.get("outsource_managers") or {}
+                    for k in list(osm.keys()):
+                        if k.lstrip("@").lower() == uname:
+                            del osm[k]
+                    await storage._save_unlocked()
+                # 2) Kick из всех managed_chats где userbot админ
+                managed = (storage.state.get("managed_chats") or {})
+                for chat_id_str, info in list(managed.items()):
+                    try:
+                        cid = int(chat_id_str)
+                    except Exception:
+                        continue
+                    try:
+                        # Резолвим пользователя в чате
+                        target = await self._resolve_chat_target(cid)
+                        try:
+                            ent = await self.client.get_entity(f"@{uname}")
+                            # kick через edit_admin → user.banned via ChannelBannedRights
+                            from telethon.tl.functions.channels import EditBannedRequest
+                            from telethon.tl.types import ChatBannedRights
+                            rights = ChatBannedRights(
+                                until_date=None,
+                                view_messages=True,
+                            )
+                            await self.client(EditBannedRequest(target, ent, rights))
+                            removed["chats_kicked"] += 1
+                        except Exception:
+                            removed["chats_failed"] += 1
+                    except Exception:
+                        removed["chats_failed"] += 1
+                return (
+                    f"✅ wipe_user @{uname}: "
+                    f"workers={removed['workers']} roles={removed['roles']} "
+                    f"operators={removed['operators']} kicked={removed['chats_kicked']} "
+                    f"failed={removed['chats_failed']}"
+                )
+            except Exception as e:
+                logger.exception("wipe_user @%s failed", uname)
+                return f"⚠️ wipe_user @{uname}: {e}"
+
         # ===== __outkup_extension_decided <request_id> =====
         m = re.match(r"^__outkup_extension_decided\s+(\S+)\s*$", text, re.I)
         if m:

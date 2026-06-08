@@ -244,6 +244,23 @@ balance_usdt    = max(0, total_usdt_due - total_usdt_paid - pending_usdt)
 
 ---
 
+### 15. @pride_debet01 — НЕ наш человек (выкинут 7 июня 2026)
+
+⚠️ **НИКОГДА** не возвращать `@pride_debet01` в код/knowledge/storage. Это был левый человек, не работник проекта. Удалён:
+- `storage.get_debet_operator_username` дефолт изменён с `"pride_debet01"` → `""` (пусто)
+- `knowledge/about.md`: убрана строка про @pride_debet01 как менеджера дебета. Заменено на «менеджер назначается в JARVIS → Settings → Welcome v2 → debet_operator_username».
+- Welcome v2 при выборе «Дебет» больше НЕ приглашает никого автоматически пока в Settings не выставлен новый username
+
+Если в storage state остались артефакты (workers, worker_roles, operators, kicks) — использовать dashboard-команду `__wipe_user @username` (см. ниже). Команда чистит:
+- `state.workers[@uname]`
+- `state.worker_roles[uname]`
+- `state.tg_users_with_roles[tg_id]` где username совпадает
+- `state.voip_operator_username` / `debet_operator_username` если равны
+- `state.outsource_managers[uname]`
+- Kick из всех `managed_chats` через Telethon `EditBannedRequest`
+
+Запустить из JARVIS → Команда в чат: введи в обычном внутреннем чате с PRIDE ASSISTANT строку `__wipe_user @pride_debet01` (через storage.enqueue_dashboard_command если есть API, либо вручную через DevTools).
+
 ### 14. Auto-delete служебных СМС-сообщений — ТОЛЬКО ack-подтверждения
 
 **🔴 КРИТИЧНО:** сообщения **с инлайн-кнопкой** или **с инструкцией для клиента** удалять auto-delete'ом **НЕЛЬЗЯ**. Иначе клиент не успевает нажать → пишет код в чат без FSM → код игнорируется → SIMBA в шоке «коды не вставляются в бота».

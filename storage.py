@@ -1316,7 +1316,10 @@ class Storage:
         return (self.state.get("voip_operator_username") or "pride_voip01").lstrip("@")
 
     def get_debet_operator_username(self) -> str:
-        return (self.state.get("debet_operator_username") or "pride_debet01").lstrip("@")
+        # @pride_debet01 был левым человеком — выкинут из проекта 7 июня 2026.
+        # Дефолт пустой: пока новый дебет-оператор не назначен в Settings —
+        # welcome-flow «Дебет» НЕ должен приглашать никого левого.
+        return (self.state.get("debet_operator_username") or "").lstrip("@")
 
     async def set_voip_operator_username(self, username: str):
         async with _lock:
