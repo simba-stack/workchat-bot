@@ -669,3 +669,254 @@ async def handle_outkup_payout_request(event, userbot, storage) -> bool:
     logger.info("outkup: payout request chat=%s amount=%.2f addr=%s",
                 event.chat_id, balance, address)
     return True
+
+
+# ====================================================================
+# Команда «очистить стату» / «обнули стату» — админская
+# ====================================================================
+#
+# Архивирует текущую активность дня (все заявки/выплаты сегодняшнего дня)
+# в outkup_daily_archive, потом обнуляет счётчики клиента и его pending/paid
+# выплаты. Используется для тестов и для закрытия дня.
+#
+# Триггеры (только от админов outkup-команды / owner):
+#   • «очистить стату» / «обнули стату» / «обнулить стату»
+#   • «новый день» (когда хотят начать день с нуля)
+#   • «очистить баланс @username» — точечно по одному клиенту
+#
+_CLEAR_STATS_RE = re.compile(
+    r"^\s*(?:очистить\s+стат\w*|обнул\w+\s+стат\w*|новый\s+день|обнули\s+ст\w*)\s*$",
+    re.IGNORECASE,
+)
+_CLEAR_BALANCE_RE = re.compile(
+    r"^\s*(?:очистить|обнули|обнулить)\s+баланс\s+(?:@?(\w+)|(-?\d+))\s*$",
+    re.IGNORECASE,
+)
+
+
+async def handle_outkup_admin_clear(event, userbot, storage) -> bool:
+    """Админская команда «очистить стату» в outkup-команд-чате или owner-чате.
+
+    Не разрешается в обычном work_chat клиента (там балансы клиента, и он
+    сам не должен этого делать). Только от admin/outkup_specialist/owner."""
+    if not event or not event.message:
+        return False
+    text = (event.message.text or event.message.message or "").strip()
+    if not text:
+        return False
+
+    is_clear_all = bool(_CLEAR_STATS_RE.match(text))
+    m_balance = _CLEAR_BALANCE_RE.match(text)
+    if not is_clear_all and not m_balance:
+        return False
+
+    # Проверка: команда работает ТОЛЬКО в outkup-team-чате (где сидят админы)
+    # или в чате owner-а. В клиентских work-чатах — игнор.
+    try:
+        team_chat_id = int((storage.state.get("settings") or {})
+                           .get("outkup_team_chat_id") or 0)
+    except Exception:
+        team_chat_id = 0
+    is_team_chat = (team_chat_id and event.chat_id == team_chat_id)
+    # Доп. fallback: разрешаем если sender — owner или специалист откупов
+    sender_uname = ""
+    try:
+        sender = await event.get_sender()
+        sender_uname = (getattr(sender, "username", "") or "").lower()
+    except Exception:
+        pass
+    is_admin_sender = False
+    try:
+        roles = (storage.state.get("worker_roles") or {})
+        role = (roles.get(sender_uname) or {}).get("role") or ""
+        is_admin_sender = role in ("owner", "manager", "outkup_specialist")
+    except Exception:
+        pass
+    if not (is_team_chat or is_admin_sender):
+        return False
+
+    import time as _t
+    import datetime as _dt
+    now = _t.time()
+    today = _dt.date.fromtimestamp(now).isoformat()  # type: ignore
+
+    if m_balance:
+        # Точечно: очищаем балансы одного клиента
+        uname_arg = m_balance.group(1)
+        chat_id_arg = m_balance.group(2)
+        target_chat = None
+        if chat_id_arg:
+            try:
+                target_chat = int(chat_id_arg)
+            except Exception:
+                target_chat = None
+        elif uname_arg:
+            # Ищем клиента по username в outkup_client_settings или partners
+            partners = (storage.state.get("outkup_partners") or {})
+            for cid, p in partners.items():
+                if (p.get("username") or "").lstrip("@").lower() == uname_arg.lower():
+                    try:
+                        target_chat = int(cid)
+                    except Exception:
+                        pass
+                    break
+        if not target_chat:
+            await userbot.client.send_message(
+                event.chat_id,
+                f"❌ Не нашёл клиента «{uname_arg or chat_id_arg}». "
+                f"Используй цифровой chat_id или @username из настроек.",
+            )
+            return True
+        cleared = await _clear_client_balance(storage, target_chat, today)
+        await userbot.client.send_message(
+            event.chat_id,
+            f"✅ Баланс клиента chat={target_chat} обнулён.\n"
+            f"📊 Архив дня {today}:\n"
+            f"  • Откуплено: {cleared['orders']} заявок на {cleared['rub']:.0f}₽\n"
+            f"  • Выплачено: {cleared['paid_usdt']:.2f} USDT ({cleared['paid_count']} выплат)\n"
+            f"  • Отменено pending: {cleared['cancelled_pending']}",
+        )
+        return True
+
+    # Полная очистка дня
+    cleared = await _archive_and_clear_day(storage, today)
+    await userbot.client.send_message(
+        event.chat_id,
+        f"✅ День {today} закрыт и обнулён.\n"
+        f"📊 Архив:\n"
+        f"  • Откуплено: {cleared['orders_count']} заявок на {cleared['rub']:.0f}₽\n"
+        f"  • Выплачено клиентам: {cleared['paid_usdt']:.2f} USDT ({cleared['paid_count']} выплат)\n"
+        f"  • Pending отменено: {cleared['cancelled_pending']}\n"
+        f"  • Маржа дня: {cleared['margin_usdt']:.2f} USDT\n\n"
+        f"Новый день начался. Балансы клиентов сброшены.",
+    )
+    return True
+
+
+async def _archive_and_clear_day(storage, day_iso: str) -> dict:
+    """Архивирует все откупы и выплаты сегодняшнего дня в outkup_daily_archive[day_iso],
+    потом помечает старые orders как 'archived' и обнуляет outkup_client_payouts.
+
+    Возвращает dict со статистикой архивированного дня.
+    """
+    import time as _t
+    import datetime as _dt
+    async with storage._lock if hasattr(storage, "_lock") else _NullLock():
+        state = storage.state
+        archive = state.setdefault("outkup_daily_archive", {})
+        day_archive = archive.setdefault(day_iso, {
+            "orders": [], "payments": [], "client_payouts": [],
+            "totals": {"orders_count": 0, "rub": 0.0, "paid_usdt": 0.0,
+                       "paid_count": 0, "cancelled_pending": 0, "margin_usdt": 0.0},
+            "archived_at": _t.time(),
+        })
+        # Определяем границы дня
+        day_start = _dt.datetime.fromisoformat(day_iso).timestamp()
+        day_end = day_start + 86400.0
+        orders = state.get("outkup_orders") or {}
+        payments = state.get("outkup_payments") or {}
+        payouts = state.get("outkup_client_payouts") or {}
+        # 1) Архивируем orders созданные сегодня + помечаем archived
+        rub_total = 0.0
+        orders_cnt = 0
+        for oid, o in list(orders.items()):
+            ts = float(o.get("created_at") or 0)
+            if day_start <= ts < day_end:
+                day_archive["orders"].append(dict(o))
+                rub_total += float(o.get("amount_rub") or 0)
+                orders_cnt += 1
+                o["status"] = "archived"
+        # 2) Архивируем payments сегодня
+        for pid, p in list(payments.items()):
+            ts = float(p.get("created_at") or 0)
+            if day_start <= ts < day_end:
+                day_archive["payments"].append(dict(p))
+        # 3) Архивируем client_payouts + cancel pending
+        paid_usdt_total = 0.0
+        paid_count = 0
+        cancelled_cnt = 0
+        for pid, p in list(payouts.items()):
+            ts = float(p.get("created_at") or 0)
+            if day_start <= ts < day_end:
+                day_archive["client_payouts"].append(dict(p))
+                st = (p.get("status") or "").lower()
+                if st == "paid":
+                    paid_usdt_total += float(p.get("amount_usdt") or 0)
+                    paid_count += 1
+                elif st == "pending":
+                    p["status"] = "cancelled"
+                    p["cancelled_at"] = _t.time()
+                    p["cancelled_by"] = "admin:clear_day"
+                    cancelled_cnt += 1
+        # Маржа дня
+        try:
+            full = storage.get_outkup_full_stats()
+            margin_today = 0.0
+            for row in (full.get("margin_by_day") or []):
+                if row.get("period") == day_iso:
+                    margin_today = float(row.get("margin_usdt") or 0)
+                    break
+        except Exception:
+            margin_today = 0.0
+        day_archive["totals"] = {
+            "orders_count": orders_cnt, "rub": rub_total,
+            "paid_usdt": paid_usdt_total, "paid_count": paid_count,
+            "cancelled_pending": cancelled_cnt, "margin_usdt": margin_today,
+        }
+        await storage._save_unlocked()
+        return day_archive["totals"]
+
+
+async def _clear_client_balance(storage, chat_id: int, day_iso: str) -> dict:
+    """Точечная очистка: для одного клиента архивирует его orders/payouts дня,
+    помечает orders=archived, pending payouts=cancelled. Не трогает других клиентов.
+    """
+    import time as _t
+    import datetime as _dt
+    from storage import _norm_chat_id
+    cid_norm = _norm_chat_id(chat_id)
+    async with storage._lock if hasattr(storage, "_lock") else _NullLock():
+        state = storage.state
+        archive = state.setdefault("outkup_daily_archive", {})
+        day_archive = archive.setdefault(day_iso, {
+            "orders": [], "payments": [], "client_payouts": [],
+            "totals": {}, "archived_at": _t.time(),
+        })
+        orders = state.get("outkup_orders") or {}
+        payouts = state.get("outkup_client_payouts") or {}
+        orders_cnt = 0
+        rub_total = 0.0
+        for oid, o in list(orders.items()):
+            if _norm_chat_id(o.get("partner_chat_id")) != cid_norm:
+                continue
+            day_archive["orders"].append(dict(o))
+            rub_total += float(o.get("amount_rub") or 0)
+            orders_cnt += 1
+            o["status"] = "archived"
+        paid_usdt_total = 0.0
+        paid_count = 0
+        cancelled_cnt = 0
+        for pid, p in list(payouts.items()):
+            if _norm_chat_id(p.get("client_chat_id")) != cid_norm:
+                continue
+            day_archive["client_payouts"].append(dict(p))
+            st = (p.get("status") or "").lower()
+            if st == "paid":
+                paid_usdt_total += float(p.get("amount_usdt") or 0)
+                paid_count += 1
+            elif st == "pending":
+                p["status"] = "cancelled"
+                p["cancelled_at"] = _t.time()
+                p["cancelled_by"] = f"admin:clear_balance:{chat_id}"
+                cancelled_cnt += 1
+        await storage._save_unlocked()
+        return {
+            "orders": orders_cnt, "rub": rub_total,
+            "paid_usdt": paid_usdt_total, "paid_count": paid_count,
+            "cancelled_pending": cancelled_cnt,
+        }
+
+
+class _NullLock:
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): pass

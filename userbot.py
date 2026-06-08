@@ -1693,6 +1693,7 @@ class UserbotService:
                 handle_outkup_message, handle_outkup_confirm,
                 handle_outkup_stats, handle_outkup_payout_request,
                 handle_outkup_address_reply, handle_outkup_extension_request,
+                handle_outkup_admin_clear,
             )
             # Сначала — receipt/comment reply на сообщение с реквизитом
             if await self._handle_outkup_payment_reply(event):
@@ -1702,6 +1703,10 @@ class UserbotService:
                 return
             # «хочу продлить реквизит на N минут»
             if await handle_outkup_extension_request(event, self, storage):
+                return
+            # Админские: «очистить стату» / «обнули стату» / «новый день» /
+            # «очистить баланс @username» — закрывают день и обнуляют балансы
+            if await handle_outkup_admin_clear(event, self, storage):
                 return
             if await handle_outkup_confirm(event, self, storage):
                 return
