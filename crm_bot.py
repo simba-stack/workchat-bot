@@ -3859,7 +3859,12 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, удалять нельзя
+            # пока клиент не нажмёт. Иначе сообщение исчезает через 30 сек
+            # и клиент не видит на что жать → пишет код в чат напрямую →
+            # FSM не активен (waiting_code ставится только через callback) →
+            # код игнорируется.
+            await call.message.bot.send_message(target_chat, text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             await call.answer("📩 Запрос отправлен клиенту")
         except Exception as e:
@@ -3886,7 +3891,12 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, удалять нельзя
+            # пока клиент не нажмёт. Иначе сообщение исчезает через 30 сек
+            # и клиент не видит на что жать → пишет код в чат напрямую →
+            # FSM не активен (waiting_code ставится только через callback) →
+            # код игнорируется.
+            await call.message.bot.send_message(target_chat, text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             await call.answer("📩 Запрошен код входа")
         except Exception as e:
@@ -3912,7 +3922,12 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         ]])
         try:
             target_chat = _resolve_work_chat(drop, lk, owner)
-            await _send_ephemeral(call.message.bot, target_chat, text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, удалять нельзя
+            # пока клиент не нажмёт. Иначе сообщение исчезает через 30 сек
+            # и клиент не видит на что жать → пишет код в чат напрямую →
+            # FSM не активен (waiting_code ставится только через callback) →
+            # код игнорируется.
+            await call.message.bot.send_message(target_chat, text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             await call.answer("📩 Запрошен код перевязки")
         except Exception as e:
@@ -4050,12 +4065,14 @@ async def cb_client_givecode(call: CallbackQuery, state: FSMContext):
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    # ⚠️ НЕ ephemeral — это инструкция КУДА писать код. Если удалить через 30 сек,
+    # клиент видит «пиши код» → пишет код → код игнорируется (FSM=waiting_code
+    # уже не активен в его восприятии). Оставляем висеть в чате.
     try:
-        _ask_msg = await call.message.reply(
+        await call.message.reply(
             "📩 <b>Пришлите СМС-код следующим сообщением</b>\n"
             "<i>(только цифры)</i>"
         )
-        _schedule_delete(_ask_msg, 30)
     except Exception:
         pass
 
@@ -4103,7 +4120,9 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
             kb = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="✅ Да, готов", callback_data=f"cliready:{droplk_id}"),
             ]])
-            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, нельзя удалять
+            # до того как клиент нажмёт (иначе пишет код вне FSM → игнор).
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="ready_asked")
             result = "📩 Запрос готовности отправлен клиенту"
         elif stage == "ready_confirmed":
@@ -4118,7 +4137,9 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:login",
                 ),
             ]])
-            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, нельзя удалять
+            # до того как клиент нажмёт (иначе пишет код вне FSM → игнор).
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="login_asked")
             result = "📩 Запрошен код входа"
         elif stage == "login_received":
@@ -4133,7 +4154,9 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                     callback_data=f"cligivecode:{droplk_id}:perevyaz",
                 ),
             ]])
-            await _send_ephemeral(bot, owner["work_chat_id"], text, reply_markup=kb, delete_after=30)
+            # ⚠️ НЕ ephemeral — у сообщения ИНЛАЙН-КНОПКА, нельзя удалять
+            # до того как клиент нажмёт (иначе пишет код вне FSM → игнор).
+            await bot.send_message(owner["work_chat_id"], text, reply_markup=kb, parse_mode="HTML")
             await crm_storage.update_drop_lk_any(droplk_id, sms_stage="perevyaz_asked")
             result = "📩 Запрошен код перевязки"
         elif stage == "perevyaz_received":
