@@ -29,14 +29,14 @@ async def get_setting(db: AsyncSession, key: str, default: Any = None) -> Any:
 
 
 async def set_setting(db: AsyncSession, key: str, value: Any) -> None:
-    """Upsert."""
+    """Upsert. asyncpg-safe — используем EXCLUDED.value и CAST(:v AS jsonb)."""
     payload = json.dumps(value) if not isinstance(value, str) else value
     await db.execute(
         text("""
             INSERT INTO kv_settings (key, value, updated_at)
-            VALUES (:k, :v::jsonb, NOW())
+            VALUES (:k, CAST(:v AS jsonb), NOW())
             ON CONFLICT (key)
-            DO UPDATE SET value = :v::jsonb, updated_at = NOW()
+            DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
         """),
         {"k": key, "v": payload},
     )
