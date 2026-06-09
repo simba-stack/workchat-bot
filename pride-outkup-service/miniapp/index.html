@@ -579,22 +579,86 @@
     }
   }
 
-  // ─── Депозит ──────────────────────────────────────────────────────
-  async function openDeposit() {
+  // ─── Депозит (Crypto-Bot стиль) ───────────────────────────────────
+  function openDeposit() {
+    showModal("Пополнить USDT", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:13px;color:var(--text-3);">Сколько хочешь пополнить?</div>
+        <input id="dep_amt" type="number" min="1" max="100000" step="1" placeholder="Например, 50" class="mod-in" autofocus/>
+        <div style="font-size:11px;color:var(--text-3);">Минимум 1 USDT · Только сеть Tron (TRC20)</div>
+      </div>`,
+      `<button class="btn-primary" style="width:100%" onclick="requestDeposit()">Получить адрес</button>`
+    );
+  }
+  let _depPoll = null;
+  async function requestDeposit() {
+    const amt = parseFloat(document.getElementById("dep_amt").value);
+    if (!(amt >= 1)) { tg?.showAlert?.("Минимум 1 USDT"); return; }
     try {
-      const r = await api("/users/me/deposit_address", { method: "POST" });
-      showModal("Пополнить USDT TRC20", `
-        <div style="text-align:center;padding:10px 0 18px;">
-          <div style="font-size:13px;color:var(--text-3);margin-bottom:8px;">Сеть Tron (TRC20)</div>
-          <div style="background:var(--card);border-radius:12px;padding:14px;font-family:monospace;font-size:13px;word-break:break-all;">${r.address}</div>
-          <div style="margin-top:14px;font-size:13px;color:var(--warning);">${r.note || ""}</div>
-          <div style="margin-top:8px;font-size:11px;color:var(--text-3);">Минимум 1 USDT · Зачисление 1–5 мин после 19 подтверждений</div>
-        </div>`,
-        `<button class="btn-primary" style="width:100%" onclick="navigator.clipboard.writeText('${r.address}');tg?.showAlert?.('Скопировано')">Скопировать адрес</button>`
-      );
+      const r = await api("/users/me/deposits/request", {
+        method: "POST",
+        body: JSON.stringify({ amount_usdt: amt }),
+      });
+      showDepositRequest(r);
     } catch (e) {
-      tg?.showAlert?.("Не получилось: " + e.message);
+      tg?.showAlert?.("Ошибка: " + e.message);
     }
+  }
+  function showDepositRequest(r) {
+    const exact = Number(r.exact_amount).toFixed(4);
+    const expiresAt = new Date(r.expires_at).getTime();
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&bgcolor=1d2433&color=FFFFFF&data=${encodeURIComponent("tron:" + r.address + "?amount=" + exact + "&token=USDT")}`;
+    showModal("Депозит создан", `
+      <div style="text-align:center;">
+        <img src="${qrSrc}" alt="QR" style="width:180px;height:180px;border-radius:12px;background:#fff;padding:8px;margin-bottom:14px;" onerror="this.style.display='none'"/>
+        <div style="font-size:13px;color:var(--text-3);margin-bottom:6px;">Отправь <b style="color:var(--warning);font-size:16px;">ровно ${exact} USDT</b></div>
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">⚠️ Эта точная сумма важна — мы по ней опознаём твой платёж</div>
+        <div style="background:var(--card);border-radius:12px;padding:14px;font-family:monospace;font-size:12px;word-break:break-all;text-align:left;">${r.address}</div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-3);">Сеть: <b>Tron (TRC20)</b></div>
+        <div id="dep_status" style="margin-top:14px;padding:10px;background:var(--card);border-radius:10px;font-size:13px;">
+          <span id="dep_countdown" style="color:var(--warning);">⏳ Ждём перевод…</span>
+        </div>
+      </div>`,
+      `<div style="display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1" onclick="copyDepAddress('${r.address}')">📋 Адрес</button>
+        <button class="btn-primary" style="flex:1" onclick="copyDepAmount('${exact}')">📋 Сумма</button>
+      </div>`
+    );
+    // Countdown + poll
+    if (_depPoll) clearInterval(_depPoll);
+    const tick = async () => {
+      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      const m = Math.floor(left / 60), s = left % 60;
+      const cd = document.getElementById("dep_countdown");
+      if (left <= 0) {
+        if (cd) cd.innerHTML = "❌ Срок истёк, создай новый депозит";
+        clearInterval(_depPoll); _depPoll = null;
+        return;
+      }
+      if (cd) cd.innerHTML = `⏳ Осталось ${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+      // Каждые 5 сек чекаем статус
+      if (left % 5 === 0) {
+        try {
+          const s2 = await api(`/users/me/deposits/${r.id}`);
+          if (s2.status === "matched") {
+            const ds = document.getElementById("dep_status");
+            if (ds) ds.innerHTML = `<span style="color:var(--success);font-weight:600;">✅ Зачислено ${Number(s2.base_amount).toFixed(2)} USDT</span>`;
+            clearInterval(_depPoll); _depPoll = null;
+            setTimeout(bootstrap, 800);
+          }
+        } catch (_) {}
+      }
+    };
+    _depPoll = setInterval(tick, 1000);
+    tick();
+  }
+  function copyDepAddress(addr) {
+    navigator.clipboard.writeText(addr);
+    tg?.showAlert?.("Адрес скопирован");
+  }
+  function copyDepAmount(amt) {
+    navigator.clipboard.writeText(amt);
+    tg?.showAlert?.("Сумма скопирована");
   }
 
   // ─── Вывод ────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import users, exchange, orders, offers, deals, webhooks, admin
 from core.config import settings
-from core.services import jarvis_sync
+from core.services import jarvis_sync, tron_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,13 @@ async def lifespan(app: FastAPI):
     # Background: периодический pull курса из JARVIS
     sync_task = asyncio.create_task(jarvis_sync.rate_sync_loop())
     logger.info("Started: jarvis rate_sync_loop")
+    # Background: TRON monitor — polling входящих TRC20 каждые 30 сек
+    tron_task = asyncio.create_task(tron_monitor.monitor_loop())
+    logger.info("Started: tron_monitor")
     yield
     logger.info("FastAPI stopping...")
     sync_task.cancel()
+    tron_task.cancel()
 
 
 app = FastAPI(

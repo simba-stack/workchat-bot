@@ -83,12 +83,10 @@ async def cmd_deposit(message: Message):
         await message.answer("⚠️ TRON-кошелёк ещё не настроен.")
         return
     await message.answer(
-        f"💸 <b>Пополнение USDT TRC20</b>\n\n"
-        f"<code>{settings.tron_hot_wallet_address}</code>\n\n"
-        f"При переводе укажи memo: <code>user_{u.id}</code>\n"
-        f"Сеть: <b>Tron (TRC20)</b>\n"
-        f"Минимум: <b>1 USDT</b>\n"
-        f"⏱ Зачисление: 1–5 минут после 19 подтверждений сети.",
+        "💸 <b>Пополнение USDT TRC20</b>\n\n"
+        "Жми «Открыть приложение» → Кошелёк → <b>Пополнить</b>.\n"
+        "Введи сумму — мы сгенерируем уникальную сумму с QR-кодом, "
+        "по которой опознаем твой перевод и автоматически зачислим баланс.",
         reply_markup=_miniapp_kb(),
     )
 

@@ -1,5 +1,6 @@
 """User-эндпоинты — me, balance, operations, KYC, deposit, withdraw, orders."""
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, require_verified
 from core.db import get_db
-from core.models import OperationLog, Order, User
+from core.models import DepositRequest, OperationLog, Order, User
 from core.services import jarvis_sync
 
 router = APIRouter()
@@ -188,26 +189,114 @@ async def submit_kyc(
     return {"ok": True, "kyc_status": "pending_review"}
 
 
-@router.post("/me/deposit_address")
-async def get_deposit_address(
+@router.post("/me/deposits/request")
+async def create_deposit_request(
+    payload: dict,
     user: User = Depends(require_verified),
     db: AsyncSession = Depends(get_db),
 ):
-    """Возвращает (или генерирует) TRC20-адрес для депозита USDT.
+    """Crypto-Bot-стиль депозит. Юзер вводит сумму, мы возвращаем точную сумму
+    с микро-отклонением (для матчинга) + адрес + TTL 15 мин.
 
-    В Phase A5 — реальная генерация через tron service. Сейчас — placeholder:
-    использует общий hot-wallet адрес из config с memo.
+    payload: {amount_usdt: float}
     """
     from core.config import settings as cfg
     if not cfg.tron_hot_wallet_address:
-        raise HTTPException(503, "TRON wallet not configured yet")
+        raise HTTPException(503, "TRON-кошелёк ещё не настроен")
+    try:
+        base = Decimal(str(payload.get("amount_usdt") or 0))
+    except Exception:
+        raise HTTPException(400, "bad amount_usdt")
+    if base < Decimal("1"):
+        raise HTTPException(400, "минимум 1 USDT")
+    if base > Decimal("100000"):
+        raise HTTPException(400, "максимум 100000 USDT за раз")
 
-    # Один общий адрес для депозитов + tracking по сумме (Phase A5: per-user addr)
+    # Подбираем уникальное exact_amount среди активных pending
+    # (base + 0.0001*N где N=1..9999, до 4 знаков после запятой)
+    res = await db.execute(
+        select(DepositRequest.exact_amount).where(DepositRequest.status == "pending")
+    )
+    taken = {r[0] for r in res.all()}
+    base_q = base.quantize(Decimal("0.0001"))
+    exact = None
+    for n in range(1, 10000):
+        candidate = (base_q + Decimal(n) / Decimal(10000)).quantize(Decimal("0.0001"))
+        if candidate not in taken:
+            exact = candidate
+            break
+    if exact is None:
+        raise HTTPException(503, "не удалось сгенерировать уникальную сумму, попробуйте позже")
+
+    dr = DepositRequest(
+        user_id=user.id,
+        base_amount=base_q,
+        exact_amount=exact,
+        to_address=cfg.tron_hot_wallet_address,
+        network="TRC20",
+        status="pending",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+    )
+    db.add(dr)
+    await db.flush()
     return {
+        "id": dr.id,
         "address": cfg.tron_hot_wallet_address,
         "network": "TRC20",
-        "note": f"При переводе укажите memo: user_{user.id}",
-        "user_memo": f"user_{user.id}",
+        "exact_amount": float(exact),
+        "base_amount": float(base_q),
+        "expires_at": dr.expires_at.isoformat(),
+        "status": dr.status,
+        "warning": "Переводите ровно эту сумму. Иначе зачисление вручную.",
+    }
+
+
+@router.get("/me/deposits/{request_id}")
+async def get_deposit_status(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dr = await db.get(DepositRequest, request_id)
+    if not dr or dr.user_id != user.id:
+        raise HTTPException(404, "deposit request not found")
+    return {
+        "id": dr.id,
+        "status": dr.status,
+        "exact_amount": float(dr.exact_amount),
+        "base_amount": float(dr.base_amount),
+        "address": dr.to_address,
+        "matched_tx_id": dr.matched_tx_id,
+        "matched_at": dr.matched_at.isoformat() if dr.matched_at else None,
+        "matched_amount": float(dr.matched_amount) if dr.matched_amount else None,
+        "expires_at": dr.expires_at.isoformat(),
+    }
+
+
+@router.get("/me/deposits")
+async def list_my_deposits(
+    limit: int = 20,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(DepositRequest)
+        .where(DepositRequest.user_id == user.id)
+        .order_by(desc(DepositRequest.created_at))
+        .limit(max(1, min(limit, 100)))
+    )
+    return {
+        "items": [
+            {
+                "id": dr.id, "status": dr.status,
+                "exact_amount": float(dr.exact_amount),
+                "base_amount": float(dr.base_amount),
+                "matched_tx_id": dr.matched_tx_id,
+                "created_at": dr.created_at.isoformat(),
+                "expires_at": dr.expires_at.isoformat(),
+            }
+            for dr in res.scalars().all()
+        ]
     }
 
 

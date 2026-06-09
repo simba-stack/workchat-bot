@@ -7,6 +7,7 @@ from core.models.escrow import EscrowLock
 from core.models.dispute import Dispute
 from core.models.chat import ChatMessage
 from core.models.ops import OperationLog, TronOutboundLog
+from core.models.deposit_request import DepositRequest
 
 __all__ = [
     "User",
@@ -19,4 +20,5 @@ __all__ = [
     "ChatMessage",
     "OperationLog",
     "TronOutboundLog",
+    "DepositRequest",
 ]
