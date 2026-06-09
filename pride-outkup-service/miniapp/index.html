@@ -297,6 +297,23 @@
   tg?.expand();
   if (tg?.themeParams?.bg_color) document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
 
+  // ─── DEBUG плашка — видим что Telegram реально передал ──────────
+  (function() {
+    const dbg = document.createElement('div');
+    dbg.id = 'tg-debug';
+    dbg.style.cssText = 'position:fixed;top:8px;left:8px;right:8px;background:rgba(255,80,80,0.92);color:white;padding:8px 12px;border-radius:10px;z-index:99999;font-size:11px;line-height:1.4;font-family:monospace;cursor:pointer;';
+    const idLen = (tg?.initData || '').length;
+    const userInfo = tg?.initDataUnsafe?.user ? `@${tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.id}` : 'нет user';
+    dbg.innerHTML = `
+      <b>🐛 DEBUG (тапни чтобы скрыть)</b><br>
+      tg=${tg ? 'OK' : 'NULL'} · platform=${tg?.platform || '-'} · version=${tg?.version || '-'}<br>
+      initData.length=${idLen} · user=${userInfo}<br>
+      ${idLen === 0 ? '⚠️ initData ПУСТО — backend вернёт 401 на любой запрос' : '✅ initData есть'}
+    `;
+    dbg.onclick = () => dbg.remove();
+    document.body.appendChild(dbg);
+  })();
+
   let _hideBalance = false, _hideSmall = false;
   let _currentSide = "buy";
   let _coins = [];   // [{code,name,balance,rate_usd,rate_rub,change_24h,...}]
