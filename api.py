@@ -33,7 +33,7 @@ from typing import Dict, Optional
 
 from fastapi import (
     FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect,
-    UploadFile, File,
+    UploadFile, File, Header,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
@@ -8250,3 +8250,135 @@ async def api_outkup_quote(amount_rub: float, me: dict = Depends(_get_me)):
     """Возвращает: usdt_to_client (что отправим клиенту), our_margin_usdt (наша маржа)."""
     q = storage.get_outkup_quote(float(amount_rub))
     return {"ok": True, "quote": q}
+
+
+# =====================================================================
+# PRIDE P2P (pride-outkup-service) — incoming webhook
+# =====================================================================
+# Отдельный сервис @PrideP2P_bot шлёт сюда события: новая заявка / запрос
+# выплаты / завершение / спор / kyc_requested.
+# HMAC-подпись в заголовке X-Outkup-Signature; секрет в env JARVIS_HMAC_SECRET
+# (тот же, что выставлен у pride-outkup-service).
+# =====================================================================
+
+def _verify_outkup_signature(body: bytes, signature: str) -> bool:
+    secret = os.environ.get("JARVIS_HMAC_SECRET") or ""
+    if not secret or not signature:
+        return False
+    calc = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(calc, signature)
+
+
+@app.post("/api/webhook/outkup")
+async def api_webhook_outkup(
+    request: Request,
+    x_outkup_signature: str = Header(None),
+):
+    """Приём событий от pride-outkup-service.
+
+    Payload:
+      {"event": "...", "data": {...}, "ts": 169...}
+    Events: new_order, payment_requested, order_completed, order_cancelled,
+            dispute_opened, kyc_requested, deposit_received.
+    """
+    body = await request.body()
+    if not _verify_outkup_signature(body, x_outkup_signature or ""):
+        raise HTTPException(401, "invalid signature")
+
+    try:
+        payload = json.loads(body or b"{}")
+    except json.JSONDecodeError:
+        raise HTTPException(400, "bad json")
+
+    event = (payload.get("event") or "").strip()
+    data = payload.get("data") or {}
+    log = logging.getLogger("outkup_webhook")
+    log.info("[outkup_webhook] event=%s data=%s", event, data)
+
+    # ── new_order: только показать в notifications ─────────────────────
+    if event == "new_order":
+        order_no = data.get("order_number") or data.get("id") or "?"
+        kind = data.get("kind") or "?"
+        amount = data.get("amount_rub") or 0
+        await storage.add_notification(
+            type="info",
+            text=f"P2P · новая заявка #{order_no} ({kind}, {amount}₽)",
+            target_role="outkup_specialist",
+            dedup_key=f"p2p_new_{order_no}",
+        )
+        return {"ok": True, "applied": "new_order"}
+
+    # ── payment_requested: клиент запросил выплату USDT ────────────────
+    if event == "payment_requested":
+        order_no = data.get("order_number") or "?"
+        usdt = data.get("amount_usdt") or 0
+        await storage.add_notification(
+            type="warning",
+            text=f"P2P · клиент запросил выплату {usdt}$ по заявке #{order_no}",
+            target_role="outkup_specialist",
+            dedup_key=f"p2p_payreq_{order_no}",
+        )
+        return {"ok": True, "applied": "payment_requested"}
+
+    # ── order_completed: заявка закрыта ────────────────────────────────
+    if event == "order_completed":
+        order_no = data.get("order_number") or "?"
+        await storage.add_notification(
+            type="success",
+            text=f"P2P · заявка #{order_no} завершена",
+            target_role="outkup_specialist",
+            dedup_key=f"p2p_done_{order_no}",
+        )
+        return {"ok": True, "applied": "order_completed"}
+
+    # ── order_cancelled ────────────────────────────────────────────────
+    if event == "order_cancelled":
+        order_no = data.get("order_number") or "?"
+        reason = data.get("reason") or "—"
+        await storage.add_notification(
+            type="error",
+            text=f"P2P · заявка #{order_no} отменена ({reason})",
+            target_role="outkup_specialist",
+            dedup_key=f"p2p_cancel_{order_no}",
+        )
+        return {"ok": True, "applied": "order_cancelled"}
+
+    # ── dispute_opened: открыт спор — отправляем owner ─────────────────
+    if event == "dispute_opened":
+        dispute_id = data.get("dispute_id") or "?"
+        reason = (data.get("reason") or "")[:120]
+        await storage.add_notification(
+            type="error",
+            text=f"⚠️ P2P СПОР #{dispute_id}: {reason}",
+            target_role="owner",
+            dedup_key=f"p2p_dispute_{dispute_id}",
+        )
+        return {"ok": True, "applied": "dispute_opened"}
+
+    # ── kyc_requested: клиент подал заявку на KYC ──────────────────────
+    if event == "kyc_requested":
+        user_id = data.get("user_id") or "?"
+        level = data.get("kyc_level") or 1
+        await storage.add_notification(
+            type="info",
+            text=f"P2P · KYC L{level} запрошен (user {user_id})",
+            target_role="owner",
+            dedup_key=f"p2p_kyc_{user_id}_{level}",
+        )
+        return {"ok": True, "applied": "kyc_requested"}
+
+    # ── deposit_received: пришёл USDT TRC20 ────────────────────────────
+    if event == "deposit_received":
+        user_id = data.get("user_id") or "?"
+        amount = data.get("amount_usdt") or 0
+        tx = (data.get("tx_id") or "")[:16]
+        await storage.add_notification(
+            type="success",
+            text=f"P2P · депозит {amount}$ от user {user_id} (tx {tx}...)",
+            target_role="accounting",
+            dedup_key=f"p2p_deposit_{tx}",
+        )
+        return {"ok": True, "applied": "deposit_received"}
+
+    log.warning("[outkup_webhook] unknown event: %s", event)
+    return {"ok": True, "skipped": "unknown_event", "event": event}

@@ -1,4 +1,5 @@
 """FastAPI app — Mini-App backend + webhooks + JARVIS sync."""
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import users, exchange, orders, offers, deals, webhooks, admin
 from core.config import settings
+from core.services import jarvis_sync
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +19,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI starting...")
-    # TODO: на старте проверить БД-коннект, запустить background tasks
-    # (timer для expires_at, retry webhook'ов, tron monitor)
+    # Background: периодический pull курса из JARVIS
+    sync_task = asyncio.create_task(jarvis_sync.rate_sync_loop())
+    logger.info("Started: jarvis rate_sync_loop")
     yield
     logger.info("FastAPI stopping...")
+    sync_task.cancel()
 
 
 app = FastAPI(
@@ -30,7 +34,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — Mini-App открывается из telegram.org домена
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -44,13 +47,11 @@ app.add_middleware(
 )
 
 
-# ─── Health ──────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "pride-p2p"}
+    return {"status": "ok", "service": "pride-p2p", "version": "0.1.0"}
 
 
-# ─── Routers ────────────────────────────────────────────────────────
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(exchange.router, prefix="/api/v1/exchange", tags=["exchange"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["orders"])
@@ -61,20 +62,20 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 
 
 # ─── Mini-App статика ──────────────────────────────────────────────
-# В прод-сборке Vue 3 → /miniapp/dist
-# Пока — отдаём `app/index.html` (vanilla HTML с заглушкой)
-MINIAPP_DIST = Path(__file__).parent.parent / "miniapp" / "dist"
+MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"
+MINIAPP_DIST = MINIAPP_DIR / "dist"
+
 if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
 else:
-    # Fallback — отдаём встроенный HTML-плейсхолдер
-    PLACEHOLDER_HTML = Path(__file__).parent.parent / "miniapp" / "index.html"
+    INDEX_HTML = MINIAPP_DIR / "index.html"
 
     @app.get("/app", response_class=HTMLResponse)
-    async def miniapp_placeholder():
-        if PLACEHOLDER_HTML.exists():
-            return FileResponse(PLACEHOLDER_HTML)
-        return HTMLResponse(
-            "<h1>PRIDE P2P Mini-App</h1>"
-            "<p>Frontend ещё не собран. Запусти <code>cd miniapp && npm run build</code></p>"
-        )
+    async def miniapp_root():
+        if INDEX_HTML.exists():
+            return FileResponse(INDEX_HTML)
+        return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
+
+    @app.get("/")
+    async def root():
+        return {"service": "pride-p2p", "app": "/app", "api": "/api/v1"}
