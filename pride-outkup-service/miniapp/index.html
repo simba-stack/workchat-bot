@@ -325,8 +325,8 @@
   </div>
 
   <div class="actions">
-    <div class="act" onclick="alert('Пополнение — Phase A5')"><div class="act-circle"><i class="ti ti-arrow-down-left"></i></div><div class="act-name">Пополнить</div></div>
-    <div class="act" onclick="alert('Вывод — Phase A5')"><div class="act-circle"><i class="ti ti-arrow-up-right"></i></div><div class="act-name">Вывести</div></div>
+    <div class="act" onclick="openDeposit()"><div class="act-circle"><i class="ti ti-arrow-down-left"></i></div><div class="act-name">Пополнить</div></div>
+    <div class="act" onclick="openWithdraw()"><div class="act-circle"><i class="ti ti-arrow-up-right"></i></div><div class="act-name">Вывести</div></div>
     <div class="act" onclick="goPage('exchange')"><div class="act-circle"><i class="ti ti-arrows-exchange"></i></div><div class="act-name">Обмен</div></div>
     <div class="act"><div class="act-circle"><i class="ti ti-history"></i></div><div class="act-name">История</div></div>
   </div>
@@ -467,7 +467,7 @@
     <div class="ex-row"><span class="label">TRC20-адрес</span><span class="val" id="prof-addr" style="font-family:monospace; font-size:12px">—</span></div>
   </div>
 
-  <button class="btn-primary" onclick="alert('KYC flow — Phase A2')">Пройти верификацию</button>
+  <button class="btn-primary" onclick="openKyc()">Пройти верификацию</button>
 </div>
 
 <!-- ═══════════════ BOTTOM NAV ═══════════════ -->
@@ -502,6 +502,9 @@
     document.querySelectorAll('nav.bottom .tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`nav.bottom .tab[data-tab="${name}"]`)?.classList.add('active');
     window.scrollTo({ top: 0, behavior: 'instant' });
+    // Lazy load on tab open
+    if (name === "orders") loadOrders();
+    if (name === "exchange") loadOffers(_currentSide);
   }
 
   function switchSide(el, side) {
@@ -511,7 +514,239 @@
   }
 
   function openOffer(id) {
-    tg?.showAlert?.(`Откроется страница оффера #${id} (Phase A3)`);
+    if (id === "pride") return openExchangeQuote("buy");
+    tg?.showAlert?.(`Деталь оффера #${id}`);
+  }
+
+  // ─── Модалки ──────────────────────────────────────────────────────
+  function showModal(title, contentHtml, footerHtml = "") {
+    let m = document.getElementById("modal");
+    if (!m) {
+      m = document.createElement("div");
+      m.id = "modal";
+      m.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:flex-end;justify-content:center;z-index:9999;";
+      m.addEventListener("click", e => { if (e.target === m) m.remove(); });
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `<div style="background:var(--bg);border-top-left-radius:16px;border-top-right-radius:16px;padding:20px 16px 28px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;border:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div style="font-size:17px;font-weight:600;">${title}</div>
+        <div style="font-size:22px;color:var(--text-3);cursor:pointer;" onclick="document.getElementById('modal').remove()">&times;</div>
+      </div>
+      <div>${contentHtml}</div>
+      ${footerHtml ? `<div style="margin-top:18px;">${footerHtml}</div>` : ""}
+    </div>`;
+  }
+  function closeModal() { document.getElementById("modal")?.remove(); }
+
+  // ─── KYC ──────────────────────────────────────────────────────────
+  function openKyc() {
+    showModal("Верификация (KYC L1)", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <input id="k_fn" placeholder="Имя" class="mod-in"/>
+        <input id="k_ln" placeholder="Фамилия" class="mod-in"/>
+        <input id="k_bd" placeholder="Дата рождения YYYY-MM-DD" class="mod-in"/>
+        <input id="k_ps" placeholder="Серия паспорта (4)" class="mod-in"/>
+        <input id="k_pn" placeholder="Номер паспорта (6)" class="mod-in"/>
+        <input id="k_ph" placeholder="Телефон +7..." class="mod-in"/>
+      </div>`,
+      `<button class="btn-primary" style="width:100%" onclick="submitKyc()">Отправить на модерацию</button>`
+    );
+    // inject input style
+    if (!document.getElementById("mod-in-style")) {
+      const s = document.createElement("style");
+      s.id = "mod-in-style";
+      s.textContent = ".mod-in{background:var(--card);border:1px solid var(--border);color:#fff;padding:12px 14px;border-radius:12px;font-size:14px;font-family:inherit;outline:none;}";
+      document.head.appendChild(s);
+    }
+  }
+  async function submitKyc() {
+    const payload = {
+      first_name: document.getElementById("k_fn").value.trim(),
+      last_name: document.getElementById("k_ln").value.trim(),
+      birthdate: document.getElementById("k_bd").value.trim(),
+      passport_series: document.getElementById("k_ps").value.trim(),
+      passport_number: document.getElementById("k_pn").value.trim(),
+      phone: document.getElementById("k_ph").value.trim(),
+    };
+    try {
+      await api("/users/me/kyc", { method: "POST", body: JSON.stringify(payload) });
+      closeModal();
+      tg?.showAlert?.("✅ Заявка отправлена. Дождись одобрения в течение 24ч.");
+      bootstrap();
+    } catch (e) {
+      tg?.showAlert?.("Ошибка: " + e.message);
+    }
+  }
+
+  // ─── Депозит ──────────────────────────────────────────────────────
+  async function openDeposit() {
+    try {
+      const r = await api("/users/me/deposit_address", { method: "POST" });
+      showModal("Пополнить USDT TRC20", `
+        <div style="text-align:center;padding:10px 0 18px;">
+          <div style="font-size:13px;color:var(--text-3);margin-bottom:8px;">Сеть Tron (TRC20)</div>
+          <div style="background:var(--card);border-radius:12px;padding:14px;font-family:monospace;font-size:13px;word-break:break-all;">${r.address}</div>
+          <div style="margin-top:14px;font-size:13px;color:var(--warning);">${r.note || ""}</div>
+          <div style="margin-top:8px;font-size:11px;color:var(--text-3);">Минимум 1 USDT · Зачисление 1–5 мин после 19 подтверждений</div>
+        </div>`,
+        `<button class="btn-primary" style="width:100%" onclick="navigator.clipboard.writeText('${r.address}');tg?.showAlert?.('Скопировано')">Скопировать адрес</button>`
+      );
+    } catch (e) {
+      tg?.showAlert?.("Не получилось: " + e.message);
+    }
+  }
+
+  // ─── Вывод ────────────────────────────────────────────────────────
+  function openWithdraw() {
+    showModal("Вывод USDT TRC20", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <input id="w_amt" type="number" placeholder="Сумма USDT" class="mod-in"/>
+        <input id="w_addr" placeholder="TRC20 адрес (T...)" class="mod-in"/>
+        <div style="font-size:12px;color:var(--text-3);">Комиссия сети: 1 USDT (списывается с вывода)</div>
+      </div>`,
+      `<button class="btn-primary" style="width:100%" onclick="submitWithdraw()">Подтвердить</button>`
+    );
+  }
+  async function submitWithdraw() {
+    const amt = parseFloat(document.getElementById("w_amt").value);
+    const addr = document.getElementById("w_addr").value.trim();
+    if (!(amt > 0) || !addr.startsWith("T") || addr.length < 30) {
+      tg?.showAlert?.("Проверь сумму и адрес"); return;
+    }
+    try {
+      const r = await api("/users/me/withdraw", {
+        method: "POST",
+        body: JSON.stringify({ amount_usdt: amt, trc20_address: addr }),
+      });
+      closeModal();
+      tg?.showAlert?.(`✅ Запрос на вывод ${r.amount_usdt} USDT принят (${r.status})`);
+      bootstrap();
+    } catch (e) {
+      tg?.showAlert?.("Ошибка: " + e.message);
+    }
+  }
+
+  // ─── Exchange (buy/sell) ─────────────────────────────────────────
+  function openExchangeQuote(side) {
+    showModal(side === "buy" ? "Купить USDT" : "Продать USDT", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <input id="ex_amt" type="number" placeholder="${side === "buy" ? "Сумма ₽" : "Сумма USDT"}" class="mod-in"/>
+        <select id="ex_pm" class="mod-in">
+          <option value="sbp">СБП</option>
+          <option value="tinkoff">Тинькофф</option>
+          <option value="sber">Сбер</option>
+          <option value="alfa">Альфа</option>
+        </select>
+      </div>`,
+      `<button class="btn-primary" style="width:100%" onclick="submitExchange('${side}')">Создать заявку</button>`
+    );
+  }
+  async function submitExchange(side) {
+    const amt = parseFloat(document.getElementById("ex_amt").value);
+    const pm = document.getElementById("ex_pm").value;
+    if (!(amt > 0)) { tg?.showAlert?.("Введи сумму"); return; }
+    const body = side === "buy"
+      ? { amount_rub: amt, payment_method: pm, destination: "balance" }
+      : { amount_usdt: amt, payment_method: pm, bank: pm, payout_target: "tg" };
+    try {
+      const r = await api(`/exchange/${side === "buy" ? "buy_usdt" : "sell_usdt"}`,
+        { method: "POST", body: JSON.stringify(body) });
+      closeModal();
+      tg?.showAlert?.(`✅ Заявка #${r.order_number} создана. Открой Заявки.`);
+      goPage("orders");
+      loadOrders();
+    } catch (e) {
+      tg?.showAlert?.("Ошибка: " + e.message);
+    }
+  }
+
+  // ─── Orders list ─────────────────────────────────────────────────
+  async function loadOrders() {
+    const root = document.getElementById("orders-list");
+    if (!root) return;
+    root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Загрузка...</div>';
+    try {
+      const r = await api("/orders");
+      if (!r.items?.length) {
+        root.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3);">📭 Пока нет заявок</div>';
+        return;
+      }
+      root.innerHTML = r.items.map(o => {
+        const emoji = { buy_usdt: "💵→💎", sell_usdt: "💎→💵", business_outkup: "🏢" }[o.kind] || "📦";
+        const color = { done: "var(--success)", cancelled: "var(--danger)", awaiting_receipts: "var(--warning)" }[o.status] || "var(--text-2)";
+        return `<div style="background:var(--card);border-radius:12px;padding:14px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div><b>${emoji} ${o.order_number}</b> · ${o.kind}</div>
+            <div style="color:${color};font-size:12px;">${o.status}</div>
+          </div>
+          <div style="margin-top:6px;font-size:13px;color:var(--text-2);">
+            ${Number(o.amount_rub).toFixed(0)}₽ ⇄ ${Number(o.amount_usdt).toFixed(2)}$ · курс ${o.rate}₽
+          </div>
+        </div>`;
+      }).join("");
+    } catch (e) {
+      root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`;
+    }
+  }
+
+  // ─── Offers (V2) ─────────────────────────────────────────────────
+  async function loadOffers(side = "buy") {
+    const root = document.getElementById("offers-list");
+    if (!root) return;
+    try {
+      const r = await api(`/offers?side=${side}&limit=20`);
+      const own = r.items || [];
+      if (!own.length) {
+        root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Офферов пока нет</div>';
+        return;
+      }
+      root.innerHTML = own.map(o => `
+        <div style="background:var(--card);border-radius:12px;padding:14px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-weight:600;">${o.is_pride_official ? "⭐ PRIDE Official" : "@" + (o.author?.username || "user" + o.user_id)}</div>
+              <div style="font-size:12px;color:var(--text-3);">${o.author?.total_deals ?? 0} сделок · ${o.author?.completion_rate_pct ?? 0}% ✓</div>
+            </div>
+            <div style="font-size:18px;font-weight:600;">${o.rate_rub_per_usdt} ₽</div>
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:var(--text-2);">
+            ${Number(o.min_amount_rub).toFixed(0)}–${Number(o.max_amount_rub).toFixed(0)}₽ · ${o.payment_methods.join(", ")}
+          </div>
+          <button class="btn-buy" style="margin-top:10px;width:100%;" onclick="openDealForm(${o.id})">${side === "buy" ? "Купить" : "Продать"}</button>
+        </div>`).join("");
+    } catch (e) {
+      root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`;
+    }
+  }
+  let _currentSide = "buy";
+  function switchSide2(side) { _currentSide = side; loadOffers(side); }
+
+  async function openDealForm(offer_id) {
+    showModal("Создать сделку", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <input id="d_amt" type="number" placeholder="Сумма ₽" class="mod-in"/>
+        <input id="d_pm" placeholder="Метод оплаты (из оффера)" class="mod-in"/>
+        <input id="d_bank" placeholder="Банк (опц.)" class="mod-in"/>
+      </div>`,
+      `<button class="btn-primary" style="width:100%" onclick="createDeal(${offer_id})">Создать</button>`
+    );
+  }
+  async function createDeal(offer_id) {
+    const body = {
+      offer_id,
+      amount_rub: parseFloat(document.getElementById("d_amt").value),
+      payment_method: document.getElementById("d_pm").value.trim(),
+      bank: document.getElementById("d_bank").value.trim() || null,
+    };
+    try {
+      const r = await api("/deals", { method: "POST", body: JSON.stringify(body) });
+      closeModal();
+      tg?.showAlert?.(`✅ Сделка ${r.deal.deal_number} создана. Открой Заявки.`);
+      goPage("orders");
+    } catch (e) {
+      tg?.showAlert?.("Ошибка: " + e.message);
+    }
   }
 
   async function api(path, options = {}) {

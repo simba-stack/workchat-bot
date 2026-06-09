@@ -10,28 +10,55 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from core.config import settings
+
 router = Router(name="groups")
 logger = logging.getLogger(__name__)
 
 
 @router.message(Command("курс", "rate"))
 async def cmd_rate(message: Message):
-    # TODO: подтянуть актуальный курс из ExchangeService
+    from core.db import AsyncSessionLocal
+    from core.services import settings_kv
+    async with AsyncSessionLocal() as db:
+        buy = await settings_kv.get_rate_buy(db)
+        sell = await settings_kv.get_rate_sell(db)
+        fee = await settings_kv.get_fee_v1_pct(db)
     await message.reply(
         "💱 <b>Курс PRIDE</b>\n\n"
-        "Купить USDT: <b>84.00 ₽</b>\n"
-        "Продать USDT: <b>82.00 ₽</b>\n\n"
-        "Открой Mini-App чтобы совершить обмен → @PrideP2P_bot"
+        f"Купить USDT: <b>{float(buy):.2f} ₽</b>\n"
+        f"Продать USDT: <b>{float(sell):.2f} ₽</b>\n"
+        f"Комиссия: {float(fee):.1f}%\n\n"
+        f"Открой Mini-App чтобы совершить обмен → @{settings.bot_username if False else 'PrideP2P_bot'}"
     )
 
 
 @router.message(Command("предложения", "offers"))
 async def cmd_offers(message: Message):
-    # TODO: подтянуть топ-3 active offers из OfferService
-    await message.reply(
-        "🏛 <b>Топ P2P-предложений</b>\n\n"
-        "Скоро — открой Mini-App: /start у @PrideP2P_bot"
-    )
+    from core.db import AsyncSessionLocal
+    from core.models import Offer
+    from sqlalchemy import desc as _desc, select as _sel
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            _sel(Offer)
+            .where(Offer.status == "active")
+            .order_by(_desc(Offer.is_pride_official), Offer.rate_rub_per_usdt.asc())
+            .limit(5)
+        )
+        offers = res.scalars().all()
+    if not offers:
+        await message.reply("🏛 Пока нет активных P2P-предложений. Открой Mini-App чтобы создать своё.")
+        return
+    lines = ["🏛 <b>Топ-5 P2P-предложений</b>:\n"]
+    for o in offers:
+        official = "⭐" if o.is_pride_official else "👤"
+        side_label = "Продаёт" if o.side == "sell" else "Покупает"
+        lines.append(
+            f"{official} {side_label} USDT по <b>{float(o.rate_rub_per_usdt):.2f} ₽</b> "
+            f"· {float(o.min_amount_rub):.0f}–{float(o.max_amount_rub):.0f}₽"
+        )
+    lines.append("\nОткрой Mini-App → @PrideP2P_bot")
+    await message.reply("\n".join(lines))
 
 
 # Текст-триггер «откуп N к/тыс/рублей»

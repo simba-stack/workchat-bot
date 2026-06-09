@@ -42,13 +42,43 @@ async def tron_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     tx_id = payload.get("tx_id")
     to_addr = payload.get("to_address")
     amount = payload.get("amount_usdt")
+    memo = (payload.get("memo") or payload.get("data") or "").strip()
     if not (tx_id and to_addr and amount):
         raise HTTPException(400, "missing fields")
 
-    # TODO Phase A5: lookup user by deposit_address == to_addr, credit balance
-    # сейчас просто логируем
-    logger.info("[webhook/tron] would credit %s USDT to %s (tx %s)", amount, to_addr, tx_id)
-    return {"ok": True, "stub": "phase_a5"}
+    # Парсим memo: 'user_42' → user_id=42
+    import re
+    from decimal import Decimal as _D
+    m = re.match(r"user_(\d+)", memo)
+    if not m:
+        logger.warning("[webhook/tron] memo not parsed: %r", memo)
+        return {"ok": True, "skipped": "no_memo"}
+    user_id = int(m.group(1))
+    user = await db.get(User, user_id)
+    if not user:
+        logger.warning("[webhook/tron] user %s not found", user_id)
+        return {"ok": True, "skipped": "user_not_found"}
+
+    amt = _D(str(amount))
+    user.balance_usdt += amt
+    from core.models import OperationLog as _OL
+    db.add(_OL(
+        user_id=user.id, type="deposit", amount_usdt=amt,
+        balance_after=user.balance_usdt, txid=tx_id,
+        ref_table="tron_inbound", note=f"deposit from {to_addr}",
+    ))
+    await db.commit()
+    # Уведомление JARVIS
+    try:
+        from core.services import jarvis_sync as _js
+        await _js.send_event("deposit_received", {
+            "user_id": user.id, "tg_id": user.tg_id,
+            "amount_usdt": float(amt), "tx_id": tx_id,
+        })
+    except Exception:
+        pass
+    logger.info("[webhook/tron] credited %s USDT to user=%s tx=%s", amt, user.id, tx_id)
+    return {"ok": True, "applied": "deposit", "user_id": user.id}
 
 
 # ─── JARVIS push webhook ──────────────────────────────────────────────
