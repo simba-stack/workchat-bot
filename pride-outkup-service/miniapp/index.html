@@ -329,13 +329,35 @@
   }
 
   // ─── Success animation + haptic + sound ──────────────────────────
-  // Tiny base64-encoded success ding (Apple Pay-like). Single beep.
-  const SUCCESS_SOUND_B64 = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+  // Apple-Pay-like ding: синтезируем 2-нотный аккорд через Web Audio API.
+  // Чище чем base64-mp3 и не раздувает HTML.
+  let _audioCtx = null;
+  function playSuccessChord() {
+    try {
+      if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = _audioCtx;
+      const now = ctx.currentTime;
+      // C5 → E5 → G5 — мажорный аккорд (как «дзинь» Apple Pay)
+      [523.25, 659.25, 783.99].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const start = now + i * 0.06;
+        const dur = 0.5;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+        osc.start(start);
+        osc.stop(start + dur);
+      });
+    } catch (_) {}
+  }
   function showSuccess(title, sub) {
     tg?.HapticFeedback?.notificationOccurred?.('success');
-    try {
-      const a = new Audio(SUCCESS_SOUND_B64); a.volume = 0.6; a.play().catch(()=>{});
-    } catch (_) {}
+    playSuccessChord();
     const o = document.createElement('div');
     o.className = 'success-overlay';
     o.innerHTML = `
@@ -400,7 +422,7 @@
       const dStr = change != null ? `${change > 0 ? "+" : ""}${change.toFixed(2)}%` : "";
       const initial = c.code.substring(0, 2);
       return `<div class="coin-row" onclick="openCoinDetails('${c.code}')">
-        <div class="coin-icon" style="background:${c.icon_color || '#666'}">${initial}</div>
+        <div class="coin-icon" style="background:${c.icon_color || '#666'};overflow:hidden;">${c.icon_url ? `<img src="${c.icon_url}" alt="${c.code}" style="width:100%;height:100%;object-fit:cover;" onerror="this.replaceWith(document.createTextNode('${initial}'));"/>` : initial}</div>
         <div class="coin-info">
           <div class="coin-name">${c.name}</div>
           <div class="coin-rate">${c.rate_usd ? "$"+c.rate_usd.toFixed(c.rate_usd<1?4:2) : "—"} <span class="${dCls}">${dStr}</span></div>

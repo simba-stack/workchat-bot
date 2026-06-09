@@ -125,14 +125,13 @@ async def send_transfer(
 
     # TG notification to recipient
     try:
-        from bot.main import bot as _bot
-        if _bot:
-            await _bot.send_message(
-                recipient.tg_id,
-                f"💸 <b>+{float(amount)} {coin}</b>\n"
-                f"От @{user.username or user.tg_id}"
-                + (f"\n💬 «{comment}»" if comment else ""),
-            )
+        from bot.main import notify_user
+        await notify_user(
+            recipient.tg_id,
+            f"💸 <b>+{float(amount)} {coin}</b>\n"
+            f"От @{user.username or user.tg_id}"
+            + (f"\n💬 «{comment}»" if comment else ""),
+        )
     except Exception as e:
         logger.warning("[transfer] notify failed: %s", e)
 
