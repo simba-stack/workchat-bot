@@ -297,22 +297,14 @@
   tg?.expand();
   if (tg?.themeParams?.bg_color) document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
 
-  // ─── DEBUG плашка — видим что Telegram реально передал ──────────
-  (function() {
-    const dbg = document.createElement('div');
-    dbg.id = 'tg-debug';
-    dbg.style.cssText = 'position:fixed;top:8px;left:8px;right:8px;background:rgba(255,80,80,0.92);color:white;padding:8px 12px;border-radius:10px;z-index:99999;font-size:11px;line-height:1.4;font-family:monospace;cursor:pointer;';
-    const idLen = (tg?.initData || '').length;
-    const userInfo = tg?.initDataUnsafe?.user ? `@${tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.id}` : 'нет user';
-    dbg.innerHTML = `
-      <b>🐛 DEBUG (тапни чтобы скрыть)</b><br>
-      tg=${tg ? 'OK' : 'NULL'} · platform=${tg?.platform || '-'} · version=${tg?.version || '-'}<br>
-      initData.length=${idLen} · user=${userInfo}<br>
-      ${idLen === 0 ? '⚠️ initData ПУСТО — backend вернёт 401 на любой запрос' : '✅ initData есть'}
-    `;
-    dbg.onclick = () => dbg.remove();
-    document.body.appendChild(dbg);
-  })();
+  // Если initData пустой — показываем подсказку юзеру
+  if (!tg?.initData) {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed;top:8px;left:8px;right:8px;background:#fbbf24;color:#1d2733;padding:10px 14px;border-radius:10px;z-index:99999;font-size:12px;cursor:pointer;';
+    banner.innerHTML = '⚠️ Открой Mini-App через @PrideP2P_bot → /start → кнопку «Открыть PRIDE P2P»';
+    banner.onclick = () => banner.remove();
+    document.body.appendChild(banner);
+  }
 
   let _hideBalance = false, _hideSmall = false;
   let _currentSide = "buy";
@@ -332,12 +324,16 @@
 
   // ─── API helper ───────────────────────────────────────────────────
   async function api(path, options = {}) {
+    const idata = tg?.initData || "";
+    // Передаём initData И как header, И как query — header иногда режет прокси
+    const sep = path.includes("?") ? "&" : "?";
+    const url = `/api/v1${path}${idata ? sep + "init_data=" + encodeURIComponent(idata) : ""}`;
     const headers = {
       "Content-Type": "application/json",
-      "X-Telegram-InitData": tg?.initData || "",
+      "X-Telegram-InitData": idata,
       ...(options.headers || {}),
     };
-    const r = await fetch(`/api/v1${path}`, { ...options, headers });
+    const r = await fetch(url, { ...options, headers });
     if (!r.ok) {
       const txt = await r.text();
       throw new Error(`${r.status}: ${txt}`);

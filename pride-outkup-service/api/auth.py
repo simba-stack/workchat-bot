@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 from urllib.parse import parse_qsl
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,17 +71,20 @@ def verify_init_data(init_data: str, bot_token: str, max_age_sec: int = 3600) ->
 
 
 async def get_current_user(
+    request: Request,
     x_telegram_init_data: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """FastAPI dependency — текущий юзер из initData.
 
-    Если юзера в БД нет — создаёт нового с kyc_status='pending'.
+    Принимает initData либо в заголовке X-Telegram-InitData, либо в query ?init_data=...
+    (некоторые прокси/Telegram-клиенты режут custom-headers — query надёжнее).
     """
-    if not x_telegram_init_data:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "X-Telegram-InitData header required")
+    init_data = x_telegram_init_data or request.query_params.get("init_data") or ""
+    if not init_data:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "X-Telegram-InitData header or ?init_data= query param required")
 
-    tg_user = verify_init_data(x_telegram_init_data, settings.bot_token)
+    tg_user = verify_init_data(init_data, settings.bot_token)
     tg_id = int(tg_user.get("id") or 0)
     if not tg_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no user.id in initData")
