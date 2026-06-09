@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PRIDE P2P</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+  <style>
+    :root {
+      --bg: #1d2433;
+      --card: rgba(255,255,255,0.04);
+      --card-hi: rgba(255,255,255,0.07);
+      --text: #ffffff;
+      --text-2: #c2c7d2;
+      --text-3: #8e95a8;
+      --border: rgba(255,255,255,0.06);
+      --success: #22c55e;
+      --warning: #fbbf24;
+      --danger: #ef4444;
+      --pill-bg: rgba(40,46,62,0.85);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      min-height: 100vh;
+      padding-bottom: 88px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Header */
+    header {
+      padding: 18px 16px 0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .h-title { font-size: 18px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 8px; }
+    .h-actions { display: flex; gap: 16px; color: var(--text-3); font-size: 20px; }
+
+    /* KYC row */
+    .kyc-row {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 12px; margin: 22px 16px 0;
+    }
+    .icon-circle {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--card-hi);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-3); font-size: 18px;
+    }
+    .kyc-pill {
+      flex: 1; background: var(--card);
+      border-radius: 30px; padding: 8px 14px;
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer;
+    }
+    .kyc-progress {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2.5px solid #4a5478;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: var(--text-2); flex-shrink: 0;
+    }
+    .kyc-progress.done { border-color: var(--success); color: var(--success); }
+    .kyc-txt { flex: 1; min-width: 0; }
+    .kyc-name { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 4px; }
+    .kyc-sub { font-size: 10px; color: var(--text-3); }
+
+    /* Balance */
+    .balance { text-align: center; padding: 32px 16px 14px; }
+    .balance-amount { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .balance-amount .val { font-size: 36px; font-weight: 500; color: var(--text); }
+    .balance-amount .eye { font-size: 18px; color: var(--text-3); cursor: pointer; }
+    .balance-label { font-size: 13px; color: var(--text-3); margin-top: 4px; }
+    .balance-label .ccy { color: var(--text-2); }
+
+    /* Quick actions */
+    .actions { display: flex; justify-content: center; gap: 28px; padding: 14px 0 22px; }
+    .act { text-align: center; cursor: pointer; }
+    .act-circle {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: var(--card-hi);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto; font-size: 22px; color: var(--text-2);
+      transition: background 0.15s;
+    }
+    .act:hover .act-circle { background: rgba(255,255,255,0.1); }
+    .act-name { font-size: 12px; color: var(--text-2); margin-top: 8px; }
+
+    /* Hint banner */
+    .hint {
+      margin: 0 16px;
+      background: linear-gradient(90deg, rgba(34,197,94,0.12), rgba(34,197,94,0.04));
+      border-left: 3px solid var(--success);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex; align-items: center; gap: 12px;
+      cursor: pointer;
+    }
+    .hint-ico { font-size: 22px; color: var(--success); }
+    .hint-body { flex: 1; min-width: 0; }
+    .hint-title { font-size: 13px; color: var(--text-2); }
+    .hint-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+    /* Section title */
+    .section-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 24px 16px 12px;
+    }
+    .section-title { font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    .section-action { font-size: 12px; color: var(--text-3); cursor: pointer; }
+
+    /* Asset row */
+    .asset-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-bottom: 0.5px solid var(--border);
+    }
+    .asset-row:last-child { border-bottom: 0; }
+    .asset-ico {
+      width: 38px; height: 38px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 500; font-size: 13px; flex-shrink: 0;
+    }
+    .asset-body { flex: 1; min-width: 0; }
+    .asset-name { font-size: 14px; color: var(--text); }
+    .asset-rate { font-size: 11px; color: var(--text-3); }
+    .asset-rate .up { color: var(--success); }
+    .asset-rate .down { color: var(--danger); }
+    .asset-bal { text-align: right; }
+    .asset-bal .b1 { font-size: 14px; color: var(--text); }
+    .asset-bal .b2 { font-size: 11px; color: var(--text-3); }
+
+    /* Bottom nav (pill) */
+    nav.bottom {
+      position: fixed; bottom: 10px; left: 10px; right: 10px;
+      background: var(--pill-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 30px;
+      padding: 6px;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+      z-index: 50;
+    }
+    nav.bottom .tab {
+      padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
+      color: var(--text-3); text-decoration: none; cursor: pointer;
+      border-radius: 24px; transition: all 0.15s;
+    }
+    nav.bottom .tab.active { background: rgba(255,255,255,0.07); color: var(--text); }
+    nav.bottom .tab i { font-size: 19px; }
+    nav.bottom .tab span { font-size: 10px; }
+
+    /* Pages */
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* Tabs (top toggle) */
+    .seg {
+      display: flex; gap: 4px; margin: 18px 16px 0;
+      background: var(--card); border-radius: 28px; padding: 4px;
+    }
+    .seg-tab {
+      flex: 1; text-align: center; padding: 9px;
+      font-size: 13px; color: var(--text-3); cursor: pointer;
+      border-radius: 24px;
+    }
+    .seg-tab.active { background: rgba(255,255,255,0.08); color: var(--text); }
+
+    /* Offer card */
+    .offer {
+      margin: 0 16px 8px;
+      background: var(--card);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .offer-head { display: flex; justify-content: space-between; align-items: start; }
+    .offer-trader { display: flex; align-items: center; gap: 6px; }
+    .trader-ava {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--card-hi);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; color: var(--text-2);
+    }
+    .trader-ava.pride { background: rgba(34,197,94,0.15); color: var(--success); }
+    .trader-name { font-size: 14px; color: var(--text); }
+    .verified-badge {
+      background: rgba(34,197,94,0.15); color: var(--success);
+      font-size: 9px; padding: 2px 6px; border-radius: 4px;
+    }
+    .offer-rate { text-align: right; }
+    .offer-rate .v { font-size: 17px; color: var(--text); font-weight: 500; }
+    .offer-rate .u { font-size: 10px; color: var(--text-3); }
+    .offer-stats { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+    .offer-info { font-size: 11px; color: var(--text-3); margin-top: 8px; }
+    .offer-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+    .offer-status { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
+    .offer-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+    .btn-buy {
+      background: #ffffff; color: var(--bg);
+      border: 0; padding: 7px 18px; border-radius: 20px;
+      font-size: 12px; font-weight: 500; cursor: pointer;
+    }
+    .btn-buy-sec {
+      background: rgba(255,255,255,0.08); color: var(--text);
+      border: 0; padding: 7px 18px; border-radius: 20px;
+      font-size: 12px; cursor: pointer;
+    }
+
+    /* Filters */
+    .filters { display: flex; gap: 8px; margin: 14px 16px 8px; flex-wrap: wrap; }
+    .filter {
+      background: var(--card-hi); border-radius: 18px;
+      padding: 6px 12px; font-size: 12px; color: var(--text-2);
+      display: flex; align-items: center; gap: 5px; cursor: pointer;
+    }
+    .filter .val { color: var(--text); }
+
+    /* Empty / loading */
+    .empty { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
+
+    /* Exchange */
+    .ex-card {
+      margin: 0 16px;
+      background: var(--card);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .ex-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+    .ex-row .label { font-size: 12px; color: var(--text-3); }
+    .ex-row .val { font-size: 14px; color: var(--text); font-weight: 500; }
+    .ex-amount {
+      width: 100%;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font-size: 28px;
+      font-weight: 500;
+      text-align: center;
+      outline: none;
+      padding: 12px 0;
+    }
+    .ex-arrow {
+      display: flex; align-items: center; justify-content: center;
+      margin: -2px 0;
+    }
+    .ex-arrow-circle {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--card-hi);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-2); font-size: 16px;
+      border: 4px solid var(--bg);
+    }
+    .ex-receive {
+      text-align: center; padding: 12px 0;
+    }
+    .ex-receive .v { font-size: 22px; color: var(--text); font-weight: 500; }
+    .ex-receive .l { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .btn-primary {
+      width: 100%;
+      background: #ffffff; color: var(--bg);
+      border: 0; padding: 14px;
+      border-radius: 28px;
+      font-size: 14px; font-weight: 500;
+      margin: 16px 16px 0;
+      width: calc(100% - 32px);
+      cursor: pointer;
+    }
+    .btn-primary:disabled { opacity: 0.4; }
+
+    .methods { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 16px 0; }
+    .method {
+      background: var(--card-hi); border-radius: 16px;
+      padding: 7px 14px; font-size: 12px; color: var(--text-2);
+      cursor: pointer;
+    }
+    .method.active { background: #fff; color: var(--bg); }
+
+    /* Skeleton loading */
+    .skel {
+      background: linear-gradient(90deg, var(--card) 25%, var(--card-hi) 50%, var(--card) 75%);
+      background-size: 200% 100%;
+      animation: skel 1.4s infinite;
+      border-radius: 6px;
+    }
+    @keyframes skel { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+    /* Helpers */
+    .row { display: flex; align-items: center; }
+    .gap-2 { gap: 8px; } .gap-3 { gap: 12px; }
+    .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ PAGE: WALLET ═══════════════ -->
+<div class="page active" data-page="wallet">
+  <header>
+    <div class="h-title">PRIDE P2P</div>
+    <div class="h-actions">
+      <i class="ti ti-bell"></i>
+      <i class="ti ti-dots-vertical"></i>
+    </div>
+  </header>
+
+  <div class="kyc-row" id="kyc-row" onclick="goPage('profile')">
+    <div class="icon-circle"><i class="ti ti-qrcode"></i></div>
+    <div class="kyc-pill">
+      <div class="kyc-progress" id="kyc-progress">0/3</div>
+      <div class="kyc-txt">
+        <div class="kyc-name">Настройте аккаунт <i class="ti ti-chevron-right" style="font-size:13px"></i></div>
+        <div class="kyc-sub">Займёт 2 минуты</div>
+      </div>
+    </div>
+    <div class="icon-circle"><i class="ti ti-settings"></i></div>
+  </div>
+
+  <div class="balance">
+    <div class="balance-amount">
+      <span class="val" id="bal-usdt">$ 0</span>
+      <i class="ti ti-eye eye"></i>
+    </div>
+    <div class="balance-label">Общий баланс в <span class="ccy">USDT</span></div>
+  </div>
+
+  <div class="actions">
+    <div class="act" onclick="alert('Пополнение — Phase A5')"><div class="act-circle"><i class="ti ti-arrow-down-left"></i></div><div class="act-name">Пополнить</div></div>
+    <div class="act" onclick="alert('Вывод — Phase A5')"><div class="act-circle"><i class="ti ti-arrow-up-right"></i></div><div class="act-name">Вывести</div></div>
+    <div class="act" onclick="goPage('exchange')"><div class="act-circle"><i class="ti ti-arrows-exchange"></i></div><div class="act-name">Обмен</div></div>
+    <div class="act"><div class="act-circle"><i class="ti ti-history"></i></div><div class="act-name">История</div></div>
+  </div>
+
+  <div class="hint" onclick="goPage('profile')">
+    <div class="hint-ico"><i class="ti ti-shield-check"></i></div>
+    <div class="hint-body">
+      <div class="hint-title">Пройдите верификацию</div>
+      <div class="hint-sub">Откроется доступ к P2P и крупным сделкам</div>
+    </div>
+    <i class="ti ti-chevron-right" style="color:var(--text-3); font-size:18px"></i>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Мои активы <i class="ti ti-chevron-right" style="font-size:13px"></i></div>
+    <div class="section-action">Скрыть мелкие</div>
+  </div>
+
+  <div id="assets-list">
+    <div class="asset-row">
+      <div class="asset-ico" style="background:#22c55e">₮</div>
+      <div class="asset-body">
+        <div class="asset-name">USDT</div>
+        <div class="asset-rate">$1.00 <span class="up">+0.01%</span></div>
+      </div>
+      <div class="asset-bal">
+        <div class="b1" id="asset-usdt-bal">0 USDT</div>
+        <div class="b2">$0</div>
+      </div>
+    </div>
+    <div class="asset-row">
+      <div class="asset-ico" style="background:#5a667a">₽</div>
+      <div class="asset-body">
+        <div class="asset-name">RUB</div>
+        <div class="asset-rate">Курс <span id="rate-buy">84.0</span> ₽ <span class="down">-0.12%</span></div>
+      </div>
+      <div class="asset-bal">
+        <div class="b1">0 ₽</div>
+        <div class="b2">$0</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ PAGE: EXCHANGE (P2P доска) ═══════════════ -->
+<div class="page" data-page="exchange">
+  <header>
+    <div class="h-title">Биржа</div>
+    <div class="h-actions">
+      <i class="ti ti-search"></i>
+      <i class="ti ti-adjustments-horizontal"></i>
+    </div>
+  </header>
+
+  <div class="seg">
+    <div class="seg-tab active" onclick="switchSide(this,'buy')">Купить USDT</div>
+    <div class="seg-tab" onclick="switchSide(this,'sell')">Продать USDT</div>
+  </div>
+
+  <div class="filters">
+    <div class="filter">Сумма <span class="val">50 000 ₽</span> <i class="ti ti-chevron-down"></i></div>
+    <div class="filter">Банк <i class="ti ti-chevron-down"></i></div>
+    <div class="filter">Online</div>
+  </div>
+
+  <div class="section-head" style="padding-top:6px">
+    <div class="section-title">Лучший курс ↓</div>
+    <div class="section-action">Сортировка <i class="ti ti-arrows-sort"></i></div>
+  </div>
+
+  <div id="offers-list">
+    <!-- PRIDE Official — всегда первая -->
+    <div class="offer">
+      <div class="offer-head">
+        <div>
+          <div class="offer-trader">
+            <div class="trader-ava pride"><i class="ti ti-shield-check"></i></div>
+            <div class="trader-name">PRIDE Official</div>
+            <span class="verified-badge">VERIFIED</span>
+          </div>
+          <div class="offer-stats">5.0 ★ · 9999+ сделок · 24/7</div>
+        </div>
+        <div class="offer-rate">
+          <div class="v">84.00</div>
+          <div class="u">₽/USDT</div>
+        </div>
+      </div>
+      <div class="offer-info">Лимит 5к – 5М ₽ · Тинькофф, Сбер, Альфа</div>
+      <div class="offer-foot">
+        <div class="offer-status"><span class="dot"></span>Авто-выдача реквизита</div>
+        <button class="btn-buy" onclick="openOffer('pride')">Купить</button>
+      </div>
+    </div>
+
+    <!-- Загрузится из API -->
+    <div id="other-offers"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ PAGE: ORDERS ═══════════════ -->
+<div class="page" data-page="orders">
+  <header>
+    <div class="h-title">Заявки</div>
+    <div class="h-actions"><i class="ti ti-filter"></i></div>
+  </header>
+
+  <div class="seg">
+    <div class="seg-tab active">Активные</div>
+    <div class="seg-tab">История</div>
+  </div>
+
+  <div id="orders-list">
+    <div class="empty">Активных заявок нет</div>
+  </div>
+</div>
+
+<!-- ═══════════════ PAGE: PROFILE ═══════════════ -->
+<div class="page" data-page="profile">
+  <header>
+    <div class="h-title">Профиль</div>
+    <div class="h-actions"><i class="ti ti-settings"></i></div>
+  </header>
+
+  <div style="text-align:center; padding:24px 16px">
+    <div style="width:72px; height:72px; border-radius:50%; background:var(--card-hi); display:flex; align-items:center; justify-content:center; margin:0 auto; font-size:28px; color:var(--text-2)" id="ava-init">?</div>
+    <div style="font-size:18px; color:var(--text); margin-top:12px" id="prof-name">—</div>
+    <div style="font-size:13px; color:var(--text-3); margin-top:2px" id="prof-status">Не верифицирован</div>
+  </div>
+
+  <div class="ex-card" style="margin:0 16px 12px">
+    <div class="ex-row"><span class="label">Сделок завершено</span><span class="val" id="prof-deals">0</span></div>
+    <div class="ex-row"><span class="label">% успеха</span><span class="val" id="prof-rate">—</span></div>
+    <div class="ex-row"><span class="label">Trust score</span><span class="val" id="prof-trust">0/100</span></div>
+    <div class="ex-row"><span class="label">Оборот</span><span class="val" id="prof-vol">0 USDT</span></div>
+  </div>
+
+  <div class="ex-card" style="margin:0 16px 12px">
+    <div class="ex-row"><span class="label">TRC20-адрес</span><span class="val" id="prof-addr" style="font-family:monospace; font-size:12px">—</span></div>
+  </div>
+
+  <button class="btn-primary" onclick="alert('KYC flow — Phase A2')">Пройти верификацию</button>
+</div>
+
+<!-- ═══════════════ BOTTOM NAV ═══════════════ -->
+<nav class="bottom">
+  <div class="tab active" data-tab="wallet" onclick="goPage('wallet')">
+    <i class="ti ti-wallet"></i><span>Кошелёк</span>
+  </div>
+  <div class="tab" data-tab="exchange" onclick="goPage('exchange')">
+    <i class="ti ti-building-bank"></i><span>Биржа</span>
+  </div>
+  <div class="tab" data-tab="orders" onclick="goPage('orders')">
+    <i class="ti ti-list-details"></i><span>Заявки</span>
+  </div>
+  <div class="tab" data-tab="profile" onclick="goPage('profile')">
+    <i class="ti ti-user"></i><span>Профиль</span>
+  </div>
+</nav>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  tg?.ready();
+  tg?.expand();
+
+  // Apply Telegram theme colors if available
+  if (tg?.themeParams?.bg_color) {
+    document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
+  }
+
+  function goPage(name) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelector(`.page[data-page="${name}"]`)?.classList.add('active');
+    document.querySelectorAll('nav.bottom .tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`nav.bottom .tab[data-tab="${name}"]`)?.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  function switchSide(el, side) {
+    el.parentElement.querySelectorAll('.seg-tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    // TODO: загрузить офферы side=buy/sell
+  }
+
+  function openOffer(id) {
+    tg?.showAlert?.(`Откроется страница оффера #${id} (Phase A3)`);
+  }
+
+  async function api(path, options = {}) {
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Telegram-InitData": tg?.initData || "",
+      ...(options.headers || {}),
+    };
+    const r = await fetch(`/api/v1${path}`, { ...options, headers });
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+    return r.json();
+  }
+
+  async function bootstrap() {
+    try {
+      const [me, rate] = await Promise.all([
+        api("/users/me").catch(() => null),
+        api("/exchange/rate").catch(() => ({ buy: 84.0, sell: 82.0 })),
+      ]);
+
+      if (me) {
+        // Balance
+        document.getElementById("bal-usdt").textContent =
+          `$ ${Number(me.balance_usdt || 0).toFixed(2)}`;
+        document.getElementById("asset-usdt-bal").textContent =
+          `${Number(me.balance_usdt || 0).toFixed(2)} USDT`;
+
+        // KYC progress
+        const kycSteps = { pending: 0, pending_review: 1, verified: 3, rejected: 0, banned: 0 };
+        const progress = kycSteps[me.kyc_status] || 0;
+        const progEl = document.getElementById("kyc-progress");
+        if (progress >= 3) {
+          progEl.classList.add("done");
+          progEl.innerHTML = '<i class="ti ti-check"></i>';
+          document.getElementById("kyc-row").style.display = "none";
+        } else {
+          progEl.textContent = `${progress}/3`;
+        }
+
+        // Profile
+        const initials = (me.full_name || me.username || "?")
+          .split(" ").map(s => s[0]?.toUpperCase()).slice(0,2).join("");
+        document.getElementById("ava-init").textContent = initials || "?";
+        document.getElementById("prof-name").textContent =
+          me.full_name || `@${me.username}` || "—";
+        document.getElementById("prof-status").textContent =
+          me.kyc_status === "verified" ? "✓ Verified" : "Не верифицирован";
+        document.getElementById("prof-deals").textContent = me.stats?.completed_deals ?? 0;
+        document.getElementById("prof-rate").textContent =
+          me.stats?.completion_rate_pct ? `${me.stats.completion_rate_pct}%` : "—";
+        document.getElementById("prof-trust").textContent = `${me.trust_score || 0}/100`;
+        document.getElementById("prof-vol").textContent =
+          `${Number(me.stats?.total_volume_usdt || 0).toFixed(2)} USDT`;
+        document.getElementById("prof-addr").textContent = me.trc20_address || "не указан";
+      }
+
+      if (rate) {
+        document.getElementById("rate-buy").textContent = rate.buy.toFixed(2);
+      }
+    } catch (e) {
+      console.error("bootstrap failed:", e);
+    }
+  }
+
+  bootstrap();
+</script>
+</body>
+</html>

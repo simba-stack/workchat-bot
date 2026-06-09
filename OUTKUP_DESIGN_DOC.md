@@ -118,6 +118,50 @@ pride-outkup-service/
 
 ---
 
+## 1.5. Design System (утверждено SIMBA 2026-06-09)
+
+Стиль референса — Crypto Bot (Wallet). Минимализм, тёмно-серый, **без яркого голубого акцента**.
+
+### Палитра
+
+```css
+:root {
+  --bg:       #1d2433;              /* Фон main */
+  --card:     rgba(255,255,255,0.04); /* Карточки */
+  --card-hi:  rgba(255,255,255,0.07); /* Карточки accent / iconcircle */
+  --text:     #ffffff;              /* Primary text */
+  --text-2:   #c2c7d2;              /* Secondary */
+  --text-3:   #8e95a8;              /* Tertiary / hints */
+  --border:   rgba(255,255,255,0.06);
+  --success:  #22c55e;
+  --warning:  #fbbf24;
+  --danger:   #ef4444;
+  --pill-bg:  rgba(40,46,62,0.85);  /* Bottom-nav blur bg */
+}
+```
+
+### Правила
+
+- **Primary button** = белый бг `#fff`, тёмный текст `var(--bg)`, `border-radius: 28px`, padding 14px
+- **Secondary button** = `rgba(255,255,255,0.08)` бг, белый текст
+- **Иконки в круге** — `var(--card-hi)`, иконка `var(--text-2)`, радиус 50%
+- **Карточки** — `var(--card)`, radius 14px, padding 14px
+- **Bottom nav** — pill с `backdrop-filter: blur(20px)`, активный таб подсвечен `rgba(255,255,255,0.07)`
+- **Sticky pill сверху** (KYC progress) — круг + текст в полупрозрачной плашке
+- **Шрифты** — SF Pro Display / system, веса 400/500 (никаких 600+)
+- **Цветовые акценты**: success зелёный — для верификации/успехов; warning жёлтый — таймер/предупреждение; danger красный — % падения/отмены/споры
+- **НЕТ**: ярко-голубого, градиентов, теней, неона
+
+### Типографика
+
+| Элемент | size | weight | color |
+|---------|------|--------|-------|
+| Page title | 18px | 500 | text |
+| Balance amount | 36px | 500 | text |
+| Card title | 14px | 500 | text |
+| Label | 12-13px | 400 | text-2 |
+| Hint / sub | 10-11px | 400 | text-3 |
+
 ## 2. Mockups Mini-App (V1)
 
 ### 2.1. Главный экран — Баланс (стартовый таб)
@@ -909,7 +953,240 @@ ADMIN_TG_IDS=8151738775                    # SIMBA
 
 ---
 
-## 8. Open questions перед стартом кодинга
+## 8. Полный feature-set (адаптированные функции бирж и P2P)
+
+Прошёлся по фичам Binance, Bybit, Huobi P2P, Bitpapa, LocalBitcoins. Адаптирую под нашу модель.
+
+### 8.1. Onboarding и аккаунт
+- ✅ Регистрация через Telegram (auto, без email/пароля — `initData`)
+- ✅ Multi-level KYC: Lvl 0 (только смотреть) / Lvl 1 (паспорт + телефон, до 50к/сделка) / Lvl 2 (КУЦ-видео, до 500к/сделка) / Lvl 3 (документ адреса + видео, без лимита)
+- ✅ Auto-pass KYC для `is_partner=true` (импорт из workchat-bot)
+- ✅ Anti-phishing code (юзер задаёт фразу — все email/TG от PRIDE её содержат, защита от фишинга)
+- ✅ Trust score 0..100 — растёт от завершённых сделок, падает от споров/отмен/опозданий
+- ✅ Verification badges: 🛡 KYC verified · ⭐ Top trader · 💎 VIP · ⚡ Fast trader (< 5 мин)
+- ⏸ Биометрия для подтверждения операций (TouchID/FaceID) — Phase B
+- ⏸ Email уведомления (нужны для recovery) — Phase B
+
+### 8.2. Кошельки и баланс
+- ✅ Internal balance PRIDE (USDT) — главное хранение
+- ✅ TRC20-адрес для вывода (один основной, можно menять)
+- ✅ Депозит USDT: показать TRC20-адрес сервиса + QR-код, автоматическое зачисление через TronGrid webhook
+- ✅ Вывод USDT: запрос → автоматическая отправка (если < threshold) / 2FA через guard_bot (если > threshold)
+- ✅ History всех операций с фильтрами (deposit/withdraw/earn/fee/escrow)
+- ✅ Лимиты вывода в день/неделю по KYC-уровню
+- ✅ Freeze баланса (если открыт спор — часть заморожена)
+- ⏸ Multi-currency wallets (BTC/ETH) — далеко в будущем
+- ⏸ Earn/Staking — отдельный продукт, не сейчас
+
+### 8.3. Exchange (V1 — обмен с PRIDE)
+- ✅ Купить USDT за RUB
+- ✅ Продать USDT за RUB
+- ✅ Live курс из JARVIS (sync каждые 30 сек)
+- ✅ Расчёт сумм налету при вводе
+- ✅ Toggle направления RUB ⇅ USDT
+- ✅ Выбор метода оплаты (Тинькофф/Сбер/Альфа/Озон/...)
+- ✅ Выбор destination (баланс/TRC20)
+- ✅ Откуп бизнес-счёта — спец-флоу для крупных сумм с разделением на части
+- ✅ Quick amounts (50к, 100к, 500к — кнопки)
+- ⏸ Recurring exchange (автообмен по расписанию) — Phase B
+- ⏸ Spot orders с разными типами — нет, мы не биржа
+
+### 8.4. P2P (V2 — клиенты ↔ клиенты)
+- ✅ Доска объявлений с фильтрами/сортировкой
+- ✅ **PRIDE Official как первый оффер** в списке (всегда сверху, верифицированный, лучший курс) — это и есть мост V1↔V2
+- ✅ Создание оффера (для верифицированных, с лимитом по KYC-уровню)
+- ✅ Pause/Activate/Archive оффера
+- ✅ Auto-reply при создании сделки (откупщик заранее настраивает текст)
+- ✅ Online status (зелёный/жёлтый/серый — последняя активность)
+- ✅ Trader profile: статистика, рейтинг, отзывы, история
+- ✅ Bookmark (избранные офферы)
+- ✅ Reviews (лайк/дизлайк + опц. текст после сделки)
+- ✅ Escrow lock автоматический
+- ✅ Dispute resolution (PRIDE = арбитр, 24ч ответа)
+- ✅ Trade chat (анонимный, через бота, без раскрытия личных TG)
+- ✅ Live deal status с countdown timer
+- ✅ Quick filters (банк/валюта/online-only/мин-сумма)
+- ✅ Sort by: best rate / trader rating / volume / payment speed
+- ⏸ Limit orders (типа поставил курс — сделка автоматически при пересечении) — Phase C
+- ⏸ Order book визуализация — Phase C
+
+### 8.5. Безопасность
+- ✅ Escrow с гарантией PRIDE (USDT заморожен до confirm)
+- ✅ Anti-phishing code в уведомлениях
+- ✅ 2FA через `@PrideGuard_bot` для крупных операций (>$500)
+- ✅ Rate limit на создание сделок (не более 5 одновременно)
+- ✅ IP logging (FastAPI middleware)
+- ✅ Blacklist по TG-ID и TRC20-адресам
+- ✅ Заморозка аккаунта админом (бан)
+- ✅ Cooldown после отмены сделки (1 минута)
+- ✅ Auto-detect мошеннических паттернов (одинаковая сумма от разных юзеров за 5 мин)
+- ⏸ Device management (список устройств с активными сессиями) — Phase B
+
+### 8.6. Уведомления
+- ✅ TG-bot уведомления (по умолчанию, всегда)
+- ✅ Push в Mini-App (через TG webview)
+- ✅ Tag в групповых чатах (если включено)
+- ✅ Price alerts (когда курс достиг X — уведомить)
+- ✅ Customizable: пользователь выбирает что получать (новые офферы / сделки / споры / маркетинг)
+- ⏸ Email — Phase B
+- ⏸ SMS — слишком дорого
+
+### 8.7. Реферальная программа
+- ✅ Уникальная реф-ссылка `https://t.me/PrideP2P_bot?start=ref_USERID`
+- ✅ Приглашающий получает % с маржи PRIDE по сделкам приглашённого (например 10% от 3.5% = 0.35% с оборота)
+- ✅ Многоуровневая (Lvl1 10%, Lvl2 3%, Lvl3 1%) — опционально
+- ✅ Real-time dashboard рефералов
+- ✅ Promo codes (раздаём купоны на снижение комиссии)
+- ⏸ Affiliate API для блогеров — Phase C
+
+### 8.8. Поддержка и помощь
+- ✅ Chat support через бота (24/7 — направление в команд-чат PRIDE)
+- ✅ FAQ / Help center (статьи в Mini-App)
+- ✅ Onboarding tour для новых юзеров
+- ✅ Tooltips на сложных полях
+- ⏸ Live chat с оператором — Phase B
+
+### 8.9. Профиль и статистика
+- ✅ Total trades / Completion rate
+- ✅ Avg release time
+- ✅ Volume (week/month/all-time)
+- ✅ Trust score history
+- ✅ Trader achievements / Badges
+- ✅ Earnings dashboard (для откупщиков-партнёров)
+- ⏸ Leaderboard публичный (топ-10 трейдеров) — Phase C
+
+### 8.10. Локализация и доступность
+- ✅ Русский на старте
+- ✅ Adapt to Telegram theme (light/dark auto)
+- ⏸ Английский — Phase C
+- ⏸ Accessibility (screen reader, увеличенный шрифт) — Phase B
+
+### 8.11. Аналитика и админка (JARVIS-side)
+- ✅ Все события синкаются в JARVIS через webhook
+- ✅ Real-time dashboard в JARVIS «Outkup → V1 / V2»
+- ✅ Модерация KYC из JARVIS (одобрить/отклонить)
+- ✅ Модерация споров из JARVIS
+- ✅ Управление курсом PRIDE из JARVIS (Settings → Курс)
+- ✅ Управление комиссиями из JARVIS
+- ✅ Бан пользователей из JARVIS
+- ✅ Аналитика: маржа по дням/неделям/месяцам, по клиентам, по откупщикам (уже есть в текущих Откупах)
+- ✅ Promo-коды управление
+- ⏸ A/B-тестирование курса — далеко
+
+### 8.12. Группы Telegram
+- ✅ Бот в группе: команды `/курс`, `/предложения`, `/статус`
+- ✅ Текст «откуп 100к» → бот создаёт заявку (только если юзер верифицирован)
+- ✅ Объявления PRIDE в групповом чате (рассылка анонсов)
+- ⏸ Channel mode (только PRIDE постит, юзеры реагируют) — Phase C
+
+---
+
+## 9. Синхронизация с PRIDE JARVIS
+
+**Это самое критичное место.** Сейчас в JARVIS Откупы работают на локальном storage. После запуска outkup-сервиса JARVIS становится **read-mostly клиентом** удалённого сервиса.
+
+### 9.1. Что синкается
+
+Все ключевые сущности:
+- **users** (создание/обновление/KYC/бан)
+- **orders** (V1: создание/принятие/выдача реквизита/чек/завершение)
+- **offers** (V2: создание/паузa/архивация)
+- **deals** (V2: создание/оплата/release/спор)
+- **escrow_locks** (lock/release)
+- **operations_log** (depo/withdraw/earn/fee)
+- **tron_outbound_log** (исходящие выплаты)
+- **disputes** (создание/решение)
+
+### 9.2. Webhook-протокол (outkup-service → JARVIS)
+
+```
+POST https://workchat-bot-production.up.railway.app/api/webhook/outkup
+Headers:
+  X-Outkup-Signature: hmac_sha256(payload, OUTKUP_HMAC_SECRET)
+  X-Outkup-Timestamp: 1717744800
+  X-Outkup-Event: order.created
+Content-Type: application/json
+
+Body:
+{
+  "event": "order.created",
+  "version": 1,
+  "timestamp": 1717744800,
+  "data": {
+    "order_id": 29,
+    "order_number": "#O0029",
+    "user": { "tg_id": 8232753590, "username": "ivan_p" },
+    "kind": "business_outkup",
+    "amount_rub": 500000,
+    "amount_usdt": 5952.38,
+    "rate": 84.00,
+    "status": "pending"
+  }
+}
+```
+
+Список events:
+- `user.created`, `user.kyc_submitted`, `user.kyc_decided`, `user.banned`
+- `order.created`, `order.accepted`, `order.payment_issued`, `order.receipt_uploaded`, `order.payment_confirmed`, `order.completed`, `order.cancelled`, `order.disputed`
+- `offer.created`, `offer.paused`, `offer.archived`
+- `deal.created`, `deal.paid`, `deal.released`, `deal.disputed`, `deal.cancelled`
+- `withdraw.requested`, `withdraw.sent`, `withdraw.confirmed`
+- `dispute.opened`, `dispute.resolved`
+
+JARVIS получает webhook → проверяет HMAC → пишет в local cache (state.outkup_remote) → показывает в UI.
+
+### 9.3. REST API для JARVIS (read-mostly)
+
+JARVIS периодически пуллит для надёжности (на случай если webhook потерян):
+
+```
+GET /api/v1/sync/orders?since=<ts>&limit=100
+GET /api/v1/sync/deals?since=<ts>
+GET /api/v1/sync/users?since=<ts>
+GET /api/v1/sync/stats/daily?date=<YYYY-MM-DD>
+GET /api/v1/sync/disputes?status=open
+```
+
+Auth: header `Authorization: Bearer <JARVIS_API_TOKEN>` (общий секрет).
+
+### 9.4. Реверс — JARVIS → outkup-service
+
+JARVIS делает write-операции (админ-действия):
+
+```
+POST /api/v1/admin/users/{id}/kyc_decide  body: {decision: 'approved'|'rejected', note}
+POST /api/v1/admin/users/{id}/ban         body: {reason}
+POST /api/v1/admin/disputes/{id}/resolve  body: {winner: 'buyer'|'seller', note}
+POST /api/v1/admin/exchange/set_rate      body: {buy_rate, sell_rate, fee_pct}
+POST /api/v1/admin/promos/create          body: {code, discount_pct, expires_at}
+POST /api/v1/admin/users/{id}/freeze_balance body: {amount, reason}
+```
+
+Auth: Bearer JARVIS_API_TOKEN. Только пользователи с `role=owner|manager` в JARVIS.
+
+### 9.5. Failure handling
+
+- **Webhook не дошёл** → outkup-сервис ретраит exponential backoff (1, 5, 15, 60, 300 сек), потом помечает событие как failed_to_deliver. JARVIS pull-полингом подбирает (см. 9.3).
+- **JARVIS пишет в outkup но получает 5xx** → ретраит до 3 раз, потом alert админу.
+- **Расхождение данных** → ночной cron-job в JARVIS сверяет totals (count_orders, sum_usdt, sum_rub) с `/api/v1/sync/stats/daily` outkup-сервиса. Расхождение > 0.1% → alert.
+
+### 9.6. Миграция текущих Откупов
+
+После запуска outkup-сервиса:
+1. Один раз: `scripts/import_partners.py` тянет из workchat-bot:
+   - `state.outkup_partners` → `users` (с `is_partner=true`, `kyc_status='verified'`)
+   - `state.outkup_orders` → `orders` (historical, status='done')
+   - `state.outkup_payments` → `order_payments`
+   - `state.outkup_client_payouts` → `operations_log` + tron_outbound_log
+   - `state.outkup_client_wallets` → `users.trc20_address`
+2. В JARVIS вкладку «Откупы» переключаем на новый remote-источник (флаг `state.outkup_use_remote=true`).
+3. Старые модули `outkup_detector.py` отключаются (но код остаётся для отката).
+4. Грейс-период 2 недели — параллельно работают оба, можно сравнивать.
+5. Через 2 недели — полное удаление старого кода.
+
+---
+
+## 10. Open questions перед стартом кодинга
 
 1. **Курс RUB→USDT** — берём из JARVIS (sync) или у Outkup-сервиса свой? Я предлагаю синхронизировать из JARVIS — там SIMBA меняет ручкой.
 2. **Маржа на V2 P2P** — фиксированная (0.5%) или % от суммы сделки + минимум?
