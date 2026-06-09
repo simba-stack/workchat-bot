@@ -192,14 +192,19 @@ async def submit_kyc(
 @router.post("/me/deposits/request")
 async def create_deposit_request(
     payload: dict,
-    user: User = Depends(require_verified),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Crypto-Bot-стиль депозит. Юзер вводит сумму, мы возвращаем точную сумму
     с микро-отклонением (для матчинга) + адрес + TTL 15 мин.
 
+    Депозиты разрешены без KYC — это просто приём средств.
+    KYC требуется для вывода/P2P/обмена.
+
     payload: {amount_usdt: float}
     """
+    if user.kyc_status == "banned":
+        raise HTTPException(403, "Аккаунт заблокирован")
     from core.config import settings as cfg
     if not cfg.tron_hot_wallet_address:
         raise HTTPException(503, "TRON-кошелёк ещё не настроен")
