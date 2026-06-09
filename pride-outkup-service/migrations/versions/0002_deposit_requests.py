@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = "0002_deposit_requests"
-down_revision = "0001_initial"
+down_revision = "0001"
 branch_labels = None
 depends_on = None
 

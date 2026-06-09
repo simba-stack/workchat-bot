@@ -16,9 +16,75 @@ from core.services import jarvis_sync, tron_monitor, rates_service
 logger = logging.getLogger(__name__)
 
 
+async def _ensure_schema_and_seed():
+    """Safety net: create_all для всех моделей + seed coins если пусто.
+    Запускается после alembic upgrade. Идемпотентно — таблицы IF NOT EXISTS,
+    coins seed только если пустая таблица.
+    """
+    from decimal import Decimal
+    from sqlalchemy import select, func
+    from core.db import Base, engine, AsyncSessionLocal
+    from core.models import Coin
+
+    # 1) create_all для всех моделей (idempotent, IF NOT EXISTS)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("[schema] create_all OK")
+    except Exception as e:
+        logger.warning("[schema] create_all skipped: %s", e)
+
+    # 2) Seed coins если таблица пуста
+    SEED = [
+        ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
+         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 2, 1, 10),
+        ("TON",   "Toncoin",      "the-open-network", ["TON"], 9, "#0098EA",
+         "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 1, 0.05, 20),
+        ("TRX",   "TRON",         "tron",             ["TRC20"], 6, "#FF060A",
+         "https://assets.coingecko.com/coins/images/1094/small/tron-logo.png", 5, 5, 1, 30),
+        ("BTC",   "Bitcoin",      "bitcoin",          ["BTC"], 8, "#F7931A",
+         "https://assets.coingecko.com/coins/images/1/small/bitcoin.png", 0.0001, 0.0005, 0.0001, 40),
+        ("ETH",   "Ethereum",     "ethereum",         ["ERC20"], 18, "#627EEA",
+         "https://assets.coingecko.com/coins/images/279/small/ethereum.png", 0.01, 0.01, 0.003, 50),
+        ("SOL",   "Solana",       "solana",           ["SPL"], 9, "#9945FF",
+         "https://assets.coingecko.com/coins/images/4128/small/solana.png", 0.05, 0.1, 0.01, 60),
+        ("USDC",  "USD Coin",     "usd-coin",         ["TRC20","ERC20","BEP20","SPL"], 6, "#2775CA",
+         "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png", 1, 2, 1, 15),
+        ("BNB",   "Binance Coin", "binancecoin",      ["BEP20"], 18, "#F3BA2F",
+         "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", 0.005, 0.01, 0.001, 70),
+        ("DOGE",  "Dogecoin",     "dogecoin",         ["DOGE"], 8, "#C2A633",
+         "https://assets.coingecko.com/coins/images/5/small/dogecoin.png", 5, 5, 2, 80),
+        ("LTC",   "Litecoin",     "litecoin",         ["LTC"], 8, "#345D9D",
+         "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.001, 0.0003, 90),
+        ("XAUT",  "Tether Gold",  "tether-gold",      ["ERC20"], 6, "#D4AF37",
+         "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.001, 0.0005, 95),
+        ("RUB",   "Российский рубль", None,           [], 2, "#FF3B30",
+         None, 100, 100, 0, 100),
+    ]
+    try:
+        async with AsyncSessionLocal() as db:
+            cnt = (await db.execute(select(func.count(Coin.id)))).scalar() or 0
+            if cnt == 0:
+                for (code, name, cg_id, nets, dec, color, icon, mind, minw, fee, sort_) in SEED:
+                    db.add(Coin(
+                        code=code, name=name, coingecko_id=cg_id,
+                        networks=nets, decimals=dec, icon_color=color, icon_url=icon,
+                        min_deposit=Decimal(str(mind)), min_withdraw=Decimal(str(minw)),
+                        withdraw_fee=Decimal(str(fee)), sort_order=sort_, is_active=True,
+                    ))
+                await db.commit()
+                logger.info("[schema] seeded %d coins", len(SEED))
+            else:
+                logger.info("[schema] coins already seeded (%d rows)", cnt)
+    except Exception as e:
+        logger.warning("[schema] seed skipped: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI starting...")
+    # Safety: гарантируем что все таблицы существуют + seed coins
+    await _ensure_schema_and_seed()
     # Background: периодический pull курса из JARVIS
     sync_task = asyncio.create_task(jarvis_sync.rate_sync_loop())
     logger.info("Started: jarvis rate_sync_loop")
