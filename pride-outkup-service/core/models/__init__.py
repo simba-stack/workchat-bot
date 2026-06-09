@@ -8,6 +8,8 @@ from core.models.dispute import Dispute
 from core.models.chat import ChatMessage
 from core.models.ops import OperationLog, TronOutboundLog
 from core.models.deposit_request import DepositRequest
+from core.models.coin import Coin, UserCoinBalance
+from core.models.transfer import Transfer, Swap
 
 __all__ = [
     "User",
@@ -21,4 +23,8 @@ __all__ = [
     "OperationLog",
     "TronOutboundLog",
     "DepositRequest",
+    "Coin",
+    "UserCoinBalance",
+    "Transfer",
+    "Swap",
 ]

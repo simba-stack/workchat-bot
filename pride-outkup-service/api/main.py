@@ -9,9 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import users, exchange, orders, offers, deals, webhooks, admin
+from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet
 from core.config import settings
-from core.services import jarvis_sync, tron_monitor
+from core.services import jarvis_sync, tron_monitor, rates_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,14 @@ async def lifespan(app: FastAPI):
     # Background: TRON monitor — polling входящих TRC20 каждые 30 сек
     tron_task = asyncio.create_task(tron_monitor.monitor_loop())
     logger.info("Started: tron_monitor")
+    # Background: crypto rates polling (CoinGecko) каждые 60 сек
+    rates_task = asyncio.create_task(rates_service.rate_loop())
+    logger.info("Started: rates_service")
     yield
     logger.info("FastAPI stopping...")
     sync_task.cancel()
     tron_task.cancel()
+    rates_task.cancel()
 
 
 app = FastAPI(
@@ -63,6 +67,7 @@ app.include_router(offers.router, prefix="/api/v1/offers", tags=["offers"])
 app.include_router(deals.router, prefix="/api/v1/deals", tags=["deals"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 
 
 # ─── Mini-App статика ──────────────────────────────────────────────

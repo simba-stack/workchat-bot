@@ -8,17 +8,19 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
   <style>
     :root {
-      --bg: #1d2433;
+      --bg: #17212b;
+      --bg-2: #1d2733;
       --card: rgba(255,255,255,0.04);
-      --card-hi: rgba(255,255,255,0.07);
+      --card-hi: rgba(255,255,255,0.08);
       --text: #ffffff;
-      --text-2: #c2c7d2;
-      --text-3: #8e95a8;
+      --text-2: #aab1c1;
+      --text-3: #717a8c;
       --border: rgba(255,255,255,0.06);
       --success: #22c55e;
       --warning: #fbbf24;
       --danger: #ef4444;
-      --pill-bg: rgba(40,46,62,0.85);
+      --accent: #3a8ee6;
+      --pill-bg: rgba(40,46,62,0.92);
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { margin: 0; padding: 0; }
@@ -28,7 +30,7 @@
       color: var(--text);
       font-size: 14px;
       min-height: 100vh;
-      padding-bottom: 88px;
+      padding-bottom: 96px;
       -webkit-font-smoothing: antialiased;
     }
 
@@ -37,449 +39,252 @@
       padding: 18px 16px 0;
       display: flex; justify-content: space-between; align-items: center;
     }
-    .h-title { font-size: 18px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 8px; }
-    .h-actions { display: flex; gap: 16px; color: var(--text-3); font-size: 20px; }
+    .h-title { font-size: 18px; font-weight: 600; }
+    .h-actions { display: flex; gap: 18px; color: var(--text-3); font-size: 22px; cursor: pointer; }
 
-    /* KYC row */
+    /* KYC pill */
     .kyc-row {
-      display: flex; justify-content: space-between; align-items: center;
-      gap: 12px; margin: 22px 16px 0;
-    }
-    .icon-circle {
-      width: 36px; height: 36px; border-radius: 50%;
-      background: var(--card-hi);
-      display: flex; align-items: center; justify-content: center;
-      color: var(--text-3); font-size: 18px;
-    }
-    .kyc-pill {
-      flex: 1; background: var(--card);
-      border-radius: 30px; padding: 8px 14px;
       display: flex; align-items: center; gap: 10px;
-      cursor: pointer;
+      margin: 18px 16px 0; padding: 10px 14px;
+      background: var(--card); border-radius: 30px; cursor: pointer;
     }
-    .kyc-progress {
-      width: 28px; height: 28px; border-radius: 50%;
-      border: 2.5px solid #4a5478;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 10px; color: var(--text-2); flex-shrink: 0;
+    .kyc-icon {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--card-hi); display: flex; align-items: center; justify-content: center;
+      color: var(--text-3); font-size: 14px; font-weight: 600;
     }
-    .kyc-progress.done { border-color: var(--success); color: var(--success); }
-    .kyc-txt { flex: 1; min-width: 0; }
-    .kyc-name { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 4px; }
-    .kyc-sub { font-size: 10px; color: var(--text-3); }
+    .kyc-icon.done { background: var(--success); color: white; }
+    .kyc-text { flex: 1; }
+    .kyc-text b { display: block; font-size: 14px; }
+    .kyc-text span { font-size: 12px; color: var(--text-3); }
 
     /* Balance */
-    .balance { text-align: center; padding: 32px 16px 14px; }
-    .balance-amount { display: flex; align-items: center; justify-content: center; gap: 8px; }
-    .balance-amount .val { font-size: 36px; font-weight: 500; color: var(--text); }
-    .balance-amount .eye { font-size: 18px; color: var(--text-3); cursor: pointer; }
-    .balance-label { font-size: 13px; color: var(--text-3); margin-top: 4px; }
-    .balance-label .ccy { color: var(--text-2); }
+    .balance-block {
+      text-align: center; margin: 28px 16px 0;
+    }
+    .bal-big {
+      font-size: 38px; font-weight: 600; letter-spacing: -0.5px;
+      display: inline-flex; align-items: center; gap: 10px;
+    }
+    .bal-eye { font-size: 18px; color: var(--text-3); cursor: pointer; }
+    .bal-sub { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 
-    /* Quick actions */
-    .actions { display: flex; justify-content: center; gap: 28px; padding: 14px 0 22px; }
-    .act { text-align: center; cursor: pointer; }
+    /* Action row */
+    .actions {
+      display: flex; justify-content: space-around; margin: 24px 16px 8px;
+    }
+    .act { display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; }
     .act-circle {
-      width: 52px; height: 52px; border-radius: 50%;
-      background: var(--card-hi);
-      display: flex; align-items: center; justify-content: center;
-      margin: 0 auto; font-size: 22px; color: var(--text-2);
-      transition: background 0.15s;
+      width: 50px; height: 50px; border-radius: 50%;
+      background: var(--card-hi); display: flex; align-items: center; justify-content: center;
+      font-size: 22px; color: var(--text);
     }
-    .act:hover .act-circle { background: rgba(255,255,255,0.1); }
-    .act-name { font-size: 12px; color: var(--text-2); margin-top: 8px; }
+    .act-name { font-size: 12px; color: var(--text-2); }
 
-    /* Hint banner */
-    .hint {
-      margin: 0 16px;
-      background: linear-gradient(90deg, rgba(34,197,94,0.12), rgba(34,197,94,0.04));
-      border-left: 3px solid var(--success);
-      border-radius: 10px;
-      padding: 12px 14px;
-      display: flex; align-items: center; gap: 12px;
-      cursor: pointer;
-    }
-    .hint-ico { font-size: 22px; color: var(--success); }
-    .hint-body { flex: 1; min-width: 0; }
-    .hint-title { font-size: 13px; color: var(--text-2); }
-    .hint-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
-
-    /* Section title */
+    /* Section */
+    .section { margin: 22px 0 0; }
     .section-head {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 24px 16px 12px;
+      padding: 0 16px 8px; font-size: 13px; color: var(--text-3);
     }
-    .section-title { font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 5px; cursor: pointer; }
-    .section-action { font-size: 12px; color: var(--text-3); cursor: pointer; }
+    .section-head a { color: var(--accent); text-decoration: none; font-size: 13px; cursor: pointer; }
 
-    /* Asset row */
-    .asset-row {
-      display: flex; align-items: center; gap: 12px;
-      padding: 12px 16px; border-bottom: 0.5px solid var(--border);
+    /* Coin row */
+    .coin-list { padding: 0 8px; }
+    .coin-row {
+      display: flex; align-items: center; padding: 12px 8px;
+      gap: 12px; cursor: pointer; border-radius: 14px;
     }
-    .asset-row:last-child { border-bottom: 0; }
-    .asset-ico {
-      width: 38px; height: 38px; border-radius: 50%;
+    .coin-row:active { background: var(--card); }
+    .coin-icon {
+      width: 36px; height: 36px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      color: #fff; font-weight: 500; font-size: 13px; flex-shrink: 0;
+      font-weight: 700; font-size: 14px; color: white;
+      flex-shrink: 0;
     }
-    .asset-body { flex: 1; min-width: 0; }
-    .asset-name { font-size: 14px; color: var(--text); }
-    .asset-rate { font-size: 11px; color: var(--text-3); }
-    .asset-rate .up { color: var(--success); }
-    .asset-rate .down { color: var(--danger); }
-    .asset-bal { text-align: right; }
-    .asset-bal .b1 { font-size: 14px; color: var(--text); }
-    .asset-bal .b2 { font-size: 11px; color: var(--text-3); }
+    .coin-info { flex: 1; min-width: 0; }
+    .coin-name { font-weight: 500; font-size: 14px; }
+    .coin-rate { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+    .coin-rate .delta-up { color: var(--success); }
+    .coin-rate .delta-dn { color: var(--danger); }
+    .coin-val { text-align: right; }
+    .coin-val .v1 { font-size: 14px; font-weight: 500; }
+    .coin-val .v2 { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 
-    /* Bottom nav (pill) */
+    /* Bottom nav pill */
     nav.bottom {
-      position: fixed; bottom: 10px; left: 10px; right: 10px;
-      background: var(--pill-bg);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-radius: 30px;
-      padding: 6px;
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+      position: fixed; bottom: 12px; left: 12px; right: 12px;
+      background: var(--pill-bg); backdrop-filter: blur(20px);
+      border-radius: 28px; padding: 8px 4px;
+      display: flex; justify-content: space-around;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
       z-index: 50;
     }
     nav.bottom .tab {
-      padding: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
-      color: var(--text-3); text-decoration: none; cursor: pointer;
-      border-radius: 24px; transition: all 0.15s;
+      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+      padding: 6px 4px; cursor: pointer; color: var(--text-3); font-size: 11px;
     }
-    nav.bottom .tab.active { background: rgba(255,255,255,0.07); color: var(--text); }
-    nav.bottom .tab i { font-size: 19px; }
-    nav.bottom .tab span { font-size: 10px; }
+    nav.bottom .tab i { font-size: 22px; }
+    nav.bottom .tab.active { color: var(--text); }
 
     /* Pages */
-    .page { display: none; }
+    .page { display: none; padding-top: 4px; }
     .page.active { display: block; }
 
-    /* Tabs (top toggle) */
-    .seg {
-      display: flex; gap: 4px; margin: 18px 16px 0;
-      background: var(--card); border-radius: 28px; padding: 4px;
+    /* Forms */
+    .mod-in {
+      width: 100%; background: var(--card); border: 1px solid var(--border);
+      color: white; padding: 14px 16px; border-radius: 14px;
+      font-size: 15px; font-family: inherit; outline: none;
     }
-    .seg-tab {
-      flex: 1; text-align: center; padding: 9px;
-      font-size: 13px; color: var(--text-3); cursor: pointer;
-      border-radius: 24px;
-    }
-    .seg-tab.active { background: rgba(255,255,255,0.08); color: var(--text); }
-
-    /* Offer card */
-    .offer {
-      margin: 0 16px 8px;
-      background: var(--card);
-      border-radius: 14px;
-      padding: 14px;
-    }
-    .offer-head { display: flex; justify-content: space-between; align-items: start; }
-    .offer-trader { display: flex; align-items: center; gap: 6px; }
-    .trader-ava {
-      width: 24px; height: 24px; border-radius: 50%;
-      background: var(--card-hi);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 11px; color: var(--text-2);
-    }
-    .trader-ava.pride { background: rgba(34,197,94,0.15); color: var(--success); }
-    .trader-name { font-size: 14px; color: var(--text); }
-    .verified-badge {
-      background: rgba(34,197,94,0.15); color: var(--success);
-      font-size: 9px; padding: 2px 6px; border-radius: 4px;
-    }
-    .offer-rate { text-align: right; }
-    .offer-rate .v { font-size: 17px; color: var(--text); font-weight: 500; }
-    .offer-rate .u { font-size: 10px; color: var(--text-3); }
-    .offer-stats { font-size: 11px; color: var(--text-3); margin-top: 4px; }
-    .offer-info { font-size: 11px; color: var(--text-3); margin-top: 8px; }
-    .offer-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
-    .offer-status { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
-    .offer-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
-    .btn-buy {
-      background: #ffffff; color: var(--bg);
-      border: 0; padding: 7px 18px; border-radius: 20px;
-      font-size: 12px; font-weight: 500; cursor: pointer;
-    }
-    .btn-buy-sec {
-      background: rgba(255,255,255,0.08); color: var(--text);
-      border: 0; padding: 7px 18px; border-radius: 20px;
-      font-size: 12px; cursor: pointer;
-    }
-
-    /* Filters */
-    .filters { display: flex; gap: 8px; margin: 14px 16px 8px; flex-wrap: wrap; }
-    .filter {
-      background: var(--card-hi); border-radius: 18px;
-      padding: 6px 12px; font-size: 12px; color: var(--text-2);
-      display: flex; align-items: center; gap: 5px; cursor: pointer;
-    }
-    .filter .val { color: var(--text); }
-
-    /* Empty / loading */
-    .empty { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
-
-    /* Exchange */
-    .ex-card {
-      margin: 0 16px;
-      background: var(--card);
-      border-radius: 14px;
-      padding: 16px;
-    }
-    .ex-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
-    .ex-row .label { font-size: 12px; color: var(--text-3); }
-    .ex-row .val { font-size: 14px; color: var(--text); font-weight: 500; }
-    .ex-amount {
-      width: 100%;
-      background: transparent;
-      border: 0;
-      color: var(--text);
-      font-size: 28px;
-      font-weight: 500;
-      text-align: center;
-      outline: none;
-      padding: 12px 0;
-    }
-    .ex-arrow {
-      display: flex; align-items: center; justify-content: center;
-      margin: -2px 0;
-    }
-    .ex-arrow-circle {
-      width: 32px; height: 32px; border-radius: 50%;
-      background: var(--card-hi);
-      display: flex; align-items: center; justify-content: center;
-      color: var(--text-2); font-size: 16px;
-      border: 4px solid var(--bg);
-    }
-    .ex-receive {
-      text-align: center; padding: 12px 0;
-    }
-    .ex-receive .v { font-size: 22px; color: var(--text); font-weight: 500; }
-    .ex-receive .l { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .mod-in:focus { border-color: var(--accent); }
     .btn-primary {
-      width: 100%;
-      background: #ffffff; color: var(--bg);
-      border: 0; padding: 14px;
-      border-radius: 28px;
-      font-size: 14px; font-weight: 500;
-      margin: 16px 16px 0;
-      width: calc(100% - 32px);
-      cursor: pointer;
+      background: var(--accent); color: white; border: none; border-radius: 14px;
+      padding: 14px 16px; font-size: 15px; font-weight: 600; cursor: pointer;
+      width: 100%; font-family: inherit;
     }
-    .btn-primary:disabled { opacity: 0.4; }
-
-    .methods { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 16px 0; }
-    .method {
-      background: var(--card-hi); border-radius: 16px;
-      padding: 7px 14px; font-size: 12px; color: var(--text-2);
-      cursor: pointer;
+    .btn-primary:disabled { opacity: 0.5; }
+    .btn-secondary {
+      background: var(--card); color: var(--text); border: none; border-radius: 14px;
+      padding: 14px 16px; font-size: 15px; cursor: pointer; width: 100%; font-family: inherit;
     }
-    .method.active { background: #fff; color: var(--bg); }
 
-    /* Skeleton loading */
-    .skel {
-      background: linear-gradient(90deg, var(--card) 25%, var(--card-hi) 50%, var(--card) 75%);
-      background-size: 200% 100%;
-      animation: skel 1.4s infinite;
-      border-radius: 6px;
+    /* Confirmation table — стиль Crypto Bot */
+    .conf-table { background: var(--card); border-radius: 14px; overflow: hidden; }
+    .conf-row { display: flex; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .conf-row:last-child { border-bottom: none; }
+    .conf-row .k { width: 110px; color: var(--text-3); font-size: 13px; }
+    .conf-row .v { flex: 1; font-size: 14px; }
+    .conf-row .v small { display: block; color: var(--text-3); font-size: 11px; margin-top: 2px; }
+
+    /* Success animation */
+    .success-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 10000;
+      animation: fade-in 0.25s ease-out;
     }
-    @keyframes skel { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-
-    /* Helpers */
-    .row { display: flex; align-items: center; }
-    .gap-2 { gap: 8px; } .gap-3 { gap: 12px; }
-    .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; }
+    @keyframes fade-in { from {opacity: 0;} to {opacity: 1;} }
+    .check-circle { width: 110px; height: 110px; }
+    .check-circle circle { stroke: var(--success); stroke-width: 4; fill: none;
+      stroke-dasharray: 320; stroke-dashoffset: 320; animation: draw-circ 0.5s ease-out forwards; }
+    .check-circle path { stroke: var(--success); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round;
+      stroke-dasharray: 80; stroke-dashoffset: 80; animation: draw-check 0.35s 0.45s ease-out forwards; }
+    @keyframes draw-circ { to { stroke-dashoffset: 0; } }
+    @keyframes draw-check { to { stroke-dashoffset: 0; } }
+    .success-title { font-size: 22px; font-weight: 600; margin-top: 20px; }
+    .success-sub { font-size: 14px; color: var(--text-2); margin-top: 6px; text-align: center; padding: 0 24px; }
   </style>
 </head>
 <body>
 
-<!-- ═══════════════ PAGE: WALLET ═══════════════ -->
-<div class="page active" data-page="wallet">
-  <header>
-    <div class="h-title">PRIDE P2P</div>
-    <div class="h-actions">
-      <i class="ti ti-bell"></i>
-      <i class="ti ti-dots-vertical"></i>
-    </div>
-  </header>
-
-  <div class="kyc-row" id="kyc-row" onclick="goPage('profile')">
-    <div class="icon-circle"><i class="ti ti-qrcode"></i></div>
-    <div class="kyc-pill">
-      <div class="kyc-progress" id="kyc-progress">0/3</div>
-      <div class="kyc-txt">
-        <div class="kyc-name">Настройте аккаунт <i class="ti ti-chevron-right" style="font-size:13px"></i></div>
-        <div class="kyc-sub">Займёт 2 минуты</div>
-      </div>
-    </div>
-    <div class="icon-circle"><i class="ti ti-settings"></i></div>
+<!-- ─── HEADER ─── -->
+<header>
+  <div class="h-title">PRIDE P2P</div>
+  <div class="h-actions">
+    <i class="ti ti-bell" onclick="tg?.showAlert?.('Уведомления — скоро')"></i>
+    <i class="ti ti-dots-vertical" onclick="goPage('profile')"></i>
   </div>
+</header>
 
-  <div class="balance">
-    <div class="balance-amount">
-      <span class="val" id="bal-usdt">$ 0</span>
-      <i class="ti ti-eye eye"></i>
+<!-- ─── KYC ROW ─── -->
+<div class="kyc-row" id="kyc-row" onclick="openKyc()">
+  <div class="kyc-icon" id="kyc-icon">0/3</div>
+  <div class="kyc-text">
+    <b>Настройте аккаунт</b>
+    <span>Займёт 2 минуты</span>
+  </div>
+  <i class="ti ti-chevron-right" style="color:var(--text-3)"></i>
+</div>
+
+<!-- ─── PAGE: WALLET ─── -->
+<div class="page active" data-page="wallet">
+  <div class="balance-block">
+    <div class="bal-big">$ <span id="bal-total">0.00</span>
+      <i class="ti ti-eye bal-eye" onclick="toggleHideBalance()"></i>
     </div>
-    <div class="balance-label">Общий баланс в <span class="ccy">USDT</span></div>
+    <div class="bal-sub">Общий баланс в USD</div>
   </div>
 
   <div class="actions">
-    <div class="act" onclick="openDeposit()"><div class="act-circle"><i class="ti ti-arrow-down-left"></i></div><div class="act-name">Пополнить</div></div>
-    <div class="act" onclick="openWithdraw()"><div class="act-circle"><i class="ti ti-arrow-up-right"></i></div><div class="act-name">Вывести</div></div>
-    <div class="act" onclick="goPage('exchange')"><div class="act-circle"><i class="ti ti-arrows-exchange"></i></div><div class="act-name">Обмен</div></div>
-    <div class="act"><div class="act-circle"><i class="ti ti-history"></i></div><div class="act-name">История</div></div>
-  </div>
-
-  <div class="hint" onclick="goPage('profile')">
-    <div class="hint-ico"><i class="ti ti-shield-check"></i></div>
-    <div class="hint-body">
-      <div class="hint-title">Пройдите верификацию</div>
-      <div class="hint-sub">Откроется доступ к P2P и крупным сделкам</div>
+    <div class="act" onclick="openDeposit()">
+      <div class="act-circle"><i class="ti ti-arrow-down-left"></i></div>
+      <div class="act-name">Пополнить</div>
     </div>
-    <i class="ti ti-chevron-right" style="color:var(--text-3); font-size:18px"></i>
-  </div>
-
-  <div class="section-head">
-    <div class="section-title">Мои активы <i class="ti ti-chevron-right" style="font-size:13px"></i></div>
-    <div class="section-action">Скрыть мелкие</div>
-  </div>
-
-  <div id="assets-list">
-    <div class="asset-row">
-      <div class="asset-ico" style="background:#22c55e">₮</div>
-      <div class="asset-body">
-        <div class="asset-name">USDT</div>
-        <div class="asset-rate">$1.00 <span class="up">+0.01%</span></div>
-      </div>
-      <div class="asset-bal">
-        <div class="b1" id="asset-usdt-bal">0 USDT</div>
-        <div class="b2">$0</div>
-      </div>
+    <div class="act" onclick="openSend()">
+      <div class="act-circle"><i class="ti ti-send"></i></div>
+      <div class="act-name">Отправить</div>
     </div>
-    <div class="asset-row">
-      <div class="asset-ico" style="background:#5a667a">₽</div>
-      <div class="asset-body">
-        <div class="asset-name">RUB</div>
-        <div class="asset-rate">Курс <span id="rate-buy">84.0</span> ₽ <span class="down">-0.12%</span></div>
-      </div>
-      <div class="asset-bal">
-        <div class="b1">0 ₽</div>
-        <div class="b2">$0</div>
-      </div>
+    <div class="act" onclick="openWithdraw()">
+      <div class="act-circle"><i class="ti ti-arrow-up-right"></i></div>
+      <div class="act-name">Вывести</div>
+    </div>
+    <div class="act" onclick="openSwap()">
+      <div class="act-circle"><i class="ti ti-arrows-exchange"></i></div>
+      <div class="act-name">Обмен</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span>Мои активы</span>
+      <a onclick="toggleHideSmall()" id="toggle-small">Скрыть мелкие</a>
+    </div>
+    <div class="coin-list" id="coins-list">
+      <div style="text-align:center;padding:30px;color:var(--text-3);">Загрузка...</div>
     </div>
   </div>
 </div>
 
-<!-- ═══════════════ PAGE: EXCHANGE (P2P доска) ═══════════════ -->
+<!-- ─── PAGE: EXCHANGE ─── -->
 <div class="page" data-page="exchange">
-  <header>
-    <div class="h-title">Биржа</div>
-    <div class="h-actions">
-      <i class="ti ti-search"></i>
-      <i class="ti ti-adjustments-horizontal"></i>
-    </div>
-  </header>
-
-  <div class="seg">
-    <div class="seg-tab active" onclick="switchSide(this,'buy')">Купить USDT</div>
-    <div class="seg-tab" onclick="switchSide(this,'sell')">Продать USDT</div>
+  <div style="padding: 20px 16px 8px; font-size: 22px; font-weight: 600;">Биржа P2P</div>
+  <div style="padding: 0 16px 16px; font-size: 13px; color: var(--text-3);">Покупай / продавай у проверенных клиентов</div>
+  <div style="display:flex; gap:8px; padding: 0 16px 12px;">
+    <button id="seg-buy"  class="btn-secondary" onclick="switchSide2('buy')">Купить USDT</button>
+    <button id="seg-sell" class="btn-secondary" onclick="switchSide2('sell')">Продать USDT</button>
   </div>
-
-  <div class="filters">
-    <div class="filter">Сумма <span class="val">50 000 ₽</span> <i class="ti ti-chevron-down"></i></div>
-    <div class="filter">Банк <i class="ti ti-chevron-down"></i></div>
-    <div class="filter">Online</div>
-  </div>
-
-  <div class="section-head" style="padding-top:6px">
-    <div class="section-title">Лучший курс ↓</div>
-    <div class="section-action">Сортировка <i class="ti ti-arrows-sort"></i></div>
-  </div>
-
-  <div id="offers-list">
-    <!-- PRIDE Official — всегда первая -->
-    <div class="offer">
-      <div class="offer-head">
-        <div>
-          <div class="offer-trader">
-            <div class="trader-ava pride"><i class="ti ti-shield-check"></i></div>
-            <div class="trader-name">PRIDE Official</div>
-            <span class="verified-badge">VERIFIED</span>
-          </div>
-          <div class="offer-stats">5.0 ★ · 9999+ сделок · 24/7</div>
-        </div>
-        <div class="offer-rate">
-          <div class="v">84.00</div>
-          <div class="u">₽/USDT</div>
-        </div>
-      </div>
-      <div class="offer-info">Лимит 5к – 5М ₽ · Тинькофф, Сбер, Альфа</div>
-      <div class="offer-foot">
-        <div class="offer-status"><span class="dot"></span>Авто-выдача реквизита</div>
-        <button class="btn-buy" onclick="openOffer('pride')">Купить</button>
-      </div>
-    </div>
-
-    <!-- Загрузится из API -->
-    <div id="other-offers"></div>
-  </div>
+  <div id="offers-list" style="padding: 0 16px;"></div>
 </div>
 
-<!-- ═══════════════ PAGE: ORDERS ═══════════════ -->
+<!-- ─── PAGE: ORDERS / HISTORY ─── -->
 <div class="page" data-page="orders">
-  <header>
-    <div class="h-title">Заявки</div>
-    <div class="h-actions"><i class="ti ti-filter"></i></div>
-  </header>
-
-  <div class="seg">
-    <div class="seg-tab active">Активные</div>
-    <div class="seg-tab">История</div>
-  </div>
-
-  <div id="orders-list">
-    <div class="empty">Активных заявок нет</div>
-  </div>
+  <div style="padding: 20px 16px 16px; font-size: 22px; font-weight: 600;">История</div>
+  <div id="orders-list" style="padding: 0 16px;"></div>
 </div>
 
-<!-- ═══════════════ PAGE: PROFILE ═══════════════ -->
+<!-- ─── PAGE: PROFILE ─── -->
 <div class="page" data-page="profile">
-  <header>
-    <div class="h-title">Профиль</div>
-    <div class="h-actions"><i class="ti ti-settings"></i></div>
-  </header>
-
-  <div style="text-align:center; padding:24px 16px">
-    <div style="width:72px; height:72px; border-radius:50%; background:var(--card-hi); display:flex; align-items:center; justify-content:center; margin:0 auto; font-size:28px; color:var(--text-2)" id="ava-init">?</div>
-    <div style="font-size:18px; color:var(--text); margin-top:12px" id="prof-name">—</div>
-    <div style="font-size:13px; color:var(--text-3); margin-top:2px" id="prof-status">Не верифицирован</div>
+  <div style="padding: 20px 16px;">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div id="ava-init" style="width:60px;height:60px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;">?</div>
+      <div>
+        <div id="prof-name" style="font-size:18px;font-weight:600;">—</div>
+        <div id="prof-status" style="font-size:13px;color:var(--text-3);margin-top:2px;">—</div>
+      </div>
+    </div>
+    <div class="conf-table" style="margin-top:20px;">
+      <div class="conf-row"><div class="k">Сделок</div><div class="v" id="prof-deals">—</div></div>
+      <div class="conf-row"><div class="k">Успех</div><div class="v" id="prof-rate">—</div></div>
+      <div class="conf-row"><div class="k">Trust score</div><div class="v" id="prof-trust">—</div></div>
+      <div class="conf-row"><div class="k">Объём</div><div class="v" id="prof-vol">—</div></div>
+      <div class="conf-row"><div class="k">TRC20 addr</div><div class="v" id="prof-addr" style="word-break:break-all;font-size:12px;">не указан</div></div>
+    </div>
+    <button class="btn-primary" style="margin-top:18px;" onclick="openKyc()">Пройти / обновить KYC</button>
+    <button class="btn-secondary" style="margin-top:8px;" onclick="logout()">Выйти из аккаунта</button>
   </div>
-
-  <div class="ex-card" style="margin:0 16px 12px">
-    <div class="ex-row"><span class="label">Сделок завершено</span><span class="val" id="prof-deals">0</span></div>
-    <div class="ex-row"><span class="label">% успеха</span><span class="val" id="prof-rate">—</span></div>
-    <div class="ex-row"><span class="label">Trust score</span><span class="val" id="prof-trust">0/100</span></div>
-    <div class="ex-row"><span class="label">Оборот</span><span class="val" id="prof-vol">0 USDT</span></div>
-  </div>
-
-  <div class="ex-card" style="margin:0 16px 12px">
-    <div class="ex-row"><span class="label">TRC20-адрес</span><span class="val" id="prof-addr" style="font-family:monospace; font-size:12px">—</span></div>
-  </div>
-
-  <button class="btn-primary" onclick="openKyc()">Пройти верификацию</button>
 </div>
 
-<!-- ═══════════════ BOTTOM NAV ═══════════════ -->
+<!-- ─── BOTTOM NAV ─── -->
 <nav class="bottom">
   <div class="tab active" data-tab="wallet" onclick="goPage('wallet')">
     <i class="ti ti-wallet"></i><span>Кошелёк</span>
   </div>
   <div class="tab" data-tab="exchange" onclick="goPage('exchange')">
-    <i class="ti ti-building-bank"></i><span>Биржа</span>
+    <i class="ti ti-chart-candle"></i><span>Биржа</span>
   </div>
   <div class="tab" data-tab="orders" onclick="goPage('orders')">
-    <i class="ti ti-list-details"></i><span>Заявки</span>
+    <i class="ti ti-list-details"></i><span>История</span>
   </div>
   <div class="tab" data-tab="profile" onclick="goPage('profile')">
     <i class="ti ti-user"></i><span>Профиль</span>
@@ -490,35 +295,63 @@
   const tg = window.Telegram?.WebApp;
   tg?.ready();
   tg?.expand();
+  if (tg?.themeParams?.bg_color) document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
 
-  // Apply Telegram theme colors if available
-  if (tg?.themeParams?.bg_color) {
-    document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
-  }
+  let _hideBalance = false, _hideSmall = false;
+  let _currentSide = "buy";
+  let _coins = [];   // [{code,name,balance,rate_usd,rate_rub,change_24h,...}]
+  let _depPoll = null;
 
+  // ─── Page nav ─────────────────────────────────────────────────────
   function goPage(name) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelector(`.page[data-page="${name}"]`)?.classList.add('active');
     document.querySelectorAll('nav.bottom .tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`nav.bottom .tab[data-tab="${name}"]`)?.classList.add('active');
     window.scrollTo({ top: 0, behavior: 'instant' });
-    // Lazy load on tab open
     if (name === "orders") loadOrders();
     if (name === "exchange") loadOffers(_currentSide);
   }
 
-  function switchSide(el, side) {
-    el.parentElement.querySelectorAll('.seg-tab').forEach(t => t.classList.remove('active'));
-    el.classList.add('active');
-    // TODO: загрузить офферы side=buy/sell
+  // ─── API helper ───────────────────────────────────────────────────
+  async function api(path, options = {}) {
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Telegram-InitData": tg?.initData || "",
+      ...(options.headers || {}),
+    };
+    const r = await fetch(`/api/v1${path}`, { ...options, headers });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`${r.status}: ${txt}`);
+    }
+    return r.json();
   }
 
-  function openOffer(id) {
-    if (id === "pride") return openExchangeQuote("buy");
-    tg?.showAlert?.(`Деталь оффера #${id}`);
+  // ─── Success animation + haptic + sound ──────────────────────────
+  // Tiny base64-encoded success ding (Apple Pay-like). Single beep.
+  const SUCCESS_SOUND_B64 = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+  function showSuccess(title, sub) {
+    tg?.HapticFeedback?.notificationOccurred?.('success');
+    try {
+      const a = new Audio(SUCCESS_SOUND_B64); a.volume = 0.6; a.play().catch(()=>{});
+    } catch (_) {}
+    const o = document.createElement('div');
+    o.className = 'success-overlay';
+    o.innerHTML = `
+      <svg class="check-circle" viewBox="0 0 110 110">
+        <circle cx="55" cy="55" r="50"/>
+        <path d="M32 56 L48 72 L80 38"/>
+      </svg>
+      <div class="success-title">${title}</div>
+      ${sub ? `<div class="success-sub">${sub}</div>` : ""}
+      <button class="btn-primary" style="margin-top:30px;width:180px;" onclick="this.closest('.success-overlay').remove()">OK</button>
+    `;
+    document.body.appendChild(o);
+    setTimeout(() => { o.remove(); }, 4500);
   }
 
-  // ─── Модалки ──────────────────────────────────────────────────────
+  // ─── Modal helper ────────────────────────────────────────────────
   function showModal(title, contentHtml, footerHtml = "") {
     let m = document.getElementById("modal");
     if (!m) {
@@ -528,10 +361,10 @@
       m.addEventListener("click", e => { if (e.target === m) m.remove(); });
       document.body.appendChild(m);
     }
-    m.innerHTML = `<div style="background:var(--bg);border-top-left-radius:16px;border-top-right-radius:16px;padding:20px 16px 28px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;border:1px solid var(--border);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <div style="font-size:17px;font-weight:600;">${title}</div>
-        <div style="font-size:22px;color:var(--text-3);cursor:pointer;" onclick="document.getElementById('modal').remove()">&times;</div>
+    m.innerHTML = `<div style="background:var(--bg-2);border-top-left-radius:16px;border-top-right-radius:16px;padding:20px 16px 28px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;border-top:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+        <div style="font-size:18px;font-weight:600;">${title}</div>
+        <div style="font-size:24px;color:var(--text-3);cursor:pointer;line-height:1;" onclick="closeModal()">&times;</div>
       </div>
       <div>${contentHtml}</div>
       ${footerHtml ? `<div style="margin-top:18px;">${footerHtml}</div>` : ""}
@@ -539,7 +372,74 @@
   }
   function closeModal() { document.getElementById("modal")?.remove(); }
 
-  // ─── KYC ──────────────────────────────────────────────────────────
+  // ─── Bootstrap ─────────────────────────────────────────────────────
+  async function bootstrap() {
+    try {
+      const [me, coinsData] = await Promise.all([
+        api("/users/me").catch(() => null),
+        api("/coins").catch(() => ({items: []})),
+      ]);
+      _coins = coinsData.items || [];
+      renderCoins();
+      if (me) renderProfile(me);
+    } catch (e) {
+      console.error("bootstrap:", e);
+    }
+  }
+
+  function renderCoins() {
+    const root = document.getElementById("coins-list");
+    let total_usd = 0;
+    const visible = _coins.filter(c => !_hideSmall || (c.balance || 0) > 0);
+    root.innerHTML = visible.map(c => {
+      const bal = Number(c.balance || 0);
+      const usd = bal * (c.rate_usd || (c.code === "USDT" || c.code === "USDC" ? 1 : 0));
+      total_usd += usd;
+      const change = c.change_24h;
+      const dCls = change > 0 ? "delta-up" : (change < 0 ? "delta-dn" : "");
+      const dStr = change != null ? `${change > 0 ? "+" : ""}${change.toFixed(2)}%` : "";
+      const initial = c.code.substring(0, 2);
+      return `<div class="coin-row" onclick="openCoinDetails('${c.code}')">
+        <div class="coin-icon" style="background:${c.icon_color || '#666'}">${initial}</div>
+        <div class="coin-info">
+          <div class="coin-name">${c.name}</div>
+          <div class="coin-rate">${c.rate_usd ? "$"+c.rate_usd.toFixed(c.rate_usd<1?4:2) : "—"} <span class="${dCls}">${dStr}</span></div>
+        </div>
+        <div class="coin-val">
+          <div class="v1">${_hideBalance ? "•••" : bal.toFixed(c.code === "RUB" ? 2 : (bal < 1 ? 6 : 4))} ${c.code}</div>
+          <div class="v2">${_hideBalance ? "" : ("$" + usd.toFixed(2))}</div>
+        </div>
+      </div>`;
+    }).join("");
+    document.getElementById("bal-total").textContent = _hideBalance ? "•••" : total_usd.toFixed(2);
+  }
+
+  function renderProfile(me) {
+    const kycSteps = { pending: 0, pending_review: 1, verified: 3, rejected: 0, banned: 0 };
+    const progress = kycSteps[me.kyc_status] ?? 0;
+    const icon = document.getElementById("kyc-icon");
+    if (progress >= 3) { icon.classList.add("done"); icon.innerHTML = '<i class="ti ti-check"></i>'; document.getElementById("kyc-row").style.display = "none"; }
+    else { icon.textContent = `${progress}/3`; }
+    const initials = (me.full_name || me.username || "?").split(" ").map(s => s[0]?.toUpperCase()).slice(0,2).join("");
+    document.getElementById("ava-init").textContent = initials || "?";
+    document.getElementById("prof-name").textContent = me.full_name || `@${me.username || me.tg_id}` || "—";
+    document.getElementById("prof-status").textContent = me.kyc_status === "verified" ? "✓ Verified" : "Не верифицирован";
+    document.getElementById("prof-deals").textContent = me.stats?.completed_deals ?? 0;
+    document.getElementById("prof-rate").textContent = me.stats?.completion_rate_pct ? `${me.stats.completion_rate_pct}%` : "—";
+    document.getElementById("prof-trust").textContent = `${me.trust_score || 0}/100`;
+    document.getElementById("prof-vol").textContent = `${Number(me.stats?.total_volume_usdt || 0).toFixed(2)} USDT`;
+    document.getElementById("prof-addr").textContent = me.trc20_address || "не указан";
+  }
+
+  function toggleHideBalance() { _hideBalance = !_hideBalance; renderCoins(); }
+  function toggleHideSmall() {
+    _hideSmall = !_hideSmall;
+    document.getElementById("toggle-small").textContent = _hideSmall ? "Показать все" : "Скрыть мелкие";
+    renderCoins();
+  }
+  function logout() { tg?.close?.(); }
+
+  // ─── KYC ─────────────────────────────────────────────────────────
   function openKyc() {
     showModal("Верификация (KYC L1)", `
       <div style="display:flex;flex-direction:column;gap:10px;">
@@ -550,18 +450,11 @@
         <input id="k_pn" placeholder="Номер паспорта (6)" class="mod-in"/>
         <input id="k_ph" placeholder="Телефон +7..." class="mod-in"/>
       </div>`,
-      `<button class="btn-primary" style="width:100%" onclick="submitKyc()">Отправить на модерацию</button>`
+      `<button class="btn-primary" onclick="submitKyc()">Отправить на модерацию</button>`
     );
-    // inject input style
-    if (!document.getElementById("mod-in-style")) {
-      const s = document.createElement("style");
-      s.id = "mod-in-style";
-      s.textContent = ".mod-in{background:var(--card);border:1px solid var(--border);color:#fff;padding:12px 14px;border-radius:12px;font-size:14px;font-family:inherit;outline:none;}";
-      document.head.appendChild(s);
-    }
   }
   async function submitKyc() {
-    const payload = {
+    const body = {
       first_name: document.getElementById("k_fn").value.trim(),
       last_name: document.getElementById("k_ln").value.trim(),
       birthdate: document.getElementById("k_bd").value.trim(),
@@ -570,48 +463,36 @@
       phone: document.getElementById("k_ph").value.trim(),
     };
     try {
-      await api("/users/me/kyc", { method: "POST", body: JSON.stringify(payload) });
-      closeModal();
-      tg?.showAlert?.("✅ Заявка отправлена. Дождись одобрения в течение 24ч.");
+      await api("/users/me/kyc", { method: "POST", body: JSON.stringify(body) });
+      closeModal(); showSuccess("Заявка отправлена", "Дождись одобрения в течение 24 часов");
       bootstrap();
-    } catch (e) {
-      tg?.showAlert?.("Ошибка: " + e.message);
-    }
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
   }
 
-  // ─── Депозит (Crypto-Bot стиль) ───────────────────────────────────
+  // ─── Deposit (Crypto-Bot style) ──────────────────────────────────
   function openDeposit() {
     showModal("Пополнить USDT", `
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <div style="font-size:13px;color:var(--text-3);">Сколько хочешь пополнить?</div>
-        <input id="dep_amt" type="number" min="1" max="100000" step="1" placeholder="Например, 50" class="mod-in" autofocus/>
-        <div style="font-size:11px;color:var(--text-3);">Минимум 1 USDT · Только сеть Tron (TRC20)</div>
-      </div>`,
-      `<button class="btn-primary" style="width:100%" onclick="requestDeposit()">Получить адрес</button>`
+      <div style="font-size:13px;color:var(--text-3);margin-bottom:10px;">Сеть Tron (TRC20). Минимум 1 USDT.</div>
+      <input id="dep_amt" type="number" min="1" max="100000" step="1" placeholder="Сколько хочешь пополнить?" class="mod-in" autofocus/>`,
+      `<button class="btn-primary" onclick="requestDeposit()">Получить адрес</button>`
     );
   }
-  let _depPoll = null;
   async function requestDeposit() {
     const amt = parseFloat(document.getElementById("dep_amt").value);
     if (!(amt >= 1)) { tg?.showAlert?.("Минимум 1 USDT"); return; }
     try {
-      const r = await api("/users/me/deposits/request", {
-        method: "POST",
-        body: JSON.stringify({ amount_usdt: amt }),
-      });
+      const r = await api("/users/me/deposits/request", { method: "POST", body: JSON.stringify({ amount_usdt: amt }) });
       showDepositRequest(r);
-    } catch (e) {
-      tg?.showAlert?.("Ошибка: " + e.message);
-    }
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
   }
   function showDepositRequest(r) {
     const exact = Number(r.exact_amount).toFixed(4);
     const expiresAt = new Date(r.expires_at).getTime();
-    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&bgcolor=1d2433&color=FFFFFF&data=${encodeURIComponent("tron:" + r.address + "?amount=" + exact + "&token=USDT")}`;
+    const qr = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&bgcolor=1d2733&color=FFFFFF&margin=4&data=${encodeURIComponent("tron:"+r.address+"?amount="+exact+"&token=USDT")}`;
     showModal("Депозит создан", `
       <div style="text-align:center;">
-        <img src="${qrSrc}" alt="QR" style="width:180px;height:180px;border-radius:12px;background:#fff;padding:8px;margin-bottom:14px;" onerror="this.style.display='none'"/>
-        <div style="font-size:13px;color:var(--text-3);margin-bottom:6px;">Отправь <b style="color:var(--warning);font-size:16px;">ровно ${exact} USDT</b></div>
+        <img src="${qr}" style="width:180px;height:180px;border-radius:14px;background:#fff;padding:8px;margin-bottom:14px;"/>
+        <div style="font-size:13px;color:var(--text-3);margin-bottom:6px;">Отправь <b style="color:var(--warning);font-size:18px;">ровно ${exact} USDT</b></div>
         <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">⚠️ Эта точная сумма важна — мы по ней опознаём твой платёж</div>
         <div style="background:var(--card);border-radius:12px;padding:14px;font-family:monospace;font-size:12px;word-break:break-all;text-align:left;">${r.address}</div>
         <div style="margin-top:10px;font-size:12px;color:var(--text-3);">Сеть: <b>Tron (TRC20)</b></div>
@@ -620,180 +501,273 @@
         </div>
       </div>`,
       `<div style="display:flex;gap:8px;">
-        <button class="btn-primary" style="flex:1" onclick="copyDepAddress('${r.address}')">📋 Адрес</button>
-        <button class="btn-primary" style="flex:1" onclick="copyDepAmount('${exact}')">📋 Сумма</button>
+        <button class="btn-secondary" onclick="navigator.clipboard.writeText('${r.address}');tg?.HapticFeedback?.impactOccurred?.('light');tg?.showAlert?.('Адрес скопирован')">📋 Адрес</button>
+        <button class="btn-primary" onclick="navigator.clipboard.writeText('${exact}');tg?.HapticFeedback?.impactOccurred?.('light');tg?.showAlert?.('Сумма скопирована')">📋 Сумма</button>
       </div>`
     );
-    // Countdown + poll
     if (_depPoll) clearInterval(_depPoll);
     const tick = async () => {
       const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-      const m = Math.floor(left / 60), s = left % 60;
-      const cd = document.getElementById("dep_countdown");
-      if (left <= 0) {
-        if (cd) cd.innerHTML = "❌ Срок истёк, создай новый депозит";
-        clearInterval(_depPoll); _depPoll = null;
-        return;
-      }
-      if (cd) cd.innerHTML = `⏳ Осталось ${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
-      // Каждые 5 сек чекаем статус
+      const cd = document.getElementById("dep_countdown"); if (!cd) { clearInterval(_depPoll); return; }
+      if (left <= 0) { cd.innerHTML = "❌ Срок истёк, создай новый депозит"; clearInterval(_depPoll); _depPoll = null; return; }
+      const m = Math.floor(left/60), s = left%60;
+      cd.innerHTML = `⏳ Осталось ${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
       if (left % 5 === 0) {
         try {
           const s2 = await api(`/users/me/deposits/${r.id}`);
           if (s2.status === "matched") {
-            const ds = document.getElementById("dep_status");
-            if (ds) ds.innerHTML = `<span style="color:var(--success);font-weight:600;">✅ Зачислено ${Number(s2.base_amount).toFixed(2)} USDT</span>`;
-            clearInterval(_depPoll); _depPoll = null;
-            setTimeout(bootstrap, 800);
+            clearInterval(_depPoll); _depPoll = null; closeModal();
+            showSuccess("Зачислено!", `+${Number(s2.base_amount).toFixed(2)} USDT на баланс`);
+            bootstrap();
           }
         } catch (_) {}
       }
     };
-    _depPoll = setInterval(tick, 1000);
-    tick();
-  }
-  function copyDepAddress(addr) {
-    navigator.clipboard.writeText(addr);
-    tg?.showAlert?.("Адрес скопирован");
-  }
-  function copyDepAmount(amt) {
-    navigator.clipboard.writeText(amt);
-    tg?.showAlert?.("Сумма скопирована");
+    _depPoll = setInterval(tick, 1000); tick();
   }
 
-  // ─── Вывод ────────────────────────────────────────────────────────
-  function openWithdraw() {
-    showModal("Вывод USDT TRC20", `
+  // ─── Send (Crypto Pay style @username) ──────────────────────────
+  function openSend() {
+    const coinOpts = _coins.filter(c => Number(c.balance) > 0).map(c =>
+      `<option value="${c.code}">${c.name} (${c.code}) · ${Number(c.balance).toFixed(4)}</option>`).join("");
+    if (!coinOpts) { tg?.showAlert?.("Нет средств для отправки. Пополни баланс."); return; }
+    showModal("Отправить криптовалюту", `
       <div style="display:flex;flex-direction:column;gap:10px;">
-        <input id="w_amt" type="number" placeholder="Сумма USDT" class="mod-in"/>
-        <input id="w_addr" placeholder="TRC20 адрес (T...)" class="mod-in"/>
-        <div style="font-size:12px;color:var(--text-3);">Комиссия сети: 1 USDT (списывается с вывода)</div>
+        <select id="s_coin" class="mod-in">${coinOpts}</select>
+        <input id="s_to" placeholder="@username получателя" class="mod-in"/>
+        <input id="s_amt" type="number" step="any" placeholder="Сумма" class="mod-in"/>
+        <input id="s_note" placeholder="Комментарий (опц.)" class="mod-in"/>
       </div>`,
-      `<button class="btn-primary" style="width:100%" onclick="submitWithdraw()">Подтвердить</button>`
+      `<button class="btn-primary" onclick="sendTransfer()">Отправить</button>`
     );
   }
-  async function submitWithdraw() {
-    const amt = parseFloat(document.getElementById("w_amt").value);
-    const addr = document.getElementById("w_addr").value.trim();
-    if (!(amt > 0) || !addr.startsWith("T") || addr.length < 30) {
-      tg?.showAlert?.("Проверь сумму и адрес"); return;
-    }
+  async function sendTransfer() {
+    const body = {
+      coin: document.getElementById("s_coin").value,
+      to_username: document.getElementById("s_to").value.trim(),
+      amount: parseFloat(document.getElementById("s_amt").value),
+      comment: document.getElementById("s_note").value.trim(),
+    };
+    if (!body.to_username || !(body.amount > 0)) { tg?.showAlert?.("Заполни @username и сумму"); return; }
     try {
-      const r = await api("/users/me/withdraw", {
-        method: "POST",
-        body: JSON.stringify({ amount_usdt: amt, trc20_address: addr }),
-      });
+      const r = await api("/wallet/transfer", { method: "POST", body: JSON.stringify(body) });
       closeModal();
-      tg?.showAlert?.(`✅ Запрос на вывод ${r.amount_usdt} USDT принят (${r.status})`);
+      showSuccess("Отправлено", `${body.amount} ${body.coin} → @${r.to.username || r.to.tg_id}`);
       bootstrap();
-    } catch (e) {
-      tg?.showAlert?.("Ошибка: " + e.message);
-    }
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
   }
 
-  // ─── Exchange (buy/sell) ─────────────────────────────────────────
-  function openExchangeQuote(side) {
-    showModal(side === "buy" ? "Купить USDT" : "Продать USDT", `
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <input id="ex_amt" type="number" placeholder="${side === "buy" ? "Сумма ₽" : "Сумма USDT"}" class="mod-in"/>
-        <select id="ex_pm" class="mod-in">
-          <option value="sbp">СБП</option>
-          <option value="tinkoff">Тинькофф</option>
-          <option value="sber">Сбер</option>
-          <option value="alfa">Альфа</option>
-        </select>
+  // ─── Withdraw (Crypto-Bot 4-step flow) ──────────────────────────
+  function openWithdraw() {
+    // Step 1: выбор монеты
+    const items = _coins.filter(c => Number(c.balance) > 0).map(c => `
+      <div class="coin-row" onclick="withdrawPickNetwork('${c.code}')">
+        <div class="coin-icon" style="background:${c.icon_color || '#666'}">${c.code.substring(0,2)}</div>
+        <div class="coin-info"><div class="coin-name">${c.name}</div><div class="coin-rate">${c.code}</div></div>
+        <div class="coin-val"><div class="v1">${Number(c.balance).toFixed(4)}</div><div class="v2">${c.rate_usd ? "$"+(Number(c.balance)*c.rate_usd).toFixed(2) : ""}</div></div>
+      </div>`).join("");
+    showModal("Вывод криптовалюты", items || '<div style="color:var(--text-3);padding:20px;text-align:center;">Нет монет на балансе</div>');
+  }
+  function withdrawPickNetwork(coin) {
+    const c = _coins.find(x => x.code === coin);
+    if (!c) return;
+    if ((c.networks || []).length === 1) return withdrawForm(coin, c.networks[0]);
+    const items = (c.networks || []).map(n => `
+      <div class="coin-row" onclick="withdrawForm('${coin}','${n}')">
+        <div class="coin-icon" style="background:${c.icon_color || '#666'}">${n.substring(0,3)}</div>
+        <div class="coin-info"><div class="coin-name">${n}</div></div>
+        <i class="ti ti-chevron-right" style="color:var(--text-3)"></i>
+      </div>`).join("");
+    showModal("Выберите сеть", items);
+  }
+  function withdrawForm(coin, network) {
+    const c = _coins.find(x => x.code === coin);
+    showModal(`${c.name} · ${network}`, `
+      <div class="conf-table" style="margin-bottom:14px;">
+        <div class="conf-row"><div class="k">Доступно</div><div class="v"><b>${Number(c.balance).toFixed(4)} ${coin}</b><small>${c.rate_usd?'$'+(Number(c.balance)*c.rate_usd).toFixed(2):''}</small></div></div>
+        <div class="conf-row"><div class="k">Комиссия</div><div class="v">${c.withdraw_fee} ${coin}</div></div>
+      </div>
+      <input id="w_addr" placeholder="Адрес ${network}" class="mod-in" style="margin-bottom:10px;"/>
+      <div style="position:relative;">
+        <input id="w_amt" type="number" step="any" placeholder="Сумма ${coin}" class="mod-in"/>
+        <span onclick="document.getElementById('w_amt').value='${(Number(c.balance)-Number(c.withdraw_fee)).toFixed(4)}'" style="position:absolute;right:14px;top:14px;color:var(--accent);font-size:13px;cursor:pointer;">Макс</span>
       </div>`,
-      `<button class="btn-primary" style="width:100%" onclick="submitExchange('${side}')">Создать заявку</button>`
+      `<button class="btn-primary" onclick="withdrawConfirm('${coin}','${network}')">Продолжить</button>`
     );
   }
-  async function submitExchange(side) {
-    const amt = parseFloat(document.getElementById("ex_amt").value);
-    const pm = document.getElementById("ex_pm").value;
-    if (!(amt > 0)) { tg?.showAlert?.("Введи сумму"); return; }
-    const body = side === "buy"
-      ? { amount_rub: amt, payment_method: pm, destination: "balance" }
-      : { amount_usdt: amt, payment_method: pm, bank: pm, payout_target: "tg" };
+  function withdrawConfirm(coin, network) {
+    const c = _coins.find(x => x.code === coin);
+    const addr = document.getElementById("w_addr").value.trim();
+    const amt = parseFloat(document.getElementById("w_amt").value);
+    if (!addr || !(amt > 0)) { tg?.showAlert?.("Введи адрес и сумму"); return; }
+    const fee = Number(c.withdraw_fee);
+    const total = amt + fee;
+    const usd = c.rate_usd ? (amt * c.rate_usd).toFixed(2) : '0';
+    showModal("Подтверждение вывода", `
+      <div class="conf-table">
+        <div class="conf-row"><div class="k">Общая сумма</div><div class="v"><b>${total} ${coin}</b><small>$${(total*(c.rate_usd||0)).toFixed(2)}</small></div></div>
+        <div class="conf-row"><div class="k">Комиссия</div><div class="v">${fee} ${coin}</div></div>
+        <div class="conf-row"><div class="k">Отправка</div><div class="v"><b>${amt} ${coin}</b><small>$${usd}</small></div></div>
+        <div class="conf-row"><div class="k">Сеть</div><div class="v">${network}</div></div>
+        <div class="conf-row"><div class="k">Адрес</div><div class="v" style="word-break:break-all;font-size:12px;">${addr}</div></div>
+      </div>`,
+      `<button class="btn-primary" onclick="executeWithdraw('${coin}','${network}','${addr}',${amt})">Подтвердить</button>`
+    );
+  }
+  async function executeWithdraw(coin, network, address, amount) {
     try {
-      const r = await api(`/exchange/${side === "buy" ? "buy_usdt" : "sell_usdt"}`,
-        { method: "POST", body: JSON.stringify(body) });
+      const r = await api("/wallet/withdraw", { method: "POST", body: JSON.stringify({coin, network, address, amount}) });
       closeModal();
-      tg?.showAlert?.(`✅ Заявка #${r.order_number} создана. Открой Заявки.`);
-      goPage("orders");
-      loadOrders();
-    } catch (e) {
-      tg?.showAlert?.("Ошибка: " + e.message);
-    }
+      const sub = r.status === "sent" ? `TX: ${r.tx_id?.substring(0,16)}...` : "Заявка на обработке";
+      showSuccess(`${amount} ${coin} отправлено`, sub);
+      bootstrap();
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
   }
 
-  // ─── Orders list ─────────────────────────────────────────────────
+  // ─── Swap ────────────────────────────────────────────────────────
+  function openSwap() {
+    const opts = _coins.map(c => `<option value="${c.code}">${c.name} (${c.code})</option>`).join("");
+    showModal("Обмен криптовалюты", `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:12px;color:var(--text-3);">Из</div>
+        <div style="display:flex;gap:8px;">
+          <select id="sw_from" class="mod-in" style="flex:0 0 130px;" onchange="updateSwapRate()">${opts}</select>
+          <input id="sw_amt" type="number" step="any" placeholder="Сумма" class="mod-in" oninput="updateSwapRate()"/>
+        </div>
+        <div style="font-size:12px;color:var(--text-3);">В</div>
+        <div style="display:flex;gap:8px;">
+          <select id="sw_to" class="mod-in" style="flex:0 0 130px;" onchange="updateSwapRate()">${opts}</select>
+          <input id="sw_get" class="mod-in" readonly placeholder="Получишь"/>
+        </div>
+        <div id="sw_info" style="font-size:12px;color:var(--text-3);margin-top:4px;"></div>
+      </div>`,
+      `<button class="btn-primary" onclick="executeSwap()">Обменять</button>`
+    );
+    document.getElementById("sw_to").value = "USDT";
+    updateSwapRate();
+  }
+  async function updateSwapRate() {
+    const from = document.getElementById("sw_from").value;
+    const to = document.getElementById("sw_to").value;
+    const amt = parseFloat(document.getElementById("sw_amt").value) || 0;
+    if (from === to || amt <= 0) {
+      document.getElementById("sw_get").value = "";
+      document.getElementById("sw_info").textContent = "";
+      return;
+    }
+    try {
+      const r = await api(`/wallet/swap_rate?from_coin=${from}&to_coin=${to}&amount=${amt}`);
+      document.getElementById("sw_get").value = r.to_amount.toFixed(8);
+      document.getElementById("sw_info").textContent = `Курс: 1 ${from} = ${r.rate.toFixed(6)} ${to} · Комиссия ${r.fee_pct}% (${r.fee.toFixed(6)} ${from})`;
+    } catch (e) {
+      document.getElementById("sw_info").textContent = "Ошибка курса";
+    }
+  }
+  async function executeSwap() {
+    const body = {
+      from_coin: document.getElementById("sw_from").value,
+      to_coin: document.getElementById("sw_to").value,
+      amount: parseFloat(document.getElementById("sw_amt").value),
+    };
+    if (!(body.amount > 0)) { tg?.showAlert?.("Введи сумму"); return; }
+    try {
+      const r = await api("/wallet/swap", { method: "POST", body: JSON.stringify(body) });
+      closeModal();
+      showSuccess(`Обмен ${r.from_amount} ${r.from} → ${r.to_amount.toFixed(6)} ${r.to}`, `Курс ${r.rate.toFixed(6)}`);
+      bootstrap();
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
+  }
+
+  // ─── Coin details (placeholder) ──────────────────────────────────
+  function openCoinDetails(code) {
+    const c = _coins.find(x => x.code === code);
+    if (!c) return;
+    showModal(c.name, `
+      <div class="conf-table">
+        <div class="conf-row"><div class="k">Баланс</div><div class="v"><b>${Number(c.balance).toFixed(8)} ${c.code}</b><small>${c.rate_usd ? '$'+(Number(c.balance)*c.rate_usd).toFixed(2) : ""}</small></div></div>
+        <div class="conf-row"><div class="k">Курс USD</div><div class="v">${c.rate_usd ? "$"+c.rate_usd.toFixed(c.rate_usd<1?6:2) : "—"}</div></div>
+        <div class="conf-row"><div class="k">24ч</div><div class="v ${c.change_24h>0?'delta-up':'delta-dn'}">${c.change_24h ? (c.change_24h>0?'+':'')+c.change_24h.toFixed(2)+'%' : "—"}</div></div>
+        <div class="conf-row"><div class="k">Сети</div><div class="v">${(c.networks||[]).join(", ") || "—"}</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn-secondary" onclick="closeModal();openDeposit()">Пополнить</button>
+        <button class="btn-secondary" onclick="closeModal();openWithdraw()">Вывести</button>
+      </div>`
+    );
+  }
+
+  // ─── Orders / History ────────────────────────────────────────────
   async function loadOrders() {
     const root = document.getElementById("orders-list");
-    if (!root) return;
     root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Загрузка...</div>';
     try {
-      const r = await api("/orders");
-      if (!r.items?.length) {
-        root.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3);">📭 Пока нет заявок</div>';
-        return;
-      }
-      root.innerHTML = r.items.map(o => {
-        const emoji = { buy_usdt: "💵→💎", sell_usdt: "💎→💵", business_outkup: "🏢" }[o.kind] || "📦";
-        const color = { done: "var(--success)", cancelled: "var(--danger)", awaiting_receipts: "var(--warning)" }[o.status] || "var(--text-2)";
-        return `<div style="background:var(--card);border-radius:12px;padding:14px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div><b>${emoji} ${o.order_number}</b> · ${o.kind}</div>
-            <div style="color:${color};font-size:12px;">${o.status}</div>
-          </div>
-          <div style="margin-top:6px;font-size:13px;color:var(--text-2);">
-            ${Number(o.amount_rub).toFixed(0)}₽ ⇄ ${Number(o.amount_usdt).toFixed(2)}$ · курс ${o.rate}₽
-          </div>
+      const [orders, transfers] = await Promise.all([
+        api("/orders").catch(() => ({items:[]})),
+        api("/wallet/transfers").catch(() => ({items:[]})),
+      ]);
+      const all = [
+        ...(orders.items || []).map(o => ({...o, _type: "order"})),
+        ...(transfers.items || []).map(t => ({...t, _type: "transfer"})),
+      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      if (!all.length) { root.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3);">📭 Пока пусто</div>'; return; }
+      root.innerHTML = all.map(x => {
+        if (x._type === "transfer") {
+          const sign = x.direction === "in" ? "+" : "-";
+          const color = x.direction === "in" ? "var(--success)" : "var(--danger)";
+          const who = x.counterparty ? "@"+x.counterparty.username : "—";
+          return `<div class="coin-row">
+            <div class="coin-icon" style="background:#3a8ee6"><i class="ti ti-send"></i></div>
+            <div class="coin-info"><div class="coin-name">${x.direction==='in'?'Получено от ':'Отправлено '}${who}</div><div class="coin-rate">${x.comment || ""}</div></div>
+            <div class="coin-val"><div class="v1" style="color:${color}">${sign}${x.amount} ${x.coin}</div><div class="v2">${new Date(x.created_at).toLocaleString('ru-RU', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})}</div></div>
+          </div>`;
+        }
+        const emoji = { buy_usdt: "💵→💎", sell_usdt: "💎→💵", business_outkup: "🏢" }[x.kind] || "📦";
+        return `<div class="coin-row">
+          <div class="coin-icon" style="background:#fbbf24">📦</div>
+          <div class="coin-info"><div class="coin-name">${emoji} ${x.order_number}</div><div class="coin-rate">${x.status}</div></div>
+          <div class="coin-val"><div class="v1">${Number(x.amount_rub).toFixed(0)}₽</div><div class="v2">${Number(x.amount_usdt).toFixed(2)} USDT</div></div>
         </div>`;
       }).join("");
-    } catch (e) {
-      root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`;
-    }
+    } catch (e) { root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`; }
   }
 
-  // ─── Offers (V2) ─────────────────────────────────────────────────
-  async function loadOffers(side = "buy") {
+  // ─── Exchange offers (V2) ────────────────────────────────────────
+  function switchSide2(side) {
+    _currentSide = side;
+    document.getElementById("seg-buy").style.background = side==="buy" ? "var(--accent)" : "var(--card)";
+    document.getElementById("seg-sell").style.background = side==="sell" ? "var(--accent)" : "var(--card)";
+    loadOffers(side);
+  }
+  async function loadOffers(side="buy") {
     const root = document.getElementById("offers-list");
-    if (!root) return;
+    root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Загрузка...</div>';
     try {
       const r = await api(`/offers?side=${side}&limit=20`);
-      const own = r.items || [];
-      if (!own.length) {
-        root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Офферов пока нет</div>';
-        return;
-      }
-      root.innerHTML = own.map(o => `
-        <div style="background:var(--card);border-radius:12px;padding:14px;margin-bottom:10px;">
+      if (!r.items?.length) { root.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);">Офферов пока нет</div>'; return; }
+      root.innerHTML = r.items.map(o => `
+        <div style="background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
-              <div style="font-weight:600;">${o.is_pride_official ? "⭐ PRIDE Official" : "@" + (o.author?.username || "user" + o.user_id)}</div>
+              <div style="font-weight:600;">${o.is_pride_official ? "⭐ PRIDE Official" : "@" + (o.author?.username || "user"+o.user_id)}</div>
               <div style="font-size:12px;color:var(--text-3);">${o.author?.total_deals ?? 0} сделок · ${o.author?.completion_rate_pct ?? 0}% ✓</div>
             </div>
             <div style="font-size:18px;font-weight:600;">${o.rate_rub_per_usdt} ₽</div>
           </div>
           <div style="margin-top:8px;font-size:12px;color:var(--text-2);">
-            ${Number(o.min_amount_rub).toFixed(0)}–${Number(o.max_amount_rub).toFixed(0)}₽ · ${o.payment_methods.join(", ")}
+            ${Number(o.min_amount_rub).toFixed(0)}–${Number(o.max_amount_rub).toFixed(0)}₽ · ${(o.payment_methods||[]).join(", ")}
           </div>
-          <button class="btn-buy" style="margin-top:10px;width:100%;" onclick="openDealForm(${o.id})">${side === "buy" ? "Купить" : "Продать"}</button>
+          <button class="btn-primary" style="margin-top:10px;" onclick="openDealForm(${o.id})">${side === "buy" ? "Купить" : "Продать"}</button>
         </div>`).join("");
-    } catch (e) {
-      root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`;
-    }
+    } catch (e) { root.innerHTML = `<div style="color:var(--danger);padding:20px;">Ошибка: ${e.message}</div>`; }
   }
-  let _currentSide = "buy";
-  function switchSide2(side) { _currentSide = side; loadOffers(side); }
-
-  async function openDealForm(offer_id) {
+  function openDealForm(offer_id) {
     showModal("Создать сделку", `
       <div style="display:flex;flex-direction:column;gap:10px;">
         <input id="d_amt" type="number" placeholder="Сумма ₽" class="mod-in"/>
-        <input id="d_pm" placeholder="Метод оплаты (из оффера)" class="mod-in"/>
+        <input id="d_pm" placeholder="Метод оплаты" class="mod-in"/>
         <input id="d_bank" placeholder="Банк (опц.)" class="mod-in"/>
       </div>`,
-      `<button class="btn-primary" style="width:100%" onclick="createDeal(${offer_id})">Создать</button>`
+      `<button class="btn-primary" onclick="createDeal(${offer_id})">Создать</button>`
     );
   }
   async function createDeal(offer_id) {
@@ -805,77 +779,13 @@
     };
     try {
       const r = await api("/deals", { method: "POST", body: JSON.stringify(body) });
-      closeModal();
-      tg?.showAlert?.(`✅ Сделка ${r.deal.deal_number} создана. Открой Заявки.`);
+      closeModal(); showSuccess("Сделка создана", `${r.deal.deal_number}`);
       goPage("orders");
-    } catch (e) {
-      tg?.showAlert?.("Ошибка: " + e.message);
-    }
-  }
-
-  async function api(path, options = {}) {
-    const headers = {
-      "Content-Type": "application/json",
-      "X-Telegram-InitData": tg?.initData || "",
-      ...(options.headers || {}),
-    };
-    const r = await fetch(`/api/v1${path}`, { ...options, headers });
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-    return r.json();
-  }
-
-  async function bootstrap() {
-    try {
-      const [me, rate] = await Promise.all([
-        api("/users/me").catch(() => null),
-        api("/exchange/rate").catch(() => ({ buy: 84.0, sell: 82.0 })),
-      ]);
-
-      if (me) {
-        // Balance
-        document.getElementById("bal-usdt").textContent =
-          `$ ${Number(me.balance_usdt || 0).toFixed(2)}`;
-        document.getElementById("asset-usdt-bal").textContent =
-          `${Number(me.balance_usdt || 0).toFixed(2)} USDT`;
-
-        // KYC progress
-        const kycSteps = { pending: 0, pending_review: 1, verified: 3, rejected: 0, banned: 0 };
-        const progress = kycSteps[me.kyc_status] || 0;
-        const progEl = document.getElementById("kyc-progress");
-        if (progress >= 3) {
-          progEl.classList.add("done");
-          progEl.innerHTML = '<i class="ti ti-check"></i>';
-          document.getElementById("kyc-row").style.display = "none";
-        } else {
-          progEl.textContent = `${progress}/3`;
-        }
-
-        // Profile
-        const initials = (me.full_name || me.username || "?")
-          .split(" ").map(s => s[0]?.toUpperCase()).slice(0,2).join("");
-        document.getElementById("ava-init").textContent = initials || "?";
-        document.getElementById("prof-name").textContent =
-          me.full_name || `@${me.username}` || "—";
-        document.getElementById("prof-status").textContent =
-          me.kyc_status === "verified" ? "✓ Verified" : "Не верифицирован";
-        document.getElementById("prof-deals").textContent = me.stats?.completed_deals ?? 0;
-        document.getElementById("prof-rate").textContent =
-          me.stats?.completion_rate_pct ? `${me.stats.completion_rate_pct}%` : "—";
-        document.getElementById("prof-trust").textContent = `${me.trust_score || 0}/100`;
-        document.getElementById("prof-vol").textContent =
-          `${Number(me.stats?.total_volume_usdt || 0).toFixed(2)} USDT`;
-        document.getElementById("prof-addr").textContent = me.trc20_address || "не указан";
-      }
-
-      if (rate) {
-        document.getElementById("rate-buy").textContent = rate.buy.toFixed(2);
-      }
-    } catch (e) {
-      console.error("bootstrap failed:", e);
-    }
+    } catch (e) { tg?.showAlert?.("Ошибка: " + e.message); }
   }
 
   bootstrap();
 </script>
+
 </body>
 </html>
