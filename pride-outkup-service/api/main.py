@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet
 from core.config import settings
-from core.services import jarvis_sync, tron_monitor, rates_service
+from core.services import jarvis_sync, tron_monitor, rates_service, sweep_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +94,15 @@ async def lifespan(app: FastAPI):
     # Background: crypto rates polling (CoinGecko) каждые 60 сек
     rates_task = asyncio.create_task(rates_service.rate_loop())
     logger.info("Started: rates_service")
+    # Background: sweep USDT с user HD-адресов в hot wallet раз в час
+    sweep_task = asyncio.create_task(sweep_service.sweep_loop())
+    logger.info("Started: sweep_service")
     yield
     logger.info("FastAPI stopping...")
     sync_task.cancel()
     tron_task.cancel()
     rates_task.cancel()
+    sweep_task.cancel()
 
 
 app = FastAPI(
