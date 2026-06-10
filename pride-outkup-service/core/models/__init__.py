@@ -10,6 +10,7 @@ from core.models.ops import OperationLog, TronOutboundLog
 from core.models.deposit_request import DepositRequest
 from core.models.coin import Coin, UserCoinBalance
 from core.models.transfer import Transfer, Swap
+from core.models.wallet_address import SystemSecret, UserDepositAddress
 
 __all__ = [
     "User",
@@ -27,4 +28,6 @@ __all__ = [
     "UserCoinBalance",
     "Transfer",
     "Swap",
+    "SystemSecret",
+    "UserDepositAddress",
 ]

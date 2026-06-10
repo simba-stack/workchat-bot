@@ -131,8 +131,91 @@ async def _expire_old(db) -> int:
     return len(rows)
 
 
+async def _credit_user_direct(db, user_id: int, tx_id: str, amount: Decimal, from_addr: str) -> None:
+    """Зачислить incoming USDT на баланс юзера (per-user address, без DepositRequest).
+    Используется для HD-wallet user-адресов.
+    """
+    from core.models import User
+    from core.services import balance_service
+
+    user = await db.get(User, user_id)
+    if not user:
+        return
+    try:
+        await balance_service.credit(
+            db, user_id, "USDT", amount,
+            op_type="deposit", note=f"deposit from {from_addr}",
+            txid=tx_id, ref_table="user_deposit_addresses",
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning("[tron_monitor/direct] credit failed: %s", e)
+        return
+    logger.info("[tron_monitor/direct] CREDITED user=%s amount=%s tx=%s", user_id, amount, tx_id)
+    try:
+        from bot.main import notify_user
+        from core.services import jarvis_sync as _js
+        await notify_user(
+            user.tg_id,
+            f"💰 <b>+{float(amount)} USDT</b>\nДепозит зачислен на твой баланс PRIDE P2P.",
+        )
+        await _js.send_event("deposit_received", {
+            "user_id": user.id, "tg_id": user.tg_id,
+            "amount_usdt": float(amount), "tx_id": tx_id,
+        })
+    except Exception:
+        pass
+
+
+async def _tick_user_addresses(db) -> None:
+    """Опрашиваем активные user-deposit-адреса (батчами) и зачисляем incoming USDT."""
+    from core.models import UserDepositAddress
+
+    # берём топ-50 (можем расширить пагинацией если N>>50)
+    res = await db.execute(select(UserDepositAddress).limit(200))
+    addresses = res.scalars().all()
+    if not addresses:
+        return
+    for uda in addresses:
+        txs = await _fetch_incoming_trc20(uda.address, limit=10)
+        if not txs:
+            continue
+        for tx in txs:
+            tx_id = tx.get("transaction_id") or tx.get("txID") or ""
+            to_addr = tx.get("to") or ""
+            token = (tx.get("token_info") or {}).get("address") or ""
+            value = tx.get("value")
+            if not (tx_id and to_addr and value):
+                continue
+            if token != USDT_CONTRACT:
+                continue
+            if to_addr != uda.address:
+                continue
+            amount = _parse_amount_usdt(value)
+            if amount <= 0:
+                continue
+            if await _is_already_credited(db, tx_id):
+                continue
+            from_addr = tx.get("from") or "?"
+            await _credit_user_direct(db, uda.user_id, tx_id, amount, from_addr)
+        # обновим last_synced_at
+        try:
+            uda.last_synced_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+
+
 async def tick() -> None:
     """Один цикл монитора."""
+    async with AsyncSessionLocal() as db:
+        # 1) Per-user адреса (HD-wallet) — основной поток депозитов
+        try:
+            await _tick_user_addresses(db)
+        except Exception as e:
+            logger.exception("[tron_monitor] user_addresses error: %s", e)
+
+    # 2) Legacy: hot-wallet с exact-amount матчингом (для старых deposit_requests)
     if not settings.tron_hot_wallet_address:
         return
 

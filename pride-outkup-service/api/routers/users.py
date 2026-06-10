@@ -189,6 +189,36 @@ async def submit_kyc(
     return {"ok": True, "kyc_status": "pending_review"}
 
 
+@router.get("/me/deposit_address")
+async def my_deposit_address(
+    coin: str = "USDT",
+    network: str = "TRC20",
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Возвращает (или создаёт) персональный депозитный адрес юзера.
+
+    HD-wallet: адрес деривируется из master_derivation_key + user_id детерминистически.
+    Один юзер — один адрес для (coin, network).
+    """
+    if user.kyc_status == "banned":
+        raise HTTPException(403, "Аккаунт заблокирован")
+    from core.services.wallet_derive import get_or_create_user_address
+    try:
+        address, idx = await get_or_create_user_address(db, user.id, coin, network)
+    except NotImplementedError as e:
+        raise HTTPException(400, f"Сеть пока не поддерживается: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"Не удалось создать адрес: {e}")
+    return {
+        "coin": coin.upper(),
+        "network": network.upper(),
+        "address": address,
+        "min_deposit": 1,
+        "warning": "Отправляй только эту монету и только в эту сеть. Любая сумма ≥ минимума.",
+    }
+
+
 @router.post("/me/deposits/request")
 async def create_deposit_request(
     payload: dict,
