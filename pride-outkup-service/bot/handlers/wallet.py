@@ -266,6 +266,61 @@ async def cmd_swap(message: Message):
     )
 
 
+# ─── /wallet_info — admin only ────────────────────────────────────────
+@router.message(Command("wallet_info"))
+async def cmd_wallet_info(message: Message):
+    """Только для admin: показывает hash master key для проверки бэкапа + статистику."""
+    if not message.from_user or message.from_user.id not in settings.admin_ids:
+        return  # silent для не-admin
+    import hashlib
+    from sqlalchemy import func, select as _sel
+    from core.models import SystemSecret, UserDepositAddress
+    from core.services.wallet_derive import MASTER_KEY_NAME
+    async with AsyncSessionLocal() as db:
+        srow = (await db.execute(_sel(SystemSecret).where(SystemSecret.key == MASTER_KEY_NAME))).scalar_one_or_none()
+        addr_count = (await db.execute(_sel(func.count(UserDepositAddress.id)))).scalar() or 0
+    if not srow:
+        await message.answer("⚠️ Master key ещё не сгенерирован (новый сервис?). Открой Mini-App → Пополнить.")
+        return
+    key_hex = srow.value
+    h16 = hashlib.sha256(key_hex.encode()).hexdigest()[:16]
+    h32 = hashlib.sha256(key_hex.encode()).hexdigest()[:32]
+    await message.answer(
+        "🔐 <b>Wallet Info</b>\n\n"
+        f"Master key hash16: <code>{h16}</code>\n"
+        f"Master key hash32: <code>{h32}</code>\n"
+        f"User deposit addresses: <b>{addr_count}</b>\n"
+        f"Created: {srow.created_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        "Сверь hash16 с тем что у тебя в 1Password — должен совпадать. "
+        "Если не совпадает — ключ был перезаписан/восстановлен."
+    )
+
+
+@router.message(Command("export_master_key"))
+async def cmd_export_master(message: Message):
+    """Только для admin: повторно отправляет master key (если оригинал потерян).
+    ВНИМАНИЕ: пиши команду только в личке боту, не в группе.
+    """
+    if not message.from_user or message.from_user.id not in settings.admin_ids:
+        return
+    if message.chat.type != "private":
+        await message.answer("Эта команда только в личке бота — не в группе.")
+        return
+    from sqlalchemy import select as _sel
+    from core.models import SystemSecret
+    from core.services.wallet_derive import MASTER_KEY_NAME
+    async with AsyncSessionLocal() as db:
+        srow = (await db.execute(_sel(SystemSecret).where(SystemSecret.key == MASTER_KEY_NAME))).scalar_one_or_none()
+    if not srow:
+        await message.answer("⚠️ Master key ещё не создан.")
+        return
+    await message.answer(
+        "🔐 <b>PRIDE P2P · Master Key (повторная отправка)</b>\n\n"
+        f"<code>{srow.value}</code>\n\n"
+        "Сохрани в 1Password. Удали это сообщение после копирования."
+    )
+
+
 # ─── /coins — список курсов ────────────────────────────────────────────
 @router.message(Command("coins", "rates"))
 async def cmd_coins(message: Message):

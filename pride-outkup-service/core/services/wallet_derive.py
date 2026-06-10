@@ -29,17 +29,73 @@ logger = logging.getLogger(__name__)
 MASTER_KEY_NAME = "master_derivation_key_v1"
 
 
+async def _notify_owners_restored(key_hex: str) -> None:
+    """Шлёт всем admin'ам уведомление о восстановлении ключа из MASTER_KEY_RESTORE."""
+    try:
+        from bot.main import notify_user
+        from core.config import settings as cfg
+        msg = (
+            "🔓 <b>PRIDE P2P · Master Key восстановлен</b>\n\n"
+            "Master derivation key восстановлен из переменной окружения "
+            "<code>MASTER_KEY_RESTORE</code>.\n\n"
+            f"Hash16: <code>{hashlib.sha256(key_hex.encode()).hexdigest()[:16]}</code>\n\n"
+            "Если это сделал не ты — срочно проверь доступ к Railway. "
+            "После восстановления удали MASTER_KEY_RESTORE из Variables."
+        )
+        for tg_id in cfg.admin_ids:
+            try:
+                await notify_user(tg_id, msg)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 async def get_or_create_master_key(db: AsyncSession) -> bytes:
     """Возвращает master_key (32 bytes). Создаёт если нет.
 
-    При первом создании — шлёт уведомление owner'у через Telegram.
+    Логика поиска (приоритет сверху вниз):
+    1. БД (system_secrets.master_derivation_key_v1) — основное место
+    2. ENV var MASTER_KEY_RESTORE — для восстановления после потери БД
+    3. Генерация новой через secrets.token_hex(32) (256-bit энтропия)
+
+    При выборе #2 или #3 — записывается в БД и шлётся уведомление owner'у в TG.
     """
+    import os
     res = await db.execute(
         select(SystemSecret).where(SystemSecret.key == MASTER_KEY_NAME)
     )
     row = res.scalar_one_or_none()
+
     if row:
+        # Если задана MASTER_KEY_RESTORE и она НЕ совпадает с БД — это критичная ситуация
+        restore_env = (os.environ.get("MASTER_KEY_RESTORE") or "").strip()
+        if restore_env and restore_env != row.value:
+            logger.error(
+                "[wallet_derive] ⚠️ MASTER_KEY_RESTORE env != БД master_key! "
+                "БД оставлена нетронутой (чтобы не потерять текущие адреса). "
+                "Если уверен что нужно перезаписать — удали из БД руками."
+            )
         return bytes.fromhex(row.value)
+
+    # БД пуста — пробуем восстановить из env, иначе генерим новый
+    restore_env = (os.environ.get("MASTER_KEY_RESTORE") or "").strip()
+    if restore_env and len(restore_env) == 64:
+        try:
+            bytes.fromhex(restore_env)  # validate hex
+            key_hex = restore_env
+            logger.warning(
+                "[wallet_derive] ⚠️ Восстановление из MASTER_KEY_RESTORE env. "
+                "Hash16=%s. Это операция должна быть редкой.",
+                hashlib.sha256(key_hex.encode()).hexdigest()[:16],
+            )
+            row = SystemSecret(key=MASTER_KEY_NAME, value=key_hex, is_encrypted=False)
+            db.add(row)
+            await db.commit()
+            await _notify_owners_restored(key_hex)
+            return bytes.fromhex(key_hex)
+        except ValueError:
+            logger.error("[wallet_derive] MASTER_KEY_RESTORE некорректный hex (64 chars)")
 
     # Генерим новый
     key_hex = secrets.token_hex(32)  # 64 hex chars = 32 bytes = 256 bits

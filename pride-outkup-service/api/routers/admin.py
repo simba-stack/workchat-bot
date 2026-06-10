@@ -251,6 +251,71 @@ async def set_rate(
     return {"ok": True, key: rate}
 
 
+# ─── HD-Wallet admin tooling ───────────────────────────────────────────
+@router.get("/wallet/derive_user_key")
+async def derive_user_private_key(
+    user_id: int,
+    network: str = "TRC20",
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Возвращает private key user-deposit-адреса для emergency sweep.
+
+    Очень чувствительный endpoint — доступ только admin (по tg_id).
+    Каждый вызов логируется в OperationLog для аудита.
+    """
+    from core.services import wallet_derive
+    try:
+        priv_hex = await wallet_derive.get_user_private_key(db, user_id, network)
+        address, _ = wallet_derive.derive_tron_keypair(
+            await wallet_derive.get_or_create_master_key(db),
+            user_id,
+        )
+    except NotImplementedError as e:
+        raise HTTPException(400, f"Сеть не поддерживается: {e}")
+
+    # Аудит — лог в OperationLog
+    from core.models import OperationLog
+    db.add(OperationLog(
+        user_id=user_id, type="admin_derive_key",
+        amount_usdt=0, balance_after=None,
+        note=f"admin {me.tg_id} requested privkey for {network}",
+    ))
+    await db.commit()
+
+    return {
+        "user_id": user_id,
+        "network": network,
+        "address": address,
+        "private_key_hex": priv_hex,
+        "warning": "Этот ключ даёт ПОЛНЫЙ контроль над user-адресом. Используй только для sweep/recovery. Никогда не сохраняй в файлах.",
+    }
+
+
+@router.get("/wallet/info")
+async def wallet_info(
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сводка по HD-wallet: master_key hash + кол-во адресов + статистика."""
+    import hashlib
+    from sqlalchemy import func, select as _sel
+    from core.models import SystemSecret, UserDepositAddress
+    from core.services.wallet_derive import MASTER_KEY_NAME
+
+    srow = (await db.execute(_sel(SystemSecret).where(SystemSecret.key == MASTER_KEY_NAME))).scalar_one_or_none()
+    if not srow:
+        return {"ok": False, "error": "master_key not created yet"}
+    addr_count = (await db.execute(_sel(func.count(UserDepositAddress.id)))).scalar() or 0
+    return {
+        "ok": True,
+        "master_key_hash16": hashlib.sha256(srow.value.encode()).hexdigest()[:16],
+        "master_key_hash32": hashlib.sha256(srow.value.encode()).hexdigest()[:32],
+        "user_deposit_addresses": addr_count,
+        "created_at": srow.created_at.isoformat(),
+    }
+
+
 @router.post("/feature_flag")
 async def toggle_feature(
     payload: dict,
