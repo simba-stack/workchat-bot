@@ -60,27 +60,52 @@ async def get_usdt_balance() -> Decimal:
 
 
 async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
-    """Отправить USDT TRC20 → возвращает {'tx_id', 'status'}."""
+    """Отправить USDT TRC20 → возвращает {'tx_id', 'status'}.
+
+    Если настроен FEEE_API_KEY — сначала арендуем energy через Feee.io
+    (экономия 90%+ на газе: ~$0.05 vs $1+ без energy).
+    Если аренда не удалась — fallback на сжигание TRX (fee_limit=20 TRX).
+    """
     if not is_configured():
         return {"ok": False, "error": "TRON not configured"}
+
+    # Pre-step: rent energy через Feee.io (если настроен)
+    rented = False
+    try:
+        from core.services import energy_service
+        if energy_service.is_configured():
+            rented = await energy_service.rent_and_wait(
+                settings.tron_hot_wallet_address,
+                energy_amount=65_000,
+                wait_sec=8,
+            )
+            if rented:
+                logger.info("[tron] energy rented via Feee.io for %s", to_address)
+            else:
+                logger.warning("[tron] energy rental failed, falling back to TRX burn")
+    except Exception as e:
+        logger.warning("[tron] energy rental skipped: %s", e)
+
     try:
         from tronpy.keys import PrivateKey
         client = _get_client()
         priv = PrivateKey(bytes.fromhex(settings.tron_private_key))
         contract = client.get_contract(USDT_CONTRACT)
         amount_raw = int(amount * Decimal(10 ** 6))
+        # fee_limit: если energy не арендована — даём запас 30 TRX чтобы покрыть burn
+        fee_limit_sun = 5_000_000 if rented else 30_000_000  # 5 TRX vs 30 TRX
         txn = (
             contract.functions.transfer(to_address, amount_raw)
             .with_owner(settings.tron_hot_wallet_address)
-            .fee_limit(20_000_000)  # 20 TRX
+            .fee_limit(fee_limit_sun)
             .build()
             .sign(priv)
         )
         result = txn.broadcast()
-        # result.wait() — блокирует event loop, делаем через polling-loop
         tx_id = txn.txid
-        logger.info("[tron] send %s USDT to %s tx=%s", amount, to_address, tx_id)
-        return {"ok": True, "tx_id": tx_id, "result": result}
+        logger.info("[tron] send %s USDT to %s tx=%s (energy_rented=%s)",
+                    amount, to_address, tx_id, rented)
+        return {"ok": True, "tx_id": tx_id, "result": result, "energy_rented": rented}
     except Exception as e:
         logger.exception("[tron] send failed: %s", e)
         return {"ok": False, "error": str(e)[:300]}

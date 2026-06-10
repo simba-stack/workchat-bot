@@ -35,29 +35,33 @@ async def _ensure_schema_and_seed():
         logger.warning("[schema] create_all skipped: %s", e)
 
     # 2) Seed coins если таблица пуста
+    # (code, name, coingecko_id, networks, decimals, icon_color, icon_url,
+    #  min_deposit, min_withdraw, withdraw_fee, sort_order)
+    # Комиссии конкурентны Crypto Bot (USDT там $5.5, у нас $3.5).
+    # С Feee.io energy rental реальный газ USDT ~$0.35 → чистый профит $3.15.
     SEED = [
         ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
-         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 2, 1, 10),
+         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 3.5, 10),
         ("TON",   "Toncoin",      "the-open-network", ["TON"], 9, "#0098EA",
-         "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 1, 0.05, 20),
+         "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 0.5, 0.1, 20),
         ("TRX",   "TRON",         "tron",             ["TRC20"], 6, "#FF060A",
-         "https://assets.coingecko.com/coins/images/1094/small/tron-logo.png", 5, 5, 1, 30),
+         "https://assets.coingecko.com/coins/images/1094/small/tron-logo.png", 5, 20, 5, 30),
         ("BTC",   "Bitcoin",      "bitcoin",          ["BTC"], 8, "#F7931A",
-         "https://assets.coingecko.com/coins/images/1/small/bitcoin.png", 0.0001, 0.0005, 0.0001, 40),
+         "https://assets.coingecko.com/coins/images/1/small/bitcoin.png", 0.0001, 0.001, 0.0002, 40),
         ("ETH",   "Ethereum",     "ethereum",         ["ERC20"], 18, "#627EEA",
-         "https://assets.coingecko.com/coins/images/279/small/ethereum.png", 0.01, 0.01, 0.003, 50),
+         "https://assets.coingecko.com/coins/images/279/small/ethereum.png", 0.01, 0.01, 0.005, 50),
         ("SOL",   "Solana",       "solana",           ["SPL"], 9, "#9945FF",
-         "https://assets.coingecko.com/coins/images/4128/small/solana.png", 0.05, 0.1, 0.01, 60),
+         "https://assets.coingecko.com/coins/images/4128/small/solana.png", 0.05, 0.1, 0.02, 60),
         ("USDC",  "USD Coin",     "usd-coin",         ["TRC20","ERC20","BEP20","SPL"], 6, "#2775CA",
-         "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png", 1, 2, 1, 15),
+         "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png", 1, 5, 3.5, 15),
         ("BNB",   "Binance Coin", "binancecoin",      ["BEP20"], 18, "#F3BA2F",
-         "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", 0.005, 0.01, 0.001, 70),
+         "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", 0.005, 0.01, 0.002, 70),
         ("DOGE",  "Dogecoin",     "dogecoin",         ["DOGE"], 8, "#C2A633",
-         "https://assets.coingecko.com/coins/images/5/small/dogecoin.png", 5, 5, 2, 80),
+         "https://assets.coingecko.com/coins/images/5/small/dogecoin.png", 5, 10, 5, 80),
         ("LTC",   "Litecoin",     "litecoin",         ["LTC"], 8, "#345D9D",
-         "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.001, 0.0003, 90),
+         "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.005, 0.001, 90),
         ("XAUT",  "Tether Gold",  "tether-gold",      ["ERC20"], 6, "#D4AF37",
-         "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.001, 0.0005, 95),
+         "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.005, 0.001, 95),
         ("RUB",   "Российский рубль", None,           [], 2, "#FF3B30",
          None, 100, 100, 0, 100),
     ]

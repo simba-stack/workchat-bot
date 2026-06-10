@@ -316,6 +316,121 @@ async def wallet_info(
     }
 
 
+@router.get("/coins")
+async def admin_list_coins(
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список монет с fee/min — для admin UI."""
+    from core.models import Coin
+    from sqlalchemy import select as _sel
+    rows = (await db.execute(_sel(Coin).order_by(Coin.sort_order))).scalars().all()
+    return {
+        "items": [
+            {
+                "code": c.code, "name": c.name,
+                "networks": c.networks or [],
+                "min_deposit": float(c.min_deposit),
+                "min_withdraw": float(c.min_withdraw),
+                "withdraw_fee": float(c.withdraw_fee),
+                "is_active": c.is_active,
+            }
+            for c in rows
+        ],
+    }
+
+
+@router.post("/coins/{code}/fee")
+async def admin_update_coin_fee(
+    code: str,
+    payload: dict,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Обновить withdraw_fee / min_withdraw для монеты.
+
+    payload: {withdraw_fee?: float, min_withdraw?: float, min_deposit?: float, is_active?: bool}
+    """
+    from core.models import Coin
+    from sqlalchemy import select as _sel
+    c = (await db.execute(_sel(Coin).where(Coin.code == code.upper()))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, f"coin {code} not found")
+
+    changed = []
+    if (v := payload.get("withdraw_fee")) is not None:
+        c.withdraw_fee = Decimal(str(v))
+        changed.append(f"withdraw_fee={v}")
+    if (v := payload.get("min_withdraw")) is not None:
+        c.min_withdraw = Decimal(str(v))
+        changed.append(f"min_withdraw={v}")
+    if (v := payload.get("min_deposit")) is not None:
+        c.min_deposit = Decimal(str(v))
+        changed.append(f"min_deposit={v}")
+    if (v := payload.get("is_active")) is not None:
+        c.is_active = bool(v)
+        changed.append(f"is_active={v}")
+
+    if not changed:
+        raise HTTPException(400, "nothing to update")
+
+    db.add(OperationLog(
+        user_id=me.id, type="admin_coin_update",
+        amount_usdt=0, balance_after=None,
+        note=f"{code} updated: {', '.join(changed)} by admin {me.tg_id}",
+    ))
+    await db.commit()
+    return {
+        "ok": True, "code": c.code,
+        "withdraw_fee": float(c.withdraw_fee),
+        "min_withdraw": float(c.min_withdraw),
+        "min_deposit": float(c.min_deposit),
+        "is_active": c.is_active,
+        "changed": changed,
+    }
+
+
+@router.get("/energy/status")
+async def energy_status(me: User = Depends(require_admin)):
+    """Статус интеграции Feee.io — баланс TRX + текущая цена energy."""
+    from core.services import energy_service
+    if not energy_service.is_configured():
+        return {
+            "ok": False,
+            "configured": False,
+            "hint": "Установи FEEE_API_KEY в Railway Variables (https://feee.io → API keys).",
+        }
+    bal = await energy_service.get_balance()
+    price = await energy_service.get_energy_price()
+    return {
+        "ok": True,
+        "configured": True,
+        "balance_trx": float(bal) if bal is not None else None,
+        "energy_price_trx": float(price) if price is not None else None,
+        "default_amount": energy_service.DEFAULT_ENERGY_AMOUNT,
+    }
+
+
+@router.post("/energy/rent")
+async def energy_rent_manual(
+    payload: dict,
+    me: User = Depends(require_admin),
+):
+    """Ручная аренда energy для адреса (для теста / срочной отправки).
+
+    payload: {address: str, amount?: int}
+    """
+    from core.services import energy_service
+    addr = (payload.get("address") or "").strip()
+    amount = int(payload.get("amount") or energy_service.DEFAULT_ENERGY_AMOUNT)
+    if not addr:
+        raise HTTPException(400, "address required")
+    if not energy_service.is_configured():
+        raise HTTPException(400, "FEEE_API_KEY не настроен")
+    result = await energy_service.rent_energy(addr, energy_amount=amount)
+    return result
+
+
 @router.post("/feature_flag")
 async def toggle_feature(
     payload: dict,

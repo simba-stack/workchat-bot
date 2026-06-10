@@ -67,34 +67,53 @@ async def _balance_trx(client, addr: str) -> Decimal:
 
 
 async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex: str) -> dict:
-    """Свипает один user-адрес. Возвращает результат для лога."""
+    """Свипает один user-адрес. Возвращает результат для лога.
+
+    Если настроен FEEE_API_KEY — арендует energy перед transfer'ом (нужно ~3 TRX
+    для bandwidth вместо ~15 TRX для energy+bandwidth).
+    """
     from tronpy.keys import PrivateKey
+    from core.services import energy_service
 
     usdt_bal = await _balance_usdt(client, uda.address)
     if usdt_bal < SWEEP_MIN_USDT:
         return {"address": uda.address, "skipped": "low_balance", "usdt": float(usdt_bal)}
 
+    # Если есть Feee.io — минимально нужно ~3 TRX (только bandwidth).
+    # Иначе нужно ~15 TRX (для energy через сжигание).
+    has_feee = energy_service.is_configured()
+    trx_min = Decimal("3") if has_feee else SWEEP_TRX_RESERVE
+
     trx_bal = await _balance_trx(client, uda.address)
-    if trx_bal < SWEEP_TRX_RESERVE:
-        return {"address": uda.address, "skipped": "no_trx_gas", "usdt": float(usdt_bal), "trx": float(trx_bal)}
+    if trx_bal < trx_min:
+        return {"address": uda.address, "skipped": "no_trx_gas",
+                "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
+
+    # Pre-step: rent energy для user-addr (если настроен Feee.io)
+    rented = False
+    if has_feee:
+        rented = await energy_service.rent_and_wait(uda.address, energy_amount=65_000, wait_sec=8)
+        if rented:
+            logger.info("[sweep] energy rented for %s", uda.address)
 
     try:
         priv = PrivateKey(bytes.fromhex(priv_hex))
         contract = client.get_contract(USDT_CONTRACT)
         amount_raw = int(usdt_bal * Decimal(10 ** 6))
+        fee_limit_sun = 5_000_000 if rented else 30_000_000  # 5 vs 30 TRX
         txn = (
             contract.functions.transfer(hot_wallet, amount_raw)
             .with_owner(uda.address)
-            .fee_limit(20_000_000)
+            .fee_limit(fee_limit_sun)
             .build()
             .sign(priv)
         )
         result = txn.broadcast()
-        logger.info("[sweep] %s → %s sent %s USDT tx=%s",
-                    uda.address, hot_wallet, usdt_bal, txn.txid)
+        logger.info("[sweep] %s → %s sent %s USDT tx=%s (energy_rented=%s)",
+                    uda.address, hot_wallet, usdt_bal, txn.txid, rented)
         return {
             "address": uda.address, "ok": True,
-            "amount": float(usdt_bal), "tx_id": txn.txid,
+            "amount": float(usdt_bal), "tx_id": txn.txid, "energy_rented": rented,
         }
     except Exception as e:
         logger.exception("[sweep] send failed: %s", e)
