@@ -3457,9 +3457,14 @@ async def calls_info_public(room_id: str):
 
 
 @app.post("/api/calls/{room_id}/join")
-async def calls_join(room_id: str, request: Request, _perm: bool = Depends(require_action("call_join"))):
+async def calls_join(room_id: str, request: Request):
     """Гость пытается войти в комнату. Body: {name: str, password: str}.
-    Возвращает participant_id для WS-подключения."""
+    Возвращает participant_id для WS-подключения.
+
+    БЕЗ require_action — гостевой эндпоинт: защита по паролю комнаты,
+    не по ролям JARVIS. Раньше тут стоял Depends(require_action("call_join")) —
+    он возвращал 401 для незалогиненных гостей, фронт трактовал это как
+    «Неверный пароль», и никто кроме создателя не мог зайти."""
     gc = storage.get_guest_call(room_id)
     if not gc or gc.get("ended_at"):
         raise HTTPException(404, "room not found or ended")

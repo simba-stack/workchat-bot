@@ -134,6 +134,26 @@ async def health():
     return {"status": "ok", "service": "pride-p2p", "version": "0.1.0"}
 
 
+@app.get("/myip")
+async def my_ip():
+    """Возвращает egress IP сервиса (для Feee.io whitelist).
+    Без auth — это публичный IP, не секрет."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            # Делаем 3 запроса к разным сервисам — Railway мог выделить разные IP
+            ips = set()
+            for url in ["https://api.ipify.org", "https://ifconfig.me/ip", "https://ipinfo.io/ip"]:
+                try:
+                    r = await cli.get(url, headers={"User-Agent": "PrideP2P-Bot/1.0"})
+                    ips.add(r.text.strip())
+                except Exception:
+                    pass
+            return {"ips": sorted(ips), "user_agent": "PrideP2P-Bot/1.0"}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(exchange.router, prefix="/api/v1/exchange", tags=["exchange"])
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["orders"])
