@@ -1,7 +1,6 @@
 """FastAPI app — Mini-App backend + webhooks + JARVIS sync.
 
 Lifespan делает МИНИМУМ синхронной работы — всё тяжёлое в asyncio.create_task.
-Это гарантирует что /health отвечает сразу (важно для Railway healthcheck).
 """
 import asyncio
 import logging
@@ -31,10 +30,30 @@ from core.services import (
 logger = logging.getLogger(__name__)
 
 
+# Safety-net миграция: если alembic не применил 0007, добавляем колонки тут.
+P2P_INDUSTRIAL_ALTERS = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier VARCHAR(16) NOT NULL DEFAULT 'none'",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier_updated_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cancel_cooldown_until TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS price_type VARCHAR(8) NOT NULL DEFAULT 'fixed'",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS float_margin_pct NUMERIC(6,2)",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS coin VARCHAR(16) NOT NULL DEFAULT 'USDT'",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS fiat VARCHAR(8) NOT NULL DEFAULT 'RUB'",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS pay_window_min INTEGER NOT NULL DEFAULT 30",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS min_taker_completed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS require_kyc BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS region VARCHAR(16)",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS paused_reason VARCHAR(64)",
+    "ALTER TABLE deals ADD COLUMN IF NOT EXISTS coin VARCHAR(16) NOT NULL DEFAULT 'USDT'",
+    "ALTER TABLE deals ADD COLUMN IF NOT EXISTS fiat VARCHAR(8) NOT NULL DEFAULT 'RUB'",
+    "ALTER TABLE deals ADD COLUMN IF NOT EXISTS pay_deadline_at TIMESTAMP WITH TIME ZONE",
+]
+
+
 async def _ensure_schema_and_seed():
-    """Safety net: create_all + seed coins. Всё в try/except."""
+    """Safety net: create_all + seed coins + P2P industrial columns ALTER."""
     from decimal import Decimal
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, text as _sql
     from core.db import Base, engine, AsyncSessionLocal
     from core.models import Coin
 
@@ -44,6 +63,21 @@ async def _ensure_schema_and_seed():
         logger.info("[schema] create_all OK")
     except Exception as e:
         logger.warning("[schema] create_all skipped: %s", e)
+
+    # CRITICAL: добавить P2P industrial колонки если миграция не доехала.
+    try:
+        async with engine.begin() as conn:
+            ok_count, fail_count = 0, 0
+            for sql in P2P_INDUSTRIAL_ALTERS:
+                try:
+                    await conn.execute(_sql(sql))
+                    ok_count += 1
+                except Exception as e:
+                    fail_count += 1
+                    logger.warning("[schema] ALTER skipped: %s -> %s", sql[:60], e)
+            logger.info("[schema] P2P alters: %d ok, %d fail", ok_count, fail_count)
+    except Exception as e:
+        logger.warning("[schema] industrial alter block failed: %s", e)
 
     SEED = [
         ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
@@ -91,7 +125,6 @@ async def _ensure_schema_and_seed():
 
 
 async def _bg_startup():
-    """Тяжёлая инициализация в фоне — НЕ блокирует /health."""
     logger.info("[bg_startup] begin")
     try:
         await _ensure_schema_and_seed()
@@ -128,7 +161,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="PRIDE P2P API",
-    version="0.2.0",
+    version="0.2.1",
     description="Backend for PRIDE P2P Mini-App + JARVIS integration",
     lifespan=lifespan,
 )
@@ -150,10 +183,7 @@ app.add_middleware(
 @app.get("/healthz")
 @app.get("/ping")
 async def health():
-    """Ультра-простой healthcheck — без БД, без зависимостей.
-    Алиасы: /health /healthz /ping — чтобы любой Railway healthcheck path сработал.
-    """
-    return {"status": "ok", "service": "pride-p2p", "version": "0.2.0"}
+    return {"status": "ok", "service": "pride-p2p", "version": "0.2.1"}
 
 
 @app.get("/_status")
@@ -191,7 +221,6 @@ app.include_router(cheques.router, prefix="/api/v1/cheques", tags=["cheques"])
 app.include_router(audit.router, prefix="/api/v1/admin/audit", tags=["audit"])
 
 
-# ─── Mini-App статика ──────────────────────────────────────────────
 MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"
 MINIAPP_DIST = MINIAPP_DIR / "dist"
 INDEX_HTML = MINIAPP_DIR / "index.html"
@@ -209,14 +238,9 @@ else:
 
 @app.get("/")
 async def root():
-    """Корневой endpoint — отвечает 200 для любого healthcheck."""
     return {
-        "service": "pride-p2p",
-        "status": "ok",
-        "app": "/app",
-        "owner": "/owner",
-        "api": "/api/v1",
-        "health": "/health",
+        "service": "pride-p2p", "status": "ok",
+        "app": "/app", "owner": "/owner", "api": "/api/v1", "health": "/health",
     }
 
 
