@@ -1,4 +1,9 @@
-"""FastAPI app — Mini-App backend + webhooks + JARVIS sync."""
+"""FastAPI app — Mini-App backend + webhooks + JARVIS sync.
+
+Lifespan делает МИНИМУМ синхронной работы перед yield — всё тяжёлое
+вынесено в asyncio.create_task. Это гарантирует что /health отвечает
+сразу после старта (важно для Railway healthcheck).
+"""
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -28,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 async def _ensure_schema_and_seed():
-    """Safety net: create_all для всех моделей + seed coins если пусто."""
+    """Safety net: create_all + seed coins. ВСЯ работа в try/except,
+    чтобы не блокировать старт сервиса при любых проблемах с БД."""
     from decimal import Decimal
     from sqlalchemy import select, func
     from core.db import Base, engine, AsyncSessionLocal
@@ -86,38 +92,46 @@ async def _ensure_schema_and_seed():
         logger.warning("[schema] seed skipped: %s", e)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("FastAPI starting...")
-    await _ensure_schema_and_seed()
-    sync_task = asyncio.create_task(jarvis_sync.rate_sync_loop())
-    logger.info("Started: jarvis rate_sync_loop")
-    tron_task = asyncio.create_task(tron_monitor.monitor_loop())
-    logger.info("Started: tron_monitor")
-    rates_task = asyncio.create_task(rates_service.rate_loop())
-    logger.info("Started: rates_service")
-    sweep_task = asyncio.create_task(sweep_service.sweep_loop())
-    logger.info("Started: sweep_service")
-    # P2P industrial: feature_flags bootstrap
+async def _bg_startup():
+    """Тяжёлая инициализация в фоне — НЕ блокирует /health."""
+    logger.info("[bg_startup] begin")
+    # 1) Schema + seed coins
+    try:
+        await _ensure_schema_and_seed()
+    except Exception as e:
+        logger.warning("[bg_startup] schema failed: %s", e)
+    # 2) Feature flags bootstrap (требует feature_flags таблицу)
     try:
         await feature_flags.bootstrap_registry()
-        logger.info("Started: feature_flags bootstrap done")
+        logger.info("[bg_startup] feature_flags bootstrap done")
     except Exception as e:
-        logger.warning("feature_flags bootstrap failed: %s", e)
-    # lifecycle loop: auto-expire deals + price-band enforcement
-    lifecycle_task = asyncio.create_task(deal_lifecycle.lifecycle_loop())
-    logger.info("Started: deal_lifecycle")
-    # tier recompute hourly
-    tier_task = asyncio.create_task(maker_stats.tier_loop())
-    logger.info("Started: maker_stats tier_loop")
+        logger.warning("[bg_startup] feature_flags bootstrap failed: %s", e)
+    logger.info("[bg_startup] done")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Старт в 2 фазы:
+    - синхронно: только зарегистрировать фоновые задачи
+    - фоном: schema/seed/bootstrap (могут долго работать)
+    """
+    logger.info("FastAPI starting...")
+
+    bg_tasks: list[asyncio.Task] = []
+    bg_tasks.append(asyncio.create_task(_bg_startup()))
+    bg_tasks.append(asyncio.create_task(jarvis_sync.rate_sync_loop()))
+    bg_tasks.append(asyncio.create_task(tron_monitor.monitor_loop()))
+    bg_tasks.append(asyncio.create_task(rates_service.rate_loop()))
+    bg_tasks.append(asyncio.create_task(sweep_service.sweep_loop()))
+    bg_tasks.append(asyncio.create_task(deal_lifecycle.lifecycle_loop()))
+    bg_tasks.append(asyncio.create_task(maker_stats.tier_loop()))
+
+    logger.info("FastAPI ready: %d background tasks scheduled", len(bg_tasks))
     yield
+
     logger.info("FastAPI stopping...")
-    sync_task.cancel()
-    tron_task.cancel()
-    rates_task.cancel()
-    sweep_task.cancel()
-    lifecycle_task.cancel()
-    tier_task.cancel()
+    for t in bg_tasks:
+        t.cancel()
 
 
 app = FastAPI(
