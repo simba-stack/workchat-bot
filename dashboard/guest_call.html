@@ -411,14 +411,12 @@ function updateConnBadge(peerId, state) {
   const p = peers[peerId];
   if (!p || !p.person) return;
   p.person.classList.remove('conn-warn', 'conn-failed');
-  let anyFailed = false;
   if (state === 'connected' || state === 'completed') {
     // OK
   } else if (state === 'checking' || state === 'new') {
     p.person.classList.add('conn-warn');
   } else if (state === 'failed') {
     p.person.classList.add('conn-failed');
-    anyFailed = true;
   } else if (state === 'disconnected') {
     p.person.classList.add('conn-warn');
   }
