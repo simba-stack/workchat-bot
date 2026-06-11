@@ -66,6 +66,83 @@ async def _balance_trx(client, addr: str) -> Decimal:
         return Decimal("0")
 
 
+async def fund_trx_from_hot(client, target_address: str, amount_trx: Decimal = Decimal("5")) -> bool:
+    """Отправляет TRX с hot wallet на target_address (для будущего sweep'а газа).
+
+    Возвращает True если broadcast OK. Ждёт ~10 сек на подтверждение.
+    """
+    if not (settings.tron_hot_wallet_address and settings.tron_private_key):
+        return False
+    try:
+        from tronpy.keys import PrivateKey
+        priv = PrivateKey(bytes.fromhex(settings.tron_private_key))
+        sun_amount = int(amount_trx * Decimal(1_000_000))
+        txn = (
+            client.trx.transfer(settings.tron_hot_wallet_address, target_address, sun_amount)
+            .build()
+            .sign(priv)
+        )
+        result = txn.broadcast()
+        logger.info("[sweep/fund] sent %s TRX to %s tx=%s", amount_trx, target_address, txn.txid)
+        await asyncio.sleep(12)  # дать блокчейну подтвердить
+        return True
+    except Exception as e:
+        logger.exception("[sweep/fund] failed: %s", e)
+        return False
+
+
+async def sweep_single_address(user_id: int) -> dict:
+    """Мгновенный sweep одного user-адреса (вызывается из tron_monitor после deposit).
+
+    Алгоритм:
+    1. Берём USDT balance
+    2. Если есть Feee.io — нужно ≥3 TRX для bandwidth + аренда energy
+       Иначе — ≥15 TRX (energy сжигается из TRX)
+    3. Если TRX не хватает → auto-fund с hot wallet (~5 TRX)
+    4. Свипаем USDT → hot wallet (с energy через Feee если доступно)
+    """
+    if not (settings.tron_hot_wallet_address and settings.tron_private_key):
+        return {"ok": False, "error": "tron_not_configured"}
+
+    from core.services import energy_service
+
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            select(UserDepositAddress).where(
+                UserDepositAddress.user_id == user_id,
+                UserDepositAddress.network == "TRC20",
+            )
+        )
+        uda = res.scalar_one_or_none()
+        if not uda:
+            return {"ok": False, "error": "no_address"}
+        master_key = await wallet_derive.get_or_create_master_key(db)
+        _, priv_hex = wallet_derive.derive_tron_keypair(master_key, user_id)
+
+    client = _get_tron_client()
+    usdt_bal = await _balance_usdt(client, uda.address)
+    if usdt_bal < Decimal("0.5"):
+        return {"address": uda.address, "skipped": "low_balance", "usdt": float(usdt_bal)}
+
+    # Auto-fund TRX если на user-addr не хватает
+    has_feee = energy_service.is_configured()
+    trx_min = Decimal("3") if has_feee else Decimal("15")
+    trx_bal = await _balance_trx(client, uda.address)
+    if trx_bal < trx_min:
+        logger.info("[sweep/single] %s needs TRX (%s<%s) — funding from hot wallet",
+                    uda.address, trx_bal, trx_min)
+        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("5"))
+        if not funded:
+            return {"address": uda.address, "skipped": "trx_fund_failed"}
+
+    # Свипаем USDT
+    result = await _sweep_one(client, uda, settings.tron_hot_wallet_address, priv_hex)
+    if result.get("ok"):
+        logger.info("[sweep/single] IMMEDIATE sweep done for user=%s amount=%s",
+                    user_id, result.get("amount"))
+    return result
+
+
 async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex: str) -> dict:
     """Свипает один user-адрес. Возвращает результат для лога.
 

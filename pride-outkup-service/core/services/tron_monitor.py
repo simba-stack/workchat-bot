@@ -166,6 +166,17 @@ async def _credit_user_direct(db, user_id: int, tx_id: str, amount: Decimal, fro
     except Exception:
         pass
 
+    # IMMEDIATE SWEEP: сразу перевести физический USDT с user-адреса на hot wallet.
+    # Internal balance юзера уже зачислен выше — это виртуальная запись в БД,
+    # не связана с физическим USDT. Sweep чисто про movement реальных монет.
+    # Запускаем в background чтобы не блокировать monitor loop.
+    try:
+        from core.services import sweep_service
+        asyncio.create_task(sweep_service.sweep_single_address(user_id))
+        logger.info("[tron_monitor/direct] triggered immediate sweep for user=%s", user_id)
+    except Exception as e:
+        logger.warning("[tron_monitor/direct] sweep trigger failed: %s", e)
+
 
 async def _tick_user_addresses(db) -> None:
     """Опрашиваем активные user-deposit-адреса (батчами) и зачисляем incoming USDT."""
