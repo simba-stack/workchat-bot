@@ -1,8 +1,7 @@
 """FastAPI app — Mini-App backend + webhooks + JARVIS sync.
 
-Lifespan делает МИНИМУМ синхронной работы перед yield — всё тяжёлое
-вынесено в asyncio.create_task. Это гарантирует что /health отвечает
-сразу после старта (важно для Railway healthcheck).
+Lifespan делает МИНИМУМ синхронной работы — всё тяжёлое в asyncio.create_task.
+Это гарантирует что /health отвечает сразу (важно для Railway healthcheck).
 """
 import asyncio
 import logging
@@ -33,8 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _ensure_schema_and_seed():
-    """Safety net: create_all + seed coins. ВСЯ работа в try/except,
-    чтобы не блокировать старт сервиса при любых проблемах с БД."""
+    """Safety net: create_all + seed coins. Всё в try/except."""
     from decimal import Decimal
     from sqlalchemy import select, func
     from core.db import Base, engine, AsyncSessionLocal
@@ -95,12 +93,10 @@ async def _ensure_schema_and_seed():
 async def _bg_startup():
     """Тяжёлая инициализация в фоне — НЕ блокирует /health."""
     logger.info("[bg_startup] begin")
-    # 1) Schema + seed coins
     try:
         await _ensure_schema_and_seed()
     except Exception as e:
         logger.warning("[bg_startup] schema failed: %s", e)
-    # 2) Feature flags bootstrap (требует feature_flags таблицу)
     try:
         await feature_flags.bootstrap_registry()
         logger.info("[bg_startup] feature_flags bootstrap done")
@@ -111,10 +107,6 @@ async def _bg_startup():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Старт в 2 фазы:
-    - синхронно: только зарегистрировать фоновые задачи
-    - фоном: schema/seed/bootstrap (могут долго работать)
-    """
     logger.info("FastAPI starting...")
 
     bg_tasks: list[asyncio.Task] = []
@@ -155,8 +147,18 @@ app.add_middleware(
 
 
 @app.get("/health")
+@app.get("/healthz")
+@app.get("/ping")
 async def health():
+    """Ультра-простой healthcheck — без БД, без зависимостей.
+    Алиасы: /health /healthz /ping — чтобы любой Railway healthcheck path сработал.
+    """
     return {"status": "ok", "service": "pride-p2p", "version": "0.2.0"}
+
+
+@app.get("/_status")
+async def status_root():
+    return {"ok": True}
 
 
 @app.get("/myip")
@@ -192,25 +194,30 @@ app.include_router(audit.router, prefix="/api/v1/admin/audit", tags=["audit"])
 # ─── Mini-App статика ──────────────────────────────────────────────
 MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"
 MINIAPP_DIST = MINIAPP_DIR / "dist"
+INDEX_HTML = MINIAPP_DIR / "index.html"
+OWNER_HTML = MINIAPP_DIR / "owner.html"
 
 if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
 else:
-    INDEX_HTML = MINIAPP_DIR / "index.html"
-
     @app.get("/app", response_class=HTMLResponse)
     async def miniapp_root():
         if INDEX_HTML.exists():
             return FileResponse(INDEX_HTML)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
-    @app.get("/")
-    async def root():
-        return {"service": "pride-p2p", "app": "/app", "owner": "/owner", "api": "/api/v1"}
 
-
-# Owner Panel (приватный дашборд)
-OWNER_HTML = MINIAPP_DIR / "owner.html"
+@app.get("/")
+async def root():
+    """Корневой endpoint — отвечает 200 для любого healthcheck."""
+    return {
+        "service": "pride-p2p",
+        "status": "ok",
+        "app": "/app",
+        "owner": "/owner",
+        "api": "/api/v1",
+        "health": "/health",
+    }
 
 
 @app.get("/owner", response_class=HTMLResponse)
