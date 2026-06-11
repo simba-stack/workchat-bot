@@ -200,14 +200,35 @@ async def swap_rate(
     from_coin, to_coin = from_coin.upper(), to_coin.upper()
     if from_coin == to_coin:
         raise HTTPException(400, "одинаковые монеты")
+
+    amt = Decimal(str(amount))
+    fee = amt * SWAP_FEE_PCT / 100
+    net_from = amt - fee
+
+    # 1) Пробуем FixedFloat (если настроен — реальный рыночный курс)
+    try:
+        from core.services import fixedfloat_service
+        if fixedfloat_service.is_configured():
+            ff = await fixedfloat_service.get_rate(from_coin, to_coin, net_from)
+            if ff and ff.get("rate"):
+                return {
+                    "from": from_coin, "to": to_coin,
+                    "from_amount": float(amt),
+                    "fee": float(fee), "fee_pct": float(SWAP_FEE_PCT),
+                    "to_amount": float(ff["to_amount"]),
+                    "rate": float(ff["rate"]),
+                    "source": "fixedfloat",
+                    "ff_min": ff.get("min"), "ff_max": ff.get("max"),
+                }
+    except Exception:
+        pass
+
+    # 2) Fallback — CoinGecko rates
     rates = await rates_service.get_rates()
     from_usd = _rate_usd(rates, from_coin)
     to_usd = _rate_usd(rates, to_coin)
     if from_usd <= 0 or to_usd <= 0:
         raise HTTPException(503, "курс ещё не подтянут, попробуй через минуту")
-    amt = Decimal(str(amount))
-    fee = amt * SWAP_FEE_PCT / 100
-    net_from = amt - fee
     to_amount = (net_from * from_usd / to_usd).quantize(Decimal("0.00000001"))
     return {
         "from": from_coin, "to": to_coin,
@@ -215,6 +236,7 @@ async def swap_rate(
         "fee": float(fee), "fee_pct": float(SWAP_FEE_PCT),
         "to_amount": float(to_amount),
         "rate": float(from_usd / to_usd),
+        "source": "coingecko",
     }
 
 

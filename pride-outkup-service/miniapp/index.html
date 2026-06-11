@@ -212,10 +212,30 @@
 
 <!-- ═══ MAIN ═══ -->
 <div class="view active" id="view-main">
-  <div class="balance-top">
-    <div class="label">Общий баланс</div>
-    <div class="total" id="total-usd">$0.00</div>
-    <div class="equiv" id="total-coin"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
+    <div style="font-size:20px;font-weight:700">PRIDE P2P</div>
+    <div style="display:flex;gap:14px;color:var(--muted);font-size:18px">
+      <span>🔔</span><span>⋮</span>
+    </div>
+  </div>
+  <div style="margin:8px 16px;padding:12px 14px;background:var(--panel);border-radius:14px;display:flex;align-items:center;gap:12px" id="setup-card">
+    <div style="width:36px;height:36px;border-radius:50%;background:var(--panel-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">0/3</div>
+    <div style="flex:1"><div style="font-weight:600;font-size:15px">Настройте аккаунт</div><div style="color:var(--muted);font-size:13px">Займёт 2 минуты</div></div>
+    <div style="color:var(--muted)">›</div>
+  </div>
+  <div style="text-align:center;padding:30px 20px 14px">
+    <div style="font-size:36px;font-weight:700;letter-spacing:-1px"><span id="total-usd">$0.00</span> <span style="color:var(--muted);font-size:18px;cursor:pointer" id="toggle-balance">👁</span></div>
+    <div style="color:var(--muted);font-size:13px;margin-top:4px">Общий баланс в USD</div>
+  </div>
+  <div class="actions-row" style="padding:6px 0 16px">
+    <button class="action-btn" id="main-deposit"><div class="circle">↙</div><div class="label">Пополнить</div></button>
+    <button class="action-btn" id="main-send"><div class="circle">📤</div><div class="label">Отправить</div></button>
+    <button class="action-btn" id="main-withdraw"><div class="circle">↗</div><div class="label">Вывести</div></button>
+    <button class="action-btn" id="main-swap"><div class="circle">⇆</div><div class="label">Обмен</div></button>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px">
+    <div style="color:var(--muted);font-size:13px">Мои активы</div>
+    <button id="hide-small" style="color:var(--accent);font-size:13px">Скрыть мелкие</button>
   </div>
   <div class="coins-list" id="coins-list"><div class="empty-state">Загружаю балансы…</div></div>
 </div>
@@ -372,115 +392,15 @@
   <button class="submit-btn" id="ch-create-btn">Создать чек</button>
 </div>
 
-<!-- ═══ P2P ═══ -->
-<div class="view" id="view-p2p">
-  <div class="nav-header">
-    <div class="nav-back" style="width:34px"></div>
-    <div class="nav-title">P2P Маркет</div>
-    <div class="nav-right"><button id="my-deals-btn" style="color:var(--accent);font-size:14px">Мои</button></div>
-  </div>
-  <div class="p2p-tabs">
-    <button class="p2p-tab active" data-side="buy">🛒 Купить</button>
-    <button class="p2p-tab" data-side="sell">💵 Продать</button>
-  </div>
-  <div class="filter-bar" id="p2p-coin-filters">
-    <div class="filter-chip active" data-coin="USDT">USDT</div>
-    <div class="filter-chip" data-coin="TON">TON</div>
-    <div class="filter-chip" data-coin="TRX">TRX</div>
-    <div class="filter-chip" data-coin="BTC">BTC</div>
-  </div>
-  <div class="filter-bar" id="p2p-pm-filters" style="margin-top:4px">
-    <div class="filter-chip active" data-pm="">Все способы</div>
-    <div class="filter-chip" data-pm="sbp">СБП</div>
-    <div class="filter-chip" data-pm="sber">Сбер</div>
-    <div class="filter-chip" data-pm="tinkoff">Т-Банк</div>
-    <div class="filter-chip" data-pm="alfa">Альфа</div>
-  </div>
-  <div id="p2p-offers"><div class="empty-state">Загружаю…</div></div>
-  <div style="padding:14px 16px 24px">
-    <button class="create-btn" id="p2p-create-offer">+ Создать своё объявление</button>
-  </div>
-</div>
+<!-- P2P убран из Mini-App. Используй /p2p в @PrideP2P_bot для покупки/продажи. -->
 
-<!-- ═══ P2P OFFER DETAIL ═══ -->
-<div class="view" id="view-p2p-offer">
-  <div class="nav-header">
-    <button class="nav-back" data-back="p2p">←</button>
-    <div class="nav-title">Объявление</div>
-    <div class="nav-right"></div>
-  </div>
-  <div id="offer-detail" class="form-section"></div>
-  <button class="submit-btn" id="offer-trade-btn">Начать сделку</button>
-</div>
-
-<!-- ═══ P2P DEAL CHAT ═══ -->
-<div class="view" id="view-deal-chat">
-  <div class="nav-header">
-    <button class="nav-back" data-back="p2p">←</button>
-    <div class="nav-title">Сделка <span id="deal-id-label"></span></div>
-    <div class="nav-right"><button id="deal-cancel-btn" style="color:var(--red);font-size:14px">✕</button></div>
-  </div>
-  <div id="deal-info" style="padding:12px 16px;background:var(--panel);margin:8px 12px;border-radius:12px"></div>
-  <div class="chat-msgs" id="chat-msgs"></div>
-  <div class="chat-input">
-    <input id="chat-input" placeholder="Сообщение…">
-    <button id="chat-send">→</button>
-  </div>
-</div>
-
-<!-- ═══ P2P MY DEALS ═══ -->
-<div class="view" id="view-my-deals">
-  <div class="nav-header">
-    <button class="nav-back" data-back="p2p">←</button>
-    <div class="nav-title">Мои сделки</div>
-    <div class="nav-right"></div>
-  </div>
-  <div id="my-deals-list"></div>
-</div>
-
-<!-- ═══ P2P CREATE OFFER ═══ -->
-<div class="view" id="view-create-offer">
-  <div class="nav-header">
-    <button class="nav-back" data-back="p2p">←</button>
-    <div class="nav-title">Новое объявление</div>
-    <div class="nav-right"></div>
-  </div>
-  <div class="form-section">
-    <div class="form-card">
-      <div class="col-lbl">Тип</div>
-      <div style="display:flex;gap:8px">
-        <button class="filter-chip" id="off-side-buy" data-side="buy">🛒 Покупаю</button>
-        <button class="filter-chip active" id="off-side-sell" data-side="sell">💵 Продаю</button>
-      </div>
-    </div>
-    <div class="form-card">
-      <div class="col-lbl">Монета</div>
-      <select id="off-coin" style="width:100%;background:var(--bg);border:0;padding:10px;border-radius:8px"><option>USDT</option><option>TON</option><option>TRX</option><option>BTC</option><option>ETH</option></select>
-    </div>
-    <div class="form-card">
-      <div class="col-lbl">Цена за 1 монету в RUB</div>
-      <input id="off-price" type="number" inputmode="decimal" placeholder="90" style="width:100%;background:transparent;border:0;font-size:20px;font-weight:600">
-    </div>
-    <div class="form-card">
-      <div class="col-lbl">Лимиты (RUB)</div>
-      <div style="display:flex;gap:8px">
-        <input id="off-min" type="number" placeholder="мин" style="flex:1;background:var(--bg);border:0;padding:10px;border-radius:8px">
-        <input id="off-max" type="number" placeholder="макс" style="flex:1;background:var(--bg);border:0;padding:10px;border-radius:8px">
-      </div>
-    </div>
-    <div class="form-card">
-      <div class="col-lbl">Способы оплаты (через запятую)</div>
-      <input id="off-pm" type="text" placeholder="СБП, Сбер, Т-Банк" style="width:100%;background:transparent;border:0;font-size:15px">
-    </div>
-  </div>
-  <button class="submit-btn" id="off-create-btn">Создать объявление</button>
-</div>
+<!-- P2P views (offer-detail / deal-chat / my-deals / create-offer) убраны.
+     Весь P2P-flow теперь в @PrideP2P_bot через /p2p команду. -->
 
 <!-- ═══ BOTTOM NAV ═══ -->
 <nav id="bottom-nav">
   <button data-view="main" class="active"><span class="ic">💼</span>Кошелёк</button>
   <button data-view="swap"><span class="ic">🔄</span>Обмен</button>
-  <button data-view="p2p"><span class="ic">💱</span>P2P</button>
   <button data-view="checks"><span class="ic">📜</span>Чеки</button>
 </nav>
 
@@ -524,9 +444,6 @@ function go(view) {
   if (view === 'main') loadMain();
   else if (view === 'swap') initSwap();
   else if (view === 'checks') loadCheques();
-  else if (view === 'p2p') loadOffers();
-  else if (view === 'my-deals') loadMyDeals();
-  if (chatPollTimer && view !== 'deal-chat') { clearInterval(chatPollTimer); chatPollTimer = null; }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll('#bottom-nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.view)));
@@ -538,8 +455,13 @@ function coinIcon(coin) {
   return `<div style="width:100%;height:100%;background:${c.icon_color||'#888'};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">${(coin||'?')[0]}</div>`;
 }
 function coinPrice(coin) {
+  // Stablecoins всегда $1 (даже если rates ещё не загружены)
+  if (coin === 'USDT' || coin === 'USDC') {
+    const r = rates['tether'] || rates['usd-coin'] || null;
+    return { price: 1, delta: r?.usd_24h_change || 0 };
+  }
   const c = coins.find(x => x.code === coin);
-  if (!c?.coingecko_id) return { price: (coin==='USDT'||coin==='USDC') ? 1 : 0, delta: 0 };
+  if (!c?.coingecko_id) return { price: 0, delta: 0 };
   const r = rates[c.coingecko_id];
   if (!r) return { price: 0, delta: 0 };
   return { price: r.usd || 0, delta: r.usd_24h_change || 0 };
@@ -620,6 +542,33 @@ document.querySelectorAll('[data-coin-act]').forEach(b => b.addEventListener('cl
   else if (a==='swap') { initSwap(activeCoin); go('swap'); }
   else if (a==='cheque') { openChequeNew(activeCoin); }
 }));
+
+// Главная: 4 кнопки → используем USDT по умолчанию
+$('main-deposit').addEventListener('click', () => { activeCoin = 'USDT'; openDeposit('USDT'); });
+$('main-withdraw').addEventListener('click', () => { activeCoin = 'USDT'; openWithdraw('USDT'); });
+$('main-swap').addEventListener('click', () => { go('swap'); });
+$('main-send').addEventListener('click', () => { activeCoin = 'USDT'; openChequeNew('USDT'); });
+
+// Глазик: скрыть/показать баланс
+let balanceHidden = false;
+$('toggle-balance').addEventListener('click', () => {
+  balanceHidden = !balanceHidden;
+  if (balanceHidden) {
+    $('total-usd').textContent = '••••';
+    $('toggle-balance').textContent = '🙈';
+  } else {
+    loadMain();
+    $('toggle-balance').textContent = '👁';
+  }
+});
+
+// "Скрыть мелкие" — спрятать монеты с балансом 0
+let hideSmall = false;
+$('hide-small').addEventListener('click', () => {
+  hideSmall = !hideSmall;
+  $('hide-small').textContent = hideSmall ? 'Показать все' : 'Скрыть мелкие';
+  loadMain();
+});
 
 // ── Deposit ──
 async function openDeposit(coin) {
@@ -783,7 +732,9 @@ $('ch-create-btn').addEventListener('click', async () => {
   finally { $('ch-create-btn').disabled = false; }
 });
 
-// ── P2P ──
+// ── P2P убран из Mini-App — используется в @PrideP2P_bot ──
+// (legacy функции ниже сохранены чтобы не сломать deep-link, но не вызываются из UI)
+/*
 async function loadOffers() {
   document.querySelectorAll('.p2p-tab').forEach(t => t.classList.toggle('active', t.dataset.side === myP2pSide));
   document.querySelectorAll('#p2p-coin-filters .filter-chip').forEach(t => t.classList.toggle('active', t.dataset.coin === myP2pCoin));
@@ -919,30 +870,17 @@ $('p2p-create-offer').addEventListener('click', () => go('create-offer'));
 document.querySelectorAll('#view-create-offer .filter-chip').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#view-create-offer .filter-chip').forEach(x => x.classList.toggle('active', x===b));
 }));
-$('off-create-btn').addEventListener('click', async () => {
-  const side = document.querySelector('#view-create-offer .filter-chip.active')?.dataset.side || 'sell';
-  const coin = $('off-coin').value, price = +$('off-price').value||0;
-  const min = +$('off-min').value||0, max = +$('off-max').value||0;
-  const pm = $('off-pm').value.split(',').map(s=>s.trim()).filter(Boolean);
-  if (price<=0 || min<=0 || max<=0 || !pm.length) return toast('Заполни все поля', 'error');
-  try {
-    await api('/api/v1/offers/create', { method:'POST', body: JSON.stringify({side, coin, fiat:'RUB', price, min_amount:min, max_amount:max, payment_methods:pm}) });
-    toast('Объявление создано'); go('p2p');
-  } catch (e) { toast(e.message, 'error'); }
-});
+*/  // конец отключённого P2P JS блока
 
 // ── Deep-link routing ──
 function routeFromStart() {
   const p = tg?.initDataUnsafe?.start_param || new URL(location.href).searchParams.get('view');
   if (!p) return;
   if (p === 'swap') go('swap');
-  else if (p === 'p2p') go('p2p');
   else if (p === 'checks') go('checks');
   else if (p.startsWith('cheque_')) {
     const code = p.slice(7);
     redeemCheque(code);
-  } else if (p.startsWith('deal_')) {
-    openDealChat(+p.slice(5));
   }
 }
 async function redeemCheque(code) {

@@ -683,18 +683,29 @@ async def owner_coin_update(
 async def owner_energy_status(
     _: bool = Depends(require_owner),
 ):
-    """Feee.io status: balance, price, hot wallet TRX."""
+    """Feee.io + FixedFloat + hot wallet status."""
     from core.services import energy_service, tron_service
     is_cfg = energy_service.is_configured()
     bal = await energy_service.get_balance() if is_cfg else None
     price = await energy_service.get_energy_price() if is_cfg else None
     hot_usdt = float(await tron_service.get_usdt_balance()) if tron_service.is_configured() else 0
+
+    # FixedFloat статус
+    try:
+        from core.services import fixedfloat_service
+        ff_cfg = fixedfloat_service.is_configured()
+    except Exception:
+        ff_cfg = False
+
     return {
         "ok": True,
         "feee": {
             "configured": is_cfg,
             "trx_balance": float(bal) if bal is not None else None,
             "energy_price_sun": float(price) if price is not None else None,
+        },
+        "fixedfloat": {
+            "configured": ff_cfg,
         },
         "hot_wallet": {
             "configured": tron_service.is_configured(),
