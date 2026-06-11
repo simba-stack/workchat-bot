@@ -94,4 +94,3 @@ class Deal(Base):
 
     def __repr__(self) -> str:
         return f"<Deal {self.deal_number} {self.amount_rub} {self.status}>"
->"
