@@ -121,127 +121,16 @@ async def cmd_wallet(message: Message):
     await message.answer(text, reply_markup=kb)
 
 
-# ═══════════════════ /p2p ═══════════════════════════════════════════
-@router.message(Command("p2p"))
-async def cmd_p2p(message: Message):
-    await _show_p2p(message)
-
-
+# ═══════════════════ /p2p — handled by bot.handlers.p2p ═══════════
+# Полный P2P-флоу живёт в отдельном модуле p2p.py (router зарегистрирован
+# в bot/main.py до commands).
 @router.callback_query(F.data == "main:p2p")
-async def cb_p2p(call: CallbackQuery):
-    await _show_p2p(call.message, edit=True)
-    await call.answer()
-
-
-async def _show_p2p(target: Message, edit: bool = False):
-    text = (
-        "<b>P2P Маркет</b>\n\n"
-        "Здесь вы можете <a href=\"#\">купить</a> или <a href=\"#\">продать</a> "
-        "криптовалюту переводом на карту или электронный кошелёк."
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [_cb("Купить",  "p2p:buy"),       _cb("Продать", "p2p:sell")],
-        [_cb("Мои сделки",        "p2p:my_deals")],
-        [_cb("Создать объявление", "p2p:create")],
-        [_cb("Оплата и валюта",    "p2p:settings")],
-        [_cb("Мой профиль",        "p2p:profile")],
-        [_cb("Назад", "main:back_to_start")],
-    ])
-    if edit:
-        try: await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True); return
-        except Exception: pass
-    await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
-
-
-@router.callback_query(F.data.startswith("p2p:"))
-async def cb_p2p_sub(call: CallbackQuery):
-    action = call.data.split(":", 1)[1]
-    if action == "buy":
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [_cb("Tether (USDT) · 74₽ · 45",       "p2p:coin:USDT:buy")],
-            [_cb("Toncoin (TON) · 140₽ · 39",      "p2p:coin:TON:buy")],
-            [_cb("Solana (SOL) · 9 303₽ · 5",      "p2p:coin:SOL:buy")],
-            [_cb("TRON (TRX) · 36.88₽ · 8",        "p2p:coin:TRX:buy")],
-            [_cb("Bitcoin (BTC) · 7 651 834₽ · 3", "p2p:coin:BTC:buy")],
-            [_cb("Ethereum (ETH) · 215 882₽ · 3",  "p2p:coin:ETH:buy")],
-            [_cb("Dogecoin (DOGE) · 8.89₽ · 3",    "p2p:coin:DOGE:buy")],
-            [_cb("Litecoin (LTC) · 4 000₽ · 6",    "p2p:coin:LTC:buy")],
-            [_cb("Binance Coin (BNB) · 162 900₽ · 2", "p2p:coin:BNB:buy")],
-            [_cb("Назад в P2P Маркет", "main:p2p")],
-        ])
-        await call.message.edit_text("Выберите криптовалюту, которую вы хотите купить.", reply_markup=kb)
-    elif action == "sell":
-        await call.message.edit_text(
-            "Выберите криптовалюту, которую вы хотите продать.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_cb("Tether (USDT)", "p2p:coin:USDT:sell")],
-                [_cb("Toncoin (TON)", "p2p:coin:TON:sell")],
-                [_cb("TRON (TRX)",    "p2p:coin:TRX:sell")],
-                [_cb("Назад в P2P Маркет", "main:p2p")],
-            ]),
-        )
-    elif action == "my_deals":
-        await call.message.edit_text(
-            "<b>Мои сделки</b>\n\nСделок пока нет.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_cb("Назад", "main:p2p")]]),
-        )
-    elif action == "create":
-        await call.message.edit_text(
-            "<b>Создать объявление</b>\n\nВыберите тип объявления:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_cb("Покупать крипту", "p2p:create:buy")],
-                [_cb("Продавать крипту", "p2p:create:sell")],
-                [_cb("Назад", "main:p2p")],
-            ]),
-        )
-    elif action == "settings":
-        await call.message.edit_text(
-            "<b>Оплата и валюта</b>\n\nЗдесь вы можете выбрать валюту отображаемых "
-            "объявлений или управлять своими способами оплаты.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_cb("Валюта P2P Маркета: RUB", "p2p:fiat:RUB")],
-                [_cb("Способы оплаты", "p2p:pms")],
-                [_cb("Справка PRIDE P2P", "p2p:help")],
-                [_cb("Назад", "main:p2p")],
-            ]),
-        )
-    elif action == "profile":
-        name = call.from_user.username and ("@" + call.from_user.username) or (call.from_user.first_name or "Гость")
-        await call.message.edit_text(
-            f"<b>{name}</b>\n\n"
-            f"Ваша статистика торговли за <b>30 дней</b>:\n"
-            f"0 сделок · 0% выполнено · $0",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_cb("За 30 дней", "p2p:stat:30"), _cb("За всё время", "p2p:stat:all")],
-                [_cb("Установить имя пользователя", "p2p:set_name")],
-                [_cb("Чёрный список · 0", "p2p:blacklist")],
-                [_cb("Мои отзывы · 0", "p2p:reviews")],
-                [_cb("Назад в P2P Маркет", "main:p2p")],
-            ]),
-            disable_web_page_preview=True,
-        )
-    elif action.startswith("coin:"):
-        parts = action.split(":")
-        coin = parts[1] if len(parts) > 1 else "USDT"
-        side = parts[2] if len(parts) > 2 else "buy"
-        verb = "покупки" if side == "buy" else "продажи"
-        await call.message.edit_text(
-            f"Выберите способ оплаты для {verb} <b>{coin}</b> за RUB.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_cb("СБП · 75.9₽ · 20",        f"p2p:pm:SBP:{coin}:{side}")],
-                [_cb("Сбербанк · 71.89₽ · 5",   f"p2p:pm:Sber:{coin}:{side}")],
-                [_cb("OZON Банк · 80₽ · 5",     f"p2p:pm:OZON:{coin}:{side}")],
-                [_cb("ЮMoney · 81.41₽ · 5",     f"p2p:pm:UMoney:{coin}:{side}")],
-                [_cb("Т-Банк · 81₽ · 3",        f"p2p:pm:TBank:{coin}:{side}")],
-                [_cb("Альфа-Банк · 78₽ · 3",    f"p2p:pm:Alfa:{coin}:{side}")],
-                [_cb("Яндекс Банк · 81₽ · 3",   f"p2p:pm:YBank:{coin}:{side}")],
-                [_cb("Райффайзен · 81₽ · 2",    f"p2p:pm:Raif:{coin}:{side}")],
-                [_cb("Назад", "p2p:buy" if side == "buy" else "p2p:sell")],
-            ]),
-        )
-    else:
-        await call.answer("Раздел в разработке", show_alert=True)
-        return
+async def cb_p2p_redirect(call: CallbackQuery):
+    from bot.handlers.p2p import _p2p_menu_text, _p2p_menu_kb
+    try:
+        await call.message.edit_text(await _p2p_menu_text(), reply_markup=_p2p_menu_kb())
+    except Exception:
+        await call.message.answer(await _p2p_menu_text(), reply_markup=_p2p_menu_kb())
     await call.answer()
 
 

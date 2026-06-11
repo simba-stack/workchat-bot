@@ -70,6 +70,13 @@ class User(Base):
     # Online presence
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    # Maker tier (industrial P2P, migration 0007)
+    maker_tier: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
+    # none|bronze|silver|gold|official
+    maker_tier_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cancel_cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # anti-fraud: до этой даты юзер не может открывать новые deals
+
     # Audit
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False,

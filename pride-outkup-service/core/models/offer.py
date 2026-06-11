@@ -45,8 +45,8 @@ class Offer(Base):
     )
 
     side: Mapped[str] = mapped_column(String(8), nullable=False)
-    # buy  = автор покупает USDT за RUB (выставляет: «я куплю USDT по X ₽»)
-    # sell = автор продаёт USDT за RUB (выставляет: «продам USDT по X ₽»)
+    # buy  = автор покупает USDT за RUB
+    # sell = автор продаёт USDT за RUB
 
     rate_rub_per_usdt: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
     min_amount_rub: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
@@ -55,18 +55,28 @@ class Offer(Base):
     payment_methods: Mapped[list[str]] = mapped_column(
         ARRAY(String(32)), default=list, nullable=False,
     )
-    # ['тинькофф', 'сбер', 'альфа', 'озон']
+    # ['sbp', 'tinkoff', 'sber', 'alpha', 'ozon']
 
     conditions: Mapped[Optional[str]] = mapped_column(String(1024))
-    # «работаю с 10:00-22:00 МСК, чек обязателен»
-
     auto_reply: Mapped[Optional[str]] = mapped_column(String(1024))
-    # Автотекст когда сделка создана
 
     status: Mapped[str] = mapped_column(
         String(16), default="active", nullable=False,
     )
     # active | paused | archived
+
+    # ─── Industrial pricing (migration 0007) ────────────────────────────
+    price_type: Mapped[str] = mapped_column(String(8), default="fixed", nullable=False)
+    # 'fixed' = rate_rub_per_usdt статичный
+    # 'float' = rate вычисляется как index * float_margin_pct / 100 в момент чтения
+    float_margin_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))
+    coin: Mapped[str] = mapped_column(String(16), default="USDT", nullable=False)
+    fiat: Mapped[str] = mapped_column(String(8), default="RUB", nullable=False)
+    pay_window_min: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    min_taker_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    require_kyc: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    region: Mapped[Optional[str]] = mapped_column(String(16))
+    paused_reason: Mapped[Optional[str]] = mapped_column(String(64))
 
     # PRIDE Official flag
     is_pride_official: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -91,4 +101,4 @@ class Offer(Base):
     deals = relationship("Deal", back_populates="offer")
 
     def __repr__(self) -> str:
-        return f"<Offer #{self.id} {self.side} {self.rate_rub_per_usdt}₽ {self.status}>"
+        return f"<Offer #{self.id} {self.side} {self.rate_rub_per_usdt} {self.status}>"

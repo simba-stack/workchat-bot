@@ -1,4 +1,15 @@
-"""V2 P2P Deals — сделки на основе Offers с escrow."""
+"""V2 P2P Deals — industrial сделки с escrow + anti-fraud.
+
+Поддерживает:
+- escrow lock мейкера при создании
+- pay_window_min из оффера (15..120 мин)
+- float pricing live calc на момент сделки
+- anti-fraud: max 3 active, cancel cooldown 24h после 3 cancels
+- counterparty conditions: KYC, min_completed_deals
+- auto-reply мейкера в DealMessage при создании
+- chat (DealMessage) с TG notify
+- dispute с заморозкой escrow
+"""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -9,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user, require_verified
 from core.db import get_db
 from core.models import Deal, Dispute, Offer, User
-from core.services import escrow_service, jarvis_sync, settings_kv
+from core.services import escrow_service, jarvis_sync, maker_stats, settings_kv
 
 router = APIRouter()
 
@@ -27,6 +38,8 @@ def _deal_to_dict(d: Deal) -> dict:
         "offer_id": d.offer_id,
         "buyer_id": d.buyer_id,
         "seller_id": d.seller_id,
+        "coin": d.coin or "USDT",
+        "fiat": d.fiat or "RUB",
         "amount_rub": float(d.amount_rub),
         "rate_rub_per_usdt": float(d.rate_rub_per_usdt),
         "amount_usdt": float(d.amount_usdt),
@@ -40,6 +53,7 @@ def _deal_to_dict(d: Deal) -> dict:
         "fee_usdt": float(d.fee_usdt),
         "fee_pct": float(d.fee_pct),
         "expires_at": d.expires_at.isoformat() if d.expires_at else None,
+        "pay_deadline_at": d.pay_deadline_at.isoformat() if d.pay_deadline_at else None,
         "paid_at": d.paid_at.isoformat() if d.paid_at else None,
         "released_at": d.released_at.isoformat() if d.released_at else None,
         "created_at": d.created_at.isoformat(),
@@ -65,6 +79,13 @@ async def create_deal(
     if o.user_id == user.id:
         raise HTTPException(400, "нельзя торговать со своим оффером")
 
+    ok, err = await maker_stats.can_take_deal(db, user)
+    if not ok:
+        raise HTTPException(429, err or "anti-fraud lock")
+    ok2, err2 = await maker_stats.check_taker_meets_offer_conditions(db, user, o)
+    if not ok2:
+        raise HTTPException(403, err2 or "counterparty conditions not met")
+
     try:
         amount_rub = Decimal(str(payload.get("amount_rub") or 0))
     except Exception:
@@ -72,14 +93,21 @@ async def create_deal(
     if amount_rub < o.min_amount_rub or amount_rub > o.max_amount_rub:
         raise HTTPException(
             400,
-            f"сумма {float(o.min_amount_rub)}–{float(o.max_amount_rub)} ₽",
+            f"сумма {float(o.min_amount_rub)}–{float(o.max_amount_rub)} {o.fiat or 'RUB'}",
         )
 
     payment_method = (payload.get("payment_method") or "").strip()
     if payment_method not in (o.payment_methods or []):
         raise HTTPException(400, "выберите метод из оффера")
 
-    amount_usdt = (amount_rub / o.rate_rub_per_usdt).quantize(Decimal("0.0001"))
+    # Эффективная цена: для float — пересчёт по индексу
+    from core.services import price_index as pi_svc
+    if (o.price_type or "fixed") == "float" and o.float_margin_pct:
+        live = await pi_svc.compute_float_price(db, o.coin or "USDT", o.fiat or "RUB", o.float_margin_pct)
+        rate_used = live or o.rate_rub_per_usdt
+    else:
+        rate_used = o.rate_rub_per_usdt
+    amount_usdt = (amount_rub / rate_used).quantize(Decimal("0.0001"))
     fee_pct = await settings_kv.get_fee_v2_pct(db)
     fee_usdt = (amount_usdt * fee_pct / 100).quantize(Decimal("0.0001"))
 
@@ -92,26 +120,38 @@ async def create_deal(
     if not seller or seller.balance_usdt < amount_usdt:
         raise HTTPException(400, "у продавца недостаточно USDT для escrow")
 
+    pay_window = o.pay_window_min or 30
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
     deal = Deal(
         deal_number=await _next_deal_number(db),
         offer_id=o.id,
-        buyer_id=buyer_id,
-        seller_id=seller_id,
+        buyer_id=buyer_id, seller_id=seller_id,
+        coin=o.coin or "USDT", fiat=o.fiat or "RUB",
         amount_rub=amount_rub,
-        rate_rub_per_usdt=o.rate_rub_per_usdt,
+        rate_rub_per_usdt=rate_used,
         amount_usdt=amount_usdt,
         payment_method=payment_method,
         bank=(payload.get("bank") or "").strip() or None,
         phone_or_card=(payload.get("phone_or_card") or "").strip() or None,
         receiver_name=(payload.get("receiver_name") or "").strip() or None,
         status="awaiting_payment",
-        fee_pct=fee_pct,
-        fee_usdt=fee_usdt,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        fee_pct=fee_pct, fee_usdt=fee_usdt,
+        expires_at=deadline, pay_deadline_at=deadline,
     )
     db.add(deal)
     await db.flush()
     await escrow_service.lock(db, seller, deal)
+
+    # Auto-reply мейкера
+    try:
+        if o.auto_reply:
+            from core.models import DealMessage
+            db.add(DealMessage(
+                deal_id=deal.id, from_user_id=o.user_id,
+                text=o.auto_reply[:2000], is_system=False,
+            ))
+    except Exception:
+        pass
 
     try:
         await jarvis_sync.send_event("deal_created", {
@@ -133,7 +173,6 @@ async def list_my_deals(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Мои сделки (role=buyer|seller|all)."""
     q = select(Deal)
     if role == "buyer":
         q = q.where(Deal.buyer_id == user.id)
@@ -234,30 +273,45 @@ async def cancel_deal(
     return {"ok": True, "status": d.status}
 
 
-# ─── New Mini-App v3 aliases ─────────────────────────────────────────
+# ─── Mini-App v3 aliases ────────────────────────────────────────────────
 @router.post("/create")
 async def deal_create_v3(
     payload: dict,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Создать сделку (новый формат). payload: {offer_id, amount_fiat, payment_method?}."""
+    """payload: {offer_id, amount_fiat, payment_method?}"""
     offer_id = int(payload.get("offer_id") or 0)
     o = await db.get(Offer, offer_id)
     if not o or o.status != "active":
         raise HTTPException(404, "offer not active")
     if o.user_id == user.id:
         raise HTTPException(400, "нельзя торговать со своим оффером")
+
+    ok, err = await maker_stats.can_take_deal(db, user)
+    if not ok:
+        raise HTTPException(429, err or "anti-fraud lock")
+    ok2, err2 = await maker_stats.check_taker_meets_offer_conditions(db, user, o)
+    if not ok2:
+        raise HTTPException(403, err2 or "counterparty conditions not met")
+
     try:
         amount_rub = Decimal(str(payload.get("amount_fiat") or 0))
     except Exception:
         raise HTTPException(400, "bad amount_fiat")
     if amount_rub < o.min_amount_rub or amount_rub > o.max_amount_rub:
-        raise HTTPException(400, f"сумма {float(o.min_amount_rub)}–{float(o.max_amount_rub)} ₽")
+        raise HTTPException(400, f"сумма {float(o.min_amount_rub)}–{float(o.max_amount_rub)}")
 
     pms = o.payment_methods or []
     payment_method = (payload.get("payment_method") or (pms[0] if pms else "")).strip()
-    amount_usdt = (amount_rub / o.rate_rub_per_usdt).quantize(Decimal("0.0001"))
+
+    from core.services import price_index as pi_svc
+    if (o.price_type or "fixed") == "float" and o.float_margin_pct:
+        live = await pi_svc.compute_float_price(db, o.coin or "USDT", o.fiat or "RUB", o.float_margin_pct)
+        rate_used = live or o.rate_rub_per_usdt
+    else:
+        rate_used = o.rate_rub_per_usdt
+    amount_usdt = (amount_rub / rate_used).quantize(Decimal("0.0001"))
     fee_pct = await settings_kv.get_fee_v2_pct(db)
     fee_usdt = (amount_usdt * fee_pct / 100).quantize(Decimal("0.0001"))
 
@@ -270,30 +324,37 @@ async def deal_create_v3(
     if not seller or seller.balance_usdt < amount_usdt:
         raise HTTPException(400, "у продавца недостаточно USDT для escrow")
 
+    pay_window = o.pay_window_min or 30
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
     deal = Deal(
         deal_number=await _next_deal_number(db),
         offer_id=o.id,
         buyer_id=buyer_id, seller_id=seller_id,
+        coin=o.coin or "USDT", fiat=o.fiat or "RUB",
         amount_rub=amount_rub,
-        rate_rub_per_usdt=o.rate_rub_per_usdt,
+        rate_rub_per_usdt=rate_used,
         amount_usdt=amount_usdt,
         payment_method=payment_method,
         status="awaiting_payment",
         fee_pct=fee_pct, fee_usdt=fee_usdt,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        expires_at=deadline, pay_deadline_at=deadline,
     )
     db.add(deal)
     await db.flush()
     await escrow_service.lock(db, seller, deal)
 
-    # Системное приветствие в чат
     try:
         from core.models import DealMessage
         db.add(DealMessage(
             deal_id=deal.id, from_user_id=None,
-            text=f"Сделка #{deal.deal_number} создана. {float(amount_rub)} ₽ → {float(amount_usdt)} USDT.",
+            text=f"Сделка #{deal.deal_number} создана. {float(amount_rub)} {deal.fiat} -> {float(amount_usdt)} {deal.coin}.",
             is_system=True,
         ))
+        if o.auto_reply:
+            db.add(DealMessage(
+                deal_id=deal.id, from_user_id=o.user_id,
+                text=o.auto_reply[:2000], is_system=False,
+            ))
         await db.flush()
     except Exception:
         pass
@@ -307,7 +368,6 @@ async def deals_my_v3(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Мои сделки (alias на /me с упрощённым форматом)."""
     q = (
         select(Deal)
         .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
@@ -320,7 +380,7 @@ async def deals_my_v3(
         "items": [
             {
                 "id": d.id, "deal_number": d.deal_number,
-                "coin": "USDT", "fiat": "RUB",
+                "coin": d.coin or "USDT", "fiat": d.fiat or "RUB",
                 "amount_usdt": float(d.amount_usdt),
                 "amount_fiat": float(d.amount_rub),
                 "status": d.status,
@@ -338,7 +398,6 @@ async def deal_info_v3(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Детали сделки для v3 UI."""
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
@@ -347,7 +406,7 @@ async def deal_info_v3(
     return {
         "ok": True,
         "id": d.id, "deal_number": d.deal_number,
-        "coin": "USDT", "fiat": "RUB",
+        "coin": d.coin or "USDT", "fiat": d.fiat or "RUB",
         "amount_usdt": float(d.amount_usdt),
         "amount_fiat": float(d.amount_rub),
         "price": float(d.rate_rub_per_usdt),
@@ -359,36 +418,31 @@ async def deal_info_v3(
         "seller_username": seller.username if seller else None,
         "payment_method": d.payment_method,
         "expires_at": d.expires_at.isoformat() if d.expires_at else None,
+        "pay_deadline_at": d.pay_deadline_at.isoformat() if d.pay_deadline_at else None,
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
 
-# ─── Chat messages (DealMessage) ─────────────────────────────────────
+# ─── Chat messages ──────────────────────────────────────────────────────
 @router.get("/{deal_id}/messages")
 async def deal_messages_get(
     deal_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Сообщения чата сделки. Только участники видят."""
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
-
     from core.models import DealMessage
     rows = (await db.execute(
         select(DealMessage).where(DealMessage.deal_id == deal_id)
-        .order_by(DealMessage.created_at.asc())
-        .limit(500)
+        .order_by(DealMessage.created_at.asc()).limit(500)
     )).scalars().all()
-
-    # Маппинг user_id → tg_id для UI чтобы определить "своё/чужое"
     user_ids = {m.from_user_id for m in rows if m.from_user_id}
     tg_map = {}
     if user_ids:
         urows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
         tg_map = {u.id: u.tg_id for u in urows}
-
     return {
         "ok": True,
         "items": [
@@ -412,7 +466,6 @@ async def deal_messages_post(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Отправить сообщение в чат сделки."""
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
@@ -421,13 +474,10 @@ async def deal_messages_post(
     text = (payload.get("text") or "").strip()[:2000]
     if not text:
         raise HTTPException(400, "empty message")
-
     from core.models import DealMessage
     msg = DealMessage(deal_id=deal_id, from_user_id=user.id, text=text)
     db.add(msg)
     await db.flush()
-
-    # Уведомить второго участника в TG
     try:
         from bot.main import notify_user
         other_id = d.seller_id if user.id == d.buyer_id else d.buyer_id
@@ -435,11 +485,10 @@ async def deal_messages_post(
         if other:
             await notify_user(
                 other.tg_id,
-                f"💬 <b>Сделка #{d.deal_number}</b>\n<i>{text[:200]}</i>\n\nОткрой Mini-App → P2P → Мои сделки.",
+                f"<b>Сделка #{d.deal_number}</b>\n<i>{text[:200]}</i>",
             )
     except Exception:
         pass
-
     return {"ok": True, "id": msg.id}
 
 
@@ -450,7 +499,7 @@ async def open_dispute(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Открыть спор — escrow замороз до решения админа."""
+    """Открыть спор — escrow заморожен до решения админа."""
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
@@ -459,11 +508,9 @@ async def open_dispute(
     reason = (payload.get("reason") or "").strip()
     if len(reason) < 5:
         raise HTTPException(400, "опишите причину спора (от 5 символов)")
-
     d.status = "disputed"
     dispute = Dispute(
-        deal_id=d.id,
-        opened_by_id=user.id,
+        deal_id=d.id, opened_by_id=user.id,
         reason=reason[:1024],
         evidence_urls=payload.get("evidence_urls") or [],
         status="open",

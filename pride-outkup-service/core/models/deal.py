@@ -77,6 +77,10 @@ class Deal(Base):
     extra: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    pay_deadline_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # альтернативное название (industrial-spec); пишем оба для совместимости
+    coin: Mapped[str] = mapped_column(String(16), default="USDT", nullable=False)
+    fiat: Mapped[str] = mapped_column(String(8), default="RUB", nullable=False)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     released_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -89,4 +93,5 @@ class Deal(Base):
     seller = relationship("User", foreign_keys=[seller_id], back_populates="deals_as_seller")
 
     def __repr__(self) -> str:
-        return f"<Deal {self.deal_number} {self.amount_rub}₽ {self.status}>"
+        return f"<Deal {self.deal_number} {self.amount_rub} {self.status}>"
+>"

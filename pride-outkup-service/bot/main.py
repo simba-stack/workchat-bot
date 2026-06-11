@@ -12,7 +12,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from bot.handlers import start, kyc, groups, wallet as wallet_h, commands as commands_h
+from bot.handlers import (
+    start, kyc, groups,
+    wallet as wallet_h,
+    commands as commands_h,
+    p2p as p2p_h,
+)
 from core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -56,6 +61,8 @@ async def run_bot() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(start.router)
+    # P2P router до commands — чтобы p2p:* перехватывал callback'и
+    dp.include_router(p2p_h.router)
     dp.include_router(commands_h.router)
     dp.include_router(kyc.router)
     dp.include_router(wallet_h.router)
@@ -69,15 +76,15 @@ async def run_bot() -> None:
         while True:
             await asyncio.sleep(3600)
 
-    # Команды бота (Crypto Bot стиль)
+    # Команды бота (минималистично, без эмодзи)
     try:
         from aiogram.types import BotCommand
         await bot.set_my_commands([
             BotCommand(command="start", description="Главное меню"),
-            BotCommand(command="wallet", description="💼 Кошелёк"),
-            BotCommand(command="p2p", description="💱 P2P маркет"),
-            BotCommand(command="checks", description="📜 Чеки"),
-            BotCommand(command="swap", description="🔄 Обмен"),
+            BotCommand(command="wallet", description="Кошелёк"),
+            BotCommand(command="p2p", description="P2P маркет"),
+            BotCommand(command="checks", description="Чеки"),
+            BotCommand(command="swap", description="Обмен"),
         ])
         logger.info("Bot commands installed")
     except Exception as e:

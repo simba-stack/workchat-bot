@@ -13,6 +13,8 @@ from core.models.transfer import Transfer, Swap
 from core.models.wallet_address import SystemSecret, UserDepositAddress
 from core.models.cheque import Cheque
 from core.models.deal_message import DealMessage
+from core.models.price_index import PriceIndex
+from core.models.feature_flag import FeatureFlag
 
 __all__ = [
     "User",
@@ -34,4 +36,6 @@ __all__ = [
     "UserDepositAddress",
     "Cheque",
     "DealMessage",
+    "PriceIndex",
+    "FeatureFlag",
 ]

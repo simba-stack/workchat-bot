@@ -9,24 +9,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet, owner, cheques
+from api.routers import (
+    users, exchange, orders, offers, deals, webhooks,
+    admin, wallet, owner, cheques, audit,
+)
 from core.config import settings
-from core.services import jarvis_sync, tron_monitor, rates_service, sweep_service
+from core.services import (
+    deal_lifecycle,
+    feature_flags,
+    jarvis_sync,
+    maker_stats,
+    rates_service,
+    sweep_service,
+    tron_monitor,
+)
 
 logger = logging.getLogger(__name__)
 
 
 async def _ensure_schema_and_seed():
-    """Safety net: create_all для всех моделей + seed coins если пусто.
-    Запускается после alembic upgrade. Идемпотентно — таблицы IF NOT EXISTS,
-    coins seed только если пустая таблица.
-    """
+    """Safety net: create_all для всех моделей + seed coins если пусто."""
     from decimal import Decimal
     from sqlalchemy import select, func
     from core.db import Base, engine, AsyncSessionLocal
     from core.models import Coin
 
-    # 1) create_all для всех моделей (idempotent, IF NOT EXISTS)
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -34,11 +41,6 @@ async def _ensure_schema_and_seed():
     except Exception as e:
         logger.warning("[schema] create_all skipped: %s", e)
 
-    # 2) Seed coins если таблица пуста
-    # (code, name, coingecko_id, networks, decimals, icon_color, icon_url,
-    #  min_deposit, min_withdraw, withdraw_fee, sort_order)
-    # Комиссии конкурентны Crypto Bot (USDT там $5.5, у нас $3.5).
-    # С Feee.io energy rental реальный газ USDT ~$0.35 → чистый профит $3.15.
     SEED = [
         ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
          "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 3.5, 10),
@@ -62,7 +64,7 @@ async def _ensure_schema_and_seed():
          "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.005, 0.001, 90),
         ("XAUT",  "Tether Gold",  "tether-gold",      ["ERC20"], 6, "#D4AF37",
          "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.005, 0.001, 95),
-        ("RUB",   "Российский рубль", None,           [], 2, "#FF3B30",
+        ("RUB",   "RUB",          None,               [], 2, "#FF3B30",
          None, 100, 100, 0, 100),
     ]
     try:
@@ -87,31 +89,40 @@ async def _ensure_schema_and_seed():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI starting...")
-    # Safety: гарантируем что все таблицы существуют + seed coins
     await _ensure_schema_and_seed()
-    # Background: периодический pull курса из JARVIS
     sync_task = asyncio.create_task(jarvis_sync.rate_sync_loop())
     logger.info("Started: jarvis rate_sync_loop")
-    # Background: TRON monitor — polling входящих TRC20 каждые 30 сек
     tron_task = asyncio.create_task(tron_monitor.monitor_loop())
     logger.info("Started: tron_monitor")
-    # Background: crypto rates polling (CoinGecko) каждые 60 сек
     rates_task = asyncio.create_task(rates_service.rate_loop())
     logger.info("Started: rates_service")
-    # Background: sweep USDT с user HD-адресов в hot wallet раз в час
     sweep_task = asyncio.create_task(sweep_service.sweep_loop())
     logger.info("Started: sweep_service")
+    # P2P industrial: feature_flags bootstrap
+    try:
+        await feature_flags.bootstrap_registry()
+        logger.info("Started: feature_flags bootstrap done")
+    except Exception as e:
+        logger.warning("feature_flags bootstrap failed: %s", e)
+    # lifecycle loop: auto-expire deals + price-band enforcement
+    lifecycle_task = asyncio.create_task(deal_lifecycle.lifecycle_loop())
+    logger.info("Started: deal_lifecycle")
+    # tier recompute hourly
+    tier_task = asyncio.create_task(maker_stats.tier_loop())
+    logger.info("Started: maker_stats tier_loop")
     yield
     logger.info("FastAPI stopping...")
     sync_task.cancel()
     tron_task.cancel()
     rates_task.cancel()
     sweep_task.cancel()
+    lifecycle_task.cancel()
+    tier_task.cancel()
 
 
 app = FastAPI(
     title="PRIDE P2P API",
-    version="0.1.0",
+    version="0.2.0",
     description="Backend for PRIDE P2P Mini-App + JARVIS integration",
     lifespan=lifespan,
 )
@@ -131,17 +142,14 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "pride-p2p", "version": "0.1.0"}
+    return {"status": "ok", "service": "pride-p2p", "version": "0.2.0"}
 
 
 @app.get("/myip")
 async def my_ip():
-    """Возвращает egress IP сервиса (для Feee.io whitelist).
-    Без auth — это публичный IP, не секрет."""
     import httpx
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            # Делаем 3 запроса к разным сервисам — Railway мог выделить разные IP
             ips = set()
             for url in ["https://api.ipify.org", "https://ifconfig.me/ip", "https://ipinfo.io/ip"]:
                 try:
@@ -164,6 +172,7 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 app.include_router(owner.router, prefix="/api/v1/owner", tags=["owner"])
 app.include_router(cheques.router, prefix="/api/v1/cheques", tags=["cheques"])
+app.include_router(audit.router, prefix="/api/v1/admin/audit", tags=["audit"])
 
 
 # ─── Mini-App статика ──────────────────────────────────────────────

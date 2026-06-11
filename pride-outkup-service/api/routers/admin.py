@@ -590,3 +590,128 @@ async def toggle_feature(
     await settings_kv.set_setting(db, key, value)
     await db.commit()
     return {"ok": True, "key": key, "value": value}
+
+
+# ─── P2P maker controls (industrial) ────────────────────────────────────
+@router.post("/maker/{user_id}/official_toggle")
+async def maker_official_toggle(
+    user_id: int,
+    payload: dict | None = None,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """PRIDE Official флаг — оффер всегда сверху + tier=official."""
+    u = await db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "user not found")
+    new_value = (payload or {}).get("enabled")
+    if new_value is None:
+        new_value = (u.maker_tier != "official")
+    u.maker_tier = "official" if new_value else "none"
+    u.maker_tier_updated_at = datetime.now(timezone.utc)
+    from core.models import Offer
+    offers = (await db.execute(select(Offer).where(Offer.user_id == user_id))).scalars().all()
+    for o in offers:
+        o.is_pride_official = bool(new_value)
+    await db.flush()
+    return {"ok": True, "maker_tier": u.maker_tier, "offers_updated": len(offers)}
+
+
+@router.post("/maker/{user_id}/tier")
+async def maker_set_tier(
+    user_id: int,
+    payload: dict,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ручной override tier. payload: {tier: none|bronze|silver|gold|official}"""
+    u = await db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "user not found")
+    tier = (payload.get("tier") or "").lower()
+    if tier not in ("none", "bronze", "silver", "gold", "official"):
+        raise HTTPException(400, "tier must be none|bronze|silver|gold|official")
+    u.maker_tier = tier
+    u.maker_tier_updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return {"ok": True, "maker_tier": u.maker_tier}
+
+
+@router.post("/maker/recompute")
+async def maker_recompute_all(me: User = Depends(require_admin)):
+    """Перезапустить пересчёт maker tier'ов сейчас."""
+    from core.services import maker_stats
+    updated = await maker_stats.recompute_all()
+    return {"ok": True, "updated": updated}
+
+
+@router.post("/maker/{user_id}/unban_cooldown")
+async def maker_unban_cooldown(
+    user_id: int,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Снять anti-fraud кулдаун с юзера."""
+    u = await db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "user not found")
+    u.cancel_cooldown_until = None
+    await db.flush()
+    return {"ok": True}
+
+
+@router.post("/disputes/{dispute_id}/resolve_partial")
+async def resolve_dispute_partial(
+    dispute_id: int,
+    payload: dict,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Решить спор пропорционально. payload: {buyer_share_pct: 0..100, notes?}"""
+    d = await db.get(Dispute, dispute_id)
+    if not d:
+        raise HTTPException(404, "dispute not found")
+    try:
+        buyer_pct = Decimal(str(payload.get("buyer_share_pct") or 50))
+    except Exception:
+        raise HTTPException(400, "buyer_share_pct invalid")
+    if not (Decimal("0") <= buyer_pct <= Decimal("100")):
+        raise HTTPException(400, "buyer_share_pct 0..100")
+
+    d.status = "resolved"
+    d.resolution = "split"
+    d.resolution_note = (f"buyer={buyer_pct}% notes={payload.get('notes') or ''}")[:2048]
+    d.resolved_by_admin = me.username or str(me.tg_id)
+    d.resolved_at = datetime.now(timezone.utc)
+
+    if d.deal_id:
+        deal = await db.get(Deal, d.deal_id)
+        if deal:
+            from core.models import EscrowLock as _E
+            el = (await db.execute(
+                select(_E).where(_E.deal_id == deal.id, _E.status == "locked")
+            )).scalar_one_or_none()
+            if el:
+                buyer = await db.get(User, deal.buyer_id)
+                seller = await db.get(User, deal.seller_id)
+                buyer_part = (el.amount_usdt * buyer_pct / 100).quantize(Decimal("0.0001"))
+                fee = deal.fee_usdt or Decimal("0")
+                buyer_net = max(Decimal("0"), buyer_part - fee)
+                seller_part = el.amount_usdt - buyer_part
+                if buyer:
+                    buyer.balance_usdt += buyer_net
+                if seller:
+                    seller.balance_usdt += seller_part
+                el.status = "released"
+                el.released_at = datetime.now(timezone.utc)
+                deal.released_at = datetime.now(timezone.utc)
+                deal.status = "released"
+                db.add(OperationLog(
+                    user_id=deal.buyer_id, type="dispute_split",
+                    amount_usdt=buyer_net,
+                    balance_after=buyer.balance_usdt if buyer else None,
+                    ref_table="deals", ref_id=deal.id,
+                    note=f"split {buyer_pct}/{100-buyer_pct} (admin {me.tg_id})",
+                ))
+    await db.flush()
+    return {"ok": True, "buyer_share_pct": float(buyer_pct)}

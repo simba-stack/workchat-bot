@@ -42,7 +42,13 @@ async def _fetch_rates(coingecko_ids: list[str]) -> dict[str, dict]:
 
 
 async def tick() -> None:
-    """Один цикл — тянем курсы всех активных coin'ов с coingecko_id."""
+    """Один цикл — тянем курсы всех активных coin'ов с coingecko_id.
+
+    Пишем результат и в kv_settings (для UI), и в таблицу `price_indices`
+    (для оффер-валидации и float-расчётов).
+    """
+    from core.services import price_index as pi_svc
+
     async with AsyncSessionLocal() as db:
         res = await db.execute(
             select(Coin).where(Coin.is_active.is_(True), Coin.coingecko_id.is_not(None))
@@ -60,11 +66,21 @@ async def tick() -> None:
             data = rates.get(c.coingecko_id) if c.coingecko_id else None
             if not data:
                 continue
+            usd = float(data.get("usd") or 0)
+            rub = float(data.get("rub") or 0)
             out[c.code] = {
-                "usd": float(data.get("usd") or 0),
-                "rub": float(data.get("rub") or 0),
+                "usd": usd,
+                "rub": rub,
                 "change_24h": float(data.get("usd_24h_change") or 0),
             }
+            # Industrial: пишем в price_indices для оффер-band
+            try:
+                if usd > 0:
+                    await pi_svc.upsert(db, c.code, "USD", Decimal(str(usd)))
+                if rub > 0:
+                    await pi_svc.upsert(db, c.code, "RUB", Decimal(str(rub)))
+            except Exception as e:
+                logger.warning("[rates] upsert price_index %s failed: %s", c.code, e)
         if out:
             await settings_kv.set_setting(db, "crypto_rates", out)
             await db.commit()

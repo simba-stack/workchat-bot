@@ -713,3 +713,102 @@ async def owner_energy_status(
             "address": settings.tron_hot_wallet_address,
         },
     }
+
+
+# ─── Feature flags / Аудит функций ──────────────────────────────────────
+@router.get("/audit/features")
+async def owner_audit_features(
+    _: bool = Depends(require_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    from core.models import FeatureFlag
+    rows = (await db.execute(
+        select(FeatureFlag).order_by(FeatureFlag.category, FeatureFlag.key)
+    )).scalars().all()
+    grouped: dict[str, list] = {}
+    for f in rows:
+        grouped.setdefault(f.category, []).append({
+            "key": f.key, "label": f.label, "category": f.category,
+            "enabled": bool(f.enabled), "config": f.config or {},
+            "description": f.description,
+            "last_check_at": f.last_check_at.isoformat() if f.last_check_at else None,
+            "last_check_status": f.last_check_status,
+            "last_check_note": f.last_check_note,
+            "updated_at": f.updated_at.isoformat() if f.updated_at else None,
+            "updated_by": f.updated_by,
+        })
+    return {
+        "ok": True,
+        "by_category": grouped,
+        "categories": sorted(grouped.keys()),
+        "total": len(rows),
+        "enabled_count": sum(1 for f in rows if f.enabled),
+        "disabled_count": sum(1 for f in rows if not f.enabled),
+    }
+
+
+@router.patch("/audit/features/{key}")
+async def owner_audit_update(
+    key: str,
+    payload: dict,
+    _: bool = Depends(require_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    from core.models import FeatureFlag
+    from datetime import datetime, timezone
+    from core.services import feature_flags
+    f = (await db.execute(
+        select(FeatureFlag).where(FeatureFlag.key == key)
+    )).scalar_one_or_none()
+    if not f:
+        raise HTTPException(404, f"feature '{key}' не найдена")
+    if "enabled" in payload:
+        f.enabled = bool(payload["enabled"])
+    if "config" in payload:
+        if not isinstance(payload["config"], (dict, type(None))):
+            raise HTTPException(400, "config must be object")
+        f.config = payload["config"]
+    if "description" in payload:
+        f.description = (payload["description"] or "")[:2000]
+    f.updated_at = datetime.now(timezone.utc)
+    f.updated_by = "owner"
+    await db.commit()
+    await feature_flags.invalidate_cache()
+    return {"ok": True, "key": key, "enabled": f.enabled}
+
+
+@router.post("/audit/features/{key}/test")
+async def owner_audit_test(
+    key: str,
+    _: bool = Depends(require_owner),
+):
+    from core.services import feature_flags
+    ok, note = await feature_flags.run_self_test(key)
+    await feature_flags.save_check_result(key, ok, note)
+    return {"ok": ok, "note": note}
+
+
+@router.post("/audit/features/run_all_tests")
+async def owner_audit_run_all(
+    _: bool = Depends(require_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    from core.models import FeatureFlag
+    from core.services import feature_flags
+    rows = (await db.execute(select(FeatureFlag))).scalars().all()
+    report = []
+    ok_n, fail_n = 0, 0
+    for f in rows:
+        ok, note = await feature_flags.run_self_test(f.key)
+        await feature_flags.save_check_result(f.key, ok, note)
+        report.append({"key": f.key, "label": f.label, "ok": ok, "note": note})
+        ok_n += int(ok); fail_n += int(not ok)
+    return {"ok": True, "total": len(report), "ok_count": ok_n, "fail_count": fail_n, "report": report}
+
+
+@router.post("/audit/features/resync")
+async def owner_audit_resync(_: bool = Depends(require_owner)):
+    from core.services import feature_flags
+    await feature_flags.bootstrap_registry()
+    await feature_flags.invalidate_cache()
+    return {"ok": True}

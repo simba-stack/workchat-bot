@@ -49,7 +49,8 @@ async def release(db: AsyncSession, deal: Deal) -> None:
     """Освободить escrow — USDT переходит buyer'у.
 
     seller теряет окончательно, buyer.balance_usdt += amount - fee.
-    fee.usdt → системный счёт (logged).
+    fee.usdt -> системный счёт (logged).
+    Также обновляет stats обоим участникам (для maker tier).
     """
     res = await db.execute(
         select(EscrowLock).where(
@@ -61,8 +62,9 @@ async def release(db: AsyncSession, deal: Deal) -> None:
         raise HTTPException(400, "escrow lock not found")
 
     buyer = await db.get(User, deal.buyer_id)
-    if not buyer:
-        raise HTTPException(500, "buyer not found")
+    seller = await db.get(User, deal.seller_id)
+    if not buyer or not seller:
+        raise HTTPException(500, "buyer/seller not found")
 
     fee = deal.fee_usdt or Decimal("0")
     payout = lock_row.amount_usdt - fee
@@ -74,6 +76,20 @@ async def release(db: AsyncSession, deal: Deal) -> None:
     deal.released_at = lock_row.released_at
     deal.status = "released"
 
+    # ── Stats для maker tier ────────────────────────────────────────
+    if deal.paid_at and deal.released_at:
+        release_sec = int((deal.released_at - deal.paid_at).total_seconds())
+        prev_avg = seller.avg_release_time_sec or 0
+        prev_completed = seller.completed_deals or 0
+        seller.avg_release_time_sec = (
+            (prev_avg * prev_completed + release_sec) // (prev_completed + 1)
+            if prev_completed >= 0 else release_sec
+        )
+    for u in (buyer, seller):
+        u.total_deals = (u.total_deals or 0) + 1
+        u.completed_deals = (u.completed_deals or 0) + 1
+        u.total_volume_usdt = (u.total_volume_usdt or Decimal("0")) + lock_row.amount_usdt
+
     db.add(OperationLog(
         user_id=buyer.id,
         type="deal_payout",
@@ -83,10 +99,9 @@ async def release(db: AsyncSession, deal: Deal) -> None:
         ref_id=deal.id,
         note=f"deal {deal.deal_number} payout (fee {fee})",
     ))
-    # Бухгалтерская запись на системный fee (user_id=None не получится — кладём в meta)
     if fee > 0:
         db.add(OperationLog(
-            user_id=buyer.id,  # технически тот же — но type=fee_collected
+            user_id=buyer.id,
             type="fee_collected",
             amount_usdt=fee,
             balance_after=None,

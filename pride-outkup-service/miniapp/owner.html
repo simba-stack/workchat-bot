@@ -189,6 +189,7 @@
     <button class="tab" data-page="sweeps">🔄 Свайпы</button>
     <button class="tab" data-page="coins">💰 Монеты</button>
     <button class="tab" data-page="ops">📜 Операции</button>
+    <button class="tab" data-page="audit">🛠 Аудит функций</button>
   </div>
 
   <!-- ─── OVERVIEW ─── -->
@@ -298,6 +299,21 @@
       <tbody id="ops-tbody"><tr><td colspan="6" class="loading">Загружаю…</td></tr></tbody>
     </table>
   </div>
+
+  <!-- ─── AUDIT ─── -->
+  <div class="page" id="page-audit">
+    <div class="toolbar">
+      <button class="btn primary" data-action="audit-refresh">↻ Обновить</button>
+      <button class="btn" data-action="audit-run-all">▶ Запустить ВСЕ тесты</button>
+      <button class="btn" data-action="audit-resync">⟳ Resync REGISTRY</button>
+      <span class="last-updated">
+        Управление функциями PRIDE P2P — toggle / config / самопроверки.
+        Выключенная функция возвращает 503 в API.
+      </span>
+    </div>
+    <div id="audit-summary" style="margin-bottom:14px;color:var(--muted);font-size:13px;">—</div>
+    <div id="audit-categories"><div class="loading">Загружаю…</div></div>
+  </div>
 </div>
 
 <!-- ═══ MODAL ═══ -->
@@ -383,6 +399,7 @@ async function loadPage(page) {
   if (page==='sweeps') return loadSweeps();
   if (page==='coins') return loadCoins();
   if (page==='ops') return loadOps('');
+  if (page==='audit') return loadAudit();
 }
 
 async function showDashboard() {
@@ -603,6 +620,140 @@ async function loadOps(type) {
 }
 document.querySelectorAll('.filter-op').forEach(b => b.onclick = () => loadOps(b.dataset.type || ''));
 
+// ── AUDIT (Feature flags) ─────────────────────────
+const CATEGORY_LABELS = {
+  p2p: 'P2P рынок', wallet: 'Кошелёк', cheques: 'Чеки',
+  swap: 'Свап', kyc: 'KYC', bot: 'Бот', miniapp: 'Mini-App', admin: 'Админ',
+};
+
+async function loadAudit() {
+  try {
+    const j = await api('/audit/features');
+    $('audit-summary').textContent =
+      `Всего: ${j.total} · вкл: ${j.enabled_count} · выкл: ${j.disabled_count}`;
+    const cats = j.categories || [];
+    if (!cats.length) {
+      $('audit-categories').innerHTML = '<div class="empty">REGISTRY пуст — нажми «Resync REGISTRY».</div>';
+      return;
+    }
+    const html = cats.map(cat => {
+      const items = j.by_category[cat] || [];
+      const rows = items.map(f => renderFeatureRow(f)).join('');
+      return `
+        <div style="margin-bottom:24px">
+          <h3 style="font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin:10px 0">
+            ${CATEGORY_LABELS[cat] || cat} · <span style="color:var(--text)">${items.length}</span>
+          </h3>
+          <table>
+            <thead><tr>
+              <th style="width:30%">Функция</th>
+              <th>Описание</th>
+              <th style="width:90px">Статус</th>
+              <th style="width:130px">Последняя проверка</th>
+              <th style="width:180px">Действия</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }).join('');
+    $('audit-categories').innerHTML = html;
+  } catch(e) {
+    toast('Аудит: '+e.message, 'error');
+    $('audit-categories').innerHTML = '<div class="empty error">'+e.message+'</div>';
+  }
+}
+
+function renderFeatureRow(f) {
+  const cfg = f.config ? JSON.stringify(f.config) : '';
+  const statusBadge = f.enabled
+    ? '<span class="badge green">ON</span>'
+    : '<span class="badge red">OFF</span>';
+  const lastBadge = f.last_check_status === 'ok'
+    ? '<span class="badge green">OK</span>'
+    : f.last_check_status === 'fail'
+      ? '<span class="badge red">FAIL</span>'
+      : '<span class="badge grey">—</span>';
+  const lastNote = f.last_check_note
+    ? `<div style="font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.last_check_note)}">${esc(f.last_check_note)}</div>`
+    : '';
+  const lastTime = f.last_check_at ? dt(f.last_check_at) : '—';
+  return `<tr data-key="${f.key}">
+    <td>
+      <div style="font-weight:600">${esc(f.label)}</div>
+      <div style="font-family:monospace;font-size:11px;color:var(--muted)">${f.key}</div>
+    </td>
+    <td style="font-size:12px;color:var(--muted);max-width:380px">
+      ${esc(f.description || '')}
+      ${cfg ? `<div style="margin-top:6px;font-family:monospace;font-size:11px;background:var(--panel-2);padding:6px 8px;border-radius:6px;word-break:break-all">${esc(cfg)}</div>` : ''}
+    </td>
+    <td>${statusBadge}</td>
+    <td>${lastBadge}<div style="font-size:11px;color:var(--muted)">${lastTime}</div>${lastNote}</td>
+    <td>
+      <button class="btn sm" onclick="auditToggle('${f.key}', ${!f.enabled})">${f.enabled ? 'Выкл' : 'Вкл'}</button>
+      <button class="btn sm" onclick="auditTest('${f.key}')">Тест</button>
+      <button class="btn sm" onclick="auditConfig('${f.key}')">JSON</button>
+    </td>
+  </tr>`;
+}
+
+function esc(s) {
+  return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function auditToggle(key, enabled) {
+  try {
+    await api(`/audit/features/${encodeURIComponent(key)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled}),
+    });
+    toast(`${key}: ${enabled?'ВКЛ':'ВЫКЛ'}`);
+    loadAudit();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function auditTest(key) {
+  toast(`Тест ${key}...`);
+  try {
+    const r = await api(`/audit/features/${encodeURIComponent(key)}/test`, {method:'POST'});
+    toast(`${key}: ${r.ok?'OK':'FAIL'} — ${r.note||''}`, r.ok?'success':'error');
+    loadAudit();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function auditConfig(key) {
+  const current = prompt(`Config (JSON) для ${key}:`, '{}');
+  if (current === null) return;
+  let parsed;
+  try { parsed = JSON.parse(current); } catch(e) { toast('Невалидный JSON: '+e.message, 'error'); return; }
+  try {
+    await api(`/audit/features/${encodeURIComponent(key)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({config: parsed}),
+    });
+    toast(`${key}: config сохранён`);
+    loadAudit();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function auditRunAll() {
+  if (!confirm('Запустить ВСЕ self-tests?')) return;
+  toast('Тесты пошли...');
+  try {
+    const r = await api('/audit/features/run_all_tests', {method:'POST'});
+    toast(`Готово: ${r.ok_count} OK / ${r.fail_count} FAIL`, r.fail_count?'error':'success');
+    loadAudit();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function auditResync() {
+  if (!confirm('Resync REGISTRY → создать недостающие записи в БД?')) return;
+  try {
+    await api('/audit/features/resync', {method:'POST'});
+    toast('REGISTRY синхронизирован');
+    loadAudit();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ── Toolbar buttons ───────────────────────────────
 document.body.addEventListener('click', (e) => {
   const a = e.target?.dataset?.action;
@@ -614,6 +765,9 @@ document.body.addEventListener('click', (e) => {
   if (a==='coins-refresh') return loadCoins();
   if (a==='ops-refresh') return loadOps('');
   if (a==='sweep-all') return sweepAll();
+  if (a==='audit-refresh') return loadAudit();
+  if (a==='audit-run-all') return auditRunAll();
+  if (a==='audit-resync') return auditResync();
 });
 $('overview-refresh').dataset.action = 'overview-refresh';
 
