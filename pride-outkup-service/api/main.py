@@ -1,6 +1,7 @@
 """FastAPI app — Mini-App backend + webhooks + JARVIS sync.
 
-Lifespan делает МИНИМУМ синхронной работы — всё тяжёлое в asyncio.create_task.
+Lifespan: всё тяжёлое в asyncio.create_task. /health отвечает сразу.
+Safety-net миграция: ALTER TABLE IF NOT EXISTS на каждом старте.
 """
 import asyncio
 import logging
@@ -18,19 +19,28 @@ from api.routers import (
 )
 from core.config import settings
 from core.services import (
-    deal_lifecycle,
-    feature_flags,
-    jarvis_sync,
-    maker_stats,
-    rates_service,
-    sweep_service,
-    tron_monitor,
+    deal_lifecycle, feature_flags, jarvis_sync, maker_stats,
+    rates_service, sweep_service, tron_monitor,
 )
 
 logger = logging.getLogger(__name__)
 
 
-# Safety-net миграция: если alembic не применил 0007, добавляем колонки тут.
+# SIMBA: $4.5-эквивалент withdraw fee для всех coin
+COIN_FEES_UPDATE = [
+    "UPDATE coins SET withdraw_fee=4.5      WHERE code='USDT'",
+    "UPDATE coins SET withdraw_fee=4.5      WHERE code='USDC'",
+    "UPDATE coins SET withdraw_fee=25       WHERE code='TRX'",
+    "UPDATE coins SET withdraw_fee=0.9      WHERE code='TON'",
+    "UPDATE coins SET withdraw_fee=0.00005  WHERE code='BTC'",
+    "UPDATE coins SET withdraw_fee=0.0015   WHERE code='ETH'",
+    "UPDATE coins SET withdraw_fee=0.03     WHERE code='SOL'",
+    "UPDATE coins SET withdraw_fee=0.007    WHERE code='BNB'",
+    "UPDATE coins SET withdraw_fee=28       WHERE code='DOGE'",
+    "UPDATE coins SET withdraw_fee=0.05     WHERE code='LTC'",
+    "UPDATE coins SET withdraw_fee=0.0015   WHERE code='XAUT'",
+]
+
 P2P_INDUSTRIAL_ALTERS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier VARCHAR(16) NOT NULL DEFAULT 'none'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier_updated_at TIMESTAMP WITH TIME ZONE",
@@ -51,7 +61,6 @@ P2P_INDUSTRIAL_ALTERS = [
 
 
 async def _ensure_schema_and_seed():
-    """Safety net: create_all + seed coins + P2P industrial columns ALTER."""
     from decimal import Decimal
     from sqlalchemy import select, func, text as _sql
     from core.db import Base, engine, AsyncSessionLocal
@@ -64,7 +73,7 @@ async def _ensure_schema_and_seed():
     except Exception as e:
         logger.warning("[schema] create_all skipped: %s", e)
 
-    # CRITICAL: добавить P2P industrial колонки если миграция не доехала.
+    # P2P safety-net columns
     try:
         async with engine.begin() as conn:
             ok_count, fail_count = 0, 0
@@ -79,29 +88,41 @@ async def _ensure_schema_and_seed():
     except Exception as e:
         logger.warning("[schema] industrial alter block failed: %s", e)
 
+    # Coin fees update -> $4.5 equivalent
+    try:
+        async with engine.begin() as conn:
+            for sql in COIN_FEES_UPDATE:
+                try:
+                    await conn.execute(_sql(sql))
+                except Exception as e:
+                    logger.warning("[schema] fee update skipped: %s -> %s", sql[:60], e)
+        logger.info("[schema] coin fees updated to $4.5 equivalent")
+    except Exception as e:
+        logger.warning("[schema] fees update block failed: %s", e)
+
     SEED = [
         ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
-         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 3.5, 10),
+         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 4.5, 10),
         ("TON",   "Toncoin",      "the-open-network", ["TON"], 9, "#0098EA",
-         "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 0.5, 0.1, 20),
+         "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 0.5, 0.9, 20),
         ("TRX",   "TRON",         "tron",             ["TRC20"], 6, "#FF060A",
-         "https://assets.coingecko.com/coins/images/1094/small/tron-logo.png", 5, 20, 5, 30),
+         "https://assets.coingecko.com/coins/images/1094/small/tron-logo.png", 5, 20, 25, 30),
         ("BTC",   "Bitcoin",      "bitcoin",          ["BTC"], 8, "#F7931A",
-         "https://assets.coingecko.com/coins/images/1/small/bitcoin.png", 0.0001, 0.001, 0.0002, 40),
+         "https://assets.coingecko.com/coins/images/1/small/bitcoin.png", 0.0001, 0.001, 0.00005, 40),
         ("ETH",   "Ethereum",     "ethereum",         ["ERC20"], 18, "#627EEA",
-         "https://assets.coingecko.com/coins/images/279/small/ethereum.png", 0.01, 0.01, 0.005, 50),
+         "https://assets.coingecko.com/coins/images/279/small/ethereum.png", 0.01, 0.01, 0.0015, 50),
         ("SOL",   "Solana",       "solana",           ["SPL"], 9, "#9945FF",
-         "https://assets.coingecko.com/coins/images/4128/small/solana.png", 0.05, 0.1, 0.02, 60),
+         "https://assets.coingecko.com/coins/images/4128/small/solana.png", 0.05, 0.1, 0.03, 60),
         ("USDC",  "USD Coin",     "usd-coin",         ["TRC20","ERC20","BEP20","SPL"], 6, "#2775CA",
-         "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png", 1, 5, 3.5, 15),
+         "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png", 1, 5, 4.5, 15),
         ("BNB",   "Binance Coin", "binancecoin",      ["BEP20"], 18, "#F3BA2F",
-         "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", 0.005, 0.01, 0.002, 70),
+         "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", 0.005, 0.01, 0.007, 70),
         ("DOGE",  "Dogecoin",     "dogecoin",         ["DOGE"], 8, "#C2A633",
-         "https://assets.coingecko.com/coins/images/5/small/dogecoin.png", 5, 10, 5, 80),
+         "https://assets.coingecko.com/coins/images/5/small/dogecoin.png", 5, 10, 28, 80),
         ("LTC",   "Litecoin",     "litecoin",         ["LTC"], 8, "#345D9D",
-         "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.005, 0.001, 90),
+         "https://assets.coingecko.com/coins/images/2/small/litecoin.png", 0.001, 0.005, 0.05, 90),
         ("XAUT",  "Tether Gold",  "tether-gold",      ["ERC20"], 6, "#D4AF37",
-         "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.005, 0.001, 95),
+         "https://assets.coingecko.com/coins/images/10481/small/Tether_Gold.png", 0.001, 0.005, 0.0015, 95),
         ("RUB",   "RUB",          None,               [], 2, "#FF3B30",
          None, 100, 100, 0, 100),
     ]
@@ -141,7 +162,6 @@ async def _bg_startup():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI starting...")
-
     bg_tasks: list[asyncio.Task] = []
     bg_tasks.append(asyncio.create_task(_bg_startup()))
     bg_tasks.append(asyncio.create_task(jarvis_sync.rate_sync_loop()))
@@ -150,32 +170,23 @@ async def lifespan(app: FastAPI):
     bg_tasks.append(asyncio.create_task(sweep_service.sweep_loop()))
     bg_tasks.append(asyncio.create_task(deal_lifecycle.lifecycle_loop()))
     bg_tasks.append(asyncio.create_task(maker_stats.tier_loop()))
-
     logger.info("FastAPI ready: %d background tasks scheduled", len(bg_tasks))
     yield
-
     logger.info("FastAPI stopping...")
     for t in bg_tasks:
         t.cancel()
 
 
 app = FastAPI(
-    title="PRIDE P2P API",
-    version="0.2.1",
+    title="PRIDE P2P API", version="0.2.2",
     description="Backend for PRIDE P2P Mini-App + JARVIS integration",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://web.telegram.org",
-        "https://t.me",
-        settings.miniapp_url,
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["https://web.telegram.org", "https://t.me", settings.miniapp_url],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 
@@ -183,7 +194,7 @@ app.add_middleware(
 @app.get("/healthz")
 @app.get("/ping")
 async def health():
-    return {"status": "ok", "service": "pride-p2p", "version": "0.2.1"}
+    return {"status": "ok", "service": "pride-p2p", "version": "0.2.2"}
 
 
 @app.get("/_status")
@@ -238,10 +249,8 @@ else:
 
 @app.get("/")
 async def root():
-    return {
-        "service": "pride-p2p", "status": "ok",
-        "app": "/app", "owner": "/owner", "api": "/api/v1", "health": "/health",
-    }
+    return {"service": "pride-p2p", "status": "ok", "app": "/app",
+            "owner": "/owner", "api": "/api/v1", "health": "/health"}
 
 
 @app.get("/owner", response_class=HTMLResponse)
