@@ -21,7 +21,17 @@
     font-size:15px; }
   body { padding-bottom:60px; }
   button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
-  input, textarea, select { font:inherit; color:inherit; }
+  input, textarea, select {
+    font:inherit; color:var(--text); background:var(--panel);
+    border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+    outline:none;
+  }
+  input::placeholder, textarea::placeholder { color:var(--muted); }
+  input:focus, textarea:focus, select:focus { border-color:var(--accent); }
+  /* Сохраняем прозрачность для специальных input'ов где она нужна */
+  .amt-input, input[style*="background:transparent"], input[style*="background: transparent"] {
+    background:transparent !important; border:0 !important; padding:0 !important;
+  }
   a { color:var(--accent); text-decoration:none; }
   .hidden { display:none !important; }
 
