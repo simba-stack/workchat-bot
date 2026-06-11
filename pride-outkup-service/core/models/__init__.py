@@ -11,6 +11,8 @@ from core.models.deposit_request import DepositRequest
 from core.models.coin import Coin, UserCoinBalance
 from core.models.transfer import Transfer, Swap
 from core.models.wallet_address import SystemSecret, UserDepositAddress
+from core.models.cheque import Cheque
+from core.models.deal_message import DealMessage
 
 __all__ = [
     "User",
@@ -30,4 +32,6 @@ __all__ = [
     "Swap",
     "SystemSecret",
     "UserDepositAddress",
+    "Cheque",
+    "DealMessage",
 ]

@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from bot.handlers import start, kyc, groups, wallet as wallet_h
+from bot.handlers import start, kyc, groups, wallet as wallet_h, commands as commands_h
 from core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ async def run_bot() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(start.router)
+    dp.include_router(commands_h.router)
     dp.include_router(kyc.router)
     dp.include_router(wallet_h.router)
     dp.include_router(groups.router)
@@ -67,6 +68,20 @@ async def run_bot() -> None:
         logger.error("getMe failed: %s", e)
         while True:
             await asyncio.sleep(3600)
+
+    # Команды бота (Crypto Bot стиль)
+    try:
+        from aiogram.types import BotCommand
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="wallet", description="💼 Кошелёк"),
+            BotCommand(command="p2p", description="💱 P2P маркет"),
+            BotCommand(command="checks", description="📜 Чеки"),
+            BotCommand(command="swap", description="🔄 Обмен"),
+        ])
+        logger.info("Bot commands installed")
+    except Exception as e:
+        logger.warning("set_my_commands failed: %s", e)
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

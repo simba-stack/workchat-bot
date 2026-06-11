@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet, owner
+from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet, owner, cheques
 from core.config import settings
 from core.services import jarvis_sync, tron_monitor, rates_service, sweep_service
 
@@ -163,6 +163,7 @@ app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"]
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 app.include_router(owner.router, prefix="/api/v1/owner", tags=["owner"])
+app.include_router(cheques.router, prefix="/api/v1/cheques", tags=["cheques"])
 
 
 # ─── Mini-App статика ──────────────────────────────────────────────
