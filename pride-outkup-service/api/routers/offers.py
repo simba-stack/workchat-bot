@@ -232,3 +232,101 @@ async def my_offers(
     )
     items = res.scalars().all()
     return {"items": [_offer_to_dict(o, user) for o in items]}
+
+
+# ─── New Mini-App v3 aliases (Crypto Bot style) ──────────────────────
+@router.get("/list")
+async def list_offers_v3(
+    side: str = "buy",
+    coin: str = "USDT",
+    fiat: str = "RUB",
+    payment_method: str | None = None,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список офферов для нового UI. Возвращает плоский формат с полями
+    coin, fiat, price, min_amount, max_amount, username, payment_methods.
+    """
+    if not await settings_kv.is_v2_p2p_public(db):
+        from core.config import settings as _s
+        if user.tg_id not in _s.admin_ids:
+            # Возвращаем пустой список вместо ошибки — UI покажет "пока пусто"
+            return {"ok": True, "items": [], "count": 0}
+
+    offer_side = "sell" if side == "buy" else "buy"
+    q = (
+        select(Offer)
+        .where(Offer.side == offer_side, Offer.status == "active")
+        .order_by(
+            desc(Offer.is_pride_official),
+            Offer.rate_rub_per_usdt.asc() if side == "buy" else Offer.rate_rub_per_usdt.desc(),
+        )
+        .limit(max(1, min(limit, 200)))
+    )
+    if payment_method:
+        q = q.where(Offer.payment_methods.any(payment_method))
+
+    rows = (await db.execute(q)).scalars().all()
+    author_ids = list({o.user_id for o in rows})
+    authors_res = await db.execute(select(User).where(User.id.in_(author_ids)))
+    authors = {u.id: u for u in authors_res.scalars().all()}
+    return {
+        "ok": True,
+        "items": [
+            {
+                "id": o.id, "user_id": o.user_id,
+                "username": authors.get(o.user_id).username if authors.get(o.user_id) else None,
+                "side": o.side, "coin": "USDT", "fiat": "RUB",
+                "price": float(o.rate_rub_per_usdt),
+                "min_amount": float(o.min_amount_rub),
+                "max_amount": float(o.max_amount_rub),
+                "payment_methods": o.payment_methods or [],
+                "is_pride_official": o.is_pride_official,
+                "is_active": o.status == "active",
+                "total_deals": authors.get(o.user_id).total_deals if authors.get(o.user_id) else 0,
+                "completion_rate": float(authors.get(o.user_id).completion_rate_pct) if authors.get(o.user_id) else 100.0,
+                "created_at": o.created_at.isoformat(),
+            }
+            for o in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/create")
+async def create_offer_v3(
+    payload: dict,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Создать оффер (новый формат с {price, min_amount, max_amount, ...})."""
+    side = (payload.get("side") or "").strip().lower()
+    if side not in ("buy", "sell"):
+        raise HTTPException(400, "side must be buy or sell")
+    try:
+        price = Decimal(str(payload.get("price") or 0))
+        min_amt = Decimal(str(payload.get("min_amount") or 0))
+        max_amt = Decimal(str(payload.get("max_amount") or 0))
+    except Exception:
+        raise HTTPException(400, "bad amounts")
+    if price <= 0 or min_amt <= 0 or max_amt < min_amt:
+        raise HTTPException(400, "price>0, min_amount>0, max≥min")
+    pms = payload.get("payment_methods") or []
+    if not isinstance(pms, list) or not pms:
+        raise HTTPException(400, "payment_methods required")
+
+    if side == "sell":
+        need = max_amt / price
+        if user.balance_usdt < need:
+            raise HTTPException(400, f"нужно ≥ {float(need):.2f} USDT на балансе")
+
+    o = Offer(
+        user_id=user.id, side=side,
+        rate_rub_per_usdt=price,
+        min_amount_rub=min_amt, max_amount_rub=max_amt,
+        payment_methods=pms, status="active",
+    )
+    db.add(o)
+    await db.flush()
+    return {"ok": True, "id": o.id}
