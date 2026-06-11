@@ -316,6 +316,151 @@ async def wallet_info(
     }
 
 
+@router.get("/dashboard")
+async def admin_dashboard(
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Полная сводка для админа PRIDE P2P:
+
+    - Сумма internal balances всех юзеров по каждой монете (= обязательства сервиса)
+    - Кол-во активных юзеров, deposits, withdrawals
+    - Hot wallet адрес + ссылка на Tronscan
+    - HD-master_key hash (для backup-verify)
+
+    Это «единая дашборд-страница» для понимания состояния всего p2p.
+    """
+    import hashlib
+    from sqlalchemy import func, select as _sel
+    from core.models import (
+        UserCoinBalance, UserDepositAddress, DepositRequest, SystemSecret,
+        OperationLog as _OpLog,
+    )
+    from core.services.wallet_derive import MASTER_KEY_NAME
+
+    # Суммы по монетам (обязательства сервиса)
+    res = await db.execute(
+        _sel(UserCoinBalance.coin_code, func.sum(UserCoinBalance.balance))
+        .group_by(UserCoinBalance.coin_code)
+    )
+    liabilities = {code: float(total or 0) for code, total in res.all()}
+
+    # Кол-во юзеров и адресов
+    total_users = (await db.execute(_sel(func.count(User.id)))).scalar() or 0
+    verified_users = (await db.execute(
+        _sel(func.count(User.id)).where(User.kyc_status == "verified")
+    )).scalar() or 0
+    total_addresses = (await db.execute(_sel(func.count(UserDepositAddress.id)))).scalar() or 0
+
+    # Последние операции (для understanding активности)
+    recent_ops = (await db.execute(
+        _sel(_OpLog).order_by(desc(_OpLog.created_at)).limit(20)
+    )).scalars().all()
+
+    # Master key info
+    srow = (await db.execute(
+        _sel(SystemSecret).where(SystemSecret.key == MASTER_KEY_NAME)
+    )).scalar_one_or_none()
+    master_hash = (
+        hashlib.sha256(srow.value.encode()).hexdigest()[:16] if srow else None
+    )
+
+    return {
+        "ok": True,
+        "liabilities": liabilities,  # {USDT: 123.5, TON: 10, ...} — сколько мы должны юзерам
+        "users": {
+            "total": total_users,
+            "verified": verified_users,
+        },
+        "hd_wallet": {
+            "user_addresses_count": total_addresses,
+            "master_key_hash16": master_hash,
+        },
+        "hot_wallet": {
+            "address": settings.tron_hot_wallet_address,
+            "tronscan_url": (
+                f"https://tronscan.org/#/address/{settings.tron_hot_wallet_address}"
+                if settings.tron_hot_wallet_address else None
+            ),
+        },
+        "recent_operations": [
+            {
+                "id": op.id, "user_id": op.user_id, "type": op.type,
+                "amount_usdt": float(op.amount_usdt or 0),
+                "note": (op.note or "")[:100],
+                "created_at": op.created_at.isoformat() if op.created_at else None,
+            }
+            for op in recent_ops
+        ],
+    }
+
+
+@router.get("/balances")
+async def admin_list_user_balances(
+    limit: int = 200,
+    coin: str | None = None,
+    has_balance: bool = True,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список юзеров с их балансами по монетам + HD-адресами.
+
+    Query params:
+    - coin: фильтр по монете (USDT/TON/etc) — если не указан, вернёт все монеты юзера
+    - has_balance: только юзеры с balance > 0 (default True)
+    - limit: макс кол-во юзеров
+
+    Возвращает: [{tg_id, username, balances: {USDT: 10, TON: 0.5}, addresses: {TRC20: T...}}]
+    """
+    from sqlalchemy import select as _sel
+    from core.models import UserCoinBalance, UserDepositAddress
+
+    # Получаем юзеров
+    q = _sel(User).order_by(desc(User.created_at)).limit(max(1, min(limit, 1000)))
+    users = (await db.execute(q)).scalars().all()
+    user_ids = [u.id for u in users]
+
+    # Загружаем все балансы для этих юзеров
+    q_bal = _sel(UserCoinBalance).where(UserCoinBalance.user_id.in_(user_ids))
+    if coin:
+        q_bal = q_bal.where(UserCoinBalance.coin_code == coin.upper())
+    balances = (await db.execute(q_bal)).scalars().all()
+
+    # Группируем балансы по user_id
+    by_user: dict[int, dict[str, float]] = {}
+    for b in balances:
+        by_user.setdefault(b.user_id, {})[b.coin_code] = float(b.balance)
+
+    # Загружаем HD-адреса
+    q_addr = _sel(UserDepositAddress).where(UserDepositAddress.user_id.in_(user_ids))
+    addresses = (await db.execute(q_addr)).scalars().all()
+    addr_by_user: dict[int, dict[str, str]] = {}
+    for a in addresses:
+        addr_by_user.setdefault(a.user_id, {})[a.network] = a.address
+
+    items = []
+    for u in users:
+        user_balances = by_user.get(u.id, {})
+        if has_balance and not any(v > 0 for v in user_balances.values()):
+            continue
+        items.append({
+            "id": u.id, "tg_id": u.tg_id,
+            "username": u.username, "full_name": u.full_name,
+            "kyc_status": u.kyc_status, "kyc_level": u.kyc_level,
+            "balances": user_balances,
+            "deposit_addresses": addr_by_user.get(u.id, {}),
+            "total_deals": u.total_deals,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        })
+
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+        "filter": {"coin": coin, "has_balance": has_balance},
+    }
+
+
 @router.get("/coins")
 async def admin_list_coins(
     me: User = Depends(require_admin),
