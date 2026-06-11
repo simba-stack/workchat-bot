@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>PRIDE Owner</title>
+<meta name="viewport" content="width=1280,initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #0a0a0f; --panel: #13131a; --panel-2: #1a1a24;
+    --border: rgba(255,255,255,0.06); --border-strong: rgba(255,255,255,0.12);
+    --text: #e8e8ee; --muted: #8a8a99;
+    --accent: #ff6b35; --green: #22c55e; --red: #ef4444;
+    --blue: #3b82f6; --gold: #fbbf24; --purple: #a855f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:14px; }
+  .container { max-width:1400px; margin:0 auto; padding:20px; }
+  button { font: inherit; }
+  input { font: inherit; color: var(--text); }
+
+  /* ── LOGIN ─────────────────────────────────────────── */
+  .login-shell { min-height:100vh; display:flex; align-items:center; justify-content:center; }
+  .login-card { background:var(--panel); border:1px solid var(--border); border-radius:16px;
+    padding:32px; width:360px; box-shadow:0 8px 32px rgba(0,0,0,0.4); }
+  .login-card h1 { margin:0 0 8px; font-size:22px;
+    background:linear-gradient(135deg,#ff6b35,#fbbf24);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+  .login-card .sub { color:var(--muted); font-size:13px; margin-bottom:24px; }
+  .login-card label { display:block; font-size:11px; color:var(--muted);
+    text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+  .login-card input { width:100%; padding:12px 14px; border-radius:10px;
+    background:var(--panel-2); border:1px solid var(--border); font-size:15px; outline:none; }
+  .login-card input:focus { border-color:var(--accent); }
+  .login-card .field { margin-bottom:16px; }
+  .login-card button { width:100%; padding:14px; border:0; border-radius:10px;
+    background:linear-gradient(135deg,#ff6b35,#fbbf24); color:#000; font-size:15px;
+    font-weight:600; cursor:pointer; margin-top:8px; }
+  .login-card button:disabled { opacity:0.5; cursor:wait; }
+  .login-error { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3);
+    color:#fca5a5; padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; display:none; }
+  .login-error.show { display:block; }
+
+  /* ── TOPBAR + TABS ───────────────────────────────── */
+  .top-bar { display:flex; justify-content:space-between; align-items:center;
+    padding:16px 0; border-bottom:1px solid var(--border); margin-bottom:20px; }
+  .logo { font-size:20px; font-weight:700;
+    background:linear-gradient(135deg,#ff6b35,#fbbf24);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+  .logout { color:var(--muted); cursor:pointer; padding:8px 14px;
+    border:1px solid var(--border); border-radius:8px; font-size:13px; background:transparent; }
+  .logout:hover { color:var(--text); border-color:var(--accent); }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:20px; }
+  .tab { padding:10px 18px; cursor:pointer; color:var(--muted);
+    border:none; background:transparent; font-size:14px;
+    border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  .tab:hover { color:var(--text); }
+
+  /* ── STATS ───────────────────────────────────────── */
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:20px; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; }
+  .stat .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+  .stat .value { font-size:26px; font-weight:700; margin-top:6px; font-variant-numeric:tabular-nums; }
+  .stat.blue .value { color:var(--blue); }
+  .stat.red .value { color:var(--red); }
+  .stat.green .value { color:var(--green); }
+  .stat.gold .value { color:var(--gold); }
+  .stat .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+
+  /* ── PAGES ───────────────────────────────────────── */
+  .page { display:none; }
+  .page.active { display:block; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  .btn { padding:8px 14px; border:1px solid var(--border); border-radius:8px;
+    background:transparent; color:var(--text); font-size:13px; cursor:pointer; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#000; font-weight:600; }
+  .btn.primary:hover { filter:brightness(1.1); }
+  .btn.danger { color:var(--red); border-color:rgba(239,68,68,0.3); }
+  .btn.danger:hover { background:rgba(239,68,68,0.1); }
+  .btn.green { color:var(--green); border-color:rgba(34,197,94,0.3); }
+  .btn.green:hover { background:rgba(34,197,94,0.1); }
+  .btn.sm { padding:4px 10px; font-size:12px; }
+
+  /* ── HOT WALLET ───────────────────────────────────── */
+  .hot-card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:16px 18px; margin-bottom:20px; display:flex; align-items:center; gap:20px; }
+  .hot-card .lbl { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+  .hot-card .val { font-size:14px; font-weight:600; font-family:ui-monospace,Menlo,monospace; }
+  .hot-card a { color:var(--accent); text-decoration:none; }
+
+  /* ── TABLES ──────────────────────────────────────── */
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+    border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  th { text-align:left; padding:10px 14px; font-size:11px; color:var(--muted);
+    text-transform:uppercase; letter-spacing:0.5px;
+    border-bottom:1px solid var(--border); background:var(--panel-2); }
+  td { padding:12px 14px; font-size:13px; border-bottom:1px solid var(--border);
+    font-variant-numeric:tabular-nums; vertical-align:middle; }
+  tr:last-child td { border-bottom:0; }
+  td.mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  td.amount { font-weight:600; }
+  td.amount.pos { color:var(--green); }
+  td.amount.neg { color:var(--red); }
+  td a { color:var(--accent); text-decoration:none; }
+  tr:hover td { background:rgba(255,255,255,0.02); }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; }
+
+  /* ── BADGES ──────────────────────────────────────── */
+  .badge { display:inline-block; padding:2px 8px; border-radius:6px;
+    font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:500; }
+  .badge.green { background:rgba(34,197,94,0.15); color:var(--green); }
+  .badge.red { background:rgba(239,68,68,0.15); color:var(--red); }
+  .badge.gold { background:rgba(251,191,36,0.15); color:var(--gold); }
+  .badge.blue { background:rgba(59,130,246,0.15); color:var(--blue); }
+  .badge.purple { background:rgba(168,85,247,0.15); color:#c084fc; }
+  .badge.grey { background:rgba(255,255,255,0.08); color:var(--muted); }
+  .bal-chip { display:inline-block; padding:3px 8px; border-radius:6px;
+    background:var(--panel-2); margin-right:4px; font-size:12px; }
+  .bal-chip strong { color:var(--gold); }
+
+  /* ── INLINE EDIT ─────────────────────────────────── */
+  .inline-input { width:90px; padding:4px 8px; border-radius:6px;
+    background:var(--panel-2); border:1px solid var(--border); font-size:12px;
+    font-variant-numeric:tabular-nums; }
+  .inline-input:focus { border-color:var(--accent); outline:none; }
+
+  /* ── MODAL ───────────────────────────────────────── */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:100;
+    display:none; align-items:center; justify-content:center; }
+  .modal-overlay.show { display:flex; }
+  .modal { background:var(--panel); border:1px solid var(--border-strong); border-radius:14px;
+    padding:24px; width:420px; max-width:90vw; }
+  .modal h3 { margin:0 0 16px; font-size:17px; }
+  .modal .field { margin-bottom:14px; }
+  .modal label { display:block; font-size:11px; color:var(--muted); margin-bottom:5px;
+    text-transform:uppercase; letter-spacing:0.5px; }
+  .modal input, .modal select, .modal textarea {
+    width:100%; padding:10px 12px; border-radius:8px;
+    background:var(--panel-2); border:1px solid var(--border); font-size:14px; outline:none;
+  }
+  .modal textarea { resize:vertical; min-height:60px; }
+  .modal .actions { justify-content:flex-end; margin-top:18px; }
+
+  .loading, .empty { color:var(--muted); padding:20px; text-align:center; font-size:13px; }
+  .last-updated { color:var(--muted); font-size:12px; margin-left:auto; }
+
+  .toast { position:fixed; bottom:20px; right:20px; padding:12px 18px;
+    border-radius:10px; font-size:13px; z-index:200;
+    box-shadow:0 4px 16px rgba(0,0,0,0.3); animation:slideIn 0.2s; }
+  .toast.success { background:#0d3b1d; border:1px solid var(--green); color:#86efac; }
+  .toast.error { background:#3b0d0d; border:1px solid var(--red); color:#fca5a5; }
+  @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+</style>
+</head>
+<body>
+
+<!-- ═══ LOGIN ═══ -->
+<div class="login-shell" id="login-shell">
+  <div class="login-card">
+    <h1>🛡 PRIDE Owner</h1>
+    <div class="sub">Приватная панель управления. Только владелец.</div>
+    <div class="field">
+      <label>Telegram ID</label>
+      <input id="login-tg" type="number" inputmode="numeric" placeholder="6009769056">
+    </div>
+    <div class="field">
+      <label>PIN (8 цифр)</label>
+      <input id="login-pin" type="password" inputmode="numeric" maxlength="16" placeholder="••••••••">
+    </div>
+    <button id="login-btn">Войти</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ═══ DASHBOARD ═══ -->
+<div class="container" id="dash" style="display:none">
+  <div class="top-bar">
+    <div class="logo">🛡 PRIDE Owner</div>
+    <button class="logout" id="logout-btn">Выйти</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-page="overview">📊 Обзор</button>
+    <button class="tab" data-page="users">👥 Юзеры</button>
+    <button class="tab" data-page="p2p">💱 P2P</button>
+    <button class="tab" data-page="sweeps">🔄 Свайпы</button>
+    <button class="tab" data-page="coins">💰 Монеты</button>
+    <button class="tab" data-page="ops">📜 Операции</button>
+  </div>
+
+  <!-- ─── OVERVIEW ─── -->
+  <div class="page active" id="page-overview">
+    <div class="stats">
+      <div class="stat blue"><div class="label">Hot Wallet USDT</div><div class="value" id="s-hot">—</div><div class="sub">Реальные средства TRON</div></div>
+      <div class="stat red"><div class="label">Обязательства</div><div class="value" id="s-liab">—</div><div class="sub">Должны юзерам</div></div>
+      <div class="stat green"><div class="label">Чистая позиция</div><div class="value" id="s-net">—</div><div class="sub">Hot − обязательства</div></div>
+      <div class="stat gold"><div class="label">Заработок</div><div class="value" id="s-earn">—</div><div class="sub">Сумма withdraw fees</div></div>
+    </div>
+
+    <div class="hot-card">
+      <div><div class="lbl">Hot Wallet</div><div class="val"><a id="hot-addr" target="_blank">—</a></div></div>
+      <div><div class="lbl">TRX в Feee.io</div><div class="val" id="feee-trx">—</div></div>
+      <div><div class="lbl">Статус Feee</div><div class="val" id="feee-status">—</div></div>
+      <div style="margin-left:auto"><button class="btn primary" id="overview-refresh">↻ Обновить</button></div>
+    </div>
+
+    <h3 style="font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin:20px 0 10px">Балансы юзеров по монетам</h3>
+    <table>
+      <thead><tr><th>Монета</th><th>Сумма обязательств</th></tr></thead>
+      <tbody id="liab-tbody"><tr><td colspan="2" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ─── USERS ─── -->
+  <div class="page" id="page-users">
+    <div class="toolbar">
+      <button class="btn primary" data-action="users-refresh">↻ Обновить</button>
+      <label style="color:var(--muted);font-size:12px;cursor:pointer">
+        <input type="checkbox" id="users-only-balance" checked> только с балансом
+      </label>
+      <span class="last-updated" id="users-count"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ID</th><th>TG</th><th>User</th><th>Балансы</th><th>HD-адрес</th><th>KYC</th><th>Действия</th>
+      </tr></thead>
+      <tbody id="users-tbody"><tr><td colspan="7" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ─── P2P ─── -->
+  <div class="page" id="page-p2p">
+    <h3 style="margin:10px 0;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Активные офферы</h3>
+    <div class="toolbar"><button class="btn primary" data-action="p2p-refresh">↻ Обновить</button></div>
+    <table>
+      <thead><tr><th>ID</th><th>Юзер</th><th>Side</th><th>Монета</th><th>Цена</th><th>Лимиты</th><th>Активен</th><th>Действия</th></tr></thead>
+      <tbody id="offers-tbody"><tr><td colspan="8" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+
+    <h3 style="margin:24px 0 10px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Сделки</h3>
+    <table>
+      <thead><tr><th>ID</th><th>Сумма USDT</th><th>Покупатель</th><th>Продавец</th><th>Статус</th><th>Создано</th></tr></thead>
+      <tbody id="deals-tbody"><tr><td colspan="6" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+
+    <h3 style="margin:24px 0 10px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">⚖ Открытые споры</h3>
+    <table>
+      <thead><tr><th>ID</th><th>Сделка</th><th>Открыл</th><th>Причина</th><th>Создан</th><th>Действия</th></tr></thead>
+      <tbody id="disputes-tbody"><tr><td colspan="6" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ─── SWEEPS ─── -->
+  <div class="page" id="page-sweeps">
+    <div class="toolbar">
+      <button class="btn primary" data-action="sweep-all">🔄 Sweep ALL</button>
+      <button class="btn" data-action="sweeps-refresh">↻ Обновить историю</button>
+      <span class="last-updated">Свайп = перенос USDT с user-адресов на hot wallet</span>
+    </div>
+    <table>
+      <thead><tr><th>Время</th><th>Юзер</th><th>Тип</th><th>Сумма</th><th>TX</th><th>Заметка</th></tr></thead>
+      <tbody id="sweeps-tbody"><tr><td colspan="6" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ─── COINS ─── -->
+  <div class="page" id="page-coins">
+    <div class="toolbar">
+      <button class="btn primary" data-action="coins-refresh">↻ Обновить</button>
+      <span class="last-updated">Изменения применяются сразу после Save</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Код</th><th>Название</th><th>Сети</th><th>Min Deposit</th><th>Min Withdraw</th><th>Withdraw Fee</th><th>Активна</th><th></th>
+      </tr></thead>
+      <tbody id="coins-tbody"><tr><td colspan="8" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ─── OPS ─── -->
+  <div class="page" id="page-ops">
+    <div class="toolbar">
+      <button class="btn primary" data-action="ops-refresh">↻ Обновить</button>
+      <button class="btn sm filter-op active" data-type="">Все</button>
+      <button class="btn sm filter-op" data-type="deposit">Депозиты</button>
+      <button class="btn sm filter-op" data-type="withdraw">Выводы</button>
+      <button class="btn sm filter-op" data-type="withdraw_fee">Fees</button>
+      <button class="btn sm filter-op" data-type="transfer">Переводы</button>
+      <button class="btn sm filter-op" data-type="swap">Обмен</button>
+      <button class="btn sm filter-op" data-type="owner_credit">Owner credit</button>
+      <button class="btn sm filter-op" data-type="owner_ban">Баны</button>
+    </div>
+    <table>
+      <thead><tr><th>Время</th><th>Юзер</th><th>Тип</th><th>Сумма USDT</th><th>TX</th><th>Заметка</th></tr></thead>
+      <tbody id="ops-tbody"><tr><td colspan="6" class="loading">Загружаю…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ MODAL ═══ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">—</h3>
+    <div id="modal-body"></div>
+    <div class="actions">
+      <button class="btn" id="modal-cancel">Отмена</button>
+      <button class="btn primary" id="modal-confirm">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API='/api/v1/owner';
+const $=(i)=>document.getElementById(i);
+const fmt=(n,d=2)=>Number(n||0).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});
+const dt=(iso)=>iso?new Date(iso).toLocaleString('ru-RU'):'—';
+
+function toast(msg, type='success') {
+  const t = document.createElement('div');
+  t.className = 'toast '+type;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3500);
+}
+
+async function api(path, opts={}) {
+  const r = await fetch(API+path, {credentials:'include', ...opts});
+  if (r.status === 401) { location.reload(); throw new Error('401'); }
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+
+// ── LOGIN ─────────────────────────────────────────
+async function tryLogin() {
+  const btn=$('login-btn'), err=$('login-error');
+  btn.disabled=true; btn.textContent='⏳';
+  err.classList.remove('show');
+  try {
+    const tg_id=$('login-tg').value.trim(), pin=$('login-pin').value.trim();
+    if (!tg_id || !pin) { err.textContent='Заполни оба поля'; err.classList.add('show'); return; }
+    const r = await fetch(API+'/login', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tg_id, pin}),
+    });
+    if (!r.ok) {
+      err.textContent = r.status===503 ? 'OWNER_PIN не настроен в Variables' : '❌ Неверный TG ID или PIN';
+      err.classList.add('show'); return;
+    }
+    showDashboard();
+  } catch(e) {
+    err.textContent = 'Сеть: '+e.message;
+    err.classList.add('show');
+  } finally {
+    btn.disabled=false; btn.textContent='Войти';
+  }
+}
+async function logout() { await fetch(API+'/logout',{method:'POST',credentials:'include'}).catch(()=>{}); location.reload(); }
+
+$('login-btn').onclick = tryLogin;
+$('login-pin').onkeydown = e => { if (e.key==='Enter') tryLogin(); };
+$('login-tg').onkeydown = e => { if (e.key==='Enter') $('login-pin').focus(); };
+$('logout-btn').onclick = logout;
+
+// ── TABS ──────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    $('page-' + t.dataset.page).classList.add('active');
+    loadPage(t.dataset.page);
+  };
+});
+
+async function loadPage(page) {
+  if (page==='overview') return loadOverview();
+  if (page==='users') return loadUsers();
+  if (page==='p2p') return loadP2P();
+  if (page==='sweeps') return loadSweeps();
+  if (page==='coins') return loadCoins();
+  if (page==='ops') return loadOps('');
+}
+
+async function showDashboard() {
+  $('login-shell').style.display='none';
+  $('dash').style.display='block';
+  loadOverview();
+}
+
+// ── OVERVIEW ──────────────────────────────────────
+async function loadOverview() {
+  try {
+    const j = await api('/dashboard');
+    $('s-hot').textContent = '$'+fmt(j.hot_wallet?.usdt_balance);
+    $('s-liab').textContent = '$'+fmt(j.liabilities_usdt_total);
+    $('s-net').textContent = '$'+fmt(j.net_position_usdt);
+    $('s-earn').textContent = '$'+fmt(j.earnings?.total_usdt);
+    const a=j.hot_wallet?.address||''; const link=$('hot-addr');
+    link.textContent=a||'—'; link.href=j.hot_wallet?.tronscan_url||'#';
+
+    // liabilities table
+    const liabs = j.liabilities||{};
+    const rows = Object.entries(liabs).filter(([_,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+    $('liab-tbody').innerHTML = rows.length
+      ? rows.map(([c,v])=>`<tr><td><strong>${c}</strong></td><td>${fmt(v, c==='USDT'?2:6)}</td></tr>`).join('')
+      : '<tr><td colspan="2" class="empty">Нет балансов у юзеров</td></tr>';
+
+    // energy status
+    try {
+      const e = await api('/energy_status');
+      $('feee-trx').textContent = e.feee.trx_balance !== null ? fmt(e.feee.trx_balance, 2)+' TRX' : 'нет данных';
+      $('feee-status').innerHTML = e.feee.configured
+        ? '<span class="badge green">configured</span>'
+        : '<span class="badge red">FEEE_API_KEY не настроен</span>';
+    } catch(e) { $('feee-status').innerHTML = '<span class="badge red">ошибка</span>'; }
+  } catch(e) { toast('Загрузка обзора: '+e.message, 'error'); }
+}
+
+// ── USERS ─────────────────────────────────────────
+async function loadUsers() {
+  try {
+    const hb = $('users-only-balance').checked ? 'true' : 'false';
+    const j = await api(`/users?has_balance=${hb}&limit=500`);
+    $('users-count').textContent = `Всего: ${j.count}`;
+    const tbody = $('users-tbody');
+    if (!j.items?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">Юзеры не найдены</td></tr>'; return;
+    }
+    tbody.innerHTML = j.items.map(u => {
+      const bals = Object.entries(u.balances||{}).filter(([_,v])=>v>0)
+        .map(([c,v])=>`<span class="bal-chip"><strong>${fmt(v, c==='USDT'?2:6)}</strong> ${c}</span>`)
+        .join(' ') || '<span style="color:var(--muted)">пусто</span>';
+      const addr = u.addresses?.TRC20 || '';
+      const addrLink = addr
+        ? `<a href="https://tronscan.org/#/address/${addr}" target="_blank">${addr.slice(0,6)}…${addr.slice(-4)}</a>`
+        : '—';
+      const kycBadge = u.kyc_status==='verified' ? '<span class="badge green">verified</span>'
+        : u.kyc_status==='banned' ? '<span class="badge red">BANNED</span>'
+        : u.kyc_status==='rejected' ? '<span class="badge red">rejected</span>'
+        : `<span class="badge grey">${u.kyc_status}</span>`;
+      const banBtn = u.kyc_status==='banned'
+        ? `<button class="btn sm green" onclick="unbanUser(${u.id})">✓ Разбан</button>`
+        : `<button class="btn sm danger" onclick="banUser(${u.id})">🚫 Бан</button>`;
+      return `<tr>
+        <td>${u.id}</td>
+        <td class="mono">${u.tg_id}</td>
+        <td>${u.username?'@'+u.username:(u.full_name||'')}</td>
+        <td>${bals}</td>
+        <td class="mono">${addrLink}</td>
+        <td>${kycBadge}</td>
+        <td><div class="actions">
+          <button class="btn sm green" onclick="creditModal(${u.id})">+ Кредит</button>
+          <button class="btn sm danger" onclick="debitModal(${u.id})">− Дебет</button>
+          <button class="btn sm" onclick="sweepUser(${u.id})">🔄 Sweep</button>
+          ${banBtn}
+        </div></td>
+      </tr>`;
+    }).join('');
+  } catch(e) { toast('Загрузка юзеров: '+e.message, 'error'); }
+}
+
+$('users-only-balance').onchange = () => loadUsers();
+
+// ── P2P ───────────────────────────────────────────
+async function loadP2P() {
+  try {
+    const offers = await api('/p2p/offers?limit=100');
+    $('offers-tbody').innerHTML = offers.items.length
+      ? offers.items.map(o => {
+          const sideClr = o.side==='buy' ? 'green' : 'red';
+          const active = o.is_active ? '<span class="badge green">on</span>' : '<span class="badge grey">off</span>';
+          return `<tr>
+            <td>${o.id}${o.is_pride_official?' <span class="badge gold">PRIDE</span>':''}</td>
+            <td>${o.user_id}</td>
+            <td><span class="badge ${sideClr}">${o.side}</span></td>
+            <td>${o.coin}/${o.fiat||''}</td>
+            <td>${fmt(o.price, 2)}</td>
+            <td>${fmt(o.min_amount,0)}–${fmt(o.max_amount,0)}</td>
+            <td>${active}</td>
+            <td><div class="actions">
+              <button class="btn sm" onclick="toggleOffer(${o.id})">⏯ Toggle</button>
+              <button class="btn sm danger" onclick="deleteOffer(${o.id})">🗑</button>
+            </div></td>
+          </tr>`;
+        }).join('')
+      : '<tr><td colspan="8" class="empty">Офферов нет</td></tr>';
+
+    const deals = await api('/p2p/deals?limit=100');
+    $('deals-tbody').innerHTML = deals.items.length
+      ? deals.items.map(d => {
+          const stClr = d.status==='released'?'green':d.status==='cancelled'?'grey':d.status==='disputed'?'red':'blue';
+          return `<tr><td>${d.id}</td><td class="amount">${fmt(d.amount_usdt)}</td>
+            <td>${d.buyer_id}</td><td>${d.seller_id}</td>
+            <td><span class="badge ${stClr}">${d.status}</span></td>
+            <td>${dt(d.created_at)}</td></tr>`;
+        }).join('')
+      : '<tr><td colspan="6" class="empty">Сделок нет</td></tr>';
+
+    const disputes = await api('/disputes?status_=open');
+    $('disputes-tbody').innerHTML = disputes.items.length
+      ? disputes.items.map(d => `<tr>
+          <td>${d.id}</td><td>${d.deal_id||d.order_id||'—'}</td><td>${d.opened_by_id}</td>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.reason||''}</td>
+          <td>${dt(d.created_at)}</td>
+          <td><div class="actions">
+            <button class="btn sm green" onclick="resolveDispute(${d.id},'buyer')">→ Покупателю</button>
+            <button class="btn sm" onclick="resolveDispute(${d.id},'seller')">→ Продавцу</button>
+            <button class="btn sm" onclick="resolveDispute(${d.id},'split')">50/50</button>
+          </div></td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" class="empty">Открытых споров нет</td></tr>';
+  } catch(e) { toast('Загрузка P2P: '+e.message, 'error'); }
+}
+
+// ── SWEEPS ────────────────────────────────────────
+async function loadSweeps() {
+  try {
+    const j = await api('/sweeps?limit=100');
+    $('sweeps-tbody').innerHTML = j.items.length
+      ? j.items.map(op => {
+          const tx = op.txid?`<a href="${op.tronscan_url}" target="_blank" class="mono">${op.txid.slice(0,8)}…</a>`:'—';
+          return `<tr><td>${dt(op.created_at)}</td><td>${op.user_id||'—'}</td>
+            <td><span class="badge blue">${op.type}</span></td>
+            <td class="amount">${fmt(op.amount_usdt)}</td>
+            <td>${tx}</td>
+            <td style="color:var(--muted);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${op.note||''}</td></tr>`;
+        }).join('')
+      : '<tr><td colspan="6" class="empty">Свайпов пока не было</td></tr>';
+  } catch(e) { toast('Загрузка свайпов: '+e.message, 'error'); }
+}
+
+// ── COINS ─────────────────────────────────────────
+async function loadCoins() {
+  try {
+    const j = await api('/coins');
+    $('coins-tbody').innerHTML = j.items.map(c => {
+      const netStr = (c.networks||[]).join(', ') || '—';
+      return `<tr data-code="${c.code}">
+        <td><strong>${c.code}</strong></td>
+        <td>${c.name}</td>
+        <td style="color:var(--muted);font-size:12px">${netStr}</td>
+        <td><input class="inline-input" data-field="min_deposit" value="${c.min_deposit}"></td>
+        <td><input class="inline-input" data-field="min_withdraw" value="${c.min_withdraw}"></td>
+        <td><input class="inline-input" data-field="withdraw_fee" value="${c.withdraw_fee}"></td>
+        <td>
+          <input type="checkbox" data-field="is_active" ${c.is_active?'checked':''}>
+        </td>
+        <td><button class="btn sm primary" onclick="saveCoin('${c.code}')">💾 Save</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e) { toast('Загрузка монет: '+e.message, 'error'); }
+}
+
+async function saveCoin(code) {
+  const row = document.querySelector(`tr[data-code="${code}"]`);
+  if (!row) return;
+  const payload = {};
+  row.querySelectorAll('[data-field]').forEach(el => {
+    const f = el.dataset.field;
+    payload[f] = el.type === 'checkbox' ? el.checked : parseFloat(el.value);
+  });
+  try {
+    await api(`/coins/${code}/update`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    toast(`${code} обновлена`);
+  } catch(e) { toast('Ошибка: '+e.message, 'error'); }
+}
+
+// ── OPS ───────────────────────────────────────────
+async function loadOps(type) {
+  try {
+    document.querySelectorAll('.filter-op').forEach(b=>b.classList.toggle('active',(b.dataset.type||'')===type));
+    const url = '/operations?limit=200' + (type?`&op_type=${type}`:'');
+    const j = await api(url);
+    $('ops-tbody').innerHTML = j.items.length
+      ? j.items.map(op => {
+          const pos = ['deposit','admin_credit','owner_credit','transfer_in','withdraw_fee'].includes(op.type);
+          const neg = ['withdraw','transfer_out','swap_out','owner_debit'].includes(op.type);
+          const cls = pos?'pos':neg?'neg':'';
+          const sign = pos?'+':neg?'−':'';
+          const tx = op.txid?`<a href="https://tronscan.org/#/transaction/${op.txid}" target="_blank" class="mono">${op.txid.slice(0,8)}…</a>`:'—';
+          const badge = op.type.includes('withdraw_fee')?'gold'
+            : op.type.includes('withdraw')?'red'
+            : op.type.includes('deposit')||op.type.includes('credit')?'green'
+            : op.type==='transfer'?'blue'
+            : op.type==='swap'?'purple'
+            : op.type.includes('ban')?'red'
+            : 'grey';
+          return `<tr><td>${dt(op.created_at)}</td><td>${op.user_id||'—'}</td>
+            <td><span class="badge ${badge}">${op.type}</span></td>
+            <td class="amount ${cls}">${sign}$${fmt(op.amount_usdt)}</td>
+            <td>${tx}</td>
+            <td style="color:var(--muted);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${op.note||''}</td></tr>`;
+        }).join('')
+      : '<tr><td colspan="6" class="empty">Пока пусто</td></tr>';
+  } catch(e) { toast('Загрузка ops: '+e.message, 'error'); }
+}
+document.querySelectorAll('.filter-op').forEach(b => b.onclick = () => loadOps(b.dataset.type || ''));
+
+// ── Toolbar buttons ───────────────────────────────
+document.body.addEventListener('click', (e) => {
+  const a = e.target?.dataset?.action;
+  if (!a) return;
+  if (a==='overview-refresh') return loadOverview();
+  if (a==='users-refresh') return loadUsers();
+  if (a==='p2p-refresh') return loadP2P();
+  if (a==='sweeps-refresh') return loadSweeps();
+  if (a==='coins-refresh') return loadCoins();
+  if (a==='ops-refresh') return loadOps('');
+  if (a==='sweep-all') return sweepAll();
+});
+$('overview-refresh').dataset.action = 'overview-refresh';
+
+// ── ACTIONS ───────────────────────────────────────
+async function banUser(id) {
+  const reason = prompt('Причина блокировки:', '');
+  if (reason === null) return;
+  try {
+    await api(`/users/${id}/ban`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason})});
+    toast(`Юзер ${id} заблокирован`); loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function unbanUser(id) {
+  if (!confirm(`Разблокировать юзера ${id}?`)) return;
+  try {
+    await api(`/users/${id}/unban`, {method:'POST'});
+    toast(`Юзер ${id} разблокирован`); loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function sweepUser(id) {
+  if (!confirm(`Запустить sweep для юзера ${id}? (заберём USDT с его HD-адреса на hot wallet)`)) return;
+  toast('Sweep запущен… подожди 20-30 сек', 'success');
+  try {
+    const r = await api(`/sweep/user/${id}`, {method:'POST'});
+    if (r.ok) toast(`Sweep успешен: ${r.result.amount||0} USDT, TX: ${r.result.tx_id||''}`);
+    else toast(`Sweep пропущен: ${r.result.skipped||r.result.error}`, 'error');
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function sweepAll() {
+  if (!confirm('Запустить sweep ВСЕХ user-адресов?')) return;
+  try {
+    await api('/sweep/all', {method:'POST'});
+    toast('Sweep ALL запущен в фоне, история обновится через минуту');
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function toggleOffer(id) {
+  try {
+    const r = await api(`/p2p/offers/${id}/toggle`, {method:'POST'});
+    toast(`Оффер ${id} → ${r.is_active?'on':'off'}`); loadP2P();
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function deleteOffer(id) {
+  if (!confirm(`Удалить оффер ${id}?`)) return;
+  try {
+    await api(`/p2p/offers/${id}`, {method:'DELETE'});
+    toast(`Оффер ${id} удалён`); loadP2P();
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function resolveDispute(id, side) {
+  const lbl = side==='buyer'?'покупателю':side==='seller'?'продавцу':'50/50';
+  if (!confirm(`Решить спор ${id} в пользу ${lbl}?`)) return;
+  const notes = prompt('Комментарий (опционально):', '') || '';
+  try {
+    await api(`/disputes/${id}/resolve`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({resolution: side, notes}),
+    });
+    toast(`Спор ${id} решён → ${lbl}`); loadP2P();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── MODALS (credit/debit) ─────────────────────────
+let modalConfirmFn = null;
+function openModal(title, bodyHTML, onConfirm) {
+  $('modal-title').textContent = title;
+  $('modal-body').innerHTML = bodyHTML;
+  modalConfirmFn = onConfirm;
+  $('modal-overlay').classList.add('show');
+}
+function closeModal() { $('modal-overlay').classList.remove('show'); modalConfirmFn=null; }
+$('modal-cancel').onclick = closeModal;
+$('modal-confirm').onclick = async () => {
+  if (modalConfirmFn) { try { await modalConfirmFn(); } catch(e) { toast(e.message,'error'); } }
+  closeModal();
+};
+
+function creditModal(userId) {
+  openModal(`+ Кредит юзеру ${userId}`,
+    `<div class="field"><label>Монета</label>
+       <select id="m-coin"><option>USDT</option><option>TON</option><option>BTC</option><option>ETH</option><option>SOL</option><option>USDC</option></select></div>
+     <div class="field"><label>Сумма</label><input id="m-amount" type="number" step="0.01" placeholder="10.00"></div>
+     <div class="field"><label>Комментарий</label><input id="m-note" placeholder="за что"></div>`,
+    async () => {
+      const coin=$('m-coin').value, amount=parseFloat($('m-amount').value), note=$('m-note').value;
+      if (!amount || amount<=0) throw new Error('Сумма > 0');
+      await api(`/users/${userId}/credit`, {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({coin, amount, note})});
+      toast(`+${amount} ${coin} юзеру ${userId}`); loadUsers();
+    });
+}
+function debitModal(userId) {
+  openModal(`− Дебет юзеру ${userId}`,
+    `<div class="field"><label>Монета</label>
+       <select id="m-coin"><option>USDT</option><option>TON</option><option>BTC</option><option>ETH</option><option>SOL</option><option>USDC</option></select></div>
+     <div class="field"><label>Сумма</label><input id="m-amount" type="number" step="0.01" placeholder="10.00"></div>
+     <div class="field"><label>Комментарий</label><input id="m-note" placeholder="за что"></div>`,
+    async () => {
+      const coin=$('m-coin').value, amount=parseFloat($('m-amount').value), note=$('m-note').value;
+      if (!amount || amount<=0) throw new Error('Сумма > 0');
+      await api(`/users/${userId}/debit`, {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({coin, amount, note})});
+      toast(`−${amount} ${coin} с юзера ${userId}`); loadUsers();
+    });
+}
+
+// expose for inline onclick
+window.banUser = banUser; window.unbanUser = unbanUser;
+window.sweepUser = sweepUser; window.toggleOffer = toggleOffer;
+window.deleteOffer = deleteOffer; window.resolveDispute = resolveDispute;
+window.creditModal = creditModal; window.debitModal = debitModal;
+window.saveCoin = saveCoin;
+
+// ── INIT ──────────────────────────────────────────
+(async () => {
+  try {
+    const r = await fetch(API+'/dashboard', {credentials:'include'});
+    if (r.ok) showDashboard();
+  } catch(e) {}
+})();
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet
+from api.routers import users, exchange, orders, offers, deals, webhooks, admin, wallet, owner
 from core.config import settings
 from core.services import jarvis_sync, tron_monitor, rates_service, sweep_service
 
@@ -162,6 +162,7 @@ app.include_router(deals.router, prefix="/api/v1/deals", tags=["deals"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
+app.include_router(owner.router, prefix="/api/v1/owner", tags=["owner"])
 
 
 # ─── Mini-App статика ──────────────────────────────────────────────
@@ -181,4 +182,15 @@ else:
 
     @app.get("/")
     async def root():
-        return {"service": "pride-p2p", "app": "/app", "api": "/api/v1"}
+        return {"service": "pride-p2p", "app": "/app", "owner": "/owner", "api": "/api/v1"}
+
+
+# Owner Panel (приватный дашборд)
+OWNER_HTML = MINIAPP_DIR / "owner.html"
+
+
+@app.get("/owner", response_class=HTMLResponse)
+async def owner_panel():
+    if OWNER_HTML.exists():
+        return FileResponse(OWNER_HTML)
+    return HTMLResponse("<h1>Owner panel not deployed</h1>", status_code=503)
