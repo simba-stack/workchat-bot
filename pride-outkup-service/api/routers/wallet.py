@@ -68,16 +68,46 @@ async def my_balances(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    bals = await balance_service.list_balances(db, user.id)
+    """Балансы юзера в плоском формате {USDT: 10.5, TON: 0.2, ...} + rates.
+
+    Legacy: если в user_coin_balances для USDT пусто, но в User.balance_usdt
+    есть значение — используем его как fallback (старые юзеры до миграции 0003).
+    """
+    bals_raw = await balance_service.list_balances(db, user.id)
+    # Plain dict: {USDT: float, TON: float}
+    balances = {code: float(amt) for code, amt in bals_raw.items()}
+
+    # Legacy USDT fallback (баланс лежит в User.balance_usdt а не в user_coin_balances)
+    legacy_usdt = float(user.balance_usdt or 0)
+    if legacy_usdt > 0 and balances.get("USDT", 0) == 0:
+        balances["USDT"] = legacy_usdt
+
     rates = await rates_service.get_rates()
-    total_usdt = 0.0
-    out = {}
-    for code, amt in bals.items():
-        rate_usd = (rates.get(code) or {}).get("usd") or (1 if code in ("USDT", "USDC") else 0)
-        usd_value = float(amt) * float(rate_usd or 0)
-        total_usdt += usd_value
-        out[code] = {"balance": float(amt), "usd_value": usd_value}
-    return {"balances": out, "total_usd": total_usdt}
+    # Считаем total_usd
+    total_usd = 0.0
+    for code, amt in balances.items():
+        if code in ("USDT", "USDC"):
+            total_usd += amt
+        else:
+            # rates ключи — coingecko_id, нужен маппинг через Coin
+            pass
+    # Пересчёт total через rates (для не-stablecoin)
+    coin_to_cg = {"TON": "the-open-network", "TRX": "tron", "BTC": "bitcoin",
+                  "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin",
+                  "DOGE": "dogecoin", "LTC": "litecoin", "XAUT": "tether-gold"}
+    for code, amt in balances.items():
+        if code not in ("USDT", "USDC") and amt > 0:
+            cg = coin_to_cg.get(code)
+            if cg:
+                r = rates.get(cg) or {}
+                total_usd += amt * float(r.get("usd", 0) or 0)
+
+    return {
+        "ok": True,
+        "balances": balances,       # плоский dict {USDT: 1.5, TON: 0}
+        "rates": rates,             # {tether: {usd:1, usd_24h_change:0}, ...}
+        "total_usd": total_usd,
+    }
 
 
 # ─── Transfer @username (Crypto Pay) ─────────────────────────────────

@@ -8,11 +8,12 @@
 <link rel="icon" href="data:,">
 <style>
   :root {
-    --bg: #17212b; --panel: #232e3c; --panel-2: #2b5278;
-    --border: rgba(255,255,255,0.07);
-    --text: #ffffff; --muted: #708499;
-    --accent: #3390ec; --accent-2: #5eaeff;
-    --green: #4dd56a; --red: #e53935; --gold: #f5c042;
+    --bg: #000000; --panel: #131313; --panel-2: #1f1f1f;
+    --border: rgba(255,255,255,0.06);
+    --text: #ffffff; --muted: #7a7a7a;
+    --accent: #ffffff; --accent-2: #cccccc;
+    --green: #34c759; --red: #ff453a; --gold: #ffd60a;
+    --btn-bg: #1a1a1a;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin:0; padding:0; min-height:100%; background:var(--bg); color:var(--text);
@@ -59,12 +60,15 @@
   .coin-hero .lbl { color:var(--muted); font-size:14px; }
   .coin-hero .amt-usd { font-size:36px; font-weight:700; margin:4px 0; letter-spacing:-1px; }
   .coin-hero .amt-coin { color:var(--muted); font-size:14px; }
-  .actions-row { display:flex; justify-content:center; gap:18px; padding:18px 0; }
-  .action-btn { display:flex; flex-direction:column; align-items:center; gap:6px; width:64px; }
-  .action-btn .circle { width:48px; height:48px; border-radius:50%; background:var(--accent);
-    display:flex; align-items:center; justify-content:center; font-size:22px; transition:filter .15s, transform .1s; }
-  .action-btn:active .circle { filter:brightness(1.15); transform:scale(0.95); }
-  .action-btn .label { font-size:12px; color:var(--accent); }
+  .actions-row { display:flex; justify-content:center; gap:14px; padding:18px 16px; }
+  .action-btn { display:flex; flex-direction:column; align-items:center; gap:8px; flex:1; }
+  .action-btn .circle { width:52px; height:52px; border-radius:50%;
+    background:var(--btn-bg); border:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; font-weight:300; color:var(--text);
+    transition:background .12s, transform .1s; }
+  .action-btn:active .circle { background:var(--panel-2); transform:scale(0.95); }
+  .action-btn .label { font-size:12px; color:var(--muted); font-weight:500; }
   .price-card { margin:12px 16px; padding:14px; background:var(--panel); border-radius:14px; }
   .price-card .row1 { display:flex; align-items:baseline; gap:8px; }
   .price-card .price { font-size:18px; font-weight:600; }
@@ -127,10 +131,9 @@
   #bottom-nav { position:fixed; bottom:0; left:0; right:0; z-index:50;
     display:flex; justify-content:space-around; background:var(--panel);
     border-top:1px solid var(--border); padding:8px 0 14px; }
-  #bottom-nav button { display:flex; flex-direction:column; align-items:center; gap:3px;
-    color:var(--muted); font-size:11px; padding:4px; }
-  #bottom-nav button.active { color:var(--accent); }
-  #bottom-nav .ic { font-size:22px; }
+  #bottom-nav button { color:var(--muted); font-size:13px; padding:8px 14px;
+    font-weight:500; letter-spacing:0.2px; }
+  #bottom-nav button.active { color:var(--text); }
 
   /* Coming soon */
   .soon-box { margin:30px 20px; text-align:center; padding:30px 20px; background:var(--panel); border-radius:16px; }
@@ -213,25 +216,21 @@
 <!-- ═══ MAIN ═══ -->
 <div class="view active" id="view-main">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
-    <div style="font-size:20px;font-weight:700">PRIDE P2P</div>
-    <div style="display:flex;gap:14px;color:var(--muted);font-size:18px">
-      <span>🔔</span><span>⋮</span>
+    <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
+    <div style="color:var(--muted);font-size:18px;cursor:pointer" id="menu-btn">⋯</div>
+  </div>
+  <div style="text-align:center;padding:36px 20px 16px">
+    <div style="font-size:38px;font-weight:700;letter-spacing:-1px">
+      <span id="total-usd">$0.00</span>
+      <span style="color:var(--muted);font-size:14px;cursor:pointer;margin-left:6px" id="toggle-balance">скрыть</span>
     </div>
-  </div>
-  <div style="margin:8px 16px;padding:12px 14px;background:var(--panel);border-radius:14px;display:flex;align-items:center;gap:12px" id="setup-card">
-    <div style="width:36px;height:36px;border-radius:50%;background:var(--panel-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">0/3</div>
-    <div style="flex:1"><div style="font-weight:600;font-size:15px">Настройте аккаунт</div><div style="color:var(--muted);font-size:13px">Займёт 2 минуты</div></div>
-    <div style="color:var(--muted)">›</div>
-  </div>
-  <div style="text-align:center;padding:30px 20px 14px">
-    <div style="font-size:36px;font-weight:700;letter-spacing:-1px"><span id="total-usd">$0.00</span> <span style="color:var(--muted);font-size:18px;cursor:pointer" id="toggle-balance">👁</span></div>
-    <div style="color:var(--muted);font-size:13px;margin-top:4px">Общий баланс в USD</div>
+    <div style="color:var(--muted);font-size:13px;margin-top:6px">Общий баланс в USD</div>
   </div>
   <div class="actions-row" style="padding:6px 0 16px">
-    <button class="action-btn" id="main-deposit"><div class="circle">↙</div><div class="label">Пополнить</div></button>
-    <button class="action-btn" id="main-send"><div class="circle">📤</div><div class="label">Отправить</div></button>
-    <button class="action-btn" id="main-withdraw"><div class="circle">↗</div><div class="label">Вывести</div></button>
-    <button class="action-btn" id="main-swap"><div class="circle">⇆</div><div class="label">Обмен</div></button>
+    <button class="action-btn" id="main-deposit"><div class="circle">↓</div><div class="label">Пополнить</div></button>
+    <button class="action-btn" id="main-send"><div class="circle">→</div><div class="label">Отправить</div></button>
+    <button class="action-btn" id="main-withdraw"><div class="circle">↑</div><div class="label">Вывести</div></button>
+    <button class="action-btn" id="main-swap"><div class="circle">⇅</div><div class="label">Обмен</div></button>
   </div>
   <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px">
     <div style="color:var(--muted);font-size:13px">Мои активы</div>
@@ -399,9 +398,9 @@
 
 <!-- ═══ BOTTOM NAV ═══ -->
 <nav id="bottom-nav">
-  <button data-view="main" class="active"><span class="ic">💼</span>Кошелёк</button>
-  <button data-view="swap"><span class="ic">🔄</span>Обмен</button>
-  <button data-view="checks"><span class="ic">📜</span>Чеки</button>
+  <button data-view="main" class="active">Кошелёк</button>
+  <button data-view="swap">Обмен</button>
+  <button data-view="checks">Чеки</button>
 </nav>
 
 <!-- ═══ COIN PICKER ═══ -->
