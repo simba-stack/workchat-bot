@@ -21,16 +21,24 @@
     font-size:15px; }
   body { padding-bottom:60px; }
   button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
-  /* CTA-кнопки — accent=white в чёрной теме, потому текст ДОЛЖЕН быть чёрным.
-     Применяем ко всем primary-кнопкам через классы и accent. */
+  /* CTA-кнопки v0.2.3 — accent=white в чёрной теме, ВСЕ белые кнопки должны
+     иметь чёрный читаемый текст. Используем nuclear !important селекторы. */
+  button[class*="-btn"], button.copy-btn, button.submit-btn, button.create-btn,
   .copy-btn, .submit-btn, .create-btn, .max-btn, .chat-input button,
-  .p2p-tab.active, .filter-chip.active, button.primary {
-    color:#000 !important; font-weight:600;
+  .p2p-tab.active, .filter-chip.active, button.primary,
+  button[style*="background:var(--accent)"],
+  button[style*="background:#fff"],
+  button[style*="background:white"] {
+    color:#000 !important; font-weight:700 !important;
+  }
+  .copy-btn, .submit-btn, .create-btn {
+    background:#ffffff !important; color:#000 !important;
+    font-weight:700 !important; font-size:15px !important;
+    margin-bottom:24px !important;
+    box-shadow:0 2px 12px rgba(255,255,255,0.05);
   }
   .h-row .h-icon { color:#000; }
   .msg.mine .bubble { color:#000; }
-  /* Pad bottom — чтобы CTA-кнопки не цеплялись к низу */
-  .copy-btn, .submit-btn, .create-btn { margin-bottom:18px; }
   input, textarea, select {
     font:inherit; color:var(--text); background:var(--panel);
     border:1px solid var(--border); border-radius:10px; padding:10px 12px;

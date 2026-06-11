@@ -237,13 +237,20 @@ MINIAPP_DIST = MINIAPP_DIR / "dist"
 INDEX_HTML = MINIAPP_DIR / "index.html"
 OWNER_HTML = MINIAPP_DIR / "owner.html"
 
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
 else:
     @app.get("/app", response_class=HTMLResponse)
     async def miniapp_root():
         if INDEX_HTML.exists():
-            return FileResponse(INDEX_HTML)
+            return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
 
