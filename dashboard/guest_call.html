@@ -161,17 +161,30 @@ const ROOM_ID = window.location.pathname.split('/').filter(Boolean).pop();
 
 // === ICE servers: STUN + несколько TURN серверов разных провайдеров для надёжности ===
 // Если все TURN упадут — соединение может не пробить симметричный NAT.
+// 4 группы STUN + 2 группы TURN от Metered (legacy openrelay + новые a/b/c/d relays).
 const ICE_SERVERS = [
-  // Google STUN
+  // Google + Cloudflare STUN
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302",
-           "stun:stun2.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
-  // Public TURN от Open Relay Project (Metered) — бесплатные, UDP/TCP, 80/443
+           "stun:stun2.l.google.com:19302", "stun:stun3.l.google.com:19302",
+           "stun:stun4.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+  // Public TURN от Open Relay Project (Metered) — legacy openrelay
   {
     urls: [
       "turn:openrelay.metered.ca:80",
       "turn:openrelay.metered.ca:443",
       "turn:openrelay.metered.ca:443?transport=tcp",
       "turns:openrelay.metered.ca:443",
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  // Metered global relays (UDP + TCP fallback на 443 для жёстких corporate firewall)
+  {
+    urls: [
+      "turn:global.relay.metered.ca:80",
+      "turn:global.relay.metered.ca:80?transport=tcp",
+      "turn:global.relay.metered.ca:443",
+      "turns:global.relay.metered.ca:443?transport=tcp",
     ],
     username: "openrelayproject",
     credential: "openrelayproject",
@@ -355,9 +368,25 @@ async function createPeerConnection(peerId, peerName, initiator) {
     }
   };
 
+  // Auto-retry: если ICE завис в 'checking' > 12 сек — рестарт ICE
+  // (типично для симметричного NAT когда первый TURN не пробил)
+  let iceCheckingTimer = null;
   pc.oniceconnectionstatechange = () => {
     console.log('[WebRTC]', peerId, 'iceState=', pc.iceConnectionState);
     updateConnBadge(peerId, pc.iceConnectionState);
+    if (iceCheckingTimer) { clearTimeout(iceCheckingTimer); iceCheckingTimer = null; }
+    if (pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'disconnected') {
+      iceCheckingTimer = setTimeout(() => {
+        if (pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'disconnected') {
+          console.warn('[WebRTC]', peerId, 'ICE stuck >12s — restartIce()');
+          try { pc.restartIce(); } catch (e) { console.warn('restartIce failed', e); }
+        }
+      }, 12000);
+    }
+    if (pc.iceConnectionState === 'failed') {
+      console.warn('[WebRTC]', peerId, 'ICE failed — restartIce()');
+      try { pc.restartIce(); } catch (e) {}
+    }
   };
   pc.onconnectionstatechange = () => {
     console.log('[WebRTC]', peerId, 'connState=', pc.connectionState);
