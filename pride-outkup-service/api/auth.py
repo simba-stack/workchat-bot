@@ -116,11 +116,18 @@ async def get_current_user(
 
 
 async def require_verified(user: User = Depends(get_current_user)) -> User:
-    """Требует KYC verified."""
-    if user.kyc_status not in ("verified",):
+    """Раньше требовал KYC verified — теперь KYC ОПЦИОНАЛЬНЫЙ.
+
+    SIMBA решил: KYC не должен блокировать operations. Юзер может пройти KYC
+    добровольно (получит badge ✓ verified в UI), но это не обязательно для
+    withdraw/transfer/swap/p2p.
+
+    Блокируем ТОЛЬКО banned юзеров (после явного бана админом).
+    """
+    if user.kyc_status == "banned":
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "KYC verification required. Open Profile in app to start.",
+            "Account banned. Свяжитесь с поддержкой.",
         )
     return user
 

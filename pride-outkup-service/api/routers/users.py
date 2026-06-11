@@ -342,8 +342,9 @@ async def withdraw(
     db: AsyncSession = Depends(get_db),
 ):
     """Запрос на вывод USDT с баланса на TRC20."""
-    if user.kyc_status != "verified":
-        raise HTTPException(403, "KYC required")
+    # KYC опциональный — не блокируем withdraw (только banned)
+    if user.kyc_status == "banned":
+        raise HTTPException(403, "Account banned")
     amount = Decimal(str(payload.get("amount_usdt", "0")))
     if amount <= 0:
         raise HTTPException(400, "amount must be > 0")

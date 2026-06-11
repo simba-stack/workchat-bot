@@ -98,11 +98,9 @@ async def cmd_send(message: Message, state: FSMContext):
         if not u:
             await message.answer("Сначала открой /start.", reply_markup=_miniapp_kb())
             return
-        if u.kyc_status != "verified":
-            await message.answer(
-                "🔒 Отправка доступна после KYC. Открой приложение → Профиль → Пройти верификацию.",
-                reply_markup=_miniapp_kb(),
-            )
+        # KYC опциональный — не блокируем отправку, только banned
+        if u.kyc_status == "banned":
+            await message.answer("🚫 Аккаунт заблокирован. Свяжись с поддержкой.")
             return
         bals = await balance_service.list_balances(db, u.id)
 
