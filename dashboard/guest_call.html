@@ -422,13 +422,23 @@ function updateConnBadge(peerId, state) {
   } else if (state === 'disconnected') {
     p.person.classList.add('conn-warn');
   }
-  // Если хоть один peer failed — показать баннер
-  let anyFailedGlobal = false;
-  for (const pid in peers) {
+  // Показываем баннер только если ВСЕ peers сломаны (нет ни одного рабочего).
+  // Раньше баннер вылетал если хоть один peer failed — но в mesh-звонке
+  // один failed peer не мешает остальным: голос идёт через работающие.
+  // Это слишком агрессивно пугало пользователей.
+  const peerIds = Object.keys(peers);
+  let anyWorking = false;
+  let anyFailed = false;
+  for (const pid of peerIds) {
     const st = peers[pid].pc?.iceConnectionState;
-    if (st === 'failed') { anyFailedGlobal = true; break; }
+    if (st === 'connected' || st === 'completed' || st === 'checking' || st === 'new') {
+      anyWorking = true;
+    }
+    if (st === 'failed') anyFailed = true;
   }
-  showNetBanner(anyFailedGlobal);
+  // Показываем только если ВСЕ failed и ни одного рабочего нет
+  const noConnection = peerIds.length > 0 && anyFailed && !anyWorking;
+  showNetBanner(noConnection);
 }
 
 function showNetBanner(show) {
