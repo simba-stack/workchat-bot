@@ -74,10 +74,7 @@ async def _try_redeem_cheque(message: Message, code: str) -> bool:
             )
             db.add(u)
             await db.flush()
-        if cq.creator_user_id == u.id:
-            await message.answer("Это твой собственный чек — нельзя активировать самому себе.")
-            return True
-
+        # Создатель тоже может активировать (по запросу SIMBA — для теста или ввода средств обратно)
         # Зачисляем
         from core.services import balance_service
         await balance_service.credit(

@@ -736,11 +736,38 @@ function renderCheque(c) {
     <div class="right">${badge}</div>
   </div>`;
 }
-window.shareCheque = (code) => {
-  const link = `https://t.me/${tg?.initDataUnsafe?.bot_username || 'PrideP2P_bot'}?start=cheque_${code}`;
-  if (tg?.openTelegramLink) tg.openTelegramLink(link);
-  else if (navigator.share) navigator.share({ url: link });
-  else { navigator.clipboard.writeText(link); toast('Ссылка скопирована'); }
+window.shareCheque = (code, amount, coin, comment) => {
+  const link = `https://t.me/${tg?.initDataUnsafe?.bot_username || 'PrideP2P_bot'}?start=chq_${code}`;
+  const shareText = `Чек ${amount||''} ${coin||''}${comment?'\n'+comment:''}\n${link}`;
+  // Покажем модалку со ссылкой + кнопками
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  ov.innerHTML = `
+    <div style="background:var(--panel);border-radius:18px;padding:24px;max-width:380px;width:100%;text-align:center;">
+      <div style="font-size:48px;margin-bottom:8px;">✓</div>
+      <div style="font-size:22px;font-weight:700;margin-bottom:4px;">Чек создан</div>
+      <div style="color:var(--muted);font-size:14px;margin-bottom:18px;">${amount||''} ${coin||''}${comment?'<br><i>'+comment+'</i>':''}</div>
+      <div style="background:var(--bg);border-radius:10px;padding:12px;font-family:monospace;font-size:12px;word-break:break-all;text-align:left;margin-bottom:16px;color:var(--text);">${link}</div>
+      <button id="chq-share-tg" style="background:#fff;color:#000;font-weight:700;width:100%;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:15px;">Отправить в чат</button>
+      <button id="chq-copy-link" style="background:var(--panel-2);color:var(--text);width:100%;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px;">Скопировать ссылку</button>
+      <button id="chq-close" style="background:transparent;color:var(--muted);width:100%;padding:10px;border:0;cursor:pointer;font-size:13px;">Закрыть</button>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#chq-share-tg').onclick = () => {
+    if (tg?.switchInlineQuery) {
+      // открывает селектор чата с готовым текстом
+      tg.switchInlineQuery(`${amount||''} ${coin||''} ${comment||''}`.trim(), ['users','groups','channels']);
+    } else if (tg?.openTelegramLink) {
+      tg.openTelegramLink('https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(`Чек ${amount} ${coin}${comment?' — '+comment:''}`));
+    } else {
+      navigator.clipboard.writeText(shareText); toast('Текст чека скопирован — вставь в чат');
+    }
+    ov.remove();
+  };
+  ov.querySelector('#chq-copy-link').onclick = () => {
+    navigator.clipboard.writeText(link).then(()=>toast('Ссылка скопирована'));
+  };
+  ov.querySelector('#chq-close').onclick = () => ov.remove();
 };
 $('ch-new-btn').addEventListener('click', () => openChequeNew(activeCoin || 'USDT'));
 function openChequeNew(coin) {
@@ -757,9 +784,10 @@ $('ch-create-btn').addEventListener('click', async () => {
   if (amt > (+balances[coin]||0)) return toast('Недостаточно', 'error');
   $('ch-create-btn').disabled = true;
   try {
-    const r = await api('/api/v1/cheques/create', { method:'POST', body: JSON.stringify({coin, amount:amt, comment:$('ch-comment').value||''}) });
-    toast('Чек создан');
-    setTimeout(() => { go('checks'); window.shareCheque(r.code); }, 500);
+    const cmt = $('ch-comment').value || '';
+    const r = await api('/api/v1/cheques/create', { method:'POST', body: JSON.stringify({coin, amount:amt, comment:cmt}) });
+    go('checks');
+    setTimeout(() => window.shareCheque(r.code, amt, coin, cmt), 300);
   } catch (e) { toast(e.message, 'error'); }
   finally { $('ch-create-btn').disabled = false; }
 });

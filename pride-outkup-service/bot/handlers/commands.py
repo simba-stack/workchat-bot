@@ -165,9 +165,77 @@ async def _show_checks(target: Message, edit: bool = False):
     await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
 
 
+def _bot_username() -> str:
+    return (settings.bot_username or "PrideP2P_bot").lstrip("@")
+
+
+def _cheque_link(code: str) -> str:
+    return f"https://t.me/{_bot_username()}?start=chq_{code}"
+
+
 @router.callback_query(F.data.startswith("checks:"))
 async def cb_checks_sub(call: CallbackQuery):
     action = call.data.split(":", 1)[1]
+    # ── Одиночный чек: checks:view:CODE ──
+    if action.startswith("view:"):
+        code = action.split(":", 1)[1]
+        try:
+            from core.models import Cheque
+            async with AsyncSessionLocal() as db:
+                cq = (await db.execute(select(Cheque).where(Cheque.code == code))).scalar_one_or_none()
+                if not cq:
+                    await call.answer("Чек не найден", show_alert=True); return
+            link = _cheque_link(cq.code)
+            status_txt = {"active":"Активный","redeemed":"Получен","cancelled":"Отменён"}.get(cq.status, cq.status)
+            comment = f"\nКомментарий: <i>{cq.comment}</i>" if cq.comment else ""
+            text = (
+                f"<b>Чек {cq.amount} {cq.coin_code}</b>\n"
+                f"Статус: <b>{status_txt}</b>\n"
+                f"Код: <code>{cq.code}</code>"
+                f"{comment}\n\n"
+                f"<a href=\"{link}\">{link}</a>"
+            )
+            rows = []
+            if cq.status == "active":
+                rows.append([InlineKeyboardButton(text=f"Активировать {cq.amount} {cq.coin_code}", url=link)])
+                rows.append([_cb("Отменить чек", f"checks:cancel:{cq.code}")])
+            rows.append([_cb("← Мои чеки", "checks:my")])
+            await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                                          disable_web_page_preview=True)
+        except Exception as e:
+            await call.answer(f"Ошибка: {e}", show_alert=True)
+        await call.answer(); return
+
+    # ── Отмена чека: checks:cancel:CODE ──
+    if action.startswith("cancel:"):
+        code = action.split(":", 1)[1]
+        try:
+            from core.models import Cheque
+            from core.services import balance_service
+            from datetime import datetime, timezone
+            async with AsyncSessionLocal() as db:
+                cq = (await db.execute(select(Cheque).where(Cheque.code == code))).scalar_one_or_none()
+                me = (await db.execute(select(User).where(User.tg_id == call.from_user.id))).scalar_one_or_none()
+                if not cq or not me or cq.creator_user_id != me.id:
+                    await call.answer("Нет доступа", show_alert=True); return
+                if cq.status != "active":
+                    await call.answer(f"Чек уже {cq.status}", show_alert=True); return
+                await balance_service.credit(
+                    db, me.id, cq.coin_code, cq.amount,
+                    op_type="cheque_cancel", note=f"cheque {cq.code} cancelled",
+                    ref_table="cheques", ref_id=cq.id,
+                )
+                cq.status = "cancelled"
+                cq.cancelled_at = datetime.now(timezone.utc)
+                await db.commit()
+            await call.answer("Чек отменён, средства возвращены", show_alert=True)
+        except Exception as e:
+            await call.answer(f"Ошибка: {e}", show_alert=True)
+        # Назад к списку
+        call.data = "checks:my"
+        return await cb_checks_sub(call)
+
+    # ── Список "Мои чеки" ──
     if action == "my":
         try:
             from core.models import Cheque
@@ -181,24 +249,39 @@ async def cb_checks_sub(call: CallbackQuery):
                         (Cheque.creator_user_id == u.id) | (Cheque.redeemed_by_user_id == u.id),
                     ).order_by(_desc(Cheque.created_at)).limit(20)
                 )).scalars().all()
+
             if not rows:
                 await call.message.edit_text(
-                    "<b>Мои чеки</b>\n\nЧеков пока нет.",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_cb("Назад", "main:checks")]]),
+                    "<b>Мои чеки</b>\n\nЧеков пока нет.\n\n"
+                    "Создать новый: жми «+ Новый» в Mini-App, или напиши в любом чате\n"
+                    f"<code>@{_bot_username()} 5 USDT за пиццу</code>",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_cb("← Назад", "main:checks")]]),
                 )
             else:
                 lines = ["<b>Мои чеки</b>", ""]
+                kb_rows = []
                 for c in rows[:15]:
-                    status = {"active": "[активный]", "redeemed": "[принят]", "cancelled": "[отменён]"}.get(c.status, "[—]")
-                    lines.append(f"{status} {float(c.amount)} {c.coin_code}")
+                    status = {"active":"○ актив","redeemed":"✓ получ","cancelled":"✗ отмен"}.get(c.status, "—")
+                    role = "🟢" if c.creator_user_id == u.id else "🔵"
+                    lines.append(f"{role} {status}  {c.amount} {c.coin_code}  <code>{c.code}</code>")
+                    kb_rows.append([_cb(f"{c.amount} {c.coin_code} · {status}", f"checks:view:{c.code}")])
+                kb_rows.append([_cb("← Назад", "main:checks")])
                 await call.message.edit_text(
                     "\n".join(lines),
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_cb("Назад", "main:checks")]]),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+                    disable_web_page_preview=True,
                 )
         except Exception as e:
             await call.answer(f"Ошибка: {e}", show_alert=True)
-    elif action == "from_chat":
-        await call.answer("Используйте inline-режим в чате: @PrideP2P_bot <сумма>", show_alert=True)
+        await call.answer(); return
+
+    if action == "from_chat":
+        await call.answer(
+            f"В любом чате: @{_bot_username()} <сумма> [USDT] [коммент]",
+            show_alert=True,
+        )
+        return
+
     await call.answer()
 
 
