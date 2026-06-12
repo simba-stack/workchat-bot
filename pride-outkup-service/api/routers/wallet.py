@@ -324,8 +324,23 @@ async def coin_withdraw(
     user: User = Depends(require_verified),
     db: AsyncSession = Depends(get_db),
 ):
-    """Запрос вывода любой монеты. Для USDT TRC20 — автоотправка через tron_service
-    до 100 USDT, иначе pending для ручной обработки админа."""
+    """Withdraw логика (по плану SIMBA):
+
+    1. **USDT/TRC20** — отправляем напрямую с нашего hot-wallet через tron_service.
+       Юзер платит $4.5 fee, у нас расход = TRX газ (~$0.35 с Feee energy).
+       Чистая прибыль ≈ $4.15.
+
+    2. **Все остальные** (TON/BTC/ETH/SOL/BNB/DOGE/LTC/USDC) — проксирование
+       через FixedFloat. Юзер выводит COIN на свой external адрес:
+       - У юзера списываем COIN + fee=$4.5 эквивалент
+       - Считаем USDT-эквивалент через CoinGecko (наш реальный расход)
+       - Создаём FF order: from=USDT-TRC20 → to=COIN, to_address=user_addr
+       - Шлём USDT с hot-wallet на FF-адрес через tron_service.send_usdt
+       - FF доставляет COIN юзеру на его адрес
+       - Чистая прибыль = $4.5 - (FF_spread + TRX газ)
+
+    Если FixedFloat не настроен — withdraw уходит в pending (админ вручную).
+    """
     coin = (payload.get("coin") or "").upper()
     network = (payload.get("network") or "").upper()
     address = (payload.get("address") or "").strip()
@@ -345,16 +360,18 @@ async def coin_withdraw(
     if amount < c.min_withdraw:
         raise HTTPException(400, f"минимум {float(c.min_withdraw)} {coin}")
 
-    # Списываем с баланса (включая комиссию)
+    # Списываем с баланса юзера (включая комиссию)
     fee = c.withdraw_fee
     total_debit = amount + fee
     await balance_service.debit(db, user.id, coin, total_debit,
                                 op_type="withdraw",
-                                note=f"withdraw {amount} {coin} {network} → {address} (fee {fee})")
+                                note=f"withdraw {amount} {coin} {network} -> {address} (fee {fee})")
 
-    # Авто-отправка только USDT/TRC20
     status_ = "pending"
     tx_id = None
+    ff_order_id = None
+
+    # ── Путь 1: USDT/TRC20 — своя нода ──────────────────────────────
     if coin == "USDT" and network == "TRC20":
         from core.services import tron_service
         if tron_service.is_configured() and amount <= 100:
@@ -363,11 +380,59 @@ async def coin_withdraw(
                 tx_id = res.get("tx_id")
                 status_ = "sent"
             else:
-                # rollback
                 await balance_service.credit(db, user.id, coin, total_debit,
                                              op_type="withdraw_rollback",
                                              note=f"auto-send failed: {res.get('error')}")
                 raise HTTPException(503, f"send failed: {res.get('error')}")
+
+    # ── Путь 2: Прочие монеты — проксируем через FixedFloat ─────────
+    elif coin in ("TON", "BTC", "ETH", "SOL", "BNB", "DOGE", "LTC", "USDC"):
+        from core.services import fixedfloat_service as ff_svc
+        from core.services import tron_service
+        if not ff_svc.is_configured():
+            # FF не настроен — pending для ручного вывода
+            status_ = "pending"
+        else:
+            try:
+                # Рассчитываем сколько USDT нужно положить на FF чтобы юзер получил amount COIN
+                # FF принимает amount от FROM-coin (USDT). Чтобы прикинуть — берём rate из CoinGecko.
+                rates = await rates_service.get_rates()
+                from_usd = _rate_usd(rates, "USDT")  # = 1
+                to_usd = _rate_usd(rates, coin)
+                if to_usd <= 0:
+                    raise Exception(f"нет курса для {coin}")
+                # USDT эквивалент coin amount (+ небольшой запас 1% на FF spread)
+                usdt_needed = (amount * to_usd / from_usd) * Decimal("1.01")
+                usdt_needed = usdt_needed.quantize(Decimal("0.01"))
+
+                # Создаём FF order
+                ff_order = await ff_svc.create_order(
+                    from_coin="USDT", to_coin=coin,
+                    amount=usdt_needed, to_address=address,
+                )
+                if not ff_order or not ff_order.get("ff_address"):
+                    raise Exception("FF не вернул адрес")
+                ff_order_id = ff_order.get("order_id")
+                ff_address = ff_order["ff_address"]
+
+                # Шлём USDT на FF-адрес с нашего hot-wallet
+                send_res = await tron_service.send_usdt(ff_address, usdt_needed)
+                if not send_res.get("ok"):
+                    raise Exception(f"send to FF failed: {send_res.get('error')}")
+                tx_id = send_res.get("tx_id")
+                status_ = "sent_to_ff"
+                logger.info(
+                    "[withdraw] FF proxy: %s %s -> %s, usdt_paid=%s, fee=%s, "
+                    "ff_order=%s, our_profit~=$%.2f",
+                    amount, coin, address, usdt_needed, fee, ff_order_id,
+                    float(fee * (to_usd / from_usd if coin not in ('USDT','USDC') else 1)) - float(usdt_needed - amount * to_usd / from_usd),
+                )
+            except Exception as e:
+                # rollback при любой ошибке FF/send
+                await balance_service.credit(db, user.id, coin, total_debit,
+                                             op_type="withdraw_rollback",
+                                             note=f"FF proxy failed: {e}")
+                raise HTTPException(503, f"вывод не выполнен: {e}")
 
     # Notify JARVIS for manual processing
     try:
@@ -384,4 +449,5 @@ async def coin_withdraw(
         "ok": True, "coin": coin, "network": network,
         "amount": float(amount), "fee": float(fee), "total": float(total_debit),
         "to_address": address, "status": status_, "tx_id": tx_id,
+        "ff_order_id": ff_order_id,
     }
