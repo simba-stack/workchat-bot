@@ -271,7 +271,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
     <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
     <div style="display:flex;gap:14px;align-items:center">
-      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.4.0</span>
+      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.5.0</span>
     </div>
   </div>
   <div style="text-align:center;padding:30px 20px 8px">
@@ -546,6 +546,17 @@
 </div>
 
 <script>
+// === DEBUG OVERLAY (видим JS-ошибки прямо на экране) ===
+(function(){
+  const box = document.createElement('div');
+  box.id = '__debug_box';
+  box.style.cssText = 'position:fixed;bottom:70px;left:6px;right:6px;background:#400;color:#fff;font:11px monospace;padding:8px 10px;border-radius:8px;max-height:140px;overflow:auto;z-index:99999;display:none;border:1px solid #f44;';
+  document.body.appendChild(box);
+  function show(msg){ box.style.display='block'; box.innerHTML += '<div style="border-bottom:1px solid #600;padding:2px 0;">'+msg.replace(/</g,'&lt;')+'</div>'; box.scrollTop=box.scrollHeight; }
+  window.addEventListener('error', e => show('JS: '+(e.message||e)+' @ '+(e.filename||'').split('/').pop()+':'+e.lineno));
+  window.addEventListener('unhandledrejection', e => show('PROMISE: '+((e.reason&&(e.reason.message||e.reason))||'?')));
+  window.__dbg = show;
+})();
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 const initData = tg?.initData || '';
