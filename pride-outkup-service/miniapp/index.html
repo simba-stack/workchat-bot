@@ -271,7 +271,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
     <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
     <div style="display:flex;gap:14px;align-items:center">
-      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.3.0</span>
+      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.4.0</span>
     </div>
   </div>
   <div style="text-align:center;padding:30px 20px 8px">
@@ -715,16 +715,40 @@ $('main-swap').addEventListener('click', () => { go('swap'); });
 $('settings-btn').addEventListener('click', () => go('settings'));
 
 // ── Auto-refresh баланса каждые 10 сек когда вкладка main активна ──
+// Авто-обновление: история = 5 сек, баланс = 10 сек
 setInterval(() => {
-  const mainActive = document.getElementById('view-main')?.classList.contains('active');
-  if (mainActive && !document.hidden) {
+  if (document.hidden) return;
+  const v = document.querySelector('.view.active')?.id;
+  if (v === 'view-history') loadOperations(true).catch(()=>{});
+  else if (v === 'view-coin' && window.activeCoin) {
+    // Перезагружаем историю на странице монеты молча
+    const code = window.activeCoin;
+    api('/api/v1/wallet/operations?limit=50').then(j => {
+      const items = (j.items||[]).filter(o => (o.coin||'').toUpperCase() === code.toUpperCase());
+      const el = $('coin-history');
+      if (!el) return;
+      if (!items.length && !el.querySelector('.h-row')) return;
+      // Простое обновление: ставим заголовки если есть данные
+      if (items.length) {
+        el.innerHTML = items.map(op => {
+          const isOut = op.amount < 0;
+          const sign = isOut ? '−' : '+';
+          const cls = isOut ? 'neg' : 'pos';
+          const titles = {deposit:'Пополнение', withdraw:'Вывод', withdraw_rollback:'Возврат', swap:'Обмен', transfer_in:'Получено', transfer_out:'Отправлено', fee:'Комиссия', earn:'Начисление', spend:'Списание', cheque_redeem:'Чек активирован'};
+          const title = titles[op.type] || op.type;
+          return `<div class="h-row" style="display:flex;align-items:center;padding:12px 14px;border-top:1px solid var(--border)"><div class="h-icon" style="width:36px;height:36px;border-radius:50%;background:${isOut?'#FF453A22':'#26A17B22'};color:${isOut?'#FF453A':'#26A17B'};display:flex;align-items:center;justify-content:center;margin-right:12px">${isOut?'↗':'↙'}</div><div class="h-info" style="flex:1;min-width:0"><div class="t" style="font-size:14px">${title}</div><div class="d" style="color:var(--muted);font-size:12px;margin-top:2px">${(op.created_at||'').replace('T',' ').slice(0,16)}</div></div><div class="h-amt"><div class="a ${cls}" style="font-size:14px;font-weight:600">${sign}${fmt(op.amount_abs, 6)} ${op.coin}</div></div></div>`;
+        }).join('');
+      }
+    }).catch(()=>{});
+  }
+}, 5000);
+// Баланс на главной — каждые 15 сек
+setInterval(() => {
+  if (document.hidden) return;
+  if (document.getElementById('view-main')?.classList.contains('active')) {
     loadMain().catch(()=>{});
   }
-  const histActive = document.getElementById('view-history')?.classList.contains('active');
-  if (histActive && !document.hidden) {
-    loadOperations(true).catch(()=>{});  // silent refresh
-  }
-}, 10000);
+}, 15000);
 
 // ── История операций ──
 const opIcons = {
@@ -754,7 +778,7 @@ function fmtDateGroup(iso) {
 async function loadOperations(silent=false) {
   try {
     if (!silent) $('ops-list').innerHTML = '<div class="empty-state">Загружаю…</div>';
-    const j = await api('/api/v1/wallet/operations?limit=100');
+    const j = await api('/api/v1/wallet/operations?limit=100').catch(err => { throw new Error(err.message || 'fetch failed'); });
     const items = j.items || [];
     if (!items.length) {
       $('ops-list').innerHTML = '<div class="empty-state">Операций пока нет</div>';
@@ -792,7 +816,7 @@ async function loadOperations(silent=false) {
     }
     $('ops-list').innerHTML = html;
   } catch (e) {
-    if (!silent) $('ops-list').innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
+    if (!silent) $('ops-list').innerHTML = '<div class="empty-state" style="color:#FF453A">Ошибка: ' + (e.message || e) + '</div>';
   }
 }
 
@@ -903,9 +927,12 @@ $('wd-submit').addEventListener('click', async () => {
   if (!addr || addr.length < 30) return toast('Введи адрес', 'error');
   if (amt > (+balances[activeCoin]||0)) return toast('Недостаточно', 'error');
   if (amt < (+c?.min_withdraw||0)) return toast(`Минимум ${c.min_withdraw} ${activeCoin}`, 'error');
+  const okBio = await confirmBiometric('Подтвердите вывод ' + amt + ' ' + activeCoin);
+  if (!okBio) return toast('Отменено', 'error');
   $('wd-submit').disabled = true; $('wd-submit').textContent = '⏳';
   try {
     const r = await api('/api/v1/wallet/withdraw', { method:'POST', body: JSON.stringify({coin:activeCoin, network:(c.networks||['TRC20'])[0], amount:amt, address:addr}) });
+    playSuccessSound();
     if (r.status==='sent') toast(`Отправлено. TX: ${(r.tx_id||'').slice(0,12)}…`);
     else if (r.status==='pending_2fa') toast('Заявка на подтверждении');
     else toast('Заявка принята');
@@ -943,9 +970,12 @@ $('sw-submit').addEventListener('click', async () => {
   const amt = +$('sw-from-amt').value || 0;
   if (amt <= 0) return toast('Введи сумму', 'error');
   if (amt > (+balances[swFrom]||0)) return toast('Недостаточно', 'error');
+  const okBio = await confirmBiometric('Обмен ' + amt + ' ' + swFrom + ' → ' + swTo);
+  if (!okBio) return toast('Отменено', 'error');
   $('sw-submit').disabled = true; $('sw-submit').textContent = '⏳';
   try {
     await api('/api/v1/wallet/swap', { method:'POST', body: JSON.stringify({from_coin:swFrom, to_coin:swTo, amount:amt}) });
+    playSuccessSound();
     toast(`Обмен: ${amt} ${swFrom} → ${swTo}`);
     setTimeout(() => { loadMain(); go('main'); }, 1500);
   } catch (e) { toast(e.message, 'error'); }
@@ -1248,62 +1278,7 @@ function playSuccessSound() {
   } catch (e) {}
 }
 
-// ===== Оборачиваем wd-submit и sw-submit под биометрию + звук =====
-(() => {
-  const wd = document.getElementById('wd-submit');
-  if (wd) {
-    // Клонируем чтобы убрать все старые listeners + добавить новый
-    const clone = wd.cloneNode(true);
-    wd.parentNode.replaceChild(clone, wd);
-    clone.addEventListener('click', async () => {
-      const c = coins.find(x => x.code === activeCoin);
-      const amt = +document.getElementById('wd-amount').value || 0;
-      const addr = document.getElementById('wd-address').value.trim();
-      if (amt <= 0) return toast('Введи сумму', 'error');
-      if (!addr || addr.length < 30) return toast('Введи адрес', 'error');
-      if (amt > (+balances[activeCoin]||0)) return toast('Недостаточно', 'error');
-      if (amt < (+c?.min_withdraw||0)) return toast('Минимум ' + c.min_withdraw + ' ' + activeCoin, 'error');
-      const ok = await confirmBiometric('Подтвердите вывод ' + amt + ' ' + activeCoin);
-      if (!ok) return toast('Подтверждение отменено', 'error');
-      clone.disabled = true; clone.textContent = '⏳';
-      try {
-        const r = await api('/api/v1/wallet/withdraw', {
-          method: 'POST',
-          body: JSON.stringify({coin: activeCoin, network: (c.networks||['TRC20'])[0], amount: amt, address: addr})
-        });
-        playSuccessSound();
-        if (r.status === 'sent') toast('Отправлено. TX: ' + (r.tx_id||'').slice(0,12) + '…');
-        else if (r.status === 'sent_to_ff') toast('Заказ через FixedFloat создан');
-        else toast('Заявка принята');
-        setTimeout(() => { loadMain(); go('main'); }, 1500);
-      } catch (e) { toast(e.message, 'error'); }
-      finally { clone.disabled = false; clone.textContent = 'Вывести'; }
-    });
-  }
-  const sw = document.getElementById('sw-submit');
-  if (sw) {
-    const clone = sw.cloneNode(true);
-    sw.parentNode.replaceChild(clone, sw);
-    clone.addEventListener('click', async () => {
-      const amt = +document.getElementById('sw-from-amt').value || 0;
-      if (amt <= 0) return toast('Введи сумму', 'error');
-      if (amt > (+balances[swFrom]||0)) return toast('Недостаточно', 'error');
-      const ok = await confirmBiometric('Обмен ' + amt + ' ' + swFrom + ' → ' + swTo);
-      if (!ok) return toast('Подтверждение отменено', 'error');
-      clone.disabled = true; clone.textContent = '⏳';
-      try {
-        const r = await api('/api/v1/wallet/swap', {
-          method: 'POST',
-          body: JSON.stringify({from_coin: swFrom, to_coin: swTo, amount: amt})
-        });
-        playSuccessSound();
-        toast('Обмен выполнен');
-        setTimeout(() => { loadMain(); go('main'); }, 1500);
-      } catch (e) { toast(e.message, 'error'); }
-      finally { clone.disabled = false; clone.textContent = 'Обменять'; }
-    });
-  }
-})();
+// (cloneNode IIFE удалён — биометрия теперь внутри оригинальных handlers)
 
 loadMain().then(routeFromStart);
 </script>

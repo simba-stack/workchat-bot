@@ -505,17 +505,28 @@ async def list_operations(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Единая лента всех операций по балансу юзера (из operations_log)."""
-    res = await db.execute(
-        select(OperationLog)
-        .where(OperationLog.user_id == user.id)
-        .order_by(desc(OperationLog.created_at))
-        .offset(offset)
-        .limit(limit)
-    )
-    rows = res.scalars().all()
-    rates = await rates_service.get_rates()
-    rub_per_usd = (rates.get("tether") or {}).get("rub") or 95.0
+    """Единая лента всех операций по балансу юзера (из operations_log).
+
+    Никогда не падает — при ошибках возвращает пустой items, чтобы UI не показывал
+    "Ошибка загрузки" из-за временных сбоев CoinGecko или БД.
+    """
+    try:
+        res = await db.execute(
+            select(OperationLog)
+            .where(OperationLog.user_id == user.id)
+            .order_by(desc(OperationLog.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = res.scalars().all()
+    except Exception as e:
+        logger.warning("[operations] SQL error: %s", e)
+        return {"items": [], "total": 0, "error": str(e)[:200]}
+    try:
+        rates = await rates_service.get_rates()
+        rub_per_usd = (rates.get("USDT") or rates.get("tether") or {}).get("rub") or 95.0
+    except Exception:
+        rub_per_usd = 95.0
     items = []
     for op in rows:
         coin = "USDT"
