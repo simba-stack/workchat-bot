@@ -610,8 +610,22 @@ function coinPrice(coin) {
 // ── Main ──
 async function loadMain() {
   try {
-    if (!coins.length) coins = (await api('/api/v1/coins')).items || [];
-    const bj = await api('/api/v1/wallet/balances');
+    // Кеш справочника монет в sessionStorage (статичный — можно кешить надолго)
+    if (!coins.length) {
+      const cached = sessionStorage.getItem('p2p_coins');
+      if (cached) {
+        try { coins = JSON.parse(cached); } catch (_) {}
+      }
+    }
+    // ПАРАЛЛЕЛЬНО: справочник + балансы (раньше было последовательно, теряли 2x время)
+    const promCoins = coins.length ? Promise.resolve({items: coins})
+                                   : api('/api/v1/coins').catch(()=>({items:[]}));
+    const promBal = api('/api/v1/wallet/balances').catch(()=>({balances:{},rates:{}}));
+    const [cj, bj] = await Promise.all([promCoins, promBal]);
+    if (!coins.length && cj.items) {
+      coins = cj.items;
+      try { sessionStorage.setItem('p2p_coins', JSON.stringify(coins)); } catch (_) {}
+    }
     balances = bj.balances || {}; rates = bj.rates || {};
 
     let totalUsd = 0;
@@ -657,16 +671,22 @@ async function openCoin(code) {
   $('coin-delta').className = 'delta ' + (delta>=0?'pos':'neg');
   $('coin-delta').textContent = (delta>=0?'+':'') + delta.toFixed(2) + '%';
   try {
-    const tj = await api(`/api/v1/wallet/transfers?coin=${code}&limit=20`).catch(()=>({items:[]}));
-    const items = tj.items || [];
+    const tj = await api(`/api/v1/wallet/operations?limit=50`).catch(()=>({items:[]}));
+    const items = (tj.items || []).filter(op => (op.coin||'').toUpperCase() === code.toUpperCase());
     if (!items.length) $('coin-history').innerHTML = '<div class="empty-state">Истории пока нет</div>';
     else {
       $('coin-history').innerHTML = items.map(op => {
-        const isOut = op.from_user_id && !op.is_incoming;
-        return `<div class="h-row">
-          <div class="h-icon">${isOut?'↗':'↙'}</div>
-          <div class="h-info"><div class="t">${op.note || (isOut?'Отправлено':'Получено')}</div><div class="d">${(op.created_at||'').replace('T',' ').slice(0,16)}</div></div>
-          <div class="h-amt"><div class="a ${isOut?'neg':'pos'}">${isOut?'−':'+'}${fmt(op.amount, 6)} ${op.coin}</div></div>
+        const isOut = op.amount < 0;
+        const sign = isOut ? '−' : '+';
+        const cls = isOut ? 'neg' : 'pos';
+        const title = ({deposit:'Пополнение', withdraw:'Вывод', withdraw_rollback:'Возврат',
+                        swap:'Обмен', transfer_in:'Получено', transfer_out:'Отправлено',
+                        fee:'Комиссия', earn:'Начисление', spend:'Списание',
+                        cheque_redeem:'Чек активирован'})[op.type] || op.type;
+        return `<div class="h-row" style="display:flex;align-items:center;padding:12px 14px;border-top:1px solid var(--border)">
+          <div class="h-icon" style="width:36px;height:36px;border-radius:50%;background:${isOut?'#FF453A22':'#26A17B22'};color:${isOut?'#FF453A':'#26A17B'};display:flex;align-items:center;justify-content:center;margin-right:12px">${isOut?'↗':'↙'}</div>
+          <div class="h-info" style="flex:1;min-width:0"><div class="t" style="font-size:14px">${title}</div><div class="d" style="color:var(--muted);font-size:12px;margin-top:2px">${(op.created_at||'').replace('T',' ').slice(0,16)}</div></div>
+          <div class="h-amt"><div class="a ${cls}" style="font-size:14px;font-weight:600">${sign}${fmt(op.amount_abs, 6)} ${op.coin}</div></div>
         </div>`;
       }).join('');
     }
