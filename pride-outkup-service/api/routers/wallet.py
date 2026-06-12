@@ -374,24 +374,36 @@ async def coin_withdraw(
     # ── Путь 1: USDT/TRC20 — своя нода ──────────────────────────────
     if coin == "USDT" and network == "TRC20":
         from core.services import tron_service
-        if tron_service.is_configured() and amount <= 100:
-            res = await tron_service.send_usdt(address, amount)
-            if res.get("ok"):
-                tx_id = res.get("tx_id")
-                status_ = "sent"
-            else:
-                await balance_service.credit(db, user.id, coin, total_debit,
-                                             op_type="withdraw_rollback",
-                                             note=f"auto-send failed: {res.get('error')}")
-                raise HTTPException(503, f"send failed: {res.get('error')}")
+        if not tron_service.is_configured():
+            # Нет ноды — нельзя отправить. ROLLBACK + 503.
+            await balance_service.credit(db, user.id, coin, total_debit,
+                                         op_type="withdraw_rollback",
+                                         note="tron_service not configured")
+            raise HTTPException(503, "TRON-нода не настроена — обратитесь в поддержку")
+        # Без порога: hot wallet может отправлять любую сумму до своего баланса
+        res = await tron_service.send_usdt(address, amount)
+        if res.get("ok"):
+            tx_id = res.get("tx_id")
+            status_ = "sent"
+            logger.info("[withdraw] USDT/TRC20 SENT %s -> %s tx=%s", amount, address, tx_id)
+        else:
+            await balance_service.credit(db, user.id, coin, total_debit,
+                                         op_type="withdraw_rollback",
+                                         note=f"auto-send failed: {res.get('error')}")
+            logger.warning("[withdraw] USDT/TRC20 FAILED %s -> %s err=%s (rolled back)",
+                           amount, address, res.get("error"))
+            raise HTTPException(503, f"вывод не выполнен: {res.get('error')}")
 
     # ── Путь 2: Прочие монеты — проксируем через FixedFloat ─────────
     elif coin in ("TON", "BTC", "ETH", "SOL", "BNB", "DOGE", "LTC", "USDC"):
         from core.services import fixedfloat_service as ff_svc
         from core.services import tron_service
         if not ff_svc.is_configured():
-            # FF не настроен — pending для ручного вывода
-            status_ = "pending"
+            # FF не настроен — нельзя дойти до клиента. ROLLBACK + 503.
+            await balance_service.credit(db, user.id, coin, total_debit,
+                                         op_type="withdraw_rollback",
+                                         note="fixedfloat not configured")
+            raise HTTPException(503, "FixedFloat не настроен — обратитесь в поддержку")
         else:
             try:
                 # Рассчитываем сколько USDT нужно положить на FF чтобы юзер получил amount COIN
@@ -432,6 +444,8 @@ async def coin_withdraw(
                 await balance_service.credit(db, user.id, coin, total_debit,
                                              op_type="withdraw_rollback",
                                              note=f"FF proxy failed: {e}")
+                logger.warning("[withdraw] FF proxy FAILED %s %s -> %s err=%s (rolled back)",
+                               amount, coin, address, e)
                 raise HTTPException(503, f"вывод не выполнен: {e}")
 
     # Notify JARVIS for manual processing
