@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, require_verified
 from core.db import get_db
-from core.models import Coin, Swap, Transfer, User
+from core.models import Coin, OperationLog, Swap, Transfer, User
 from core.services import balance_service, jarvis_sync, rates_service
 
 router = APIRouter()
@@ -386,6 +386,24 @@ async def coin_withdraw(
             tx_id = res.get("tx_id")
             status_ = "sent"
             logger.info("[withdraw] USDT/TRC20 SENT %s -> %s tx=%s", amount, address, tx_id)
+            try:
+                from bot.main import notify_user
+                short = (address[:6] + "..." + address[-4:]) if len(address) > 12 else address
+                rt = await rates_service.get_rates()
+                rub_rate = (rt.get("tether") or {}).get("rub") or 95
+                rub_amt = float(amount) * rub_rate
+                tx_url = ("https://tronscan.org/#/transaction/" + tx_id) if tx_id else ""
+                lines_ = []
+                lines_.append("<b>Вывод " + f"{float(amount):.2f}" + " " + coin + "</b> (~" + f"{rub_amt:.0f}" + " RUB)")
+                lines_.append("Адрес: <code>" + short + "</code>")
+                lines_.append("")
+                lines_.append("USDT уже отправлен в сеть TRON и придёт на адрес через 1-2 минуты.")
+                if tx_url:
+                    lines_.append("")
+                    lines_.append('<a href="' + tx_url + '">Открыть транзакцию</a>')
+                await notify_user(user.tg_id, "\n".join(lines_))
+            except Exception as _e:
+                logger.warning("[withdraw] notify failed: %s", _e)
         else:
             await balance_service.credit(db, user.id, coin, total_debit,
                                          op_type="withdraw_rollback",
@@ -433,6 +451,18 @@ async def coin_withdraw(
                     raise Exception(f"send to FF failed: {send_res.get('error')}")
                 tx_id = send_res.get("tx_id")
                 status_ = "sent_to_ff"
+                try:
+                    from bot.main import notify_user
+                    short = (address[:6] + "..." + address[-4:]) if len(address) > 12 else address
+                    await notify_user(
+                        user.tg_id,
+                        "<b>Вывод " + f"{float(amount)}" + " " + coin + "</b>\n"
+                        "Адрес: <code>" + short + "</code>\n\n"
+                        "Запущен обмен USDT в " + coin + " через FixedFloat. "
+                        + coin + " придёт в течение 10-30 минут.",
+                    )
+                except Exception as _e:
+                    logger.warning("[withdraw FF] notify failed: %s", _e)
                 logger.info(
                     "[withdraw] FF proxy: %s %s -> %s, usdt_paid=%s, fee=%s, "
                     "ff_order=%s, our_profit~=$%.2f",
@@ -465,3 +495,51 @@ async def coin_withdraw(
         "to_address": address, "status": status_, "tx_id": tx_id,
         "ff_order_id": ff_order_id,
     }
+
+
+# Unified operations history (deposit + withdraw + swap + transfer)
+@router.get("/wallet/operations")
+async def list_operations(
+    limit: int = 50,
+    offset: int = 0,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Единая лента всех операций по балансу юзера (из operations_log)."""
+    res = await db.execute(
+        select(OperationLog)
+        .where(OperationLog.user_id == user.id)
+        .order_by(desc(OperationLog.created_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = res.scalars().all()
+    rates = await rates_service.get_rates()
+    rub_per_usd = (rates.get("tether") or {}).get("rub") or 95.0
+    items = []
+    for op in rows:
+        coin = "USDT"
+        note = op.note or ""
+        if note.startswith("[") and "]" in note:
+            try:
+                coin = note[1:note.index("]")]
+                note = note[note.index("]")+1:].strip()
+            except Exception:
+                pass
+        amt = float(op.amount_usdt or 0)
+        rub = abs(amt) * rub_per_usd
+        tx_url = ("https://tronscan.org/#/transaction/" + op.txid) if op.txid else None
+        items.append({
+            "id": op.id,
+            "type": op.type,
+            "coin": coin,
+            "amount": amt,
+            "amount_abs": abs(amt),
+            "rub": round(rub, 2),
+            "note": note,
+            "txid": op.txid,
+            "tronscan_url": tx_url,
+            "balance_after": float(op.balance_after) if op.balance_after is not None else None,
+            "created_at": op.created_at.isoformat() if op.created_at else None,
+        })
+    return {"items": items, "total": len(items)}
