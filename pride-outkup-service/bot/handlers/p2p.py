@@ -699,11 +699,15 @@ async def cb_my_offers(call: CallbackQuery):
         )).scalars().all()
     if not rows:
         await call.message.edit_text(
-            "Объявлений нет. Создать оффер можно из Mini-App.",
-            reply_markup=_kb([[_btn("← Меню", "p2p:menu")]]),
+            "У тебя пока нет объявлений.\n\n"
+            "Создай оффер — он попадёт в стакан и появится у других юзеров.",
+            reply_markup=_kb([
+                [_btn("+ Создать оффер", "p2p:create")],
+                [_btn("← Меню", "p2p:menu")],
+            ]),
         )
         await call.answer(); return
-    kb_rows = []
+    kb_rows = [[_btn("+ Создать оффер", "p2p:create")]]
     lines = ["<b>Мои объявления</b>"]
     for o in rows:
         eff = float(o.rate_rub_per_usdt)

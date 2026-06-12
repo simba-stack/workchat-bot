@@ -17,6 +17,7 @@ from bot.handlers import (
     wallet as wallet_h,
     commands as commands_h,
     p2p as p2p_h,
+    p2p_create as p2p_create_h,
     cheques as cheques_h,
 )
 from core.config import settings
@@ -65,6 +66,8 @@ async def run_bot() -> None:
     # Cheques inline (@PrideP2P_bot 5 USDT за пиццу)
     dp.include_router(cheques_h.router)
     # P2P router до commands — чтобы p2p:* перехватывал callback'и
+    # p2p_create регистрируем ПЕРЕД p2p, чтобы pc:* и p2p:create перехватывались
+    dp.include_router(p2p_create_h.router)
     dp.include_router(p2p_h.router)
     dp.include_router(commands_h.router)
     dp.include_router(kyc.router)
