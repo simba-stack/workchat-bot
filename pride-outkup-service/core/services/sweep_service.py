@@ -33,7 +33,7 @@ from core.services import wallet_derive
 
 logger = logging.getLogger(__name__)
 
-SWEEP_INTERVAL_SEC = 60 * 60  # 1 час
+SWEEP_INTERVAL_SEC = 60  # 1 минута — частый sweep по запросу SIMBA
 SWEEP_MIN_USDT = Decimal("5")  # минимум для sweep'а (комиссия ~1 USDT)
 SWEEP_TRX_RESERVE = Decimal("15")  # минимум TRX для газа
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"

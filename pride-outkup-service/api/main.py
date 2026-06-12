@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # SIMBA: $4.5-эквивалент withdraw fee для всех coin
 COIN_FEES_UPDATE = [
-    "UPDATE coins SET withdraw_fee=4.5      WHERE code='USDT'",
+    "UPDATE coins SET withdraw_fee=3        WHERE code='USDT'",
     "UPDATE coins SET withdraw_fee=4.5      WHERE code='USDC'",
     "UPDATE coins SET withdraw_fee=25       WHERE code='TRX'",
     "UPDATE coins SET withdraw_fee=0.9      WHERE code='TON'",
@@ -102,7 +102,7 @@ async def _ensure_schema_and_seed():
 
     SEED = [
         ("USDT",  "Tether",       "tether",           ["TRC20","ERC20","BEP20","TON"], 6, "#26A17B",
-         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 4.5, 10),
+         "https://assets.coingecko.com/coins/images/325/small/Tether.png", 1, 5, 3, 10),
         ("TON",   "Toncoin",      "the-open-network", ["TON"], 9, "#0098EA",
          "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png", 1, 0.5, 0.9, 20),
         ("TRX",   "TRON",         "tron",             ["TRC20"], 6, "#FF060A",
