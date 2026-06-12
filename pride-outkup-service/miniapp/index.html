@@ -277,7 +277,7 @@
   <div style="text-align:center;padding:30px 20px 8px">
     <div style="display:inline-flex;align-items:baseline;gap:10px;font-size:42px;font-weight:700;letter-spacing:-1.5px">
       <span style="color:#777;font-weight:500;font-size:30px">$</span>
-      <span id="total-usd">1.19</span>
+      <span id="total-usd">0.00</span>
       <span style="font-size:18px;cursor:pointer;opacity:0.5;display:inline-flex;align-items:center;padding:6px;transition:opacity .15s" id="toggle-balance" title="Скрыть/показать">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="eye-icon"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.5"/></svg>
       </span>
@@ -568,6 +568,7 @@ const fmt = (n,d=2) => Number(n||0).toLocaleString('en-US',{maximumFractionDigit
 const $ = id => document.getElementById(id);
 
 let coins = [], balances = {}, rates = {}, activeCoin = 'USDT';
+let balanceHidden = false;
 let myP2pSide = 'buy', myP2pCoin = 'USDT', myP2pPm = '';
 let activeDeal = null, chatPollTimer = null;
 
@@ -802,8 +803,7 @@ if (_logoutBtn) _logoutBtn.addEventListener('click', () => {
 });
 
 // Глазик: скрыть/показать баланс (Crypto-Bot style)
-let balanceHidden = false;
-const EYE_OPEN = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+const EYE_OPEN ='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.5"/></svg>';
 const EYE_OFF = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 19c-7 0-10-7-10-7a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 10 7 10 7a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"/></svg>';
 $('toggle-balance').addEventListener('click', () => {
   balanceHidden = !balanceHidden;
