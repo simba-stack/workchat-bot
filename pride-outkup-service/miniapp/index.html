@@ -271,7 +271,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
     <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
     <div style="display:flex;gap:14px;align-items:center">
-      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div>
+      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.2.0</span>
     </div>
   </div>
   <div style="text-align:center;padding:30px 20px 8px">
@@ -1179,6 +1179,104 @@ async function redeemCheque(code) {
     setTimeout(loadMain, 500);
   } catch (e) { toast(e.message, 'error'); }
 }
+
+
+// ===== Face ID + Apple Pay sound (Crypto-Bot style) =====
+async function confirmBiometric(reason) {
+  try {
+    const bm = tg && tg.BiometricManager;
+    if (!bm) return true;  // нет API — пропускаем
+    if (!bm.isInited) await new Promise(r => bm.init(r));
+    if (!bm.isBiometricAvailable) return true;
+    if (!bm.isAccessGranted) {
+      const granted = await new Promise(r => bm.requestAccess({reason: reason || 'Подтвердите операцию'}, r));
+      if (!granted) return false;
+    }
+    return await new Promise(r => bm.authenticate({reason: reason || 'Подтвердите операцию'}, (success) => r(!!success)));
+  } catch (e) { console.warn('biometric err', e); return true; }
+}
+function playSuccessSound() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    // 3 ноты — D5 → A5 → D6, как Apple Pay success
+    const notes = [
+      {f: 587.33, t: 0.00, d: 0.12},
+      {f: 880.00, t: 0.10, d: 0.16},
+      {f: 1174.66, t: 0.22, d: 0.30},
+    ];
+    notes.forEach(n => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = n.f;
+      const T = ctx.currentTime + n.t;
+      g.gain.setValueAtTime(0, T);
+      g.gain.linearRampToValueAtTime(0.28, T + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, T + n.d);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(T); osc.stop(T + n.d + 0.05);
+    });
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+  } catch (e) {}
+}
+
+// ===== Оборачиваем wd-submit и sw-submit под биометрию + звук =====
+(() => {
+  const wd = document.getElementById('wd-submit');
+  if (wd) {
+    // Клонируем чтобы убрать все старые listeners + добавить новый
+    const clone = wd.cloneNode(true);
+    wd.parentNode.replaceChild(clone, wd);
+    clone.addEventListener('click', async () => {
+      const c = coins.find(x => x.code === activeCoin);
+      const amt = +document.getElementById('wd-amount').value || 0;
+      const addr = document.getElementById('wd-address').value.trim();
+      if (amt <= 0) return toast('Введи сумму', 'error');
+      if (!addr || addr.length < 30) return toast('Введи адрес', 'error');
+      if (amt > (+balances[activeCoin]||0)) return toast('Недостаточно', 'error');
+      if (amt < (+c?.min_withdraw||0)) return toast('Минимум ' + c.min_withdraw + ' ' + activeCoin, 'error');
+      const ok = await confirmBiometric('Подтвердите вывод ' + amt + ' ' + activeCoin);
+      if (!ok) return toast('Подтверждение отменено', 'error');
+      clone.disabled = true; clone.textContent = '⏳';
+      try {
+        const r = await api('/api/v1/wallet/withdraw', {
+          method: 'POST',
+          body: JSON.stringify({coin: activeCoin, network: (c.networks||['TRC20'])[0], amount: amt, address: addr})
+        });
+        playSuccessSound();
+        if (r.status === 'sent') toast('Отправлено. TX: ' + (r.tx_id||'').slice(0,12) + '…');
+        else if (r.status === 'sent_to_ff') toast('Заказ через FixedFloat создан');
+        else toast('Заявка принята');
+        setTimeout(() => { loadMain(); go('main'); }, 1500);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { clone.disabled = false; clone.textContent = 'Вывести'; }
+    });
+  }
+  const sw = document.getElementById('sw-submit');
+  if (sw) {
+    const clone = sw.cloneNode(true);
+    sw.parentNode.replaceChild(clone, sw);
+    clone.addEventListener('click', async () => {
+      const amt = +document.getElementById('sw-from-amt').value || 0;
+      if (amt <= 0) return toast('Введи сумму', 'error');
+      if (amt > (+balances[swFrom]||0)) return toast('Недостаточно', 'error');
+      const ok = await confirmBiometric('Обмен ' + amt + ' ' + swFrom + ' → ' + swTo);
+      if (!ok) return toast('Подтверждение отменено', 'error');
+      clone.disabled = true; clone.textContent = '⏳';
+      try {
+        const r = await api('/api/v1/wallet/swap', {
+          method: 'POST',
+          body: JSON.stringify({from_coin: swFrom, to_coin: swTo, amount: amt})
+        });
+        playSuccessSound();
+        toast('Обмен выполнен');
+        setTimeout(() => { loadMain(); go('main'); }, 1500);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { clone.disabled = false; clone.textContent = 'Обменять'; }
+    });
+  }
+})();
 
 loadMain().then(routeFromStart);
 </script>
