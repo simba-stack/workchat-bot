@@ -60,40 +60,69 @@ async def get_usdt_balance() -> Decimal:
 
 
 async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
-    """Отправить USDT TRC20 → возвращает {'tx_id', 'status'}.
+    """Отправить USDT TRC20 с hot wallet → получатель.
 
-    Если настроен FEEE_API_KEY — сначала арендуем energy через Feee.io
-    (экономия 90%+ на газе: ~$0.05 vs $1+ без energy).
-    Если аренда не удалась — fallback на сжигание TRX (fee_limit=20 TRX).
+    Согласно docs.tron.network 2026:
+    - Получатель ИМЕЕТ USDT → нужно ~65k energy (~$1.4 в TRX burn)
+    - Получатель БЕЗ USDT → нужно ~130k energy (~$2.7 в TRX burn)
+
+    Алгоритм:
+    1. Проверяем USDT balance получателя → нужное кол-во energy
+    2. Если есть Feee.io → арендуем energy (платим в USDT/TRX с Feee баланса)
+    3. Иначе fee_limit = 35 или 60 TRX (в зависимости от случая) для burn
+    4. После broadcast — ЖДЁМ tx confirmation и проверяем receipt.result==SUCCESS.
+       broadcast() возвращает txid даже для failed tx (OUT_OF_ENERGY) — не доверяем!
     """
+    import asyncio
     if not is_configured():
         return {"ok": False, "error": "TRON not configured"}
 
-    # Pre-step: rent energy через Feee.io (если настроен)
+    client = _get_client()
+
+    # Проверяем USDT balance получателя — определяет нужное кол-во energy
+    receiver_has_usdt = False
+    try:
+        contract_check = client.get_contract(USDT_CONTRACT)
+        recv_bal_raw = contract_check.functions.balanceOf(to_address)
+        receiver_has_usdt = (recv_bal_raw or 0) > 0
+    except Exception as e:
+        logger.warning("[tron] check receiver balance failed: %s, assuming no USDT", e)
+
+    energy_needed = 65_000 if receiver_has_usdt else 130_000
+    logger.info("[tron] receiver=%s has_usdt=%s → energy=%d", to_address, receiver_has_usdt, energy_needed)
+
+    # Rent energy через Feee.io (если настроен)
     rented = False
     try:
         from core.services import energy_service
         if energy_service.is_configured():
             rented = await energy_service.rent_and_wait(
-                settings.tron_hot_wallet_address,
-                energy_amount=65_000,
+                settings.tron_hot_wallet_address,  # ВАЖНО: arender energy для OWNER (hot wallet)
+                energy_amount=energy_needed,
                 wait_sec=8,
             )
             if rented:
-                logger.info("[tron] energy rented via Feee.io for %s", to_address)
+                logger.info("[tron] energy %d rented via Feee.io", energy_needed)
             else:
-                logger.warning("[tron] energy rental failed, falling back to TRX burn")
+                logger.warning("[tron] energy rental FAILED → fallback TRX burn (~$%.2f)",
+                               energy_needed * 0.00021)  # ~210 sun/energy at current TRX rate
     except Exception as e:
-        logger.warning("[tron] energy rental skipped: %s", e)
+        logger.warning("[tron] energy rental exception: %s", e)
 
     try:
         from tronpy.keys import PrivateKey
-        client = _get_client()
         priv = PrivateKey(bytes.fromhex(settings.tron_private_key))
         contract = client.get_contract(USDT_CONTRACT)
         amount_raw = int(amount * Decimal(10 ** 6))
-        # fee_limit: если energy не арендована — даём запас 30 TRX чтобы покрыть burn
-        fee_limit_sun = 5_000_000 if rented else 30_000_000  # 5 TRX vs 30 TRX
+        # fee_limit: rented — 5 TRX хватит (bandwidth + safety).
+        # Не rented + receiver_has_usdt → 35 TRX (~14 TRX burn + safety).
+        # Не rented + receiver_no_usdt → 60 TRX (~27 TRX burn + safety).
+        if rented:
+            fee_limit_sun = 5_000_000
+        elif receiver_has_usdt:
+            fee_limit_sun = 35_000_000
+        else:
+            fee_limit_sun = 60_000_000
         txn = (
             contract.functions.transfer(to_address, amount_raw)
             .with_owner(settings.tron_hot_wallet_address)
@@ -101,11 +130,27 @@ async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
             .build()
             .sign(priv)
         )
-        result = txn.broadcast()
+        broadcast_res = txn.broadcast()
         tx_id = txn.txid
-        logger.info("[tron] send %s USDT to %s tx=%s (energy_rented=%s)",
-                    amount, to_address, tx_id, rented)
-        return {"ok": True, "tx_id": tx_id, "result": result, "energy_rented": rented}
+        logger.info("[tron] broadcast %s USDT → %s tx=%s (rented=%s, fee_limit=%s TRX) — waiting confirm",
+                    amount, to_address, tx_id, rented, fee_limit_sun // 1_000_000)
+
+        # КРИТИЧНО: ждём блок и проверяем receipt.result
+        await asyncio.sleep(20)  # TRON блок ~3 сек, 20 сек = с запасом 6 блоков
+        try:
+            info = client.get_transaction_info(tx_id)
+            receipt = (info or {}).get("receipt") or {}
+            result_code = receipt.get("result", "UNKNOWN")
+            if result_code != "SUCCESS":
+                logger.error("[tron] tx %s REVERT: result=%s receipt=%s",
+                             tx_id, result_code, receipt)
+                return {"ok": False, "error": f"tx_revert_{result_code}", "tx_id": tx_id}
+        except Exception as e:
+            logger.warning("[tron] confirm check failed: %s — assuming pending", e)
+            # Не вернём ошибку — tx могла улететь, лучше assume success чем сорвать withdraw
+
+        logger.info("[tron] CONFIRMED %s USDT → %s tx=%s", amount, to_address, tx_id)
+        return {"ok": True, "tx_id": tx_id, "result": broadcast_res, "energy_rented": rented}
     except Exception as e:
         logger.exception("[tron] send failed: %s", e)
         return {"ok": False, "error": str(e)[:300]}

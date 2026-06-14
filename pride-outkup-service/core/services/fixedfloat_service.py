@@ -80,7 +80,7 @@ async def get_rate(from_coin: str, to_coin: str, amount: Decimal) -> Optional[di
         return None
 
     body = {
-        "type": "fixed",   # fixed-rate quote (vs "float")
+        "type": "float",   # float = 0.5% fee (vs fixed=1%) — наш профит х2
         "fromCcy": fc, "toCcy": tc,
         "direction": "from", "amount": float(amount),
     }
