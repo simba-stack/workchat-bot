@@ -271,7 +271,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
     <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
     <div style="display:flex;gap:14px;align-items:center">
-      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.5.0</span>
+      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.6.0</span>
     </div>
   </div>
   <div style="text-align:center;padding:30px 20px 8px">
@@ -717,13 +717,16 @@ document.querySelectorAll('[data-coin-act]').forEach(b => b.addEventListener('cl
   else if (a==='cheque') { openChequeNew(activeCoin); }
 }));
 
-// Главная: 3 кнопки (Пополнить / Вывести / Обмен)
-$('main-deposit').addEventListener('click', () => { activeCoin = 'USDT'; openDeposit('USDT'); });
-$('main-withdraw').addEventListener('click', () => { activeCoin = 'USDT'; openWithdraw('USDT'); });
-$('main-swap').addEventListener('click', () => { go('swap'); });
-
-// Шапка: кнопка настроек
-$('settings-btn').addEventListener('click', () => go('settings'));
+// Главные 3 кнопки + утилитка safeBind для защиты от null
+function safeBind(id, event, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(event, fn);
+}
+safeBind('main-deposit','click', () => { activeCoin = 'USDT'; openDeposit('USDT'); });
+safeBind('main-withdraw','click', () => { activeCoin = 'USDT'; openWithdraw('USDT'); });
+safeBind('main-history','click', () => go('history'));
+safeBind('main-swap','click', () => go('swap'));  // не существует — пропустится
+safeBind('settings-btn','click', () => go('settings'));
 
 // ── Auto-refresh баланса каждые 10 сек когда вкладка main активна ──
 // Авто-обновление: история = 5 сек, баланс = 10 сек
