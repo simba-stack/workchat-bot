@@ -38,6 +38,10 @@ SWEEP_MIN_USDT = Decimal("5")  # минимум для sweep'а (комисси�
 SWEEP_TRX_RESERVE = Decimal("15")  # минимум TRX для газа
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
+# Cooldown для user-address после failed sweep (защита от TRX-petли):
+# адрес → unix_timestamp до которого пропускаем sweep
+_COOLDOWN: dict[str, float] = {}
+
 
 def _get_tron_client():
     from tronpy import Tron
@@ -161,14 +165,29 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     has_feee = energy_service.is_configured()
     trx_min = Decimal("3") if has_feee else SWEEP_TRX_RESERVE
 
+    # Cooldown: если недавно был неуспех — не дёргаем повторно
+    import time
+    if uda.address in _COOLDOWN and _COOLDOWN[uda.address] > time.time():
+        return {"address": uda.address, "skipped": "cooldown",
+                "usdt": float(usdt_bal),
+                "until": int(_COOLDOWN[uda.address])}
+
     trx_bal = await _balance_trx(client, uda.address)
     if trx_bal < trx_min:
-        # АВТО-FUND ОТКЛЮЧЁН: слил TRX в петле потому что tx broadcast выдавал OK
-        # но не подтверждался на блокчейне → USDT не двигался → TRX тратился впустую.
-        # Возвращаем skip без funding — пользователь должен сам положить TRX на user-addr,
-        # или мы добавляем правильную проверку tx confirmation (см. след. итерацию).
-        return {"address": uda.address, "skipped": "no_trx_gas",
-                "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
+        # Auto-fund TRX — но с НАДЁЖНОЙ суммой 20 TRX (USDT TRC20 transfer без energy
+        # сжигает ~14 TRX). Раньше fund'или 5 TRX → tx fail OUT_OF_ENERGY.
+        # И cooldown 30 мин ставим ДО fund — чтобы при failed tx не fund'или снова.
+        logger.info("[sweep] %s low TRX (%s<%s) — fund 20 TRX from hot wallet",
+                    uda.address, trx_bal, trx_min)
+        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин — на случай если tx failed
+        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("20"))
+        if not funded:
+            return {"address": uda.address, "skipped": "trx_fund_failed",
+                    "usdt": float(usdt_bal)}
+        trx_bal = await _balance_trx(client, uda.address)
+        if trx_bal < trx_min:
+            return {"address": uda.address, "skipped": "trx_fund_pending",
+                    "usdt": float(usdt_bal), "trx": float(trx_bal)}
 
     # Pre-step: rent energy для user-addr (если настроен Feee.io)
     rented = False
@@ -189,15 +208,39 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
             .build()
             .sign(priv)
         )
-        result = txn.broadcast()
-        logger.info("[sweep] %s → %s sent %s USDT tx=%s (energy_rented=%s)",
-                    uda.address, hot_wallet, usdt_bal, txn.txid, rented)
+        broadcast_res = txn.broadcast()
+        txid = txn.txid
+        logger.info("[sweep] %s broadcast tx=%s waiting confirmation...", uda.address, txid)
+
+        # КРИТИЧНО: ждём реального подтверждения и проверяем receipt.result
+        await asyncio.sleep(20)  # tron block ~3 сек, 20 сек = с запасом
+        try:
+            info = client.get_transaction_info(txid)
+            receipt = (info or {}).get("receipt", {}) or {}
+            result_code = receipt.get("result", "UNKNOWN")
+            if result_code != "SUCCESS":
+                # Tx revert! USDT остался на user-addr, TRX потрачен
+                logger.error("[sweep] %s tx %s REVERT: result=%s receipt=%s",
+                             uda.address, txid, result_code, receipt)
+                # ставим cooldown 30 мин чтобы не молотить впустую
+                _COOLDOWN[uda.address] = time.time() + 1800
+                return {"address": uda.address, "error": f"tx_revert_{result_code}",
+                        "tx_id": txid}
+        except Exception as e:
+            logger.warning("[sweep] %s confirm check failed: %s — assuming OK", uda.address, e)
+
+        # tx подтверждена ОК — снимаем cooldown
+        _COOLDOWN.pop(uda.address, None)
+        logger.info("[sweep] %s → %s SENT %s USDT tx=%s (energy_rented=%s) CONFIRMED",
+                    uda.address, hot_wallet, usdt_bal, txid, rented)
         return {
             "address": uda.address, "ok": True,
-            "amount": float(usdt_bal), "tx_id": txn.txid, "energy_rented": rented,
+            "amount": float(usdt_bal), "tx_id": txid, "energy_rented": rented,
         }
     except Exception as e:
         logger.exception("[sweep] send failed: %s", e)
+        # cooldown даже на exception — не молотить
+        _COOLDOWN[uda.address] = time.time() + 1800
         return {"address": uda.address, "error": str(e)[:200]}
 
 
@@ -227,14 +270,18 @@ async def tick() -> None:
                 _, priv_hex = wallet_derive.derive_tron_keypair(master_key, uda.user_id)
                 r = await _sweep_one(client, uda, hot, priv_hex)
                 results.append(r)
-                # Verbose: логируем каждый результат чтобы было видно почему skip
                 if r.get("ok"):
-                    logger.info("[sweep] %s SWEPT %.4f USDT tx=%s", uda.address, r.get("amount", 0), r.get("tx_id", "?"))
+                    logger.info("[sweep] %s SWEPT %.4f USDT tx=%s",
+                                uda.address, r.get("amount", 0), r.get("tx_id", "?"))
                 elif r.get("skipped") == "low_balance":
-                    logger.info("[sweep] %s skip low_balance: %.4f USDT", uda.address, r.get("usdt", 0))
-                elif r.get("skipped") == "no_trx_gas":
-                    logger.warning("[sweep] %s skip NO_TRX_GAS: usdt=%.4f trx=%.4f (need %.4f)",
-                                   uda.address, r.get("usdt", 0), r.get("trx", 0), r.get("need", 0))
+                    logger.info("[sweep] %s skip low_balance: %.4f USDT",
+                                uda.address, r.get("usdt", 0))
+                elif r.get("skipped") == "cooldown":
+                    logger.info("[sweep] %s skip cooldown (until %s)",
+                                uda.address, r.get("until"))
+                elif r.get("skipped") in ("no_trx_gas", "trx_fund_pending", "trx_fund_failed"):
+                    logger.warning("[sweep] %s skip %s: usdt=%.4f",
+                                   uda.address, r.get("skipped"), r.get("usdt", 0))
                 elif r.get("error"):
                     logger.error("[sweep] %s ERROR: %s", uda.address, r.get("error"))
             except Exception as e:
@@ -243,11 +290,11 @@ async def tick() -> None:
 
         swept = sum(1 for r in results if r.get("ok"))
         skipped_lb = sum(1 for r in results if r.get("skipped") == "low_balance")
-
-
-        skipped_gas = sum(1 for r in results if r.get("skipped") == "no_trx_gas")
-        logger.info("[sweep] tick summary: swept=%d, skip_low=%d, skip_gas=%d, total=%d",
-                    swept, skipped_lb, skipped_gas, len(results))
+        skipped_cd = sum(1 for r in results if r.get("skipped") == "cooldown")
+        skipped_gas = sum(1 for r in results if r.get("skipped") in ("no_trx_gas", "trx_fund_pending", "trx_fund_failed"))
+        errors = sum(1 for r in results if r.get("error"))
+        logger.info("[sweep] tick summary: swept=%d, skip_low=%d, skip_cd=%d, skip_gas=%d, err=%d, total=%d",
+                    swept, skipped_lb, skipped_cd, skipped_gas, errors, len(results))
 
 
 async def sweep_loop() -> None:
