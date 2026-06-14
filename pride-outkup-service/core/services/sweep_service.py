@@ -163,8 +163,18 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
 
     trx_bal = await _balance_trx(client, uda.address)
     if trx_bal < trx_min:
-        return {"address": uda.address, "skipped": "no_trx_gas",
-                "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
+        # Auto-fund TRX с hot wallet (раньше это работало только в immediate-sweep)
+        logger.info("[sweep] %s low TRX (%s<%s) — auto-funding from hot wallet",
+                    uda.address, trx_bal, trx_min)
+        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("5"))
+        if not funded:
+            return {"address": uda.address, "skipped": "no_trx_gas",
+                    "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
+        # После fund_trx_from_hot уже подождали 12 сек на подтверждение — проверяем TRX заново
+        trx_bal = await _balance_trx(client, uda.address)
+        if trx_bal < trx_min:
+            return {"address": uda.address, "skipped": "trx_fund_pending",
+                    "usdt": float(usdt_bal), "trx": float(trx_bal)}
 
     # Pre-step: rent energy для user-addr (если настроен Feee.io)
     rented = False
@@ -239,6 +249,8 @@ async def tick() -> None:
 
         swept = sum(1 for r in results if r.get("ok"))
         skipped_lb = sum(1 for r in results if r.get("skipped") == "low_balance")
+
+
         skipped_gas = sum(1 for r in results if r.get("skipped") == "no_trx_gas")
         logger.info("[sweep] tick summary: swept=%d, skip_low=%d, skip_gas=%d, total=%d",
                     swept, skipped_lb, skipped_gas, len(results))
