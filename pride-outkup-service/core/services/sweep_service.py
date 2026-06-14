@@ -163,18 +163,12 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
 
     trx_bal = await _balance_trx(client, uda.address)
     if trx_bal < trx_min:
-        # Auto-fund TRX с hot wallet (раньше это работало только в immediate-sweep)
-        logger.info("[sweep] %s low TRX (%s<%s) — auto-funding from hot wallet",
-                    uda.address, trx_bal, trx_min)
-        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("5"))
-        if not funded:
-            return {"address": uda.address, "skipped": "no_trx_gas",
-                    "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
-        # После fund_trx_from_hot уже подождали 12 сек на подтверждение — проверяем TRX заново
-        trx_bal = await _balance_trx(client, uda.address)
-        if trx_bal < trx_min:
-            return {"address": uda.address, "skipped": "trx_fund_pending",
-                    "usdt": float(usdt_bal), "trx": float(trx_bal)}
+        # АВТО-FUND ОТКЛЮЧЁН: слил TRX в петле потому что tx broadcast выдавал OK
+        # но не подтверждался на блокчейне → USDT не двигался → TRX тратился впустую.
+        # Возвращаем skip без funding — пользователь должен сам положить TRX на user-addr,
+        # или мы добавляем правильную проверку tx confirmation (см. след. итерацию).
+        return {"address": uda.address, "skipped": "no_trx_gas",
+                "usdt": float(usdt_bal), "trx": float(trx_bal), "need": float(trx_min)}
 
     # Pre-step: rent energy для user-addr (если настроен Feee.io)
     rented = False
