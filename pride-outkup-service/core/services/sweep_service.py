@@ -160,10 +160,24 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     if usdt_bal < SWEEP_MIN_USDT:
         return {"address": uda.address, "skipped": "low_balance", "usdt": float(usdt_bal)}
 
-    # Если есть Feee.io — минимально нужно ~3 TRX (только bandwidth).
-    # Иначе нужно ~15 TRX (для energy через сжигание).
     has_feee = energy_service.is_configured()
-    trx_min = Decimal("3") if has_feee else SWEEP_TRX_RESERVE
+    logger.info("[sweep] %s start: usdt=%s, has_feee=%s", uda.address, usdt_bal, has_feee)
+
+    # ШАГ 1 (если Feee): сразу пробуем арендовать energy. Это позволит
+    # тратить только ~1 TRX (bandwidth), а не 14 TRX burn.
+    rented = False
+    if has_feee:
+        logger.info("[sweep] %s renting energy via Feee.io...", uda.address)
+        rented = await energy_service.rent_and_wait(uda.address, energy_amount=65_000, wait_sec=8)
+        logger.info("[sweep] %s Feee rent result: %s", uda.address, rented)
+
+    # ШАГ 2: проверяем сколько TRX нужно (зависит от того арендована ли energy)
+    if rented:
+        trx_min = Decimal("1")   # только bandwidth — копейки
+        fund_amount = Decimal("2")  # на user-addr должно быть ~1 TRX, fund 2 с запасом
+    else:
+        trx_min = SWEEP_TRX_RESERVE  # 15 TRX для burn (если Feee упал)
+        fund_amount = Decimal("20")
 
     # Cooldown: если недавно был неуспех — не дёргаем повторно
     import time
@@ -173,14 +187,12 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
                 "until": int(_COOLDOWN[uda.address])}
 
     trx_bal = await _balance_trx(client, uda.address)
+    logger.info("[sweep] %s TRX balance=%s, need=%s (rented=%s)",
+                uda.address, trx_bal, trx_min, rented)
     if trx_bal < trx_min:
-        # Auto-fund TRX — но с НАДЁЖНОЙ суммой 20 TRX (USDT TRC20 transfer без energy
-        # сжигает ~14 TRX). Раньше fund'или 5 TRX → tx fail OUT_OF_ENERGY.
-        # И cooldown 30 мин ставим ДО fund — чтобы при failed tx не fund'или снова.
-        logger.info("[sweep] %s low TRX (%s<%s) — fund 20 TRX from hot wallet",
-                    uda.address, trx_bal, trx_min)
-        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин — на случай если tx failed
-        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("20"))
+        logger.info("[sweep] %s fund %s TRX from hot wallet", uda.address, fund_amount)
+        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин защита
+        funded = await fund_trx_from_hot(client, uda.address, amount_trx=fund_amount)
         if not funded:
             return {"address": uda.address, "skipped": "trx_fund_failed",
                     "usdt": float(usdt_bal)}
@@ -188,13 +200,6 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
         if trx_bal < trx_min:
             return {"address": uda.address, "skipped": "trx_fund_pending",
                     "usdt": float(usdt_bal), "trx": float(trx_bal)}
-
-    # Pre-step: rent energy для user-addr (если настроен Feee.io)
-    rented = False
-    if has_feee:
-        rented = await energy_service.rent_and_wait(uda.address, energy_amount=65_000, wait_sec=8)
-        if rented:
-            logger.info("[sweep] energy rented for %s", uda.address)
 
     try:
         priv = PrivateKey(bytes.fromhex(priv_hex))
