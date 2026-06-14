@@ -234,11 +234,15 @@ async def tick() -> None:
 
 async def sweep_loop() -> None:
     logger.info("[sweep] started, interval=%ds, min=%s USDT", SWEEP_INTERVAL_SEC, SWEEP_MIN_USDT)
-    # Первый sweep — через 5 мин после старта (дать сервису прогреться)
-    await asyncio.sleep(300)
+    # Первый tick — через 15 сек чтобы прогрузились БД/настройки (раньше было 300с — слишком долго)
+    await asyncio.sleep(15)
+    tick_num = 0
     while True:
+        tick_num += 1
         try:
+            logger.info("[sweep] tick #%d running…", tick_num)
             await tick()
+            logger.info("[sweep] tick #%d done", tick_num)
         except Exception as e:
-            logger.exception("[sweep] tick error: %s", e)
+            logger.exception("[sweep] tick #%d error: %s", tick_num, e)
         await asyncio.sleep(SWEEP_INTERVAL_SEC)
