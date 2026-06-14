@@ -4,6 +4,58 @@
 
 ---
 
+## v1.7.0 — 14 июня 2026 (Audit + Feee.io работает)
+
+### Найденные баги по research документации 2026
+
+**1. `tron_service.send_usdt` — energy 65k недостаточно для адреса без USDT**
+- TRON 2026: получатель **БЕЗ USDT** требует **130k energy** (~27 TRX burn)
+- Получатель **С USDT** требует **65k energy** (~6.4 TRX burn)
+- Старый код использовал 65k для всех + fee_limit 30 TRX → tx OUT_OF_ENERGY revert на новых адресах
+- Fix: adaptive `energy_needed = 65_000 if receiver_has_usdt else 130_000`
+- fee_limit: 5/35/60 TRX (rented / has_usdt / no_usdt)
+
+**2. `broadcast()` возвращает txid даже при revert — критичный антипаттерн**
+- `tronpy.broadcast()` НЕ проверяет результат выполнения tx, только что broadcast прошёл
+- Раньше думали что tx ушёл, реально OUT_OF_ENERGY → USDT не двигался, TRX сгорел
+- Fix: после broadcast `await asyncio.sleep(20)` → `client.get_transaction_info(txid)` → проверка `receipt.result == "SUCCESS"`
+- Применено и в `send_usdt` (withdraw) и в `_sweep_one` (sweep)
+
+**3. Sweep v3: Feee.io ПЕРВЫМ в порядке**
+- Старая логика: проверка TRX → если мало → fund TRX → return (Feee никогда не пробовался)
+- Новая логика: rent_energy → если ок → нужно только 2 TRX (bandwidth) → fund 2 TRX → sweep с energy
+- Газ упал с **$4.5 → $0.5-1.4** на sweep (≈3-9× дешевле)
+
+**4. FixedFloat — float rate вместо fixed для quote**
+- Fixed = 1% спред FF, Float = 0.5% спред
+- Для UI quote использовать `float` — юзер видит лучший курс
+- Для actual order create оставляем `fixed` — гарантия курса при отправке
+
+### Что подтверждено работающим (proof from Railway logs)
+
+- Sweep tick каждую минуту: `[sweep] tick #N running... done`
+- Feee.io rent: `[feee] rented 65000 energy for ...`
+- Confirmation: `[tron] CONFIRMED X USDT → Y tx=Z`
+- Депозиты → hot wallet за минуту с момента поступления
+
+### Ключевые цифры комиссий 2026 (research)
+
+| Сценарий | Энергия | Стоимость |
+|---|---|---|
+| Получатель имеет USDT | 65k | $1.9-2.0 (TRX burn) |
+| Получатель новый адрес | 130k | $3.7-4.0 (TRX burn) |
+| С Feee.io rent | 65k/130k | $0.5-1.4 |
+| **GasFree (JustLend DAO)** | — | **~$1 в USDT** ← TODO |
+
+### TODO для следующих итераций
+
+1. **GasFree integration** — JustLend DAO позволяет платить газ в USDT через subsidies, ~$1/tx. TronLink уже поддерживает (badge на hot wallet). Может убрать TRX из flow вообще.
+2. **FF order status polling** — после `create_order` поллить статус и нотифицировать юзера когда coin пришла
+3. **HSM/KMS для master_derivation_key** — сейчас plain в БД, прод-grade — шифровать
+4. **TronGrid paid plan** — free 100k/day, paid $10/мес 1M/day
+
+---
+
 ## v1.6.0 — 12 июня 2026 (фикс кнопок Mini-App)
 
 ### КОРЕНЬ всех «кнопки не жмутся»

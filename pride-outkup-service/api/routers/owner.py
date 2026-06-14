@@ -679,6 +679,17 @@ async def owner_coin_update(
     return {"ok": True, "code": c.code, "changed": changed}
 
 
+@router.post("/feee_test")
+async def owner_feee_test(_: bool = Depends(require_owner)):
+    """Принудительная диагностика Feee.io — пробует rent 32k energy на hot wallet.
+
+    Возвращает full result: configured, api_key_len, test_result (ok/error/code/msg).
+    Используй из Owner Panel чтобы убедиться что Feee.io реально работает.
+    """
+    from core.services import energy_service
+    return await energy_service.diagnostic()
+
+
 @router.get("/energy_status")
 async def owner_energy_status(
     _: bool = Depends(require_owner),

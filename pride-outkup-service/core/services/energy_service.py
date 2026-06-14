@@ -44,7 +44,38 @@ MIN_USDT_TRANSFER_ENERGY = 32_000  # один USDT transfer требует ~32k 
 
 def is_configured() -> bool:
     """Доступна ли интеграция с Feee.io (стоит ли env var)."""
-    return bool(os.environ.get("FEEE_API_KEY"))
+    key = os.environ.get("FEEE_API_KEY", "")
+    configured = bool(key and len(key) > 8)
+    if not configured:
+        logger.info("[feee] is_configured=False: key_len=%d", len(key))
+    return configured
+
+
+async def diagnostic() -> dict:
+    """Полная диагностика Feee.io. Доступно через /api/v1/owner/feee_test."""
+    diag = {
+        "configured": is_configured(),
+        "api_key_set": bool(os.environ.get("FEEE_API_KEY")),
+        "api_key_len": len(os.environ.get("FEEE_API_KEY", "")),
+        "base_url": FEEE_BASE_URL,
+        "user_agent": FEEE_USER_AGENT,
+    }
+    if not diag["configured"]:
+        diag["error"] = "FEEE_API_KEY не задан или короткий"
+        return diag
+
+    from core.config import settings
+    hot = settings.tron_hot_wallet_address
+    if not hot:
+        diag["error"] = "TRON_HOT_WALLET_ADDRESS не задан"
+        return diag
+
+    diag["test_address"] = hot
+    logger.info("[feee/diag] testing rent 32000 energy for %s", hot)
+    result = await rent_energy(hot, energy_amount=32_000)
+    diag["test_result"] = result
+    diag["status"] = "ok" if result.get("ok") else "failed"
+    return diag
 
 
 def _client() -> httpx.AsyncClient:
