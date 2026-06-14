@@ -217,30 +217,41 @@ async def tick() -> None:
         # Деривируем master_key один раз
         master_key = await wallet_derive.get_or_create_master_key(db)
         results = []
+        logger.info("[sweep] scanning %d user-addresses", len(rows))
         for uda in rows:
             try:
                 _, priv_hex = wallet_derive.derive_tron_keypair(master_key, uda.user_id)
                 r = await _sweep_one(client, uda, hot, priv_hex)
                 results.append(r)
+                # Verbose: логируем каждый результат чтобы было видно почему skip
+                if r.get("ok"):
+                    logger.info("[sweep] %s SWEPT %.4f USDT tx=%s", uda.address, r.get("amount", 0), r.get("tx_id", "?"))
+                elif r.get("skipped") == "low_balance":
+                    logger.info("[sweep] %s skip low_balance: %.4f USDT", uda.address, r.get("usdt", 0))
+                elif r.get("skipped") == "no_trx_gas":
+                    logger.warning("[sweep] %s skip NO_TRX_GAS: usdt=%.4f trx=%.4f (need %.4f)",
+                                   uda.address, r.get("usdt", 0), r.get("trx", 0), r.get("need", 0))
+                elif r.get("error"):
+                    logger.error("[sweep] %s ERROR: %s", uda.address, r.get("error"))
             except Exception as e:
                 logger.exception("[sweep] %s error: %s", uda.address, e)
-            # маленький delay между запросами TronGrid
             await asyncio.sleep(0.5)
 
         swept = sum(1 for r in results if r.get("ok"))
-        if swept:
-            logger.info("[sweep] tick done — swept=%d / total=%d", swept, len(results))
+        skipped_lb = sum(1 for r in results if r.get("skipped") == "low_balance")
+        skipped_gas = sum(1 for r in results if r.get("skipped") == "no_trx_gas")
+        logger.info("[sweep] tick summary: swept=%d, skip_low=%d, skip_gas=%d, total=%d",
+                    swept, skipped_lb, skipped_gas, len(results))
 
 
 async def sweep_loop() -> None:
     logger.info("[sweep] started, interval=%ds, min=%s USDT", SWEEP_INTERVAL_SEC, SWEEP_MIN_USDT)
-    # Первый tick — через 15 сек чтобы прогрузились БД/настройки (раньше было 300с — слишком долго)
     await asyncio.sleep(15)
     tick_num = 0
     while True:
         tick_num += 1
         try:
-            logger.info("[sweep] tick #%d running…", tick_num)
+            logger.info("[sweep] tick #%d running...", tick_num)
             await tick()
             logger.info("[sweep] tick #%d done", tick_num)
         except Exception as e:
