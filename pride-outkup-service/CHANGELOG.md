@@ -4,6 +4,58 @@
 
 ---
 
+## v1.8.0 — 15 июня 2026 (Sweep v7: auto-fund TRX + Feee UA whitelist)
+
+### Sweep v7 — авто-фанд для bandwidth
+
+После v6 (точная аренда energy через Feee) обнаружилось: даже когда energy куплена,
+USDT transfer ломается на bandwidth, если free quota TRON (600 байт/день per address)
+уже исчерпан и на user-addr нет TRX для bandwidth-burn.
+
+**Логика v7 в `_sweep_one`:**
+
+```
+ШАГ 3: bandwidth_available = из getaccountresource
+ЕСЛИ bandwidth < 300 И trx_bal < 0.5:
+    fund_trx_from_hot(uda.address, 1 TRX)
+    wait 12s
+    продолжить (TRX burn покроет bandwidth)
+```
+
+**Экономика одного sweep:**
+- 3.74 TRX (Feee energy rent) = $1.00
+- 0.27 TRX (bandwidth burn) = $0.07
+- **Итого ≈ $1.07/sweep**
+
+**Когда auto-fund НЕ срабатывает:**
+- Если bandwidth ≥ 300 (free quota доступна) — transfer идёт без burn
+- Если trx_bal ≥ 0.5 (TRX уже есть на адресе) — burn покрывается из текущего баланса
+
+Это делает sweep полностью self-healing для **всех будущих юзеров** — не нужно
+вручную закидывать TRX на каждый новый user-deposit-address.
+
+### Feee.io — User-Agent whitelist вместо IP
+
+**Проблема:** Railway меняет egress IP при каждом deploy → IP whitelist в Feee.io
+ломается. По доке Feee принимает **User-Agent ИЛИ IP** — но проверяет оба, если оба заполнены.
+
+**Решение:** в Feee console очищаем IP whitelist (оставляем пустым), оставляем UA
+`PrideP2P-Bot/1.0`. Теперь работает с любого IP.
+
+### Cooldown сообщения
+
+Текст логов `set cooldown 30min` → `set cooldown 60s` (реальное значение
+было 60 сек ещё с v6 — только лог-строки устарели).
+
+### Bugfix: дубликат broadcast()
+
+Случайный дубль `broadcast_res = txn.broadcast(); txid = txn.txid` появился
+после нескольких ручных правок. Сам по себе двойной broadcast одной и той же
+подписанной tx idempotent (вторая бы вернула already_executed), но это
+лишний HTTP-запрос → убрано.
+
+---
+
 ## v1.7.0 — 14 июня 2026 (Audit + Feee.io работает)
 
 ### Найденные баги по research документации 2026

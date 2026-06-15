@@ -283,21 +283,28 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     # Раньше делали fund 20 TRX и burn — это превращало sweep в дорогую операцию ($6+).
     # Теперь sweep работает ТОЛЬКО через Feee. Если Feee упал — ставим cooldown и ждём.
     if not rented:
-        logger.warning("[sweep] %s no energy (feee failed/disabled) — set cooldown 30min, skip sweep", uda.address)
-        _COOLDOWN[uda.address] = time.time() + 60  # 30 мин cooldown — не дёргать впустую
+        logger.warning("[sweep] %s no energy (feee failed/disabled) — set cooldown 60s, skip sweep", uda.address)
+        _COOLDOWN[uda.address] = time.time() + 60  # 60 сек cooldown — не дёргать впустую
         return {"address": uda.address, "skipped": "no_energy",
                 "usdt": float(usdt_bal)}
 
-    # ШАГ 3: bandwidth — берём из free quota (5000/день free). USDT transfer = ~268 байт,
-    # хватит на ~18 transfers в день. НЕ переводим TRX!
+    # ШАГ 3: bandwidth — TRON даёт 600 байт/день free per address. USDT transfer ~268 байт.
+    # Если free quota исчерпан И на адресе мало TRX → авто-fund 1 TRX (хватит на ~3 sweep burn).
+    # Стоимость sweep'а: 3.74 TRX (Feee energy) + 0.27 TRX (bandwidth burn) ≈ $1.07.
     bandwidth_available = res.get("bandwidth_available", 0)
-    logger.info("[sweep] %s bandwidth_available=%d (need ~268)", uda.address, bandwidth_available)
-    if bandwidth_available < 300:
-        # Free quota исчерпана — нужен TRX для bandwidth. Лучше cooldown чем платить $6.
-        logger.warning("[sweep] %s low bandwidth (%d<300) — cooldown 30min", uda.address, bandwidth_available)
-        _COOLDOWN[uda.address] = time.time() + 60
-        return {"address": uda.address, "skipped": "no_bandwidth",
-                "usdt": float(usdt_bal), "bandwidth": bandwidth_available}
+    trx_bal = await _balance_trx(client, uda.address)
+    logger.info("[sweep] %s bandwidth_available=%d (need ~268), trx_bal=%s",
+                uda.address, bandwidth_available, trx_bal)
+    if bandwidth_available < 300 and trx_bal < Decimal("0.5"):
+        logger.info("[sweep] %s AUTO-FUND 1 TRX from hot (bandwidth=%d, trx=%s)",
+                    uda.address, bandwidth_available, trx_bal)
+        funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("1"))
+        if not funded:
+            logger.warning("[sweep] %s fund failed — cooldown 60s", uda.address)
+            _COOLDOWN[uda.address] = time.time() + 60
+            return {"address": uda.address, "skipped": "fund_failed",
+                    "usdt": float(usdt_bal), "bandwidth": bandwidth_available}
+        logger.info("[sweep] %s fund OK — продолжаем (TRX burn покроет bandwidth)", uda.address)
 
     try:
         priv = PrivateKey(bytes.fromhex(priv_hex))
