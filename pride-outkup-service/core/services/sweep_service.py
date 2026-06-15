@@ -34,6 +34,11 @@ from core.services import wallet_derive
 logger = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SEC = 60  # 1 минута — частый sweep по запросу SIMBA
+
+# EMERGENCY KILL SWITCH — установить True чтобы остановить весь sweep loop
+# (через ENV var SWEEP_DISABLED=1). Используется при низком Feee balance.
+import os as _os
+SWEEP_DISABLED = _os.environ.get("SWEEP_DISABLED", "").strip() in ("1", "true", "yes")
 SWEEP_MIN_USDT = Decimal("5")  # минимум для sweep'а (комиссия ~1 USDT)
 SWEEP_TRX_RESERVE = Decimal("15")  # минимум TRX для газа
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -68,6 +73,34 @@ async def _balance_trx(client, addr: str) -> Decimal:
         return Decimal(str(sun))
     except Exception:
         return Decimal("0")
+
+
+async def _account_resource(client, addr: str) -> dict:
+    """Возвращает {energy, bandwidth} текущие на адресе.
+
+    Используем для проверки сколько energy УЖЕ арендовано/делегировано
+    перед тем как платить за новую аренду через Feee.io.
+
+    energy = EnergyLimit - EnergyUsed (доступно сейчас)
+    bandwidth = NetLimit - NetUsed + free_quota (~5000/день)
+    """
+    try:
+        # tronpy не имеет прямого метода — используем low-level
+        info = client.provider.make_request("/wallet/getaccountresource", {"address": addr, "visible": True})
+        energy_limit = info.get("EnergyLimit", 0)
+        energy_used = info.get("EnergyUsed", 0)
+        net_limit = info.get("NetLimit", 0)
+        net_used = info.get("NetUsed", 0)
+        free_net_limit = info.get("freeNetLimit", 5000)
+        free_net_used = info.get("freeNetUsed", 0)
+        return {
+            "energy_available": max(0, energy_limit - energy_used),
+            "bandwidth_available": max(0, net_limit - net_used) + max(0, free_net_limit - free_net_used),
+            "raw": info,
+        }
+    except Exception as e:
+        logger.warning("[sweep] _account_resource error %s: %s", addr, e)
+        return {"energy_available": 0, "bandwidth_available": 0}
 
 
 async def fund_trx_from_hot(client, target_address: str, amount_trx: Decimal = Decimal("5")) -> bool:
@@ -171,37 +204,44 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     has_feee = energy_service.is_configured()
     logger.info("[sweep] %s start: usdt=%s, has_feee=%s", uda.address, usdt_bal, has_feee)
 
-    # ШАГ 1 (если Feee): арендуем energy. USDT TRC-20 transfer требует ~64,285 energy
-    # когда получатель ИМЕЕТ USDT, ~130k когда без. Арендуем 130k чтобы покрыть оба случая.
+    # ШАГ 1: ПРОВЕРКА — сколько energy УЖЕ есть на адресе.
+    # Если хватает (≥130k) — НЕ арендуем повторно, экономим 3.5 TRX.
+    ENERGY_REQUIRED = 130_000  # safe margin для TRC-20 transfer (с запасом)
+    res = await _account_resource(client, uda.address)
+    current_energy = res.get("energy_available", 0)
+    logger.info("[sweep] %s current_energy=%d (need %d)", uda.address, current_energy, ENERGY_REQUIRED)
+
     rented = False
-    if has_feee:
-        logger.info("[sweep] %s renting 130k energy via Feee.io...", uda.address)
-        rented = await energy_service.rent_and_wait(uda.address, energy_amount=130_000, wait_sec=12)
+    if current_energy >= ENERGY_REQUIRED:
+        # Уже хватает — старая аренда ещё активна (Feee V3 = 5 мин)
+        logger.info("[sweep] %s SKIP rent — already has %d energy", uda.address, current_energy)
+        rented = True  # treat as success — энергия есть
+    elif has_feee:
+        # Не хватает — арендуем недостающее (с запасом)
+        needed = max(ENERGY_REQUIRED - current_energy, 65_000)  # минимум 65k за rent
+        logger.info("[sweep] %s renting %d energy via Feee.io...", uda.address, needed)
+        rented = await energy_service.rent_and_wait(uda.address, energy_amount=needed, wait_sec=12)
         logger.info("[sweep] %s Feee rent result: %s", uda.address, rented)
 
-    # ШАГ 2: проверяем сколько TRX нужно (зависит от того арендована ли energy)
-    if rented:
-        trx_min = Decimal("1")   # только bandwidth — копейки
-        fund_amount = Decimal("2")  # на user-addr должно быть ~1 TRX, fund 2 с запасом
-    else:
-        trx_min = SWEEP_TRX_RESERVE  # 15 TRX для burn (если Feee упал)
-        fund_amount = Decimal("20")
+    # ШАГ 2: если Feee не сработал ИЛИ не сконфигурен — НЕ продолжаем!
+    # Раньше делали fund 20 TRX и burn — это превращало sweep в дорогую операцию ($6+).
+    # Теперь sweep работает ТОЛЬКО через Feee. Если Feee упал — ставим cooldown и ждём.
+    if not rented:
+        logger.warning("[sweep] %s no energy (feee failed/disabled) — set cooldown 30min, skip sweep", uda.address)
+        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин cooldown — не дёргать впустую
+        return {"address": uda.address, "skipped": "no_energy",
+                "usdt": float(usdt_bal)}
 
-    # (Cooldown уже проверен в начале функции — до rent_energy)
-    trx_bal = await _balance_trx(client, uda.address)
-    logger.info("[sweep] %s TRX balance=%s, need=%s (rented=%s)",
-                uda.address, trx_bal, trx_min, rented)
-    if trx_bal < trx_min:
-        logger.info("[sweep] %s fund %s TRX from hot wallet", uda.address, fund_amount)
-        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин защита
-        funded = await fund_trx_from_hot(client, uda.address, amount_trx=fund_amount)
-        if not funded:
-            return {"address": uda.address, "skipped": "trx_fund_failed",
-                    "usdt": float(usdt_bal)}
-        trx_bal = await _balance_trx(client, uda.address)
-        if trx_bal < trx_min:
-            return {"address": uda.address, "skipped": "trx_fund_pending",
-                    "usdt": float(usdt_bal), "trx": float(trx_bal)}
+    # ШАГ 3: bandwidth — берём из free quota (5000/день free). USDT transfer = ~268 байт,
+    # хватит на ~18 transfers в день. НЕ переводим TRX!
+    bandwidth_available = res.get("bandwidth_available", 0)
+    logger.info("[sweep] %s bandwidth_available=%d (need ~268)", uda.address, bandwidth_available)
+    if bandwidth_available < 300:
+        # Free quota исчерпана — нужен TRX для bandwidth. Лучше cooldown чем платить $6.
+        logger.warning("[sweep] %s low bandwidth (%d<300) — cooldown 30min", uda.address, bandwidth_available)
+        _COOLDOWN[uda.address] = time.time() + 1800
+        return {"address": uda.address, "skipped": "no_bandwidth",
+                "usdt": float(usdt_bal), "bandwidth": bandwidth_available}
 
     try:
         priv = PrivateKey(bytes.fromhex(priv_hex))
@@ -253,6 +293,9 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
 
 async def tick() -> None:
     """Один цикл sweep'а."""
+    if SWEEP_DISABLED:
+        logger.info("[sweep] DISABLED via env (SWEEP_DISABLED=1), skipping tick")
+        return
     if not (settings.tron_hot_wallet_address and settings.tron_private_key):
         return
 
@@ -310,10 +353,4 @@ async def sweep_loop() -> None:
     tick_num = 0
     while True:
         tick_num += 1
-        try:
-            logger.info("[sweep] tick #%d running...", tick_num)
-            await tick()
-            logger.info("[sweep] tick #%d done", tick_num)
-        except Exception as e:
-            logger.exception("[sweep] tick #%d error: %s", tick_num, e)
-        await asyncio.sleep(SWEEP_INTERVAL_SEC)
+  
