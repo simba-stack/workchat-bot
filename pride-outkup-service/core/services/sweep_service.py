@@ -314,7 +314,12 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
         priv = PrivateKey(bytes.fromhex(priv_hex))
         contract = client.get_contract(USDT_CONTRACT)
         amount_raw = int(usdt_bal * Decimal(10 ** 6))
-        fee_limit_sun = 5_000_000 if rented else 30_000_000  # 5 vs 30 TRX
+        # ВАЖНО: fee_limit не ограничивает использование арендованной energy,
+        # но ограничивает максимальный TRX burn если energy не хватает.
+        # 5 TRX было слишком МАЛО: tx ограничивался по energy_use внутри (~50k)
+        # и валился OUT_OF_ENERGY даже когда арендовано 96k+.
+        # 100 TRX — safety cap. Реально не сжигается если energy достаточно.
+        fee_limit_sun = 100_000_000  # 100 TRX safety cap
         txn = (
             contract.functions.transfer(hot_wallet, amount_raw)
             .with_owner(uda.address)

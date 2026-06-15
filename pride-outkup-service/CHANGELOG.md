@@ -4,6 +4,43 @@
 
 ---
 
+## v1.10.0 — 15 июня 2026 (Sweep v9: fee_limit fix — финальный фикс OUT_OF_ENERGY)
+
+### КОРЕНЬ (третий раз!)
+
+v8 не помог потому что **fee_limit в tx физически ограничивает energy usage**.
+
+Logs v8 показали:
+```
+ENERGY_REQUIRED=96427 (simulated × 1.5)
+[feee] rented 96427 energy, paid=4.899 TRX
+broadcast tx=d19115...
+tx REVERT: result=OUT_OF_ENERGY
+  energy_usage_total: 50000   ← ВСЕ ОСТАНОВИЛОСЬ ЗДЕСЬ
+  energy_penalty_total: 25905
+```
+
+50,000 — это **жёсткий потолок** от `fee_limit_sun = 5_000_000` (5 TRX) — даже если арендована вся нужная energy, tx ограничен fee_limit'ом сверху.
+
+### Фикс v9
+
+```python
+# v8 опасное (5 TRX → 50k energy ceiling):
+fee_limit_sun = 5_000_000 if rented else 30_000_000
+
+# v9 безопасное (100 TRX safety cap):
+fee_limit_sun = 100_000_000
+```
+
+fee_limit ≠ обязательный burn. Это **верхняя граница** TRX, который tx может потратить если energy не хватает. **Если energy достаточно — TRX не сжигается**.
+
+### Тотал failed tx за v6/v7/v8
+
+3 failed tx × 0.345 TRX (net_fee) ≈ 1 TRX + 4 аренды Feee × 4 TRX = ~17 TRX (~$4.5) убытков на test'ах.
+Архитектурно поняли цепочку: симуляция → penalty → fee_limit. Теперь v9 финальный.
+
+---
+
 ## v1.9.0 — 15 июня 2026 (Sweep v8: TRON penalty fee учтён)
 
 ### КОРЕНЬ failed tx с OUT_OF_ENERGY
