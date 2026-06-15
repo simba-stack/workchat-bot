@@ -75,6 +75,50 @@ async def _balance_trx(client, addr: str) -> Decimal:
         return Decimal("0")
 
 
+async def _simulate_transfer_energy(client, owner_addr: str, to_addr: str, amount_raw: int) -> int:
+    """ТОЧНАЯ симуляция: сколько energy потратит USDT transfer.
+
+    Через TRON `triggerconstantcontract` — это dry-run транзакции без broadcast'a.
+    Возвращает реальное energy_used. Это позволяет арендовать ТОЧНО сколько надо,
+    без overpay (как было с hardcoded 130k).
+
+    Fallback: при ошибке возвращаем 130_000 (safe maximum).
+    """
+    try:
+        from tronpy.abi import trx_abi
+        # Encode параметры transfer(address, uint256)
+        parameter = trx_abi.encode_single(
+            "(address,uint256)", [to_addr, amount_raw]
+        ).hex()
+        result = client.provider.make_request(
+            "/wallet/triggerconstantcontract",
+            {
+                "owner_address": owner_addr,
+                "contract_address": USDT_CONTRACT,
+                "function_selector": "transfer(address,uint256)",
+                "parameter": parameter,
+                "visible": True,
+            },
+        )
+        # Проверяем result.code — должен быть SUCCESS
+        code = (result.get("result") or {}).get("code") or ""
+        if code and code != "SUCCESS":
+            msg = (result.get("result") or {}).get("message", "")
+            logger.warning("[sweep/simulate] %s NOT SUCCESS code=%s msg=%s",
+                           owner_addr, code, msg)
+            return 130_000
+        energy = result.get("energy_used", 0)
+        if not energy or energy < 1000:
+            logger.warning("[sweep/simulate] %s suspicious energy=%s — fallback 130k",
+                           owner_addr, energy)
+            return 130_000
+        logger.info("[sweep/simulate] %s exact energy_used=%d", owner_addr, energy)
+        return int(energy)
+    except Exception as e:
+        logger.warning("[sweep/simulate] %s exception: %s — fallback 130k", owner_addr, e)
+        return 130_000
+
+
 async def _account_resource(client, addr: str) -> dict:
     """Возвращает {energy, bandwidth} текущие на адресе.
 
@@ -204,22 +248,34 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     has_feee = energy_service.is_configured()
     logger.info("[sweep] %s start: usdt=%s, has_feee=%s", uda.address, usdt_bal, has_feee)
 
-    # ШАГ 1: ПРОВЕРКА — сколько energy УЖЕ есть на адресе.
-    # Если хватает (≥130k) — НЕ арендуем повторно, экономим 3.5 TRX.
-    ENERGY_REQUIRED = 130_000  # safe margin для TRC-20 transfer (с запасом)
+    # ШАГ 1: СИМУЛЯЦИЯ tx → точное energy_used
+    amount_raw = int(usdt_bal * Decimal(10 ** 6))
+    energy_simulated = await _simulate_transfer_energy(
+        client, uda.address, hot_wallet, amount_raw,
+    )
+    # +10% запас на блокчейн-флуктуации
+    ENERGY_REQUIRED = int(energy_simulated * 1.1)
+    logger.info("[sweep] %s ENERGY_REQUIRED=%d (simulated=%d + 10%%)",
+                uda.address, ENERGY_REQUIRED, energy_simulated)
+
+    # ШАГ 2: проверка ТЕКУЩЕЙ energy на адресе
     res = await _account_resource(client, uda.address)
     current_energy = res.get("energy_available", 0)
-    logger.info("[sweep] %s current_energy=%d (need %d)", uda.address, current_energy, ENERGY_REQUIRED)
+    logger.info("[sweep] %s current_energy=%d (need %d)",
+                uda.address, current_energy, ENERGY_REQUIRED)
 
     rented = False
     if current_energy >= ENERGY_REQUIRED:
         # Уже хватает — старая аренда ещё активна (Feee V3 = 5 мин)
-        logger.info("[sweep] %s SKIP rent — already has %d energy", uda.address, current_energy)
-        rented = True  # treat as success — энергия есть
+        logger.info("[sweep] %s SKIP rent — already has %d energy (need %d)",
+                    uda.address, current_energy, ENERGY_REQUIRED)
+        rented = True
     elif has_feee:
-        # Не хватает — арендуем недостающее (с запасом)
-        needed = max(ENERGY_REQUIRED - current_energy, 65_000)  # минимум 65k за rent
-        logger.info("[sweep] %s renting %d energy via Feee.io...", uda.address, needed)
+        # Не хватает — арендуем РОВНО недостающее (минимум 32k, Feee не любит мало)
+        deficit = ENERGY_REQUIRED - current_energy
+        needed = max(deficit, 32_000)
+        logger.info("[sweep] %s renting EXACT %d energy via Feee.io (deficit=%d)...",
+                    uda.address, needed, deficit)
         rented = await energy_service.rent_and_wait(uda.address, energy_amount=needed, wait_sec=12)
         logger.info("[sweep] %s Feee rent result: %s", uda.address, rented)
 
@@ -228,7 +284,7 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     # Теперь sweep работает ТОЛЬКО через Feee. Если Feee упал — ставим cooldown и ждём.
     if not rented:
         logger.warning("[sweep] %s no energy (feee failed/disabled) — set cooldown 30min, skip sweep", uda.address)
-        _COOLDOWN[uda.address] = time.time() + 1800  # 30 мин cooldown — не дёргать впустую
+        _COOLDOWN[uda.address] = time.time() + 60  # 30 мин cooldown — не дёргать впустую
         return {"address": uda.address, "skipped": "no_energy",
                 "usdt": float(usdt_bal)}
 
@@ -239,7 +295,7 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     if bandwidth_available < 300:
         # Free quota исчерпана — нужен TRX для bandwidth. Лучше cooldown чем платить $6.
         logger.warning("[sweep] %s low bandwidth (%d<300) — cooldown 30min", uda.address, bandwidth_available)
-        _COOLDOWN[uda.address] = time.time() + 1800
+        _COOLDOWN[uda.address] = time.time() + 60
         return {"address": uda.address, "skipped": "no_bandwidth",
                 "usdt": float(usdt_bal), "bandwidth": bandwidth_available}
 
@@ -257,37 +313,32 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
         )
         broadcast_res = txn.broadcast()
         txid = txn.txid
-        logger.info("[sweep] %s broadcast tx=%s waiting confirmation...", uda.address, txid)
+        broadcast_res = txn.broadcast()
+        txid = txn.txid
+        logger.info("[sweep] %s broadcast tx=%s — waiting confirmation", uda.address, txid)
 
-        # КРИТИЧНО: ждём реального подтверждения и проверяем receipt.result
-        await asyncio.sleep(20)  # tron block ~3 сек, 20 сек = с запасом
+        # Ждём 20 сек, проверяем receipt.result
+        await asyncio.sleep(20)
         try:
             info = client.get_transaction_info(txid)
-            receipt = (info or {}).get("receipt", {}) or {}
+            receipt = (info or {}).get("receipt") or {}
             result_code = receipt.get("result", "UNKNOWN")
             if result_code != "SUCCESS":
-                # Tx revert! USDT остался на user-addr, TRX потрачен
                 logger.error("[sweep] %s tx %s REVERT: result=%s receipt=%s",
                              uda.address, txid, result_code, receipt)
-                # ставим cooldown 30 мин чтобы не молотить впустую
-                _COOLDOWN[uda.address] = time.time() + 1800
-                return {"address": uda.address, "error": f"tx_revert_{result_code}",
-                        "tx_id": txid}
+                _COOLDOWN[uda.address] = time.time() + 60  # 60 сек rate-limit
+                return {"address": uda.address, "error": f"tx_revert_{result_code}", "tx_id": txid}
         except Exception as e:
             logger.warning("[sweep] %s confirm check failed: %s — assuming OK", uda.address, e)
 
-        # tx подтверждена ОК — снимаем cooldown
         _COOLDOWN.pop(uda.address, None)
         logger.info("[sweep] %s → %s SENT %s USDT tx=%s (energy_rented=%s) CONFIRMED",
                     uda.address, hot_wallet, usdt_bal, txid, rented)
-        return {
-            "address": uda.address, "ok": True,
-            "amount": float(usdt_bal), "tx_id": txid, "energy_rented": rented,
-        }
+        return {"address": uda.address, "ok": True,
+                "amount": float(usdt_bal), "tx_id": txid, "energy_rented": rented}
     except Exception as e:
         logger.exception("[sweep] send failed: %s", e)
-        # cooldown даже на exception — не молотить
-        _COOLDOWN[uda.address] = time.time() + 1800
+        _COOLDOWN[uda.address] = time.time() + 60
         return {"address": uda.address, "error": str(e)[:200]}
 
 
@@ -311,7 +362,6 @@ async def tick() -> None:
         if not rows:
             return
 
-        # Деривируем master_key один раз
         master_key = await wallet_derive.get_or_create_master_key(db)
         results = []
         logger.info("[sweep] scanning %d user-addresses", len(rows))
@@ -324,27 +374,21 @@ async def tick() -> None:
                     logger.info("[sweep] %s SWEPT %.4f USDT tx=%s",
                                 uda.address, r.get("amount", 0), r.get("tx_id", "?"))
                 elif r.get("skipped") == "low_balance":
-                    logger.info("[sweep] %s skip low_balance: %.4f USDT",
-                                uda.address, r.get("usdt", 0))
+                    pass  # silent
                 elif r.get("skipped") == "cooldown":
-                    logger.info("[sweep] %s skip cooldown (until %s)",
-                                uda.address, r.get("until"))
-                elif r.get("skipped") in ("no_trx_gas", "trx_fund_pending", "trx_fund_failed"):
-                    logger.warning("[sweep] %s skip %s: usdt=%.4f",
-                                   uda.address, r.get("skipped"), r.get("usdt", 0))
+                    pass  # silent — rate-limit
+                elif r.get("skipped"):
+                    logger.info("[sweep] %s skip %s", uda.address, r.get("skipped"))
                 elif r.get("error"):
                     logger.error("[sweep] %s ERROR: %s", uda.address, r.get("error"))
             except Exception as e:
                 logger.exception("[sweep] %s error: %s", uda.address, e)
-            await asyncio.sleep(0.5)
+            import asyncio as _a
+            await _a.sleep(0.5)
 
         swept = sum(1 for r in results if r.get("ok"))
-        skipped_lb = sum(1 for r in results if r.get("skipped") == "low_balance")
-        skipped_cd = sum(1 for r in results if r.get("skipped") == "cooldown")
-        skipped_gas = sum(1 for r in results if r.get("skipped") in ("no_trx_gas", "trx_fund_pending", "trx_fund_failed"))
-        errors = sum(1 for r in results if r.get("error"))
-        logger.info("[sweep] tick summary: swept=%d, skip_low=%d, skip_cd=%d, skip_gas=%d, err=%d, total=%d",
-                    swept, skipped_lb, skipped_cd, skipped_gas, errors, len(results))
+        errs = sum(1 for r in results if r.get("error"))
+        logger.info("[sweep] tick summary: swept=%d, err=%d, total=%d", swept, errs, len(results))
 
 
 async def sweep_loop() -> None:
@@ -353,4 +397,8 @@ async def sweep_loop() -> None:
     tick_num = 0
     while True:
         tick_num += 1
-  
+        try:
+            await tick()
+        except Exception as e:
+            logger.exception("[sweep] tick #%d error: %s", tick_num, e)
+        await asyncio.sleep(SWEEP_INTERVAL_SEC)
