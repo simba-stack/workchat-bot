@@ -153,8 +153,16 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     Если настроен FEEE_API_KEY — арендует energy перед transfer'ом (нужно ~3 TRX
     для bandwidth вместо ~15 TRX для energy+bandwidth).
     """
+    import time
     from tronpy.keys import PrivateKey
     from core.services import energy_service
+
+    # ШАГ 0: cooldown check ПЕРЕД любыми платными операциями!
+    # Раньше cooldown был после rent_energy → платили 3.5 TRX/tick впустую.
+    if uda.address in _COOLDOWN and _COOLDOWN[uda.address] > time.time():
+        remaining = int(_COOLDOWN[uda.address] - time.time())
+        return {"address": uda.address, "skipped": "cooldown",
+                "remaining_sec": remaining}
 
     usdt_bal = await _balance_usdt(client, uda.address)
     if usdt_bal < SWEEP_MIN_USDT:
@@ -163,12 +171,12 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     has_feee = energy_service.is_configured()
     logger.info("[sweep] %s start: usdt=%s, has_feee=%s", uda.address, usdt_bal, has_feee)
 
-    # ШАГ 1 (если Feee): сразу пробуем арендовать energy. Это позволит
-    # тратить только ~1 TRX (bandwidth), а не 14 TRX burn.
+    # ШАГ 1 (если Feee): арендуем energy. USDT TRC-20 transfer требует ~64,285 energy
+    # когда получатель ИМЕЕТ USDT, ~130k когда без. Арендуем 130k чтобы покрыть оба случая.
     rented = False
     if has_feee:
-        logger.info("[sweep] %s renting energy via Feee.io...", uda.address)
-        rented = await energy_service.rent_and_wait(uda.address, energy_amount=65_000, wait_sec=8)
+        logger.info("[sweep] %s renting 130k energy via Feee.io...", uda.address)
+        rented = await energy_service.rent_and_wait(uda.address, energy_amount=130_000, wait_sec=12)
         logger.info("[sweep] %s Feee rent result: %s", uda.address, rented)
 
     # ШАГ 2: проверяем сколько TRX нужно (зависит от того арендована ли energy)
@@ -179,13 +187,7 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
         trx_min = SWEEP_TRX_RESERVE  # 15 TRX для burn (если Feee упал)
         fund_amount = Decimal("20")
 
-    # Cooldown: если недавно был неуспех — не дёргаем повторно
-    import time
-    if uda.address in _COOLDOWN and _COOLDOWN[uda.address] > time.time():
-        return {"address": uda.address, "skipped": "cooldown",
-                "usdt": float(usdt_bal),
-                "until": int(_COOLDOWN[uda.address])}
-
+    # (Cooldown уже проверен в начале функции — до rent_energy)
     trx_bal = await _balance_trx(client, uda.address)
     logger.info("[sweep] %s TRX balance=%s, need=%s (rented=%s)",
                 uda.address, trx_bal, trx_min, rented)
