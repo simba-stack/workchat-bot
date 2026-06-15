@@ -4,6 +4,64 @@
 
 ---
 
+## v1.9.0 — 15 июня 2026 (Sweep v8: TRON penalty fee учтён)
+
+### КОРЕНЬ failed tx с OUT_OF_ENERGY
+
+После v6/v7 рент energy шёл успешно (Feee давал 70713 energy), но tx
+все равно валился `OUT_OF_ENERGY`. На TronScan виден receipt:
+```
+energy_usage_total: 50000
+energy_penalty_total: 25905   ← НОВОЕ! penalty fee ~40%
+result: OUT_OF_ENERGY
+```
+
+**Открытие:** TRON в 2024 году ввёл **energy penalty fee ~40%** на USDT
+contract calls (защита от спама). `triggerconstantcontract` симуляция
+возвращает energy_used БЕЗ penalty — реальный расход на 40% выше.
+
+Симуляция показывает 64,285. Реальный расход: 64,285 + 25,905 (penalty)
+≈ 90,000. Аренда 70,713 → не хватает 20k → OUT_OF_ENERGY → revert.
+
+### Фикс v8
+
+**Множитель энергии 1.1 → 1.5:**
+```python
+# v6/v7 опасное:
+ENERGY_REQUIRED = int(energy_simulated * 1.1)
+
+# v8 правильное:
+ENERGY_REQUIRED = int(energy_simulated * 1.5)
+# 50% запас покрывает 40% penalty + 10% флуктуаций
+```
+
+**SKIP rent порог ×1.3:** чтобы не пропускать аренду когда старая
+энергия "вот-вот истечёт" (Feee V3 даёт на 5 мин):
+```python
+skip_threshold = int(ENERGY_REQUIRED * 1.3)  # двойной запас
+if current_energy >= skip_threshold:
+    SKIP rent
+else:
+    rent fresh — гарантия покрытия
+```
+
+### Экономика
+
+| | v7 | v8 |
+|---|---|---|
+| Energy запрос | ~70k | ~96k |
+| Feee цена | 3.74 TRX | ~5 TRX |
+| Failed tx burn | 0.35 TRX × 2 | 0 |
+
+v8 чуть дороже на rent, но **нулевой риск OUT_OF_ENERGY**.
+
+### Что было сожжено на v6/v7
+
+3 failed tx по 0.35 TRX = ~1 TRX (≈$0.27) — копейки, но архитектурно
+важно понять корень и поправить.
+
+---
+
 ## v1.8.0 — 15 июня 2026 (Sweep v7: auto-fund TRX + Feee UA whitelist)
 
 ### Sweep v7 — авто-фанд для bandwidth

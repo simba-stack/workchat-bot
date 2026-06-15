@@ -253,9 +253,11 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     energy_simulated = await _simulate_transfer_energy(
         client, uda.address, hot_wallet, amount_raw,
     )
-    # +10% запас на блокчейн-флуктуации
-    ENERGY_REQUIRED = int(energy_simulated * 1.1)
-    logger.info("[sweep] %s ENERGY_REQUIRED=%d (simulated=%d + 10%%)",
+    # +50% запас: TRON в 2024+ добавил penalty fee ~40% на USDT transfers
+    # (симуляция triggerconstantcontract возвращает чистую стоимость БЕЗ penalty).
+    # Реально tx использует simulated + penalty (≈40%) → 50% buffer покрывает + флуктуации.
+    ENERGY_REQUIRED = int(energy_simulated * 1.5)
+    logger.info("[sweep] %s ENERGY_REQUIRED=%d (simulated=%d + 50%% penalty buffer)",
                 uda.address, ENERGY_REQUIRED, energy_simulated)
 
     # ШАГ 2: проверка ТЕКУЩЕЙ energy на адресе
@@ -265,10 +267,12 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
                 uda.address, current_energy, ENERGY_REQUIRED)
 
     rented = False
-    if current_energy >= ENERGY_REQUIRED:
-        # Уже хватает — старая аренда ещё активна (Feee V3 = 5 мин)
-        logger.info("[sweep] %s SKIP rent — already has %d energy (need %d)",
-                    uda.address, current_energy, ENERGY_REQUIRED)
+    # SKIP rent только при ОЧЕНЬ большом запасе (×1.3): Feee V3 даёт энергию на 5 мин,
+    # между check и broadcast она может истечь → OUT_OF_ENERGY. Двойной запас спасает.
+    skip_threshold = int(ENERGY_REQUIRED * 1.3)
+    if current_energy >= skip_threshold:
+        logger.info("[sweep] %s SKIP rent — has %d energy (threshold=%d, req=%d)",
+                    uda.address, current_energy, skip_threshold, ENERGY_REQUIRED)
         rented = True
     elif has_feee:
         # Не хватает — арендуем РОВНО недостающее (минимум 32k, Feee не любит мало)
