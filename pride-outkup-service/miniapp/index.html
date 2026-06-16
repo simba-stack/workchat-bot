@@ -2208,9 +2208,6 @@ document.querySelectorAll('#view-p2p .p2p-chip[data-bank]').forEach(chip => {
   });
 });
 safeBind('p2p-create-btn', 'click', () => go('p2p-create'));
-safeBind('p2p-myads-btn', 'click', () => {
-  Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Мои объявления — в следующем шаге.') : alert('Мои объявления — следующий шаг.');
-});
 
 // ═══════════════════════════════════════════════════════════
 // МОИ РЕКВИЗИТЫ — CRUD
