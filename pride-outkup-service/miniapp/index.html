@@ -344,6 +344,57 @@ body { background: #15161a !important; }
 /* Skin: Pride crown */
 .skin-crown { background:linear-gradient(135deg,#FFD700 0%,#FF8C42 50%,#8B2E0F 100%); }
 .skin-crown::before { content:'♛'; position:absolute; bottom:-40px; right:-20px; font-size:170px; opacity:0.18; color:#fff; line-height:1; font-family:serif; }
+
+/* ═══ Фоны body по выбранному скину ═══ */
+body { transition: background 0.6s ease; position: relative; }
+body[data-skin="sunset"] { background: linear-gradient(180deg, #1a0a08 0%, #2a1410 30%, #3a1a0a 70%, #0a0a08 100%) !important; }
+body[data-skin="sunset"]::before { content:''; position: fixed; top: 0; left: 0; right: 0; height: 220px; background: radial-gradient(ellipse at 50% 0%, rgba(255,140,66,0.4) 0%, rgba(255,107,53,0.2) 40%, transparent 80%); pointer-events: none; z-index: 0; }
+body[data-skin="night"] { background: linear-gradient(180deg, #0a0a1e 0%, #15152e 50%, #0a0a14 100%) !important; }
+body[data-skin="night"]::before { content:''; position: fixed; inset: 0; background: radial-gradient(1px 1px at 20% 15%, #fff, transparent), radial-gradient(1px 1px at 60% 8%, #fff, transparent), radial-gradient(2px 2px at 80% 20%, #fff, transparent), radial-gradient(1px 1px at 35% 25%, #fff, transparent), radial-gradient(1px 1px at 75% 35%, #fff, transparent), radial-gradient(2px 2px at 15% 40%, #fff, transparent), radial-gradient(1px 1px at 50% 18%, #fff, transparent); opacity: 0.5; pointer-events: none; z-index: 0; animation: starShimmer 4s ease-in-out infinite alternate; }
+@keyframes starShimmer { from { opacity: 0.3; } to { opacity: 0.7; } }
+body[data-skin="crown"] { background: linear-gradient(180deg, #1a1208 0%, #2a1a08 30%, #3a200a 70%, #0a0805 100%) !important; }
+body[data-skin="crown"]::before { content:''; position: fixed; top: 0; left: 0; right: 0; height: 200px; background: radial-gradient(ellipse at 50% 0%, rgba(255,215,0,0.25) 0%, rgba(255,140,66,0.15) 40%, transparent 80%); pointer-events: none; z-index: 0; }
+/* Контент поверх фоновых эффектов */
+.view, #bottom-nav { position: relative; z-index: 1; }
+
+/* ═══ История — карточки с анимацией ═══ */
+.tx-card { background: rgba(37,38,46,0.85); backdrop-filter: blur(8px); border: 0.5px solid rgba(255,255,255,0.06); border-radius: 14px; margin-bottom: 8px; overflow: hidden; transition: background 0.25s; }
+.tx-card.expanded { background: rgba(45,46,54,0.95); border-color: rgba(61,163,240,0.3); }
+.tx-card-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; }
+.tx-card-head:active { transform: scale(0.99); }
+.tx-card-ico { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.tx-card-ico.in { background: rgba(76,217,100,0.18); color: #4CD964; }
+.tx-card-ico.out { background: rgba(255,59,48,0.18); color: #FF3B30; }
+.tx-card-ico.sw { background: rgba(61,163,240,0.18); color: #3DA3F0; }
+.tx-card-body { flex: 1; min-width: 0; }
+.tx-card-body b { color: #fff; font-size: 14px; font-weight: 500; display: block; }
+.tx-card-body span { color: #8e9094; font-size: 11px; }
+.tx-card-amt { font-weight: 600; font-size: 14px; text-align: right; }
+.tx-card-amt.in { color: #4CD964; }
+.tx-card-amt.out { color: #FF3B30; }
+.tx-card-detail { max-height: 0; overflow: hidden; transition: max-height 0.4s cubic-bezier(.4,0,.2,1); }
+.tx-card.expanded .tx-card-detail { max-height: 280px; }
+.tx-card-detail-inner { padding: 6px 14px 14px; font-size: 12px; color: #ccc; border-top: 0.5px solid rgba(255,255,255,0.05); }
+.tx-card-detail-inner .row { display: flex; justify-content: space-between; padding: 5px 0; }
+.tx-card-detail-inner .row span:first-child { color: #8e9094; }
+.tx-card-detail-inner .row a { color: #3DA3F0; text-decoration: none; }
+.tx-day { color: #8e9094; font-size: 11px; font-weight: 600; padding: 12px 4px 6px; letter-spacing: 1px; text-transform: uppercase; }
+.tx-chevron { color: #5f6063; font-size: 14px; transition: transform 0.3s; margin-left: 4px; }
+.tx-card.expanded .tx-chevron { transform: rotate(180deg); color: #3DA3F0; }
+
+/* ═══ Coin row — кликабельный + mini-chart placeholder ═══ */
+.coin-row-v3 { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: rgba(37,38,46,0.85); border-radius: 12px; margin-bottom: 6px; cursor: pointer; transition: all 0.2s; border: 0.5px solid rgba(255,255,255,0.04); }
+.coin-row-v3:active { transform: scale(0.99); background: rgba(45,46,54,0.95); }
+.coin-row-v3 .ci { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; font-size: 14px; flex-shrink: 0; }
+.coin-row-v3 .cn { flex: 1; min-width: 0; }
+.coin-row-v3 .cn b { color: #fff; font-weight: 500; font-size: 14px; display: block; }
+.coin-row-v3 .cn span { color: #8e9094; font-size: 12px; }
+.coin-row-v3 .ca { text-align: right; min-width: 80px; }
+.coin-row-v3 .ca b { color: #fff; font-weight: 500; font-size: 14px; display: block; }
+.coin-row-v3 .ca span { font-size: 11px; }
+.coin-row-v3 .ca span.up { color: #4CD964; }
+.coin-row-v3 .ca span.down { color: #FF3B30; }
+.coin-row-v3 .spark { width: 60px; height: 24px; margin: 0 4px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -2079,6 +2130,122 @@ loadMain().then(routeFromStart);
 const _styleSkin = document.createElement('style');
 _styleSkin.textContent = '@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}';
 document.head.appendChild(_styleSkin);
+
+// ════════════════════════════════════════════════════
+// v3.3 — фон body по скину + история анимация + spark-charts
+// ════════════════════════════════════════════════════
+(function() {
+  // Расширяем applySkin: ставим data-skin на body
+  function setBodySkin() {
+    try {
+      const id = localStorage.getItem('p2p_skin') || 'sunset';
+      document.body.dataset.skin = id;
+    } catch(e) { document.body.dataset.skin = 'sunset'; }
+  }
+  setBodySkin();
+  // Перехватываем localStorage.setItem чтобы синхронить body
+  const _origSet = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = function(k, v) {
+    _origSet(k, v);
+    if (k === 'p2p_skin') document.body.dataset.skin = v;
+  };
+
+  // ── История: раскрытие транзакций с анимацией ──
+  function expandTx(card) {
+    document.querySelectorAll('.tx-card.expanded').forEach(c => { if (c !== card) c.classList.remove('expanded'); });
+    card.classList.toggle('expanded');
+    if (card.classList.contains('expanded') && window.Telegram?.WebApp?.HapticFeedback) {
+      window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+    }
+  }
+
+  // Преобразуем содержимое #history-list если оно есть
+  function rewireHistoryCards() {
+    const list = document.getElementById('history-list') || document.querySelector('[data-history-list]');
+    if (!list) return;
+    // делегированный клик
+    list.addEventListener('click', function(e) {
+      const card = e.target.closest('.tx-card-head');
+      if (card && card.parentElement.classList.contains('tx-card')) {
+        e.preventDefault();
+        expandTx(card.parentElement);
+      }
+    }, true);
+  }
+  document.addEventListener('DOMContentLoaded', rewireHistoryCards);
+  if (document.readyState !== 'loading') rewireHistoryCards();
+
+  // ── Клик на coin-row → график ──
+  function rewireCoinRows() {
+    const cl = document.getElementById('coins-list');
+    if (!cl) return;
+    cl.addEventListener('click', function(e) {
+      const row = e.target.closest('[data-coin-code]');
+      if (!row) return;
+      const code = row.dataset.coinCode;
+      if (typeof window.openCoinChart === 'function') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.openCoinChart(code);
+      }
+    }, true);
+  }
+  document.addEventListener('DOMContentLoaded', rewireCoinRows);
+  if (document.readyState !== 'loading') rewireCoinRows();
+
+  // ── Mini-sparkline для каждой монеты ──
+  // Простой SVG генератор тренда из последних 7 точек
+  function makeSparkline(values, color) {
+    if (!values || values.length < 2) return '';
+    const w = 60, h = 24;
+    const min = Math.min.apply(null, values);
+    const max = Math.max.apply(null, values);
+    const range = max - min || 1;
+    const pts = values.map((v, i) => {
+      const x = (i / (values.length - 1)) * w;
+      const y = h - ((v - min) / range) * (h - 4) - 2;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    return '<svg class="spark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  window.makeSparkline = makeSparkline;
+
+  // Подгружаем sparkline данные для всех монет (батч CoinGecko)
+  async function loadSparklines() {
+    const ids = { USDT:'tether', TRX:'tron', BTC:'bitcoin', ETH:'ethereum', TON:'the-open-network', SOL:'solana', BNB:'binancecoin', USDC:'usd-coin', DOGE:'dogecoin', LTC:'litecoin' };
+    const codes = Object.keys(ids);
+    try {
+      const url = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + codes.map(c => ids[c]).join(',') + '&sparkline=true&price_change_percentage=24h';
+      const r = await fetch(url);
+      if (!r.ok) return;
+      const data = await r.json();
+      const map = {};
+      data.forEach(c => {
+        const code = Object.keys(ids).find(k => ids[k] === c.id);
+        if (code) map[code] = { sparkline: (c.sparkline_in_7d && c.sparkline_in_7d.price) || [], change: c.price_change_percentage_24h || 0 };
+      });
+      window.SPARKLINES = map;
+      // Перерисовать координаты которые уже есть
+      document.querySelectorAll('[data-coin-code]').forEach(row => {
+        const code = row.dataset.coinCode;
+        const m = map[code];
+        if (!m) return;
+        const placeholder = row.querySelector('.spark-slot');
+        if (placeholder) {
+          const col = m.change >= 0 ? '#4CD964' : '#FF3B30';
+          placeholder.outerHTML = makeSparkline(m.sparkline, col);
+        }
+      });
+    } catch(e) { console.warn('sparkline load', e); }
+  }
+  // Запускаем 1 раз через 2 сек после загрузки
+  setTimeout(loadSparklines, 2000);
+  // И каждые 5 минут
+  setInterval(loadSparklines, 5 * 60 * 1000);
+
+  console.log('[v3.3] bg-skin + history-cards + sparklines loaded');
+})();
 </script>
 </body>
 </html>
