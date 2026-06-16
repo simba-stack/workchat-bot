@@ -734,6 +734,328 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
   border-radius: 16px;
   box-shadow: var(--lg-shadow);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   P2P module v2 — все стили (glass, бейджи, payment card, чат)
+   ═══════════════════════════════════════════════════════════ */
+.p2p-screen-label { padding:18px 16px 6px; font-size:11px; color:rgba(255,255,255,0.55); letter-spacing:0.8px; text-transform:uppercase; font-weight:600; }
+
+/* Tabs Купить/Продать */
+.p2p-tabs { display:flex; padding:10px 16px; gap:8px; }
+.p2p-tab {
+  flex:1; text-align:center; padding:12px; border-radius:14px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--lg-border);
+  color: rgba(255,255,255,0.7); font-weight:600; font-size:14px; cursor:pointer;
+  transition: all 0.25s cubic-bezier(.34,1.56,.64,1);
+}
+.p2p-tab.active {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 60%, rgba(255,255,255,0.18)),
+                                       color-mix(in srgb, var(--th-2) 45%, rgba(255,255,255,0.08)));
+  border-color: var(--lg-border-hl);
+  color:#fff;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--th-1) 35%, transparent), inset 0 1px 0 rgba(255,255,255,0.30);
+}
+
+/* Filter chips */
+.p2p-filter-row { display:flex; gap:8px; padding:4px 16px; overflow-x:auto; scrollbar-width:none; }
+.p2p-filter-row::-webkit-scrollbar { display:none; }
+.p2p-chip {
+  padding:9px 14px; border-radius:999px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid var(--lg-border);
+  color: rgba(255,255,255,0.85); font-size:12px; white-space:nowrap; cursor:pointer;
+  transition: all 0.2s;
+}
+.p2p-chip.active {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 55%, rgba(255,255,255,0.16)),
+                                       color-mix(in srgb, var(--th-2) 30%, transparent));
+  border-color: var(--lg-border-hl);
+  color:#fff;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--th-1) 30%, transparent), inset 0 1px 0 rgba(255,255,255,0.25);
+}
+
+/* Offer card */
+.p2p-offer-card {
+  background: var(--lg-bg);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  border-radius:18px; padding:16px; margin-bottom:10px; cursor:pointer;
+  box-shadow: var(--lg-shadow);
+  position:relative; overflow:hidden;
+  transition: transform 0.25s;
+}
+.p2p-offer-card::before {
+  content:''; position:absolute; inset:0 0 50% 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.10) 0%, transparent 100%);
+  pointer-events:none;
+}
+.p2p-offer-card:active { transform: scale(0.985); }
+.p2p-offer-card > * { position:relative; z-index:1; }
+.p2p-offer-card .row1 { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.p2p-offer-card .avatar {
+  width:38px; height:38px; border-radius:50%;
+  background: linear-gradient(135deg, var(--th-1), var(--th-2));
+  display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.30), 0 4px 10px rgba(0,0,0,0.25);
+}
+.p2p-offer-card .name { flex:1; min-width:0; }
+.p2p-offer-card .nick { font-weight:600; font-size:14px; color:#fff; }
+.p2p-offer-card .stats { color:rgba(255,255,255,0.6); font-size:11px; margin-top:2px; }
+.p2p-badge {
+  display:inline-block; padding:2px 8px; border-radius:6px; font-size:10px; font-weight:700; margin-left:6px;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.p2p-badge.pride { background:linear-gradient(135deg, #FFD700, #FF8C42); color:#000; }
+.p2p-badge.gold  { background:linear-gradient(135deg, #FFD700, #FF8C42); color:#000; }
+.p2p-badge.verified { background:rgba(58,150,221,0.8); color:#fff; }
+.p2p-offer-card .price-row { display:flex; justify-content:space-between; align-items:baseline; margin:8px 0 6px; }
+.p2p-offer-card .price-big { font-size:24px; font-weight:700; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,0.3); }
+.p2p-offer-card .price-sub { font-size:12px; color:rgba(255,255,255,0.5); }
+.p2p-offer-card .limit-row { font-size:12px; color:rgba(255,255,255,0.7); margin-bottom:10px; }
+.p2p-offer-card .pay-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.p2p-pay-chip {
+  padding:5px 11px;
+  background: rgba(255,255,255,0.08);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius:7px; font-size:11px; color:#fff;
+}
+.p2p-offer-card .p2p-cta {
+  width:100%; margin-top:12px; padding:12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 75%, #fff),
+                                       color-mix(in srgb, var(--th-2) 80%, #000));
+  border: 1px solid var(--lg-border-hl);
+  color:#fff; border-radius:12px; font-weight:700; font-size:14px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--th-1) 35%, transparent), inset 0 1px 0 rgba(255,255,255,0.3);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* Profile card (P2P) */
+.p2p-profile-card {
+  display:flex; gap:14px; align-items:center;
+  padding:16px; margin:14px 16px; border-radius:18px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  box-shadow: var(--lg-shadow);
+}
+.p2p-profile-card .big-avatar {
+  width:56px; height:56px; border-radius:50%;
+  background: linear-gradient(135deg, var(--th-1), var(--th-2));
+  display:flex; align-items:center; justify-content:center; font-weight:700; font-size:22px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 6px 16px rgba(0,0,0,0.25);
+}
+.p2p-profile-card .info { flex:1; }
+.p2p-profile-card .nick-line { font-weight:700; font-size:16px; }
+.p2p-profile-card .meta-line { color:rgba(255,255,255,0.65); font-size:11px; margin-top:3px; }
+
+/* Detail block (P2P) */
+.p2p-detail-block {
+  padding:16px; margin:10px 16px; border-radius:18px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  box-shadow: var(--lg-shadow);
+}
+.p2p-detail-row { display:flex; justify-content:space-between; padding:9px 0; font-size:13px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.p2p-detail-row:last-child { border-bottom:0; padding-bottom:0; }
+.p2p-detail-row .k { color: rgba(255,255,255,0.6); }
+.p2p-detail-row .v { color:#fff; font-weight:500; }
+
+/* Timer banner */
+.p2p-timer-banner {
+  margin:14px 16px; padding:18px; border-radius:18px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 18%, rgba(255,255,255,0.10)),
+                                       color-mix(in srgb, var(--th-2) 14%, rgba(255,255,255,0.04)));
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border-hl);
+  text-align:center; box-shadow: var(--lg-shadow);
+}
+.p2p-timer-banner .timer-big {
+  font-size:36px; font-weight:700; color:#fff; font-variant-numeric: tabular-nums;
+  text-shadow: 0 4px 16px color-mix(in srgb, var(--th-1) 50%, rgba(0,0,0,0.3));
+}
+.p2p-timer-banner .timer-sub { font-size:12px; color:rgba(255,255,255,0.7); margin-top:4px; }
+
+/* Payment card */
+.p2p-payment-card {
+  background: var(--lg-bg);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  border-radius:18px; margin:12px 16px; padding:16px;
+  box-shadow: var(--lg-shadow);
+}
+.p2p-payment-card .pc-bank { font-size:17px; font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:10px; }
+.p2p-payment-card .pc-bank-icon {
+  width:36px; height:36px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center; font-size:18px; color:#000; font-weight:800;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 4px 10px rgba(0,0,0,0.2);
+}
+.p2p-payment-card .pc-field { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.p2p-payment-card .pc-field:last-child { border-bottom:0; padding-bottom:0; }
+.p2p-payment-card .pc-k { color: rgba(255,255,255,0.55); font-size:11px; text-transform:uppercase; letter-spacing:0.4px; }
+.p2p-payment-card .pc-v { color:#fff; font-weight:600; font-size:15px; font-family:ui-monospace,Menlo,monospace; margin-top:2px; }
+.p2p-payment-card .pc-copy {
+  color:#fff; font-size:12px; cursor:pointer; font-weight:600;
+  padding:6px 12px; border-radius:8px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 50%, transparent),
+                                       color-mix(in srgb, var(--th-2) 35%, transparent));
+  border: 1px solid var(--lg-border-hl);
+}
+
+/* Banners */
+.p2p-banner-warn, .p2p-banner-ok, .p2p-banner-danger {
+  margin:12px 16px; padding:12px 14px; font-size:12px; line-height:1.5; border-radius:14px;
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+.p2p-banner-warn { background:rgba(255,193,7,0.12); border:1px solid rgba(255,193,7,0.30); color:#FFC107; }
+.p2p-banner-ok { background:rgba(52,199,89,0.12); border:1px solid rgba(52,199,89,0.30); color:#34c759; }
+.p2p-banner-danger { background:rgba(255,69,58,0.12); border:1px solid rgba(255,69,58,0.30); color:#ff7060; }
+
+/* Chat */
+.p2p-chat-block {
+  background: rgba(15,15,18,0.45);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border:1px solid var(--lg-border);
+  border-radius:18px; margin:12px 16px; padding:12px;
+  min-height:200px; max-height:340px; overflow-y:auto;
+}
+.p2p-msg { display:flex; margin-bottom:8px; font-size:13px; }
+.p2p-msg.me { justify-content:flex-end; }
+.p2p-msg .bubble { max-width:80%; padding:9px 13px; border-radius:16px; }
+.p2p-msg.me .bubble {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 75%, #fff),
+                                       color-mix(in srgb, var(--th-2) 75%, #000));
+  color:#fff; border-bottom-right-radius:4px;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--th-1) 25%, transparent);
+}
+.p2p-msg.them .bubble {
+  background: rgba(255,255,255,0.10);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.15);
+  color:#fff; border-bottom-left-radius:4px;
+}
+.p2p-msg.sys .bubble {
+  background: rgba(58,150,221,0.18); border: 1px solid rgba(58,150,221,0.30);
+  color:#8fcaff; font-size:11px; text-align:center; margin:0 auto; padding:6px 12px; border-radius:999px;
+}
+.p2p-msg .time { font-size:10px; color:rgba(255,255,255,0.4); margin-top:2px; }
+
+/* Big amount */
+.p2p-amount-block { padding:30px 16px 20px; text-align:center; }
+.p2p-amount-input {
+  font-size:42px; font-weight:700; text-align:center;
+  background:transparent !important; border:0 !important; color:#fff; width:100%; padding:0 !important; outline:none;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  backdrop-filter:none !important;
+}
+.p2p-amount-input::placeholder { color: rgba(255,255,255,0.2); }
+.p2p-amount-equiv { color: rgba(255,255,255,0.55); font-size:13px; margin-top:8px; }
+.p2p-quick-chips { display:flex; gap:8px; padding:0 16px; justify-content:center; flex-wrap:wrap; margin-top:14px; }
+.p2p-quick-chip {
+  padding:9px 14px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  border-radius:10px; font-size:12px; color:#fff; cursor:pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+}
+
+/* Big CTA buttons */
+.p2p-btn-primary {
+  width:100%; padding:15px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 80%, #fff),
+                                       color-mix(in srgb, var(--th-2) 80%, #000));
+  border: 1px solid var(--lg-border-hl);
+  color:#fff !important; border-radius:14px; font-weight:700 !important; font-size:15px;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--th-1) 40%, transparent), inset 0 1px 0 rgba(255,255,255,0.35);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+.p2p-btn-secondary {
+  width:100%; padding:15px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  color: rgba(255,255,255,0.85) !important; border-radius:14px; font-weight:600; font-size:15px; margin-top:8px;
+  box-shadow: var(--lg-shadow);
+}
+.p2p-btn-danger {
+  width:100%; padding:15px;
+  background: linear-gradient(135deg, rgba(255,69,58,0.75), rgba(139,20,16,0.85));
+  border: 1px solid rgba(255,150,150,0.35);
+  color:#fff; border-radius:14px; font-weight:700; font-size:15px;
+  box-shadow: 0 10px 28px rgba(255,69,58,0.30), inset 0 1px 0 rgba(255,255,255,0.25);
+}
+.p2p-bottom-cta { padding:14px 16px; }
+
+/* Status badges */
+.p2p-status { display:inline-block; padding:4px 11px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.20); }
+.p2p-status.pending { background:rgba(255,193,7,0.20); color:#FFD54F; }
+.p2p-status.paid    { background:rgba(58,150,221,0.20); color:#7DCEFF; }
+.p2p-status.released { background:rgba(52,199,89,0.20); color:#5FE388; }
+.p2p-status.dispute { background:rgba(255,69,58,0.20); color:#FF8B82; }
+
+/* Steps bar */
+.p2p-steps { display:flex; padding:14px 16px; gap:6px; }
+.p2p-steps .step { flex:1; height:5px; border-radius:3px; background:rgba(255,255,255,0.10); backdrop-filter: blur(10px); }
+.p2p-steps .step.active { background:linear-gradient(90deg, var(--th-1), var(--th-2)); box-shadow: 0 0 12px color-mix(in srgb, var(--th-1) 50%, transparent); }
+
+/* Reviews */
+.p2p-review {
+  padding:13px; border-radius:14px; margin-bottom:8px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+}
+.p2p-review .r-head { display:flex; justify-content:space-between; margin-bottom:6px; }
+.p2p-review .r-nick { font-weight:600; font-size:13px; }
+.p2p-review .r-thumb.up { color:#5FE388; font-weight:600; font-size:13px; }
+.p2p-review .r-thumb.down { color:#FF8B82; font-weight:600; font-size:13px; }
+.p2p-review .r-text { font-size:12px; color:rgba(255,255,255,0.75); line-height:1.5; }
+
+/* Reason picker (dispute) */
+.p2p-reason {
+  padding:13px; border-radius:13px; margin-bottom:6px;
+  background: var(--lg-bg);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--lg-border); border-top-color: var(--lg-border-hl);
+  cursor:pointer; font-size:14px; color:#fff;
+  transition: all 0.2s;
+}
+.p2p-reason.selected {
+  border-color: var(--th-1);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--th-1) 25%, rgba(255,255,255,0.10)), rgba(255,255,255,0.04));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--th-1) 25%, transparent);
+}
+.p2p-upload-btn {
+  display:block; width:100%; padding:26px;
+  background: rgba(255,255,255,0.04);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border: 2px dashed var(--lg-border);
+  border-radius:14px; color:rgba(255,255,255,0.55); font-size:13px; text-align:center; margin-bottom:14px; cursor:pointer;
+}
+
+/* Form labels */
+.p2p-label { font-size:11px; text-transform:uppercase; color:rgba(255,255,255,0.6); letter-spacing:0.5px; margin:14px 0 6px; display:block; font-weight:600; }
 </style>
 </head>
 <body>
@@ -1031,18 +1353,33 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 
 <!-- ═══ P2P МАРКЕТ ═══ -->
 <div class="view" id="view-p2p">
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
-    <div style="font-size:20px;font-weight:700">P2P маркет</div>
-    <button id="p2p-filter-btn" style="color:#3390EC;font-size:20px">⚙</button>
+  <div class="nav-header">
+    <div class="nav-back" style="visibility:hidden">←</div>
+    <div class="nav-title">P2P маркет</div>
+    <button id="p2p-filter-btn" class="nav-right" style="font-size:18px;color:#fff;cursor:pointer;background:transparent;border:0">⚙</button>
   </div>
-  <div style="display:flex;gap:6px;padding:0 16px 8px">
-    <button id="p2p-side-buy" style="flex:1;padding:10px;border-radius:10px;color:#fff;background:#34c759;font-weight:600">Купить USDT</button>
-    <button id="p2p-side-sell" style="flex:1;padding:10px;border-radius:10px;color:#7a7a7a;background:#1a1a1a">Продать USDT</button>
+  <div class="p2p-tabs">
+    <button id="p2p-side-buy" class="p2p-tab active">Купить USDT</button>
+    <button id="p2p-side-sell" class="p2p-tab">Продать USDT</button>
   </div>
-  <div id="p2p-list" style="padding:8px 16px"><div class="empty-state">Загрузка…</div></div>
-  <div style="padding:8px 16px;display:flex;gap:6px">
-    <button id="p2p-create-btn" style="flex:1;padding:14px;border-radius:12px;background:#fff;color:#000;font-weight:600">+ Создать своё</button>
-    <button id="p2p-myads-btn" style="padding:14px;border-radius:12px;background:#1a1a1a;color:#fff">Мои</button>
+  <div class="p2p-filter-row">
+    <div class="p2p-chip active" data-bank="all">Все банки</div>
+    <div class="p2p-chip" data-bank="sbp">СБП</div>
+    <div class="p2p-chip" data-bank="sber">Сбер</div>
+    <div class="p2p-chip" data-bank="tinkoff">Тинькофф</div>
+    <div class="p2p-chip" data-bank="alfa">Альфа</div>
+    <div class="p2p-chip" data-bank="raif">Райф</div>
+  </div>
+  <div class="p2p-filter-row" style="margin-top:6px">
+    <div class="p2p-chip">RUB</div>
+    <div class="p2p-chip">Сумма ↓</div>
+    <div class="p2p-chip">★ верифиц.</div>
+    <div class="p2p-chip">Онлайн</div>
+  </div>
+  <div id="p2p-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
+  <div class="p2p-bottom-cta" style="display:flex;gap:8px">
+    <button id="p2p-create-btn" class="p2p-btn-primary" style="flex:1">+ Создать своё</button>
+    <button id="p2p-myads-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 18px;margin-top:0">Мои</button>
   </div>
 </div>
 
@@ -1439,6 +1776,153 @@ safeBind('main-withdraw','click', () => { activeCoin = 'USDT'; openWithdraw('USD
 safeBind('main-history','click', () => go('history'));
 safeBind('main-swap','click', () => go('swap'));  // не существует — пропустится
 safeBind('settings-btn','click', () => go('settings'));
+
+// ═══════════════════════════════════════════════════════════
+// P2P module v2 — доска, оффер, активный ордер
+// MOCK data пока, затем подключим к /api/v1/offers
+// ═══════════════════════════════════════════════════════════
+window.p2pState = { side: 'buy', bank: 'all', offers: [] };
+
+const MOCK_OFFERS_BUY = [
+  { id:'mk1', nick:'PRIDE Official', avatar:'🦁', tier:'pride', tierLabel:'PRIDE',
+    rating:4.98, deals:1432, success:99.7, avgMin:1,
+    price:95.18, available:12540, minRub:1000, maxRub:500000,
+    banks:['СБП','Сбер','Тинькофф'], online:true,
+    terms:'🟡 Оплата ТОЛЬКО с личной карты, ФИО плательщика должно совпадать с ФИО на профиле.\n🟡 Без комментариев в назначении платежа.\n🟢 Отпускаю USDT в течение 1-2 минут после поступления оплаты.' },
+  { id:'mk2', nick:'MaxTrader', avatar:'M', tier:'gold', tierLabel:'GOLD',
+    rating:4.91, deals:832, success:98.4, avgMin:3,
+    price:95.35, available:8200, minRub:5000, maxRub:200000,
+    banks:['Тинькофф','Сбер'], online:true,
+    terms:'Только СБП. Перевод за 5 минут.' },
+  { id:'mk3', nick:'DenisExchange', avatar:'D', tier:'verified', tierLabel:'✓',
+    rating:4.82, deals:256, success:96.1, avgMin:7,
+    price:95.50, available:3400, minRub:1000, maxRub:100000,
+    banks:['СБП','Альфа'], online:false,
+    terms:'Принимаю только Альфа. ФИО должно совпадать.' },
+  { id:'mk4', nick:'NikitaKursy', avatar:'N', tier:null, tierLabel:null,
+    rating:4.65, deals:41, success:89.1, avgMin:15,
+    price:95.85, available:1200, minRub:500, maxRub:50000,
+    banks:['Райф','ВТБ'], online:true,
+    terms:'Свободные условия, готов договариваться.' },
+];
+
+function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+function renderOfferCard(op) {
+  const badge = op.tier ? `<span class="p2p-badge ${op.tier}">${escHtml(op.tierLabel)}</span>` : '';
+  const onlineDot = op.online ? '<span style="color:#5FE388">🟢</span> ' : '';
+  return `<div class="p2p-offer-card" onclick="openP2POffer('${escHtml(op.id)}')">
+    <div class="row1">
+      <div class="avatar">${escHtml(op.avatar)}</div>
+      <div class="name">
+        <div class="nick">${escHtml(op.nick)}${badge}</div>
+        <div class="stats">⭐ ${op.rating.toFixed(2)} · ${op.deals} сделок · ${op.success}% успех · ~${op.avgMin} мин</div>
+      </div>
+    </div>
+    <div class="price-row">
+      <span class="price-big">${op.price.toFixed(2)} ₽</span>
+      <span class="price-sub">за 1 USDT</span>
+    </div>
+    <div class="limit-row">${onlineDot}Доступно: ${op.available.toLocaleString('ru-RU')} USDT · Лимит ${op.minRub.toLocaleString('ru-RU')} — ${op.maxRub.toLocaleString('ru-RU')} ₽</div>
+    <div class="pay-row">${op.banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
+    <button class="p2p-cta">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
+  </div>`;
+}
+
+async function loadP2POffers() {
+  const list = document.getElementById('p2p-list');
+  if (!list) return;
+  list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+  // Попытка боевого API
+  let offers = [];
+  try {
+    const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
+    if (r && r.items) offers = r.items;
+  } catch(e) {}
+  // Фолбэк на mock
+  if (!offers.length) offers = MOCK_OFFERS_BUY;
+  // Фильтр по банку
+  if (p2pState.bank && p2pState.bank !== 'all') {
+    const bankMap = { sbp:'СБП', sber:'Сбер', tinkoff:'Тинькофф', alfa:'Альфа', raif:'Райф' };
+    const need = bankMap[p2pState.bank];
+    if (need) offers = offers.filter(o => (o.banks || []).indexOf(need) >= 0);
+  }
+  p2pState.offers = offers;
+  list.innerHTML = offers.length
+    ? offers.map(renderOfferCard).join('')
+    : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет офферов под фильтр</div>';
+}
+
+window.openP2POffer = function(id) {
+  const op = (p2pState.offers || []).find(x => x.id === id);
+  if (!op) return;
+  window.currentOffer = op;
+  const body = document.getElementById('p2p-offer-body');
+  if (!body) { go('p2p-offer'); return; }
+  body.innerHTML = `
+    <div class="p2p-profile-card">
+      <div class="big-avatar">${escHtml(op.avatar)}</div>
+      <div class="info">
+        <div class="nick-line">${escHtml(op.nick)}${op.tier ? '<span class="p2p-badge ' + op.tier + '">' + escHtml(op.tierLabel) + '</span>' : ''}</div>
+        <div class="meta-line">⭐ ${op.rating.toFixed(2)} · ${op.deals} сделок · ${op.success}% успех</div>
+        <div class="meta-line">${op.online ? '🟢 Онлайн' : '⚪ Был недавно'} · ~${op.avgMin} мин среднее время</div>
+      </div>
+    </div>
+    <div class="p2p-detail-block">
+      <div class="p2p-detail-row"><span class="k">Цена</span><span class="v" style="font-size:18px;font-weight:700">${op.price.toFixed(2)} ₽ за 1 USDT</span></div>
+      <div class="p2p-detail-row"><span class="k">Доступно</span><span class="v">${op.available.toLocaleString('ru-RU')} USDT</span></div>
+      <div class="p2p-detail-row"><span class="k">Лимит сделки</span><span class="v">${op.minRub.toLocaleString('ru-RU')} — ${op.maxRub.toLocaleString('ru-RU')} ₽</span></div>
+      <div class="p2p-detail-row"><span class="k">Способы оплаты</span><span class="v">${op.banks.join(', ')}</span></div>
+      <div class="p2p-detail-row"><span class="k">Тайминг оплаты</span><span class="v">15 минут</span></div>
+    </div>
+    <div class="p2p-screen-label">Условия продавца</div>
+    <div class="p2p-detail-block" style="font-size:13px;line-height:1.6;white-space:pre-wrap">${escHtml(op.terms || 'Стандартные условия')}</div>
+    <div class="p2p-bottom-cta">
+      <button class="p2p-btn-primary" onclick="openP2PCreateDeal()">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
+    </div>`;
+  go('p2p-offer');
+};
+
+window.openP2PCreateDeal = function() {
+  // Stub: пока показываем alert. На следующих шагах подключим к создания deal.
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+  Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Создание сделки — в следующем шаге.') : alert('Создание сделки — следующий шаг.');
+};
+
+// Handlers для view-p2p
+safeBind('p2p-side-buy', 'click', () => {
+  p2pState.side = 'buy';
+  document.getElementById('p2p-side-buy').classList.add('active');
+  document.getElementById('p2p-side-sell').classList.remove('active');
+  loadP2POffers();
+});
+safeBind('p2p-side-sell', 'click', () => {
+  p2pState.side = 'sell';
+  document.getElementById('p2p-side-sell').classList.add('active');
+  document.getElementById('p2p-side-buy').classList.remove('active');
+  loadP2POffers();
+});
+document.querySelectorAll('#view-p2p .p2p-chip[data-bank]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#view-p2p .p2p-chip[data-bank]').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    p2pState.bank = chip.dataset.bank;
+    loadP2POffers();
+  });
+});
+safeBind('p2p-create-btn', 'click', () => go('p2p-create'));
+safeBind('p2p-myads-btn', 'click', () => {
+  Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Мои объявления — в следующем шаге.') : alert('Мои объявления — следующий шаг.');
+});
+
+// Загружаем офферы при заходе на view-p2p
+const _origGo_p2p = window.go;
+if (typeof _origGo_p2p === 'function') {
+  window.go = function(view) {
+    _origGo_p2p(view);
+    if (view === 'p2p') setTimeout(loadP2POffers, 50);
+  };
+}
 
 // ── Auto-refresh баланса каждые 10 сек когда вкладка main активна ──
 // Авто-обновление: история = 5 сек, баланс = 10 сек
