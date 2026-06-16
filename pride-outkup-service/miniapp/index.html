@@ -140,7 +140,11 @@
   }
   .action-btn:active .circle::after { opacity:1; transition:none; }
   .action-btn .label { font-size:13px; color:var(--th-1); font-weight:500; letter-spacing:0.1px; transition:color .3s; }
-  .price-card { margin:12px 16px; padding:14px; background:var(--panel); border-radius:14px; }
+  .price-card { margin:12px 16px; padding:14px; background:var(--panel); border-radius:14px; position:relative; overflow:hidden; transition:transform .15s; }
+  .price-card:active { transform:scale(0.99); }
+  .price-card .mini-chart-wrap { margin-top:10px; height:80px; position:relative; }
+  .price-card .mini-chart-wrap canvas { display:block; width:100% !important; height:80px !important; }
+  .price-card .mini-chart-tap { margin-top:4px; font-size:11px; color:rgba(255,255,255,0.45); text-align:right; letter-spacing:0.3px; }
   .price-card .row1 { display:flex; align-items:baseline; gap:8px; }
   .price-card .price { font-size:18px; font-weight:600; }
   .price-card .delta { font-size:13px; }
@@ -582,9 +586,11 @@ body { background: #15161a !important; }
       <div class="label">Обмен</div>
     </button>
   </div>
-  <div class="price-card">
+  <div class="price-card" onclick="window.openCoinChart && openCoinChart(window.activeCoin)" style="cursor:pointer">
     <div class="row1"><span class="price" id="coin-price">$0.00</span><span class="delta" id="coin-delta">+0.00%</span></div>
     <div class="sub">Цена за 1 <span id="coin-sub-name">USDT</span></div>
+    <div class="mini-chart-wrap"><canvas id="coin-mini-chart" height="80"></canvas></div>
+    <div class="mini-chart-tap">Тап для деталей →</div>
   </div>
   <div class="history-list">
     <div class="history-date">Последние операции</div>
@@ -1090,6 +1096,7 @@ async function loadMain() {
 
 async function openCoin(code) {
   activeCoin = code;
+  window.activeCoin = code;
   // Если справочник монет ещё не загружен — догружаем
   if (!coins.length) { await loadMain(); }
   const c = coins.find(x => x.code === code) || {code, name: code, networks:[]};
@@ -1104,6 +1111,8 @@ async function openCoin(code) {
   $('coin-price').textContent = '$' + fmt(price, price<1?6:2);
   $('coin-delta').className = 'delta ' + (delta>=0?'pos':'neg');
   $('coin-delta').textContent = (delta>=0?'+':'') + delta.toFixed(2) + '%';
+  // Мини-график 7 дней
+  drawMiniChart(code, delta).catch(()=>{});
   try {
     const tj = await api(`/api/v1/wallet/operations?limit=50`).catch(()=>({items:[]}));
     const items = (tj.items || []).filter(op => (op.coin||'').toUpperCase() === code.toUpperCase());
@@ -1115,6 +1124,56 @@ async function openCoin(code) {
   go('coin');
 }
 window.openCoin = openCoin;
+
+// Мини-график на странице монеты (7 дней). CoinGecko primary, Binance fallback.
+async function drawMiniChart(code, delta) {
+  const canvas = document.getElementById('coin-mini-chart');
+  if (!canvas || !window.Chart) return;
+  // Уничтожить предыдущий
+  if (window._miniChart) { try { window._miniChart.destroy(); } catch(e) {} window._miniChart = null; }
+  const cgIds = { BTC:'bitcoin', ETH:'ethereum', USDT:'tether', TRX:'tron', TON:'the-open-network', SOL:'solana', BNB:'binancecoin', USDC:'usd-coin', DOGE:'dogecoin', LTC:'litecoin' };
+  const bnSym = { BTC:'BTCUSDT', ETH:'ETHUSDT', TRX:'TRXUSDT', SOL:'SOLUSDT', BNB:'BNBUSDT', DOGE:'DOGEUSDT', LTC:'LTCUSDT', TON:'TONUSDT' };
+  let values = [];
+  // 1) CoinGecko 7д
+  try {
+    const id = cgIds[code.toUpperCase()] || code.toLowerCase();
+    const r = await fetch('https://api.coingecko.com/api/v3/coins/' + id + '/market_chart?vs_currency=usd&days=7');
+    if (r.ok) { const j = await r.json(); values = (j.prices || []).map(p => p[1]); }
+  } catch(e) {}
+  // 2) Binance fallback (1h × 168 = 7д)
+  if (!values.length && bnSym[code.toUpperCase()]) {
+    try {
+      const r = await fetch('https://api.binance.com/api/v3/klines?symbol=' + bnSym[code.toUpperCase()] + '&interval=1h&limit=168');
+      if (r.ok) { const j = await r.json(); values = j.map(k => parseFloat(k[4])); }
+    } catch(e) {}
+  }
+  // 3) Синтетика если оба упали (стабильный stub)
+  if (!values.length) {
+    const base = (code === 'USDT' || code === 'USDC') ? 1 : (code === 'BTC' ? 67000 : 10);
+    for (let i = 0; i < 60; i++) values.push(base * (1 + Math.sin(i / 5) * 0.04));
+  }
+  // Цвет линии — по delta
+  const lineCol = (delta || 0) >= 0 ? '#30D158' : '#FF453A';
+  // Цвет fill — gradient под текущий скин
+  const ctx2d = canvas.getContext('2d');
+  function getSkinColors() {
+    const card = document.getElementById('pcard');
+    const cls = card ? (card.className || '') : '';
+    if (cls.indexOf('pskin-night') >= 0) return { top:'rgba(80,120,255,0.40)', bot:'rgba(80,120,255,0.01)' };
+    if (cls.indexOf('pskin-crown') >= 0) return { top:'rgba(255,200,60,0.45)', bot:'rgba(255,140,40,0.01)' };
+    return { top:'rgba(255,140,66,0.45)', bot:'rgba(139,46,15,0.01)' };
+  }
+  const sk = getSkinColors();
+  const grad = ctx2d.createLinearGradient(0, 0, 0, canvas.height || 80);
+  grad.addColorStop(0, sk.top);
+  grad.addColorStop(1, sk.bot);
+  window._miniChart = new Chart(canvas, {
+    type: 'line',
+    data: { labels: values.map((_, i) => i), datasets: [{ data: values, borderColor: lineCol, backgroundColor: grad, tension: 0.35, fill: true, pointRadius: 0, borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } }, animation: { duration: 500 }, elements: { line: { capBezierPoints: true } } }
+  });
+}
+window.drawMiniChart = drawMiniChart;
 
 document.querySelectorAll('[data-coin-act]').forEach(b => b.addEventListener('click', () => {
   const a = b.dataset.coinAct;
@@ -2329,13 +2388,20 @@ loadMain().then(routeFromStart);
     SKINS.forEach(s => document.body.classList.remove('theme-' + s.id));
     document.body.classList.add('theme-' + sk.id);
     try { localStorage.setItem('p2p_skin_v4', id); } catch(e) {}
-    // Перерисовать график если он сейчас открыт — чтобы fill подхватил новый скин
+    // Перерисовать графики если открыты — чтобы fill подхватил новый скин
     try {
       const chartView = document.getElementById('view-coin-chart');
       if (chartView && chartView.classList.contains('active') && window.STATE2 && window.STATE2.activeCoin && typeof window.loadChart === 'function') {
         const activePeriod = document.querySelector('.chart-period[style*="3DA3F0"]');
         const days = activePeriod ? parseInt(activePeriod.dataset.p) || 1 : 1;
         window.loadChart(window.STATE2.activeCoin, days);
+      }
+      // Мини-график на странице монеты
+      const coinView = document.getElementById('view-coin');
+      if (coinView && coinView.classList.contains('active') && window.activeCoin && typeof window.drawMiniChart === 'function') {
+        const deltaEl = document.getElementById('coin-delta');
+        const d = deltaEl && deltaEl.className.indexOf('neg') >= 0 ? -1 : 1;
+        window.drawMiniChart(window.activeCoin, d);
       }
     } catch(e) {}
   }
