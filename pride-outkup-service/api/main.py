@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import (
     users, exchange, orders, offers, deals, webhooks,
-    admin, wallet, owner, cheques, audit,
+    admin, wallet, owner, cheques, audit, payment_methods,
 )
 from core.config import settings
 from core.services import (
@@ -230,6 +230,7 @@ app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 app.include_router(owner.router, prefix="/api/v1/owner", tags=["owner"])
 app.include_router(cheques.router, prefix="/api/v1/cheques", tags=["cheques"])
 app.include_router(audit.router, prefix="/api/v1/admin/audit", tags=["audit"])
+app.include_router(payment_methods.router, prefix="/api/v1/users/me/payment_methods", tags=["payment_methods"])
 
 
 MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"

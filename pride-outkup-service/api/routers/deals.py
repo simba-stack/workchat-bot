@@ -120,6 +120,29 @@ async def create_deal(
     if not seller or seller.balance_usdt < amount_usdt:
         raise HTTPException(400, "у продавца недостаточно USDT для escrow")
 
+    # Реквизиты — из UserPaymentMethod продавца (а не из payload buyer'а!).
+    # Buyer указывает только метод оплаты, реквизиты подставляет seller.
+    from core.models import UserPaymentMethod
+    res_pm = await db.execute(
+        select(UserPaymentMethod)
+        .where(UserPaymentMethod.user_id == seller_id)
+        .where(UserPaymentMethod.type == payment_method)
+        .where(UserPaymentMethod.is_active == True)  # noqa: E712
+        .order_by(UserPaymentMethod.id.desc())
+        .limit(1)
+    )
+    seller_pm = res_pm.scalar_one_or_none()
+    if seller_pm:
+        deal_bank = seller_pm.bank_name
+        deal_card = seller_pm.card_or_phone
+        deal_name = seller_pm.receiver_name
+    else:
+        # Fallback: если у продавца не настроены реквизиты — берём из payload (legacy).
+        # В будущем будем требовать предварительной настройки реквизитов перед публикацией оффера.
+        deal_bank = (payload.get("bank") or "").strip() or None
+        deal_card = (payload.get("phone_or_card") or "").strip() or None
+        deal_name = (payload.get("receiver_name") or "").strip() or None
+
     pay_window = o.pay_window_min or 30
     deadline = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
     deal = Deal(
@@ -131,9 +154,9 @@ async def create_deal(
         rate_rub_per_usdt=rate_used,
         amount_usdt=amount_usdt,
         payment_method=payment_method,
-        bank=(payload.get("bank") or "").strip() or None,
-        phone_or_card=(payload.get("phone_or_card") or "").strip() or None,
-        receiver_name=(payload.get("receiver_name") or "").strip() or None,
+        bank=deal_bank,
+        phone_or_card=deal_card,
+        receiver_name=deal_name,
         status="awaiting_payment",
         fee_pct=fee_pct, fee_usdt=fee_usdt,
         expires_at=deadline, pay_deadline_at=deadline,

@@ -15,6 +15,7 @@ from core.models.cheque import Cheque
 from core.models.deal_message import DealMessage
 from core.models.price_index import PriceIndex
 from core.models.feature_flag import FeatureFlag
+from core.models.payment_method import UserPaymentMethod, PAYMENT_TYPES
 
 __all__ = [
     "User",
