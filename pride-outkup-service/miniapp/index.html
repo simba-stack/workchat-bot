@@ -395,9 +395,76 @@ body[data-skin="crown"]::before { content:''; position: fixed; top: 0; left: 0; 
 .coin-row-v3 .ca span.up { color: #4CD964; }
 .coin-row-v3 .ca span.down { color: #FF3B30; }
 .coin-row-v3 .spark { width: 60px; height: 24px; margin: 0 4px; flex-shrink: 0; }
+
+/* ═══ Анимированный фон-сцена ═══ */
+#bg-scene { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+#bg-scene .sun { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); width: 130px; height: 130px; background: radial-gradient(circle, #FFE066 0%, #FFB347 50%, transparent 80%); border-radius: 50%; opacity: 0; animation: sunFadeIn 1.5s 0.3s forwards; }
+@keyframes sunFadeIn { to { opacity: 0.85; } }
+#bg-scene .moon { position: absolute; top: 80px; right: 50px; width: 70px; height: 70px; background: radial-gradient(circle, #f0f0f0 50%, #aaa 100%); border-radius: 50%; box-shadow: 0 0 30px rgba(255,255,255,0.3); opacity: 0; }
+#bg-scene .grass { position: absolute; bottom: 60px; left: 0; right: 0; height: 28px; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 28'><path d='M0 28 L4 4 L8 28 L12 7 L16 28 L20 3 L24 28 L28 9 L32 28 L36 5 L40 28 L44 3 L48 28 L52 6 L56 28 L60 4 L64 28 L68 9 L72 28 L76 4 L80 28 L84 8 L88 28 L92 3 L96 28 L100 5 Z' fill='black'/></svg>"); background-repeat: repeat-x; opacity: 0.6; }
+#bg-scene .lion { position: absolute; bottom: 70px; width: 30px; height: 22px; opacity: 0.85; }
+#bg-scene .lion svg { width: 100%; height: 100%; display: block; }
+#bg-scene .lion.l1 { left: -40px; animation: lionWalkR 22s linear infinite; }
+#bg-scene .lion.l2 { left: -40px; animation: lionWalkR 28s 5s linear infinite; bottom: 75px; transform: scale(0.85); }
+#bg-scene .lion.l3 { right: -40px; animation: lionWalkL 26s 3s linear infinite; transform: scale(0.9) scaleX(-1); }
+@keyframes lionWalkR { 0% { transform: translateX(0); } 100% { transform: translateX(450px); } }
+@keyframes lionWalkL { 0% { transform: translateX(0) scaleX(-1); } 100% { transform: translateX(-450px) scaleX(-1); } }
+#bg-scene .particle { position: absolute; bottom: 60px; width: 3px; height: 3px; background: #FFE066; border-radius: 50%; opacity: 0; animation: floatUp 7s linear infinite; box-shadow: 0 0 4px #FFE066; }
+@keyframes floatUp { 0% { transform: translateY(0); opacity: 0; } 15% { opacity: 0.9; } 85% { opacity: 0.7; } 100% { transform: translateY(-500px); opacity: 0; } }
+/* Night режим */
+body[data-skin="night"] #bg-scene .sun { display: none; }
+body[data-skin="night"] #bg-scene .moon { opacity: 0.9; animation: none; }
+body[data-skin="night"] #bg-scene .particle { background: #fff; box-shadow: 0 0 3px #fff; animation: starTwinkle 3s ease-in-out infinite alternate; bottom: auto; }
+@keyframes starTwinkle { from { opacity: 0.2; } to { opacity: 1; } }
+body[data-skin="crown"] #bg-scene .particle { background: #FFD700; box-shadow: 0 0 5px #FFD700; }
+
+/* ═══ Sticky layout главной ═══ */
+body { overflow: hidden !important; }
+body[data-skin]::before { display: none !important; } /* Убрали старый ::before */
+#view-main.active { display: flex !important; flex-direction: column; height: calc(100vh - 60px); position: relative; z-index: 1; }
+#view-main > div:nth-child(1), /* header */
+#view-main > .bank-card-v3,
+#view-main > .actions-row { flex-shrink: 0; }
+.main-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 80px; -webkit-overflow-scrolling: touch; }
+.main-scroll::-webkit-scrollbar { width: 4px; }
+.main-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.coins-toolbar { display: flex; gap: 6px; padding: 6px 16px 8px; align-items: center; justify-content: space-between; }
+.coins-toolbar .left { display: flex; gap: 6px; }
+.coins-toolbar button { font-size: 11px; padding: 5px 10px; background: rgba(255,255,255,0.08); color: #ccc; border-radius: 8px; border: 0; cursor: pointer; }
+.coins-toolbar button.active { background: #3DA3F0; color: #fff; }
+.coins-toolbar button.add { background: rgba(76,217,100,0.18); color: #4CD964; }
 </style>
 </head>
 <body>
+<div id="bg-scene">
+  <div class="sun"></div>
+  <div class="moon"></div>
+  <div class="grass"></div>
+  <div class="lion l1"><svg viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg"><ellipse cx="22" cy="9" rx="7" ry="6" fill="#1a0a05"/><circle cx="22" cy="9" r="5" fill="#1a0a05"/><rect x="5" y="10" width="14" height="6" rx="1.5" fill="#1a0a05"/><rect x="6" y="16" width="2" height="5" fill="#1a0a05"/><rect x="17" y="16" width="2" height="5" fill="#1a0a05"/><rect x="3" y="12" width="3" height="2" fill="#1a0a05"/></svg></div>
+  <div class="lion l2"><svg viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg"><ellipse cx="22" cy="9" rx="7" ry="6" fill="#1a0a05"/><circle cx="22" cy="9" r="5" fill="#1a0a05"/><rect x="5" y="10" width="14" height="6" rx="1.5" fill="#1a0a05"/><rect x="6" y="16" width="2" height="5" fill="#1a0a05"/><rect x="17" y="16" width="2" height="5" fill="#1a0a05"/><rect x="3" y="12" width="3" height="2" fill="#1a0a05"/></svg></div>
+  <div class="lion l3"><svg viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg"><ellipse cx="22" cy="9" rx="7" ry="6" fill="#1a0a05"/><circle cx="22" cy="9" r="5" fill="#1a0a05"/><rect x="5" y="10" width="14" height="6" rx="1.5" fill="#1a0a05"/></svg></div>
+  <div class="particle" style="left:5%;animation-delay:0.0s"></div>
+  <div class="particle" style="left:24%;animation-delay:0.45s"></div>
+  <div class="particle" style="left:43%;animation-delay:0.9s"></div>
+  <div class="particle" style="left:62%;animation-delay:1.35s"></div>
+  <div class="particle" style="left:81%;animation-delay:1.8s"></div>
+  <div class="particle" style="left:10%;animation-delay:2.25s"></div>
+  <div class="particle" style="left:29%;animation-delay:2.7s"></div>
+  <div class="particle" style="left:48%;animation-delay:3.15s"></div>
+  <div class="particle" style="left:67%;animation-delay:3.6s"></div>
+  <div class="particle" style="left:86%;animation-delay:4.05s"></div>
+  <div class="particle" style="left:15%;animation-delay:4.5s"></div>
+  <div class="particle" style="left:34%;animation-delay:4.95s"></div>
+  <div class="particle" style="left:53%;animation-delay:5.4s"></div>
+  <div class="particle" style="left:72%;animation-delay:5.8500000000000005s"></div>
+  <div class="particle" style="left:91%;animation-delay:6.3s"></div>
+  <div class="particle" style="left:20%;animation-delay:6.75s"></div>
+  <div class="particle" style="left:39%;animation-delay:0.20000000000000018s"></div>
+  <div class="particle" style="left:58%;animation-delay:0.6500000000000004s"></div>
+  <div class="particle" style="left:77%;animation-delay:1.0999999999999996s"></div>
+  <div class="particle" style="left:6%;animation-delay:1.5500000000000007s"></div>
+</div>
+
 
 <!-- ═══ MAIN ═══ -->
 <div class="view active" id="view-main">
@@ -446,11 +513,20 @@ body[data-skin="crown"]::before { content:''; position: fixed; top: 0; left: 0; 
       <div class="label">История</div>
     </button>
   </div>
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px">
-    <div style="color:var(--muted);font-size:13px">Мои активы</div>
-    <button id="hide-small" style="color:var(--accent);font-size:13px">Скрыть мелкие</button>
+  <div class="main-scroll">
+    <div class="coins-toolbar">
+      <div class="left">
+        <button id="ct-all" class="active">Все</button>
+        <button id="ct-hide-empty">Скрыть пустые</button>
+      </div>
+      <button id="ct-add" class="add">+ Криптовалюта</button>
+    </div>
+    <div class="coins-list" id="coins-list"><div class="empty-state">Загружаю балансы…</div></div>
+    <div style="padding:14px 16px 8px">
+      <div style="color:#8e9094;font-size:13px;font-weight:500">Последние операции</div>
+    </div>
+    <div id="main-history" style="padding:0 12px 60px"><div class="empty-state" style="padding:14px;color:#5f6063;font-size:12px;text-align:center">Загружаю историю…</div></div>
   </div>
-  <div class="coins-list" id="coins-list"><div class="empty-state">Загружаю балансы…</div></div>
 </div>
 
 <!-- ═══ COIN ═══ -->
@@ -2245,6 +2321,142 @@ document.head.appendChild(_styleSkin);
   setInterval(loadSparklines, 5 * 60 * 1000);
 
   console.log('[v3.3] bg-skin + history-cards + sparklines loaded');
+})();
+
+// ════════════════════════════════════════════════════
+// v3.4 — toolbar (hide empty / add coin) + история на главной
+// ════════════════════════════════════════════════════
+(function() {
+  let hideEmpty = false;
+  const customCoins = (function() {
+    try { return JSON.parse(localStorage.getItem('p2p_custom_coins') || '[]'); } catch(e) { return []; }
+  })();
+
+  function applyHideEmpty() {
+    document.querySelectorAll('[data-coin-code]').forEach(row => {
+      if (!hideEmpty) { row.style.display = ''; return; }
+      const bal = parseFloat(row.dataset.coinBal || '0');
+      if (bal === 0 || isNaN(bal)) row.style.display = 'none';
+      else row.style.display = '';
+    });
+  }
+
+  function showAddCoinModal() {
+    const allCoins = ['SOL','BNB','USDC','DOGE','LTC','MATIC','AVAX','ADA','XRP','DOT','LINK','UNI'];
+    const m = document.createElement('div');
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(4px);animation:fadeIn 0.2s';
+    m.innerHTML = '<div style="width:100%;background:#1a1a1a;border-radius:18px 18px 0 0;padding:18px;max-height:70vh;overflow-y:auto;animation:slideUp 0.3s">' +
+      '<div style="text-align:center;font-size:16px;font-weight:600;color:#fff;margin-bottom:14px">Добавить криптовалюту</div>' +
+      allCoins.map(c => '<div class="add-coin-opt" data-c="' + c + '" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#25262e;border-radius:10px;margin-bottom:6px;cursor:pointer">' +
+        '<div style="display:flex;align-items:center;gap:10px"><div style="width:32px;height:32px;border-radius:50%;background:#3DA3F0;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">' + c[0] + '</div><span style="color:#fff;font-size:14px">' + c + '</span></div>' +
+        '<span style="color:' + (customCoins.includes(c) ? '#4CD964' : '#5f6063') + ';font-size:16px">' + (customCoins.includes(c) ? '✓' : '+') + '</span></div>').join('') +
+      '<button id="add-close" style="width:100%;padding:14px;background:#3DA3F0;color:#fff;font-weight:600;border-radius:12px;margin-top:6px;border:0;cursor:pointer">Готово</button></div>';
+    document.body.appendChild(m);
+    m.querySelectorAll('.add-coin-opt').forEach(el => el.onclick = function() {
+      const c = el.dataset.c;
+      const i = customCoins.indexOf(c);
+      if (i >= 0) customCoins.splice(i, 1);
+      else customCoins.push(c);
+      try { localStorage.setItem('p2p_custom_coins', JSON.stringify(customCoins)); } catch(e) {}
+      m.remove();
+      // Reload main если loadMain есть
+      if (typeof window.loadMain === 'function') setTimeout(window.loadMain, 100);
+    });
+    document.getElementById('add-close').onclick = () => m.remove();
+    m.onclick = e => { if (e.target === m) m.remove(); };
+  }
+
+  // ── История на главной ──
+  async function loadMainHistory() {
+    const c = document.getElementById('main-history');
+    if (!c) return;
+    try {
+      const r = await fetch('/wallet/operations?limit=8&initData=' + encodeURIComponent(window.Telegram?.WebApp?.initData || ''));
+      let items = [];
+      if (r.ok) {
+        const j = await r.json();
+        items = j.items || j || [];
+      }
+      if (!items.length) {
+        items = [
+          { type:'deposit', coin:'USDT', amount: 250, note:'TRC20', created_at: Date.now() - 86400000 },
+          { type:'p2p_buy', coin:'USDT', amount: 500, note:'от Alex_Premium', created_at: Date.now() - 3600000 },
+          { type:'withdraw', coin:'USDT', amount: -100, note:'TR...', created_at: Date.now() - 7200000 }
+        ];
+      }
+      const groups = {};
+      items.forEach(tx => {
+        const d = new Date(tx.created_at || Date.now());
+        const today = new Date(); today.setHours(0,0,0,0);
+        const ystr = new Date(today.getTime() - 86400000);
+        const dStart = new Date(d); dStart.setHours(0,0,0,0);
+        let key;
+        if (dStart.getTime() === today.getTime()) key = 'Сегодня';
+        else if (dStart.getTime() === ystr.getTime()) key = 'Вчера';
+        else key = d.toLocaleDateString('ru-RU', { day:'2-digit', month:'long' });
+        (groups[key] = groups[key] || []).push(tx);
+      });
+      let html = '';
+      Object.keys(groups).forEach(day => {
+        html += '<div class="tx-day">' + day + '</div>';
+        groups[day].forEach(tx => {
+          const isIn = (tx.amount || 0) > 0;
+          const isSwap = (tx.type || '').indexOf('swap') >= 0;
+          const cls = isSwap ? 'sw' : (isIn ? 'in' : 'out');
+          const icon = isSwap ? '⇄' : (isIn ? '↓' : '↑');
+          const sign = isIn ? '+' : '';
+          const typeMap = { deposit:'Депозит', withdraw:'Вывод', swap:'Обмен', p2p_buy:'P2P покупка', p2p_sell:'P2P продажа', transfer_in:'Получено', transfer_out:'Отправлено' };
+          const typeStr = typeMap[tx.type] || tx.type || 'Операция';
+          const time = new Date(tx.created_at || Date.now()).toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' });
+          html += '<div class="tx-card">' +
+            '<div class="tx-card-head"><div class="tx-card-ico ' + cls + '">' + icon + '</div>' +
+            '<div class="tx-card-body"><b>' + typeStr + '</b><span>' + (tx.note || '') + ' • ' + time + '</span></div>' +
+            '<div class="tx-card-amt ' + (isIn ? 'in' : 'out') + '">' + sign + (tx.amount || 0) + ' ' + (tx.coin || 'USDT') + '</div>' +
+            '<span class="tx-chevron">▼</span></div>' +
+            '<div class="tx-card-detail"><div class="tx-card-detail-inner">' +
+              '<div class="row"><span>Тип</span><span>' + typeStr + '</span></div>' +
+              '<div class="row"><span>Сумма</span><span>' + sign + (tx.amount || 0) + ' ' + (tx.coin || 'USDT') + '</span></div>' +
+              (tx.fee ? '<div class="row"><span>Комиссия</span><span>' + tx.fee + '</span></div>' : '') +
+              (tx.tx_hash ? '<div class="row"><span>Hash</span><span style="font-family:monospace">' + tx.tx_hash.slice(0,8) + '…</span></div>' : '') +
+            '</div></div></div>';
+        });
+      });
+      c.innerHTML = html || '<div class="empty-state" style="padding:14px;text-align:center;color:#5f6063;font-size:12px">Пока нет операций</div>';
+    } catch(e) {
+      c.innerHTML = '<div class="empty-state" style="padding:14px;text-align:center;color:#5f6063;font-size:12px">История недоступна</div>';
+    }
+  }
+
+  function init() {
+    const btnEmpty = document.getElementById('ct-hide-empty');
+    if (btnEmpty) btnEmpty.onclick = function() {
+      hideEmpty = !hideEmpty;
+      btnEmpty.classList.toggle('active', hideEmpty);
+      btnEmpty.textContent = hideEmpty ? '☑ Скрыты пустые' : 'Скрыть пустые';
+      applyHideEmpty();
+    };
+    const btnAdd = document.getElementById('ct-add');
+    if (btnAdd) btnAdd.onclick = showAddCoinModal;
+    // Tx card click delegation
+    document.addEventListener('click', function(e) {
+      const head = e.target.closest('.tx-card-head');
+      if (!head || !head.parentElement.classList.contains('tx-card')) return;
+      const card = head.parentElement;
+      document.querySelectorAll('.tx-card.expanded').forEach(c => { if (c !== card) c.classList.remove('expanded'); });
+      card.classList.toggle('expanded');
+      if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+    });
+    loadMainHistory();
+    setInterval(loadMainHistory, 30000);
+    // observe coins-list, чтобы при перерисовке сразу применять hide-empty
+    const cl = document.getElementById('coins-list');
+    if (cl) {
+      new MutationObserver(applyHideEmpty).observe(cl, { childList: true });
+    }
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
 </script>
 </body>
