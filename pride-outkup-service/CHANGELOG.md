@@ -4,6 +4,80 @@
 
 ---
 
+## v1.12.0 — 16 июня 2026 (Sweep v12: чистая Feee модель по официальной доке)
+
+### Спецификация (по запросу SIMBA)
+
+**Депозит → sweep:**
+1. Юзер пополняет user-addr
+2. Аренда энергии Feee.io → НА user-addr
+3. Перевод USDT user-addr → hot wallet
+4. TRX тратится **только с Feee** на аренду (не с hot wallet)
+
+**Withdraw:**
+1. Юзер запрашивает вывод
+2. Аренда энергии Feee.io → НА hot wallet
+3. Перевод USDT hot wallet → user_addr
+4. TRX тратится только с Feee
+
+### Ключевые факты из официальной доки Feee.io v3
+
+(https://feee.io/doc/en-US/api/orderv3/create.html и /api/intro/code.html)
+
+| Параметр | Значение | Замечание |
+|---|---|---|
+| Rental lock_period | 28,800 сек = **8 часов** | Energy остаётся на адресе минимум 8 часов |
+| Total rent_duration | 86,400 сек = 24 часа | Может остаться до суток |
+| Activation time | 3-6 секунд | wait_sec=8 безопасно |
+| price_in_sun | ~120 | Динамический market price |
+| Минимум resource_value | 32,000 | Меньше не примет |
+
+### Коды ошибок Feee.io
+
+- `20002` Insufficient balance → пополнить Feee
+- `20005` Address не активирован
+- `20009` Платформа без ресурсов → retry позже
+- `20014` >5 неоплаченных orders на адресе → ждать завершения
+- `20012/20013` IP/UA не в whitelist
+
+### Изменения
+
+**`sweep_service._sweep_one()`:**
+```
+1. cooldown check
+2. USDT balance check
+3. _simulate_transfer_energy() → ENERGY_REQUIRED = simulated × 1.5 (TRON penalty buffer)
+4. _account_resource() → current_energy
+5. if current_energy < ENERGY_REQUIRED:
+     rent_and_wait(uda.address, max(deficit, 32000), wait_sec=8)
+     if fail: cooldown 5 min, RETURN
+6. broadcast с fee_limit=30 TRX (cap, не сжигается)
+7. check receipt SUCCESS
+```
+
+**`sweep_service.sweep_single_address()`** — просто вызывает `_sweep_one()`. Убран `fund_trx_from_hot`.
+
+**`tron_service.send_usdt()` (withdraw):**
+- energy_needed = (32k если has_usdt else 64k) × 1.5
+- fee_limit_sun = 30_000_000 (30 TRX cap даже при rented)
+
+**`energy_service.rent_energy()`:**
+- Логи специально маркируют CRITICAL коды (20002/20009/20014)
+
+### Стоимость на одну операцию
+
+- Sweep (deposit): ~4 TRX с Feee баланса (~$1)
+- Withdraw: ~4 TRX с Feee баланса (~$1)
+- Hot wallet TRX: **не тратится** (только страховка на withdraw fallback)
+
+### Что нужно SIMBA
+
+1. **Держи Feee баланс 30-50 TRX** (запас на 10+ операций)
+2. **Hot wallet TRX можно держать минимум** — на withdraw только для bandwidth fallback
+3. Если Feee упадёт (20002/20009/20014) → cooldown 5 мин, sweep попробует снова
+
+---
+
 ## v1.11.0 — 15 июня 2026 (Sweep v11: умная проверка энергии перед fund)
 
 

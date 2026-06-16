@@ -125,7 +125,16 @@ async def rent_energy(
             code = data.get("code")
             if code != 0:
                 msg = data.get("msg") or "unknown_error"
-                logger.warning("[feee] rent_energy code=%s msg=%s", code, msg)
+                # Специальные коды (см. feee.io/doc/en-US/api/intro/code.html):
+                # 20002 = Insufficient balance (пополнить Feee)
+                # 20005 = Invalid/inactive receiving address
+                # 20009 = Insufficient remaining resources on platform (retry later)
+                # 20012/20013 = IP/UA not in whitelist
+                # 20014 = >5 uncompleted orders at same address (wait for completion)
+                if code in (20002, 20009, 20014):
+                    logger.error("[feee] rent FAIL code=%s msg=%s (CRITICAL — ручное вмешательство?)", code, msg)
+                else:
+                    logger.warning("[feee] rent_energy code=%s msg=%s", code, msg)
                 return {"ok": False, "error": msg, "code": code, "raw": data}
 
             order = data.get("data") or {}

@@ -88,8 +88,9 @@ async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
     except Exception as e:
         logger.warning("[tron] check receiver balance failed: %s, assuming no USDT", e)
 
-    energy_needed = 65_000 if receiver_has_usdt else 130_000
-    logger.info("[tron] receiver=%s has_usdt=%s → energy=%d", to_address, receiver_has_usdt, energy_needed)
+    # Базовая стоимость + 50% буфер (TRON penalty +25-40% на USDT transfers в 2024+)
+    energy_needed = int((32_000 if receiver_has_usdt else 64_000) * 1.5)
+    logger.info("[tron] receiver=%s has_usdt=%s → energy=%d (с буфером penalty)", to_address, receiver_has_usdt, energy_needed)
 
     # Rent energy через Feee.io (если настроен)
     rented = False
@@ -117,8 +118,11 @@ async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
         # fee_limit: rented — 5 TRX хватит (bandwidth + safety).
         # Не rented + receiver_has_usdt → 35 TRX (~14 TRX burn + safety).
         # Не rented + receiver_no_usdt → 60 TRX (~27 TRX burn + safety).
+        # fee_limit = верхний потолок TRX burn если energy не хватит.
+        # Поднимаем до 30 TRX даже при rented — это cap, не сжигается если energy ок.
+        # Lesson v8/v9: low fee_limit ограничивает energy usage даже когда rent ок → OUT_OF_ENERGY.
         if rented:
-            fee_limit_sun = 5_000_000
+            fee_limit_sun = 30_000_000
         elif receiver_has_usdt:
             fee_limit_sun = 35_000_000
         else:
