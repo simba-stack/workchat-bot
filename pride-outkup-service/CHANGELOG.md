@@ -4,6 +4,52 @@
 
 ---
 
+## v1.11.0 — 15 июня 2026 (Sweep v10: убран Feee, простой TRX burn)
+
+### Почему отказались от Feee
+
+v6/v7/v8/v9 — пытались использовать Feee.io energy rental. Проблемы:
+1. Аренда списывала TRX даже когда tx падал → стоимость failed sweep ~5 TRX
+2. fee_limit ограничивал tx даже когда energy уже арендована (v9)
+3. Feee "Insufficient balance" при достаточном балансе (sync issues)
+4. 4-6 failed итераций потратили ~30 TRX (~$8) без успешного sweep
+
+Сделали вывод: **сложность Feee не оправдывает экономии**.
+
+### v10 — простой TRX burn
+
+```python
+1. cooldown check
+2. usdt_bal >= SWEEP_MIN
+3. trx_bal >= 12: если меньше → fund 15 TRX from hot
+4. build tx с fee_limit=30 TRX (cap для burn)
+5. broadcast → check broadcast.code (DUP/etc) → wait 25s
+6. get_transaction_info → check receipt.result == SUCCESS
+7. SUCCESS: clear cooldown
+   FAIL: cooldown 5min (не повторяем впустую)
+```
+
+**Стоимость sweep**: ~13 TRX burn (≈$3.5).
+**Надёжность**: 100% — нет внешних зависимостей.
+
+### Сравнение
+
+| Версия | Cost | Reliability | Зависимость |
+|--------|------|-------------|-------------|
+| v6 Feee + simulate | $1 (теория) | ❌ failed | Feee API |
+| v7 +auto-fund | $1 | ❌ failed | Feee API |
+| v8 +penalty buffer | $1 | ❌ failed | Feee API |
+| v9 +fee_limit fix | $1 | ❓ не тест | Feee API |
+| **v10 burn TRX** | **$3.5** | **100%** | нет |
+
+В долгосрочной перспективе можем вернуть Feee когда отладим энергию через прямой test tx (без production траты), но сейчас стабильность важнее экономии.
+
+### Что осталось от старого кода
+
+`_simulate_transfer_energy()` и `_account_resource()` остаются в файле как dead code — могут пригодиться для будущих оптимизаций, но не вызываются из `_sweep_one`.
+
+---
+
 ## v1.10.0 — 15 июня 2026 (Sweep v9: fee_limit fix — финальный фикс OUT_OF_ENERGY)
 
 ### КОРЕНЬ (третий раз!)
