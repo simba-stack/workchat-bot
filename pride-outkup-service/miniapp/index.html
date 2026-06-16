@@ -507,9 +507,126 @@ body { background: #15161a !important; }
 /* Skin: Pride crown */
 .pskin-crown { background: linear-gradient(135deg, #FFD700 0%, #FF8C42 50%, #8B2E0F 100%); }
 .pskin-crown::before { content: '♛'; position: absolute; bottom: -30px; right: -10px; font-size: 140px; opacity: 0.15; color: #fff; line-height: 1; font-family: serif; pointer-events: none; }
+
+/* ═══════════════════════════════════════════════════════════
+   LIQUID GLASS v1.1 — Apple-style.
+   Точечные правила, не переопределяют layout критичных классов.
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  --lg-bg: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.04) 100%);
+  --lg-border: rgba(255,255,255,0.18);
+  --lg-border-hl: rgba(255,255,255,0.36);
+  --lg-shadow: 0 12px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.24);
+  --lg-blur: 24px;
+  --lg-sat: 170%;
+}
+
+/* Цветные blob'ы под темой — даём стеклу что размывать.
+   Кладём ПОД существующий body::before чтобы glow остался. */
+.lg-bg-layer {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+}
+.lg-bg-layer .lg-blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(80px); opacity: 0.55;
+  animation: lgFloat 26s ease-in-out infinite;
+  transition: background 0.6s ease;
+}
+.lg-bg-layer .lg-blob.b1 { width: 380px; height: 380px; background: var(--th-1); top: -110px; left: -110px; animation-delay: 0s; }
+.lg-bg-layer .lg-blob.b2 { width: 320px; height: 320px; background: var(--th-2); top: 26%; right: -120px; animation-delay: -8s; }
+.lg-bg-layer .lg-blob.b3 { width: 280px; height: 280px; background: var(--th-glow); bottom: -90px; left: 28%; animation-delay: -14s; opacity: 0.40; }
+.lg-bg-layer .lg-blob.b4 { width: 240px; height: 240px; background: var(--th-1); top: 52%; left: 18%; animation-delay: -20s; opacity: 0.30; }
+@keyframes lgFloat {
+  0%, 100% { transform: translate(0,0) scale(1); }
+  25% { transform: translate(40px,-30px) scale(1.08); }
+  50% { transform: translate(-20px,40px) scale(0.95); }
+  75% { transform: translate(30px,20px) scale(1.05); }
+}
+
+/* Bottom-nav — frosted bar (просто усиливаем существующий) */
+#bottom-nav {
+  background: linear-gradient(180deg, rgba(15,15,20,0.55) 0%, rgba(15,15,20,0.85) 100%);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border-top: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 -8px 20px rgba(0,0,0,0.25);
+}
+#bottom-nav button.active {
+  text-shadow: 0 0 8px color-mix(in srgb, var(--th-1) 50%, transparent);
+}
+
+/* Hist-card — усиление blur + saturate (мои собственные классы из v4.2) */
+.hist-card {
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border-top-color: var(--lg-border-hl);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16);
+}
+.hist-day-chip {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.hist-card .hc-tx-link {
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border-color: var(--lg-border-hl);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--th-1) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+/* Action-btn circle — стеклянная капля */
+.action-btn .circle {
+  border: 1px solid var(--lg-border-hl);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--th-1) 35%, transparent),
+    inset 0 1px 0 rgba(255,255,255,0.34),
+    inset 0 -8px 16px rgba(0,0,0,0.12);
+  position: relative;
+}
+.action-btn .circle::after {
+  content: ''; position: absolute; inset: 2px; border-radius: 50%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.30) 0%, transparent 45%);
+  pointer-events: none;
+}
+.action-btn .circle svg { position: relative; z-index: 1; }
+
+/* pcard — добавляем тонкий highlight сверху и subtle shadow */
+.pcard {
+  box-shadow:
+    0 14px 36px rgba(0,0,0,0.42),
+    inset 0 1px 0 rgba(255,255,255,0.32),
+    inset 0 -1px 0 rgba(0,0,0,0.22) !important;
+}
+
+/* Coin-row на главной — стеклянные при наведении */
+.coin-row:active {
+  background: rgba(255,255,255,0.06);
+  backdrop-filter: blur(14px) saturate(140%);
+}
+
+/* CTA-кнопки .copy-btn / .submit-btn — оставляем белыми (как раньше),
+   но добавляем тонкий glass-overlay. Без !important. */
+
+/* Helper-класс .lg для произвольных новых элементов (P2P views, photo skin) */
+.lg {
+  background: var(--lg-bg);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  border: 1px solid var(--lg-border);
+  border-top-color: var(--lg-border-hl);
+  border-radius: 16px;
+  box-shadow: var(--lg-shadow);
+}
 </style>
 </head>
 <body>
+<!-- Liquid glass: цветные blob'ы на фоне (под темой) — стеклу нужен цветной фон для blur'а -->
+<div class="lg-bg-layer">
+  <div class="lg-blob b1"></div>
+  <div class="lg-blob b2"></div>
+  <div class="lg-blob b3"></div>
+  <div class="lg-blob b4"></div>
+</div>
 
 <!-- ═══ MAIN ═══ -->
 <div class="view active" id="view-main">
