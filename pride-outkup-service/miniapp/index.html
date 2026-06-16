@@ -347,7 +347,7 @@ body { background: #15161a !important; }
 
 /* ═══ Фоны body по выбранному скину ═══ */
 body { transition: background 0.6s ease; position: relative; }
-body[data-skin="sunset"] { background: linear-gradient(180deg, #1a0a08 0%, #2a1410 30%, #3a1a0a 70%, #0a0a08 100%) !important; }
+body[data-skin="sunset"] { background: linear-gradient(180deg, #FF8C42 0%, #C76A1A 18%, #6A2E0A 40%, #2a1410 70%, #0a0a08 100%) !important; }
 body[data-skin="sunset"]::before { content:''; position: fixed; top: 0; left: 0; right: 0; height: 220px; background: radial-gradient(ellipse at 50% 0%, rgba(255,140,66,0.4) 0%, rgba(255,107,53,0.2) 40%, transparent 80%); pointer-events: none; z-index: 0; }
 body[data-skin="night"] { background: linear-gradient(180deg, #0a0a1e 0%, #15152e 50%, #0a0a14 100%) !important; }
 body[data-skin="night"]::before { content:''; position: fixed; inset: 0; background: radial-gradient(1px 1px at 20% 15%, #fff, transparent), radial-gradient(1px 1px at 60% 8%, #fff, transparent), radial-gradient(2px 2px at 80% 20%, #fff, transparent), radial-gradient(1px 1px at 35% 25%, #fff, transparent), radial-gradient(1px 1px at 75% 35%, #fff, transparent), radial-gradient(2px 2px at 15% 40%, #fff, transparent), radial-gradient(1px 1px at 50% 18%, #fff, transparent); opacity: 0.5; pointer-events: none; z-index: 0; animation: starShimmer 4s ease-in-out infinite alternate; }
@@ -433,6 +433,12 @@ body[data-skin]::before { display: none !important; } /* Убрали стары
 .coins-toolbar button { font-size: 11px; padding: 5px 10px; background: rgba(255,255,255,0.08); color: #ccc; border-radius: 8px; border: 0; cursor: pointer; }
 .coins-toolbar button.active { background: #3DA3F0; color: #fff; }
 .coins-toolbar button.add { background: rgba(76,217,100,0.18); color: #4CD964; }
+
+/* fix: гарантировать что animation запускается */
+#bg-scene .particle { animation-fill-mode: both !important; }
+body[data-skin="sunset"] #bg-scene .particle, 
+body[data-skin="crown"] #bg-scene .particle { animation-name: floatUp !important; }
+body[data-skin="night"] #bg-scene .particle { animation-name: starTwinkle !important; }
 </style>
 </head>
 <body>
@@ -1263,11 +1269,13 @@ $('toggle-balance').addEventListener('click', () => {
 
 // "Скрыть мелкие" — спрятать монеты с балансом 0
 let hideSmall = false;
-$('hide-small').addEventListener('click', () => {
-  hideSmall = !hideSmall;
-  $('hide-small').textContent = hideSmall ? 'Показать все' : 'Скрыть мелкие';
-  loadMain();
-});
+if ($('hide-small')) {
+  $('hide-small').addEventListener('click', () => {
+    hideSmall = !hideSmall;
+    $('hide-small').textContent = hideSmall ? 'Показать все' : 'Скрыть мелкие';
+    loadMain();
+  });
+}
 
 // ── Deposit ──
 async function openDeposit(coin) {
