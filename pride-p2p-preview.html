@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>PRIDE P2P — Preview</title>
+<style>
+:root {
+  --bg:#000; --panel:#131313; --panel-2:#1f1f1f;
+  --border:rgba(255,255,255,0.08);
+  --text:#fff; --muted:#7a7a7a;
+  --green:#34c759; --red:#ff453a; --gold:#ffd60a; --blue:#3DA3F0;
+  --th-1:#FF8C42; --th-2:#8B2E0F; --th-glow:#FFB347; --th-border:rgba(255,140,66,0.28);
+}
+body.theme-night { --th-1:#5078ff; --th-2:#1a1f44; --th-glow:#8aa8ff; --th-border:rgba(80,120,255,0.30); }
+body.theme-crown { --th-1:#FFD700; --th-2:#8B2E0F; --th-glow:#FFE066; --th-border:rgba(255,215,0,0.30); }
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin:0; padding:0; background:#0a0a0c; color:#fff; font:14px -apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif; min-height:100vh; }
+body::before {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background: radial-gradient(800px 380px at 50% -120px, color-mix(in srgb, var(--th-glow) 18%, transparent), transparent 70%),
+              radial-gradient(600px 400px at 100% 110%, color-mix(in srgb, var(--th-2) 14%, transparent), transparent 70%);
+  opacity:0.7; transition:background 0.35s ease;
+}
+button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+input, textarea, select { font:inherit; color:#fff; background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:10px; padding:10px 12px; width:100%; outline:none; }
+input:focus, textarea:focus, select:focus { border-color:var(--th-1); }
+
+/* Layout */
+.app-wrap { max-width:420px; margin:0 auto; min-height:100vh; position:relative; padding-bottom:70px; }
+.screen-label { padding:20px 16px 8px; font-size:11px; color:#7a7a7a; letter-spacing:1px; text-transform:uppercase; }
+.preview-section { border-bottom:8px solid #050507; }
+
+.nav-header { display:flex; align-items:center; padding:14px 16px; background:#0d0d10; position:sticky; top:0; z-index:5; gap:8px; border-bottom:1px solid var(--border); }
+.nav-header .back { font-size:24px; color:#fff; padding:4px 8px; }
+.nav-header .title { font-size:17px; font-weight:600; flex:1; text-align:center; }
+.nav-header .right { width:40px; text-align:right; }
+.nav-header .right .ico { font-size:20px; cursor:pointer; }
+
+/* Tabs */
+.tabs { display:flex; padding:8px 16px; gap:6px; }
+.tab { flex:1; text-align:center; padding:10px; border-radius:10px; background:rgba(255,255,255,0.05); color:#9a9a9a; font-weight:600; font-size:14px; cursor:pointer; transition:all 0.2s; }
+.tab.active { background:linear-gradient(135deg, var(--th-1), var(--th-2)); color:#fff; }
+
+/* Filter row */
+.filter-row { display:flex; gap:8px; padding:8px 16px; overflow-x:auto; }
+.filter-chip { padding:8px 14px; border-radius:999px; background:rgba(255,255,255,0.06); border:1px solid var(--border); color:#cfcfcf; font-size:12px; white-space:nowrap; cursor:pointer; }
+.filter-chip.active { background:color-mix(in srgb, var(--th-1) 25%, transparent); border-color:var(--th-1); color:#fff; }
+
+/* Offer cards */
+.offer-list { padding:8px 12px; }
+.offer-card { background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 6%, rgba(255,255,255,0.04)), rgba(255,255,255,0.02)); border:1px solid var(--th-border); border-radius:14px; padding:14px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; }
+.offer-card:active { transform:scale(0.99); }
+.offer-card .row1 { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.offer-card .avatar { width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg, var(--th-1), var(--th-2)); display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+.offer-card .name { flex:1; min-width:0; }
+.offer-card .nick { font-weight:600; font-size:14px; }
+.offer-card .stats { color:#8a8a8a; font-size:11px; margin-top:2px; }
+.offer-card .badge { display:inline-block; padding:2px 8px; border-radius:5px; font-size:10px; font-weight:700; margin-left:6px; }
+.offer-card .badge-pride { background:#FFD700; color:#000; }
+.offer-card .badge-verified { background:#3DA3F0; color:#fff; }
+.offer-card .badge-gold { background:linear-gradient(135deg, #FFD700, #FF8C42); color:#000; }
+.offer-card .price-row { display:flex; justify-content:space-between; align-items:baseline; margin:8px 0 6px; }
+.offer-card .price-big { font-size:22px; font-weight:700; color:var(--th-1); }
+.offer-card .price-sub { font-size:12px; color:#8a8a8a; }
+.offer-card .limit-row { font-size:12px; color:#bcbcbc; margin-bottom:8px; }
+.offer-card .pay-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.offer-card .pay-chip { padding:4px 10px; background:rgba(255,255,255,0.06); border-radius:6px; font-size:11px; color:#cfcfcf; }
+.offer-card .cta { width:100%; margin-top:10px; padding:11px; background:linear-gradient(135deg, var(--th-1), var(--th-2)); color:#fff; border-radius:10px; font-weight:700; font-size:14px; }
+
+/* Offer detail */
+.detail-block { padding:14px 16px; background:rgba(255,255,255,0.02); border-radius:14px; margin:8px 16px; border:1px solid var(--border); }
+.detail-row { display:flex; justify-content:space-between; padding:8px 0; font-size:13px; border-bottom:1px dashed rgba(255,255,255,0.05); }
+.detail-row:last-child { border-bottom:0; }
+.detail-row .k { color:#8a8a8a; }
+.detail-row .v { color:#fff; font-weight:500; }
+
+.profile-card { display:flex; gap:14px; align-items:center; padding:14px; margin:12px 16px; border-radius:14px; background:rgba(255,255,255,0.03); border:1px solid var(--th-border); }
+.profile-card .big-avatar { width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg, var(--th-1), var(--th-2)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; }
+.profile-card .info { flex:1; }
+.profile-card .nick-line { font-weight:700; font-size:16px; }
+.profile-card .meta-line { color:#9a9a9a; font-size:11px; margin-top:3px; }
+
+/* Big amount input */
+.amount-block { padding:24px 16px; text-align:center; }
+.amount-input { font-size:36px; font-weight:700; text-align:center; background:transparent; border:0; color:#fff; width:100%; padding:0; outline:none; }
+.amount-input::placeholder { color:#4a4a4a; }
+.amount-equiv { color:#8a8a8a; font-size:13px; margin-top:8px; }
+.quick-chips { display:flex; gap:8px; padding:0 16px; justify-content:center; flex-wrap:wrap; }
+.quick-chip { padding:8px 14px; background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:8px; font-size:12px; color:#cfcfcf; cursor:pointer; }
+
+/* CTA */
+.bottom-cta { padding:14px 16px; }
+.btn-primary { width:100%; padding:14px; background:linear-gradient(135deg, var(--th-1), var(--th-2)); color:#fff; border-radius:12px; font-weight:700; font-size:15px; }
+.btn-secondary { width:100%; padding:14px; background:rgba(255,255,255,0.06); border:1px solid var(--border); color:#cfcfcf; border-radius:12px; font-weight:600; font-size:15px; margin-top:8px; }
+.btn-danger { width:100%; padding:14px; background:linear-gradient(135deg, #ff453a, #8b1410); color:#fff; border-radius:12px; font-weight:700; font-size:15px; }
+
+/* Active order */
+.timer-banner { background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 20%, transparent), transparent); border:1px solid var(--th-border); border-radius:14px; padding:14px; margin:12px 16px; text-align:center; }
+.timer-banner .timer-big { font-size:32px; font-weight:700; color:var(--th-1); font-variant-numeric:tabular-nums; }
+.timer-banner .timer-sub { font-size:12px; color:#bcbcbc; margin-top:2px; }
+
+.payment-card { background:#161618; border-radius:14px; margin:12px 16px; padding:14px; border:1px solid var(--border); }
+.payment-card .pc-bank { font-size:18px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+.payment-card .pc-bank-icon { width:32px; height:32px; border-radius:8px; background:#FFE066; display:flex; align-items:center; justify-content:center; font-size:18px; }
+.payment-card .pc-field { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px dashed rgba(255,255,255,0.06); }
+.payment-card .pc-field:last-child { border-bottom:0; }
+.payment-card .pc-k { color:#8a8a8a; font-size:11px; text-transform:uppercase; }
+.payment-card .pc-v { color:#fff; font-weight:600; font-size:14px; font-family:ui-monospace,Menlo,monospace; }
+.payment-card .pc-copy { color:var(--th-1); font-size:12px; cursor:pointer; }
+
+.warning-banner { background:rgba(255,193,7,0.1); border:1px solid rgba(255,193,7,0.3); border-radius:10px; padding:10px 12px; margin:12px 16px; font-size:12px; color:#FFC107; line-height:1.5; }
+.success-banner { background:rgba(52,199,89,0.1); border:1px solid rgba(52,199,89,0.3); border-radius:10px; padding:10px 12px; margin:12px 16px; font-size:12px; color:#34c759; line-height:1.5; }
+.danger-banner { background:rgba(255,69,58,0.1); border:1px solid rgba(255,69,58,0.3); border-radius:10px; padding:10px 12px; margin:12px 16px; font-size:12px; color:#ff453a; line-height:1.5; }
+
+/* Chat */
+.chat-block { background:#0d0d10; border-radius:14px; margin:12px 16px; padding:12px; max-height:240px; overflow-y:auto; border:1px solid var(--border); }
+.chat-msg { display:flex; margin-bottom:8px; font-size:13px; }
+.chat-msg.me { justify-content:flex-end; }
+.chat-msg .bubble { max-width:80%; padding:8px 12px; border-radius:14px; }
+.chat-msg.me .bubble { background:linear-gradient(135deg, var(--th-1), var(--th-2)); color:#fff; border-bottom-right-radius:4px; }
+.chat-msg.them .bubble { background:rgba(255,255,255,0.07); color:#fff; border-bottom-left-radius:4px; }
+.chat-msg.sys .bubble { background:rgba(58,150,221,0.15); color:#3DA3F0; font-size:11px; text-align:center; margin:0 auto; }
+.chat-msg .time { font-size:10px; color:#5a5a5a; margin-top:2px; }
+
+/* Dispute */
+.dispute-form { padding:14px 16px; }
+.dispute-form label { font-size:11px; text-transform:uppercase; color:#8a8a8a; letter-spacing:0.5px; margin-bottom:6px; display:block; }
+.dispute-form .reason-list { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+.dispute-form .reason { padding:12px; background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-size:14px; }
+.dispute-form .reason.selected { border-color:var(--red); background:rgba(255,69,58,0.08); }
+.dispute-form textarea { min-height:80px; resize:vertical; }
+.dispute-form .upload-btn { display:block; width:100%; padding:24px; background:rgba(255,255,255,0.03); border:2px dashed var(--border); border-radius:12px; color:#7a7a7a; font-size:13px; text-align:center; margin-bottom:14px; }
+
+/* Status badges */
+.status-badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; }
+.status-pending { background:rgba(255,193,7,0.15); color:#FFC107; }
+.status-paid { background:rgba(58,150,221,0.15); color:#3DA3F0; }
+.status-released { background:rgba(52,199,89,0.15); color:#34c759; }
+.status-dispute { background:rgba(255,69,58,0.15); color:#ff453a; }
+.status-escalated { background:rgba(255,140,0,0.15); color:#ff8c00; }
+.status-completed { background:rgba(120,120,120,0.15); color:#aaa; }
+
+/* Ad creation steps */
+.steps-bar { display:flex; padding:14px 16px; gap:6px; }
+.steps-bar .step { flex:1; height:4px; border-radius:2px; background:rgba(255,255,255,0.08); }
+.steps-bar .step.active { background:var(--th-1); }
+.steps-bar .step.done { background:color-mix(in srgb, var(--th-1) 50%, transparent); }
+
+.form-block { padding:14px 16px; }
+.form-block label { font-size:11px; text-transform:uppercase; color:#8a8a8a; letter-spacing:0.5px; margin:14px 0 6px; display:block; }
+.form-block .price-type-tabs { display:flex; gap:8px; margin-bottom:8px; }
+.form-block .price-type-tabs .tab { font-size:12px; padding:8px; }
+.form-block .pay-method-grid { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; }
+.form-block .pay-method { padding:12px; background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:10px; cursor:pointer; display:flex; align-items:center; gap:8px; }
+.form-block .pay-method.selected { border-color:var(--th-1); background:color-mix(in srgb, var(--th-1) 10%, transparent); }
+.form-block .pay-method .icon { width:24px; height:24px; border-radius:6px; background:#3a3a3a; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; }
+
+/* Bottom nav */
+.bottom-nav { position:fixed; bottom:0; left:0; right:0; max-width:420px; margin:0 auto; background:#0a0a0c; border-top:1px solid var(--border); display:flex; justify-content:space-around; padding:8px 0 calc(8px + env(safe-area-inset-bottom, 0px)); }
+.bottom-nav button { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; color:#7a7a7a; font-size:10px; padding:4px; }
+.bottom-nav button .ico { font-size:20px; }
+.bottom-nav button.active { color:var(--th-1); font-weight:600; }
+
+/* Arbitrator queue */
+.arb-list { padding:8px 12px; }
+.arb-row { display:flex; align-items:center; padding:12px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:12px; margin-bottom:6px; cursor:pointer; gap:10px; }
+.arb-row.sla-breach { border-color:var(--red); background:rgba(255,69,58,0.05); }
+.arb-row.sla-warn { border-color:#FFC107; background:rgba(255,193,7,0.04); }
+.arb-row .arb-id { font-size:11px; color:#8a8a8a; font-family:ui-monospace,Menlo,monospace; }
+.arb-row .arb-mid { flex:1; min-width:0; }
+.arb-row .arb-type { font-size:12px; font-weight:600; margin-top:2px; }
+.arb-row .arb-amount { text-align:right; }
+.arb-row .arb-amount .a-fiat { font-size:14px; font-weight:700; }
+.arb-row .arb-amount .a-sla { font-size:11px; color:#ff453a; margin-top:2px; }
+.arb-row .arb-risk { padding:3px 8px; border-radius:5px; font-size:10px; font-weight:700; }
+.arb-row .arb-risk.low { background:rgba(52,199,89,0.15); color:#34c759; }
+.arb-row .arb-risk.med { background:rgba(255,193,7,0.15); color:#FFC107; }
+.arb-row .arb-risk.high { background:rgba(255,69,58,0.15); color:#ff453a; }
+
+/* Arbitrator detail */
+.arb-detail .arb-party { display:flex; align-items:center; padding:10px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:10px; margin-bottom:8px; gap:10px; }
+.arb-detail .arb-party.fraud-flag { border-color:var(--red); }
+.arb-detail .arb-party .pa { width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg, var(--th-1), var(--th-2)); display:flex; align-items:center; justify-content:center; font-weight:700; }
+.arb-detail .arb-party .info { flex:1; }
+.arb-detail .arb-party .info .pname { font-weight:600; font-size:14px; }
+.arb-detail .arb-party .info .pmeta { font-size:11px; color:#8a8a8a; }
+.arb-detail .fraud-signals { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+.arb-detail .signal { padding:2px 6px; border-radius:4px; font-size:9px; font-weight:700; text-transform:uppercase; }
+.arb-detail .signal.red { background:rgba(255,69,58,0.2); color:#ff7060; }
+.arb-detail .signal.yellow { background:rgba(255,193,7,0.2); color:#FFC107; }
+.arb-detail .signal.green { background:rgba(52,199,89,0.2); color:#34c759; }
+.arb-detail .arb-actions { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; padding:8px 0; }
+.arb-detail .arb-actions button { padding:11px; border-radius:10px; font-size:13px; font-weight:600; }
+.arb-detail .arb-actions .release { background:rgba(52,199,89,0.18); color:#34c759; border:1px solid rgba(52,199,89,0.3); }
+.arb-detail .arb-actions .refund { background:rgba(255,193,7,0.18); color:#FFC107; border:1px solid rgba(255,193,7,0.3); }
+.arb-detail .arb-actions .partial { background:rgba(58,150,221,0.18); color:#3DA3F0; border:1px solid rgba(58,150,221,0.3); }
+.arb-detail .arb-actions .extend { background:rgba(120,120,200,0.18); color:#9090ff; border:1px solid rgba(120,120,200,0.3); }
+.arb-detail .arb-actions .fraud { background:rgba(255,69,58,0.18); color:#ff453a; border:1px solid rgba(255,69,58,0.3); }
+.arb-detail .arb-actions .escalate { background:rgba(255,140,0,0.18); color:#ff8c00; border:1px solid rgba(255,140,0,0.3); }
+.evidence-locker { padding:8px; }
+.evidence-item { background:#161618; border:1px solid var(--border); border-radius:10px; padding:10px; margin-bottom:6px; font-size:12px; cursor:pointer; }
+.evidence-item .e-meta { color:#8a8a8a; font-size:10px; margin-top:4px; }
+
+/* Photo skin block */
+.photo-skin-card { margin:14px 16px; padding:18px; border-radius:14px; background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 12%, transparent), color-mix(in srgb, var(--th-2) 8%, transparent)); border:1px solid var(--th-border); }
+.photo-skin-card .ps-title { font-weight:700; margin-bottom:6px; font-size:15px; }
+.photo-skin-card .ps-sub { color:#bcbcbc; font-size:12px; margin-bottom:12px; line-height:1.5; }
+.photo-skin-card .ps-price { display:flex; align-items:baseline; gap:4px; margin-bottom:10px; }
+.photo-skin-card .ps-price .big { font-size:28px; font-weight:800; color:var(--th-1); }
+.photo-skin-card .ps-price .sub { color:#8a8a8a; font-size:13px; }
+
+/* Reviews block */
+.review { padding:12px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:10px; margin-bottom:8px; }
+.review .r-head { display:flex; justify-content:space-between; margin-bottom:6px; }
+.review .r-nick { font-weight:600; font-size:13px; }
+.review .r-thumb { font-size:14px; }
+.review .r-thumb.up { color:#34c759; }
+.review .r-thumb.down { color:#ff453a; }
+.review .r-text { font-size:12px; color:#bcbcbc; line-height:1.4; }
+
+/* Hide secondary screens by default */
+.screen { display:none; }
+.screen.active { display:block; }
+
+/* Sticky nav buttons */
+.preview-nav { position:fixed; top:10px; right:10px; z-index:100; background:rgba(0,0,0,0.85); border:1px solid var(--border); border-radius:10px; padding:8px; max-height:80vh; overflow-y:auto; }
+.preview-nav h4 { margin:0 0 6px; font-size:11px; color:#8a8a8a; text-transform:uppercase; }
+.preview-nav button { display:block; padding:5px 10px; font-size:11px; color:#fff; background:rgba(255,255,255,0.05); border-radius:5px; margin:2px 0; width:140px; text-align:left; }
+.preview-nav button.active { background:var(--th-1); color:#000; font-weight:700; }
+.preview-nav .theme-row { display:flex; gap:4px; margin:6px 0; }
+.preview-nav .theme-btn { width:24px; height:24px; border-radius:50%; border:2px solid transparent; cursor:pointer; }
+.preview-nav .theme-btn.sun { background:linear-gradient(135deg, #FF8C42, #8B2E0F); }
+.preview-nav .theme-btn.night { background:linear-gradient(135deg, #5078ff, #1a1f44); }
+.preview-nav .theme-btn.crown { background:linear-gradient(135deg, #FFD700, #8B2E0F); }
+.preview-nav .theme-btn.active { border-color:#fff; }
+</style>
+</head>
+<body class="theme-sunset">
+
+<div class="preview-nav">
+  <h4>Тема</h4>
+  <div class="theme-row">
+    <div class="theme-btn sun active" onclick="setTheme('sunset')" title="Sunset"></div>
+    <div class="theme-btn night" onclick="setTheme('night')" title="Night"></div>
+    <div class="theme-btn crown" onclick="setTheme('crown')" title="Crown"></div>
+  </div>
+  <h4>Экраны</h4>
+  <button onclick="goto('board')" class="active" id="nv-board">P2P Доска</button>
+  <button onclick="goto('offer')" id="nv-offer">Карточка оффера</button>
+  <button onclick="goto('order-create')" id="nv-order-create">Создание ордера</button>
+  <button onclick="goto('order-active')" id="nv-order-active">Активный ордер</button>
+  <button onclick="goto('order-paid')" id="nv-order-paid">«Я оплатил»</button>
+  <button onclick="goto('dispute')" id="nv-dispute">Открыть спор</button>
+  <button onclick="goto('completed')" id="nv-completed">Сделка завершена</button>
+  <button onclick="goto('my-ads')" id="nv-my-ads">Мои объявления</button>
+  <button onclick="goto('ad-create')" id="nv-ad-create">Создать объявление</button>
+  <button onclick="goto('profile')" id="nv-profile">Профиль продавца</button>
+  <button onclick="goto('photo-skin')" id="nv-photo-skin">Фото-скин $5</button>
+  <h4>Арбитры</h4>
+  <button onclick="goto('arb-queue')" id="nv-arb-queue">Очередь споров</button>
+  <button onclick="goto('arb-detail')" id="nv-arb-detail">Карточка спора</button>
+  <button onclick="goto('arb-decision')" id="nv-arb-decision">Решение</button>
+</div>
+
+<div class="app-wrap">
+
+<!-- ═════ P2P ДОСКА ═════ -->
+<div class="screen active" id="sc-board">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">P2P маркет</div>
+    <div class="right"><span class="ico">⚙</span></div>
+  </div>
+  <div class="tabs">
+    <div class="tab active">Купить USDT</div>
+    <div class="tab">Продать USDT</div>
+  </div>
+  <div class="filter-row">
+    <div class="filter-chip active">Все банки</div>
+    <div class="filter-chip">СБП</div>
+    <div class="filter-chip">Сбер</div>
+    <div class="filter-chip">Тинькофф</div>
+    <div class="filter-chip">Альфа</div>
+    <div class="filter-chip">Райф</div>
+  </div>
+  <div class="filter-row">
+    <div class="filter-chip">RUB</div>
+    <div class="filter-chip">Сумма ↓</div>
+    <div class="filter-chip">★ верифиц.</div>
+    <div class="filter-chip">Онлайн</div>
+  </div>
+  <div class="offer-list">
+
+    <div class="offer-card" onclick="goto('offer')">
+      <div class="row1">
+        <div class="avatar">🦁</div>
+        <div class="name">
+          <div class="nick">PRIDE Official<span class="badge badge-pride">PRIDE</span></div>
+          <div class="stats">⭐ 4.98 · 1.4k сделок · 99.7% успех · ~1 мин</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">95.18 ₽</span>
+        <span class="price-sub">за 1 USDT</span>
+      </div>
+      <div class="limit-row">Доступно: 12 540 USDT · Лимит 1 000 — 500 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">СБП</span>
+        <span class="pay-chip">Сбер</span>
+        <span class="pay-chip">Тинькофф</span>
+      </div>
+      <button class="cta">Купить USDT</button>
+    </div>
+
+    <div class="offer-card">
+      <div class="row1">
+        <div class="avatar" style="background:linear-gradient(135deg,#FFD700,#FF8C42)">M</div>
+        <div class="name">
+          <div class="nick">MaxTrader<span class="badge badge-gold">GOLD</span></div>
+          <div class="stats">⭐ 4.91 · 832 сделок · 98.4% успех · ~3 мин</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">95.35 ₽</span>
+        <span class="price-sub">за 1 USDT</span>
+      </div>
+      <div class="limit-row">Доступно: 8 200 USDT · Лимит 5 000 — 200 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">Тинькофф</span>
+        <span class="pay-chip">Сбер</span>
+      </div>
+      <button class="cta">Купить USDT</button>
+    </div>
+
+    <div class="offer-card">
+      <div class="row1">
+        <div class="avatar" style="background:linear-gradient(135deg,#3DA3F0,#1a1f44)">D</div>
+        <div class="name">
+          <div class="nick">DenisExchange<span class="badge badge-verified">✓</span></div>
+          <div class="stats">⭐ 4.82 · 256 сделок · 96.1% успех · ~7 мин</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">95.50 ₽</span>
+        <span class="price-sub">за 1 USDT</span>
+      </div>
+      <div class="limit-row">Доступно: 3 400 USDT · Лимит 1 000 — 100 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">СБП</span>
+        <span class="pay-chip">Альфа</span>
+      </div>
+      <button class="cta">Купить USDT</button>
+    </div>
+
+    <div class="offer-card">
+      <div class="row1">
+        <div class="avatar">N</div>
+        <div class="name">
+          <div class="nick">NikitaKursy</div>
+          <div class="stats">⭐ 4.65 · 41 сделок · 89.1% успех · ~15 мин</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">95.85 ₽</span>
+        <span class="price-sub">за 1 USDT</span>
+      </div>
+      <div class="limit-row">Доступно: 1 200 USDT · Лимит 500 — 50 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">Райф</span>
+        <span class="pay-chip">ВТБ</span>
+      </div>
+      <button class="cta">Купить USDT</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═════ КАРТОЧКА ОФФЕРА ═════ -->
+<div class="screen" id="sc-offer">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Объявление</div>
+    <div class="right"><span class="ico">⋯</span></div>
+  </div>
+  <div class="profile-card">
+    <div class="big-avatar">🦁</div>
+    <div class="info">
+      <div class="nick-line">PRIDE Official <span class="badge badge-pride">PRIDE</span></div>
+      <div class="meta-line">⭐ 4.98 · 1 432 сделок · 99.7% успех</div>
+      <div class="meta-line">✓ Верифицирован · 🟢 Онлайн · среднее время 1 мин</div>
+    </div>
+  </div>
+  <div class="detail-block">
+    <div class="detail-row"><span class="k">Цена</span><span class="v" style="color:var(--th-1);font-size:18px">95.18 ₽ за 1 USDT</span></div>
+    <div class="detail-row"><span class="k">Доступно</span><span class="v">12 540 USDT</span></div>
+    <div class="detail-row"><span class="k">Лимит сделки</span><span class="v">1 000 — 500 000 ₽</span></div>
+    <div class="detail-row"><span class="k">Способы оплаты</span><span class="v">СБП, Сбер, Тинькофф</span></div>
+    <div class="detail-row"><span class="k">Тайминг оплаты</span><span class="v">15 минут</span></div>
+  </div>
+  <div class="screen-label">Условия продавца</div>
+  <div class="detail-block" style="font-size:13px;line-height:1.5;color:#dcdcdc">
+    🟡 Оплата ТОЛЬКО с личной карты, ФИО плательщика должно совпадать с ФИО на профиле.<br>
+    🟡 Без комментариев в назначении платежа.<br>
+    🟢 Отпускаю USDT в течение 1-2 минут после поступления оплаты.<br>
+    🔴 Если перевод не пришёл за 15 минут — сделка отменяется.
+  </div>
+  <div class="screen-label">Последние отзывы</div>
+  <div style="padding:0 16px">
+    <div class="review">
+      <div class="r-head"><span class="r-nick">@alex_p2p</span><span class="r-thumb up">👍 Положительный</span></div>
+      <div class="r-text">Всё быстро, без проблем. Рекомендую!</div>
+    </div>
+    <div class="review">
+      <div class="r-head"><span class="r-nick">@maria_k</span><span class="r-thumb up">👍 Положительный</span></div>
+      <div class="r-text">Спасибо, всё чётко 👌</div>
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="goto('order-create')">Купить USDT</button>
+  </div>
+</div>
+
+<!-- ═════ СОЗДАНИЕ ОРДЕРА ═════ -->
+<div class="screen" id="sc-order-create">
+  <div class="nav-header">
+    <div class="back" onclick="goto('offer')">←</div>
+    <div class="title">Купить USDT</div>
+    <div class="right"></div>
+  </div>
+  <div class="amount-block">
+    <input class="amount-input" type="text" value="10 000" placeholder="0" />
+    <div style="font-size:14px;color:#8a8a8a;margin-top:4px">₽</div>
+    <div class="amount-equiv">≈ 105.07 USDT</div>
+  </div>
+  <div class="quick-chips">
+    <div class="quick-chip">1 000 ₽</div>
+    <div class="quick-chip">5 000 ₽</div>
+    <div class="quick-chip">10 000 ₽</div>
+    <div class="quick-chip">25 000 ₽</div>
+    <div class="quick-chip">Макс.</div>
+  </div>
+  <div class="detail-block" style="margin-top:24px">
+    <div class="detail-row"><span class="k">Способ оплаты</span><span class="v">СБП ▾</span></div>
+    <div class="detail-row"><span class="k">Цена</span><span class="v">95.18 ₽</span></div>
+    <div class="detail-row"><span class="k">Получите</span><span class="v" style="color:#34c759">105.07 USDT</span></div>
+    <div class="detail-row"><span class="k">Комиссия</span><span class="v">0% (включена в курс)</span></div>
+    <div class="detail-row"><span class="k">Время на оплату</span><span class="v">15 минут</span></div>
+  </div>
+  <div class="warning-banner">
+    ⚠ Внимание: переводите ровно <b>10 000 ₽</b> и БЕЗ комментариев в назначении платежа. Это требование банков 115-ФЗ.
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="goto('order-active')">Подтвердить ордер</button>
+  </div>
+</div>
+
+<!-- ═════ АКТИВНЫЙ ОРДЕР ═════ -->
+<div class="screen" id="sc-order-active">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Ордер #4827</div>
+    <div class="right"><span class="status-badge status-pending">Оплата</span></div>
+  </div>
+  <div class="timer-banner">
+    <div class="timer-big" id="timer-1">14:52</div>
+    <div class="timer-sub">осталось на оплату</div>
+  </div>
+  <div class="payment-card">
+    <div class="pc-bank">
+      <div class="pc-bank-icon" style="background:#FFE066">Т</div>
+      <span>Тинькофф / Т-Банк</span>
+    </div>
+    <div class="pc-field">
+      <div>
+        <div class="pc-k">Номер карты</div>
+        <div class="pc-v">2200 7019 4832 1147</div>
+      </div>
+      <button class="pc-copy">📋 Скопировать</button>
+    </div>
+    <div class="pc-field">
+      <div>
+        <div class="pc-k">ФИО получателя</div>
+        <div class="pc-v">Иванов И. И.</div>
+      </div>
+      <button class="pc-copy">📋</button>
+    </div>
+    <div class="pc-field">
+      <div>
+        <div class="pc-k">Сумма</div>
+        <div class="pc-v" style="color:var(--th-1)">10 000.00 ₽</div>
+      </div>
+      <button class="pc-copy">📋</button>
+    </div>
+  </div>
+  <div class="warning-banner">
+    ⚠ Переведите ТОЧНО <b>10 000.00 ₽</b>. Не указывайте «крипта», «USDT», «биржа» в комментарии — банк может заблокировать!
+  </div>
+  <div class="chat-block">
+    <div class="chat-msg sys"><div class="bubble">Сделка создана. 105.07 USDT заморожено в Escrow.</div></div>
+    <div class="chat-msg them"><div class="bubble">Привет! Реквизиты сверху. Жду оплату ❤️<div class="time">14:23</div></div></div>
+    <div class="chat-msg me"><div class="bubble">Принято<div class="time">14:24</div></div></div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="goto('order-paid')">Я оплатил</button>
+    <button class="btn-secondary" onclick="goto('dispute')">Отменить / Открыть спор</button>
+  </div>
+</div>
+
+<!-- ═════ Я ОПЛАТИЛ ═════ -->
+<div class="screen" id="sc-order-paid">
+  <div class="nav-header">
+    <div class="back" onclick="goto('order-active')">←</div>
+    <div class="title">Ордер #4827</div>
+    <div class="right"><span class="status-badge status-paid">Ожидание</span></div>
+  </div>
+  <div class="timer-banner">
+    <div class="timer-big" id="timer-2" style="color:#3DA3F0">14:32</div>
+    <div class="timer-sub">продавец должен подтвердить и отпустить USDT</div>
+  </div>
+  <div class="success-banner">
+    ✓ Вы подтвердили оплату. Продавец проверяет поступление средств. Обычно занимает 1-2 минуты.
+  </div>
+  <div class="chat-block">
+    <div class="chat-msg sys"><div class="bubble">Сделка создана. 105.07 USDT заморожено в Escrow.</div></div>
+    <div class="chat-msg them"><div class="bubble">Привет! Реквизиты сверху. Жду оплату<div class="time">14:23</div></div></div>
+    <div class="chat-msg me"><div class="bubble">Принято<div class="time">14:24</div></div></div>
+    <div class="chat-msg me"><div class="bubble">📎 chek.png<br><span style="font-size:11px;color:#bcbcbc">Скрин платежа</span><div class="time">14:28</div></div></div>
+    <div class="chat-msg me"><div class="bubble">Оплатил 10000<div class="time">14:28</div></div></div>
+    <div class="chat-msg sys"><div class="bubble">Покупатель отметил «Оплатил» в 14:28</div></div>
+    <div class="chat-msg them"><div class="bubble">Сек, проверю<div class="time">14:29</div></div></div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-secondary" style="border-color:#ff453a;color:#ff453a" onclick="goto('dispute')">Открыть спор (продавец не отвечает)</button>
+  </div>
+</div>
+
+<!-- ═════ ОТКРЫТЬ СПОР ═════ -->
+<div class="screen" id="sc-dispute">
+  <div class="nav-header">
+    <div class="back" onclick="goto('order-paid')">←</div>
+    <div class="title">Открыть спор</div>
+    <div class="right"></div>
+  </div>
+  <div class="danger-banner">
+    ⚠ Ложный спор снижает рейтинг на 0.5★. Открывайте только если контрагент не отвечает или нарушает условия.
+  </div>
+  <div class="dispute-form">
+    <label>Причина спора</label>
+    <div class="reason-list">
+      <div class="reason selected">❌ Продавец не отпускает USDT после оплаты</div>
+      <div class="reason">📵 Контрагент не отвечает</div>
+      <div class="reason">💸 Получил меньше, чем оплатил</div>
+      <div class="reason">🚫 Продавец просит вернуть оплату</div>
+      <div class="reason">🔄 Платёж пришёл с чужой карты</div>
+      <div class="reason">⏰ Истёк таймер ответа</div>
+      <div class="reason">❗ Другое</div>
+    </div>
+    <label>Описание ситуации</label>
+    <textarea placeholder="Опишите что произошло, со всеми деталями. От качества описания зависит скорость решения.">Оплатил 10000 ₽ на Тинькофф 14:28, прикрепил скрин платежа. Продавец молчит уже 30 минут, USDT не отпускает.</textarea>
+    <label>Доказательства (скрин чека, выписка)</label>
+    <button class="upload-btn">📎 Загрузить файл (PNG / PDF, до 10МБ)</button>
+    <div style="font-size:11px;color:#8a8a8a;padding:0 0 14px">
+      ✓ chek_tinkoff_14_28.png — 312 КБ<br>
+      💡 Совет: приложите скрин выписки банка, а не только чек — это ускорит решение.
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-danger">Подать спор арбитру</button>
+    <button class="btn-secondary" onclick="goto('order-paid')">Отмена</button>
+  </div>
+</div>
+
+<!-- ═════ СДЕЛКА ЗАВЕРШЕНА ═════ -->
+<div class="screen" id="sc-completed">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Сделка завершена</div>
+    <div class="right"></div>
+  </div>
+  <div style="text-align:center;padding:40px 20px">
+    <div style="width:80px;height:80px;border-radius:50%;background:rgba(52,199,89,0.15);margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:40px;color:#34c759">✓</div>
+    <div style="font-size:22px;font-weight:700;margin-top:18px">105.07 USDT получено</div>
+    <div style="color:#8a8a8a;font-size:13px;margin-top:6px">от @pride_official</div>
+  </div>
+  <div class="detail-block">
+    <div class="detail-row"><span class="k">Сумма оплачено</span><span class="v">10 000 ₽</span></div>
+    <div class="detail-row"><span class="k">Курс</span><span class="v">95.18 ₽</span></div>
+    <div class="detail-row"><span class="k">Получено</span><span class="v" style="color:#34c759">105.07 USDT</span></div>
+    <div class="detail-row"><span class="k">Время</span><span class="v">2 мин 14 сек</span></div>
+    <div class="detail-row"><span class="k">ID сделки</span><span class="v">#4827</span></div>
+  </div>
+  <div style="padding:20px 16px">
+    <div style="text-align:center;margin-bottom:14px">Оцените контрагента</div>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button style="padding:14px 28px;background:rgba(52,199,89,0.15);border:1px solid #34c759;border-radius:12px;color:#34c759;font-weight:700;font-size:16px">👍 Хорошо</button>
+      <button style="padding:14px 28px;background:rgba(255,69,58,0.08);border:1px solid var(--border);border-radius:12px;color:#bcbcbc;font-weight:600;font-size:16px">👎 Плохо</button>
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="goto('board')">Купить ещё</button>
+    <button class="btn-secondary">Поделиться в Stories</button>
+  </div>
+</div>
+
+<!-- ═════ МОИ ОБЪЯВЛЕНИЯ ═════ -->
+<div class="screen" id="sc-my-ads">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Мои объявления</div>
+    <div class="right" style="font-size:24px;cursor:pointer" onclick="goto('ad-create')">+</div>
+  </div>
+  <div class="tabs">
+    <div class="tab active">Активные (2)</div>
+    <div class="tab">Архив (5)</div>
+  </div>
+  <div class="offer-list">
+    <div class="offer-card">
+      <div class="row1">
+        <div class="avatar" style="background:linear-gradient(135deg,#34c759,#1a6a30)">↑</div>
+        <div class="name">
+          <div class="nick">Продаю USDT <span class="status-badge status-released">АКТИВНО</span></div>
+          <div class="stats">Создано вчера · 14 ордеров за 30 дней</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">95.40 ₽</span>
+        <span class="price-sub">плавающий +0.5%</span>
+      </div>
+      <div class="limit-row">Остаток: 4 500 / 10 000 USDT · Лимит 1 000 — 100 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">СБП</span>
+        <span class="pay-chip">Сбер</span>
+        <span class="pay-chip">Тинькофф</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="cta" style="background:rgba(255,255,255,0.05);color:#cfcfcf">Редактировать</button>
+        <button class="cta" style="background:rgba(255,69,58,0.15);color:#ff453a">Снять</button>
+      </div>
+    </div>
+    <div class="offer-card">
+      <div class="row1">
+        <div class="avatar" style="background:linear-gradient(135deg,#3DA3F0,#1a4a7a)">↓</div>
+        <div class="name">
+          <div class="nick">Покупаю USDT <span class="status-badge status-paid">ПАУЗА</span></div>
+          <div class="stats">Создано 3 дня назад · 8 ордеров за 30 дней</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">94.20 ₽</span>
+        <span class="price-sub">фиксированная</span>
+      </div>
+      <div class="limit-row">Лимит 5 000 — 200 000 ₽</div>
+      <div class="pay-row">
+        <span class="pay-chip">СБП</span>
+        <span class="pay-chip">Альфа</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="cta">Активировать</button>
+        <button class="cta" style="background:rgba(255,69,58,0.15);color:#ff453a">Удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════ СОЗДАНИЕ ОБЪЯВЛЕНИЯ ═════ -->
+<div class="screen" id="sc-ad-create">
+  <div class="nav-header">
+    <div class="back" onclick="goto('my-ads')">←</div>
+    <div class="title">Новое объявление</div>
+    <div class="right"></div>
+  </div>
+  <div class="steps-bar">
+    <div class="step active"></div>
+    <div class="step"></div>
+    <div class="step"></div>
+    <div class="step"></div>
+  </div>
+  <div class="form-block">
+    <div style="font-weight:700;font-size:18px;margin-bottom:10px">Шаг 1 — Что и почём</div>
+
+    <label>Тип объявления</label>
+    <div class="tabs" style="padding:0;margin-bottom:4px">
+      <div class="tab active">Продаю USDT</div>
+      <div class="tab">Покупаю USDT</div>
+    </div>
+
+    <label>Криптовалюта / Фиат</label>
+    <div style="display:flex;gap:8px">
+      <select style="flex:1"><option>USDT</option><option>BTC</option><option>ETH</option><option>TRX</option><option>TON</option></select>
+      <select style="flex:1"><option>RUB ₽</option><option>USD $</option><option>KZT ₸</option></select>
+    </div>
+
+    <label>Тип цены</label>
+    <div class="price-type-tabs">
+      <div class="tab active" style="font-size:13px">Плавающая</div>
+      <div class="tab" style="font-size:13px">Фиксированная</div>
+    </div>
+
+    <label>Маржа к рынку, %</label>
+    <input type="text" value="+0.5" />
+    <div style="font-size:11px;color:#8a8a8a;margin-top:4px">Текущая рыночная цена: 95.10 ₽ · Ваша цена будет: 95.58 ₽</div>
+
+    <div class="success-banner" style="margin:14px 0 0">
+      💡 Плавающая цена автоматически подстраивается под рынок каждую минуту. Не нужно постоянно обновлять руками.
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary">Далее · Шаг 2 из 4</button>
+  </div>
+</div>
+
+<!-- ═════ ПРОФИЛЬ ПРОДАВЦА ═════ -->
+<div class="screen" id="sc-profile">
+  <div class="nav-header">
+    <div class="back" onclick="goto('offer')">←</div>
+    <div class="title">Профиль</div>
+    <div class="right"><span class="ico">⋯</span></div>
+  </div>
+  <div class="profile-card" style="flex-direction:column;text-align:center;padding:24px">
+    <div class="big-avatar" style="width:80px;height:80px;font-size:32px;margin:0 auto 14px">🦁</div>
+    <div class="nick-line" style="font-size:18px">PRIDE Official <span class="badge badge-pride">PRIDE</span></div>
+    <div class="meta-line" style="margin-top:4px">✓ Верифицирован · С нами с 2024</div>
+  </div>
+  <div class="detail-block">
+    <div class="detail-row"><span class="k">Рейтинг</span><span class="v">⭐ 4.98 / 5.00</span></div>
+    <div class="detail-row"><span class="k">Сделок за 30 дней</span><span class="v">1 432</span></div>
+    <div class="detail-row"><span class="k">% успешных</span><span class="v" style="color:#34c759">99.7%</span></div>
+    <div class="detail-row"><span class="k">Среднее время</span><span class="v">~1 минута</span></div>
+    <div class="detail-row"><span class="k">Положительных</span><span class="v">👍 1 408 / 👎 24</span></div>
+    <div class="detail-row"><span class="k">Споров проиграно</span><span class="v">2 за всё время</span></div>
+  </div>
+  <div class="screen-label">Отзывы (1 432)</div>
+  <div style="padding:0 16px">
+    <div class="review">
+      <div class="r-head"><span class="r-nick">@alex_p2p</span><span class="r-thumb up">👍 Положительный</span></div>
+      <div class="r-text">Очень быстро, USDT отпустил за минуту. Беру тут постоянно!</div>
+    </div>
+    <div class="review">
+      <div class="r-head"><span class="r-nick">@kris_d</span><span class="r-thumb up">👍 Положительный</span></div>
+      <div class="r-text">Всё чётко, реквизиты в чате сразу, без воды.</div>
+    </div>
+    <div class="review">
+      <div class="r-head"><span class="r-nick">@viktor_l</span><span class="r-thumb down">👎 Отрицательный</span></div>
+      <div class="r-text">Долго ждал ответа в чате, потом всё ок.</div>
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="goto('offer')">Открыть объявление</button>
+    <button class="btn-secondary">Заблокировать пользователя</button>
+  </div>
+</div>
+
+<!-- ═════ ФОТО-СКИН $5 ═════ -->
+<div class="screen" id="sc-photo-skin">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Своё фото на карту</div>
+    <div class="right"></div>
+  </div>
+  <div class="photo-skin-card">
+    <div class="ps-title">📸 Поставь свою фотку на карту PRIDE</div>
+    <div class="ps-sub">Загрузи любое изображение — оно станет фоном твоей карты в кошельке. Видно только тебе, можно менять когда хочешь.</div>
+    <div class="ps-price"><span class="big">$5</span><span class="sub">/ один скин</span></div>
+    <button class="btn-primary" onclick="alert('Demo: тут открылся бы экран выбора фото + оплата')">📤 Загрузить фото и оплатить</button>
+  </div>
+  <div class="screen-label">Превью как будет выглядеть</div>
+  <div style="margin:0 16px 16px;padding:18px;border-radius:18px;background:linear-gradient(135deg,#FF8C42,#8B2E0F);position:relative;overflow:hidden;min-height:130px;box-shadow:0 6px 18px rgba(0,0,0,0.35)">
+    <div style="position:relative;z-index:2">
+      <div style="font-size:10px;color:#fff;letter-spacing:2px;font-weight:600">PRIDE • WALLET</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.7);letter-spacing:1px;text-transform:uppercase;margin-top:6px">Баланс</div>
+      <div style="display:flex;align-items:baseline;gap:6px;font-size:28px;font-weight:700;color:#fff;margin-top:2px;text-shadow:0 2px 6px rgba(0,0,0,0.3)">$0.00<small style="font-size:18px;opacity:0.75">.00</small></div>
+    </div>
+    <div style="position:absolute;inset:0;background-image:linear-gradient(135deg,transparent 0%,rgba(0,0,0,0.3) 60%);"></div>
+    <div style="position:absolute;bottom:14px;right:18px;color:#fff;font-weight:700;font-style:italic;font-size:16px;z-index:2">PRIDE</div>
+  </div>
+  <div class="warning-banner">
+    💡 Для лучшего результата загрузи горизонтальное фото минимум 800×400 px. Не используй фото с лицом другого человека без его согласия.
+  </div>
+  <div class="screen-label">Мои купленные скины</div>
+  <div style="padding:0 16px 16px">
+    <div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px">
+      <div style="width:140px;height:80px;border-radius:10px;background:linear-gradient(135deg,#FF8C42,#8B2E0F);flex-shrink:0;display:flex;align-items:flex-end;padding:6px;font-size:10px;color:#fff;font-weight:600">Sunset (default)</div>
+      <div style="width:140px;height:80px;border-radius:10px;background:linear-gradient(135deg,#5078ff,#1a1f44);flex-shrink:0;display:flex;align-items:flex-end;padding:6px;font-size:10px;color:#fff;font-weight:600">Night</div>
+      <div style="width:140px;height:80px;border-radius:10px;background:linear-gradient(135deg,#FFD700,#8B2E0F);flex-shrink:0;display:flex;align-items:flex-end;padding:6px;font-size:10px;color:#000;font-weight:700">Crown</div>
+      <div style="width:140px;height:80px;border-radius:10px;background:#202024;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--th-1);font-size:13px;border:2px dashed var(--th-border);cursor:pointer">+ Своё фото<br><span style="font-size:10px;color:#8a8a8a">$5</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════ АРБИТР: ОЧЕРЕДЬ СПОРОВ ═════ -->
+<div class="screen" id="sc-arb-queue">
+  <div class="nav-header">
+    <div class="back" onclick="goto('board')">←</div>
+    <div class="title">Очередь споров</div>
+    <div class="right" style="font-size:12px;color:#34c759">▶ Play next</div>
+  </div>
+  <div style="padding:8px 16px;display:flex;justify-content:space-between;font-size:11px;color:#8a8a8a">
+    <div>📊 Сегодня решено: <b style="color:#fff">12</b> · ⏱ Средн.: <b style="color:#fff">7 мин</b></div>
+    <div>🔥 Активных: <b style="color:#ff453a">4</b></div>
+  </div>
+  <div class="filter-row">
+    <div class="filter-chip active">Новые (4)</div>
+    <div class="filter-chip">Мои (2)</div>
+    <div class="filter-chip">SLA<30м (1)</div>
+    <div class="filter-chip">Эскалация</div>
+    <div class="filter-chip">Все</div>
+  </div>
+  <div class="arb-list">
+
+    <div class="arb-row sla-breach" onclick="goto('arb-detail')">
+      <div class="arb-mid">
+        <div class="arb-id">#DSP-4827 · 12 мин назад</div>
+        <div class="arb-type">🚫 Продавец не отпускает USDT</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">@simba_buyer vs @pride_official</div>
+      </div>
+      <div class="arb-amount">
+        <div class="a-fiat">10 000 ₽</div>
+        <div class="a-sla">⚠ SLA -2:14</div>
+        <span class="arb-risk high">RISK 78</span>
+      </div>
+    </div>
+
+    <div class="arb-row sla-warn" onclick="goto('arb-detail')">
+      <div class="arb-mid">
+        <div class="arb-id">#DSP-4826 · 23 мин назад</div>
+        <div class="arb-type">💸 Получил меньше чем оплатил</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">@kris_d vs @max_trader</div>
+      </div>
+      <div class="arb-amount">
+        <div class="a-fiat">52 300 ₽</div>
+        <div class="a-sla" style="color:#FFC107">SLA 23 мин</div>
+        <span class="arb-risk med">RISK 42</span>
+      </div>
+    </div>
+
+    <div class="arb-row" onclick="goto('arb-detail')">
+      <div class="arb-mid">
+        <div class="arb-id">#DSP-4825 · 1ч назад</div>
+        <div class="arb-type">🔄 Платёж с чужой карты</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">@alex_p2p vs @denis_exchange</div>
+      </div>
+      <div class="arb-amount">
+        <div class="a-fiat">5 100 ₽</div>
+        <div class="a-sla" style="color:#34c759">SLA 1ч 30м</div>
+        <span class="arb-risk high">RISK 91</span>
+      </div>
+    </div>
+
+    <div class="arb-row" onclick="goto('arb-detail')">
+      <div class="arb-mid">
+        <div class="arb-id">#DSP-4824 · 2ч назад</div>
+        <div class="arb-type">📵 Контрагент не отвечает</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">@viktor_l vs @nik_kursy</div>
+      </div>
+      <div class="arb-amount">
+        <div class="a-fiat">1 800 ₽</div>
+        <div class="a-sla" style="color:#34c759">SLA 2ч 45м</div>
+        <span class="arb-risk low">RISK 18</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═════ АРБИТР: КАРТОЧКА СПОРА ═════ -->
+<div class="screen arb-detail" id="sc-arb-detail">
+  <div class="nav-header">
+    <div class="back" onclick="goto('arb-queue')">←</div>
+    <div class="title">Спор #DSP-4827</div>
+    <div class="right"><span class="status-badge status-dispute">SLA -2:14</span></div>
+  </div>
+  <div style="padding:8px 16px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#8a8a8a;margin-bottom:4px">
+      <span>🟠 Сумма: <b style="color:#fff">10 000 ₽</b> / 105.07 USDT</span>
+      <span>🔥 RISK: <b style="color:#ff453a">78/100</b></span>
+    </div>
+    <div style="font-size:11px;color:#8a8a8a">⚠ Сумма >5000₽ — нужна вторая подпись</div>
+  </div>
+
+  <div class="screen-label">Покупатель</div>
+  <div style="padding:0 16px">
+    <div class="arb-party fraud-flag">
+      <div class="pa" style="background:linear-gradient(135deg,#ff453a,#8b1410)">S</div>
+      <div class="info">
+        <div class="pname">@simba_buyer · KYC L1</div>
+        <div class="pmeta">Зарег. 3 дня назад · 1 сделка · ★ —</div>
+        <div class="fraud-signals">
+          <span class="signal red">VPN</span>
+          <span class="signal red">NEW DEVICE</span>
+          <span class="signal yellow">NEW CARD</span>
+          <span class="signal red">3 DISPUTES 24H</span>
+          <span class="signal yellow">ACCOUNT < 7 DAYS</span>
+          <span class="signal red">SAME FP AS BANNED #1473</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen-label">Продавец</div>
+  <div style="padding:0 16px">
+    <div class="arb-party">
+      <div class="pa">🦁</div>
+      <div class="info">
+        <div class="pname">@pride_official · KYC L3 · PRIDE</div>
+        <div class="pmeta">С 2024 · 1 432 сделок · ★ 4.98</div>
+        <div class="fraud-signals">
+          <span class="signal green">VERIFIED</span>
+          <span class="signal green">KYC L3</span>
+          <span class="signal green">0 PRIOR DISPUTES</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen-label">Реквизиты + проверка ФИО</div>
+  <div class="detail-block" style="margin:0 16px">
+    <div class="detail-row"><span class="k">ФИО на банк. чеке</span><span class="v" style="color:#ff453a">Петров П. П.</span></div>
+    <div class="detail-row"><span class="k">ФИО KYC покупателя</span><span class="v">Симба Львов</span></div>
+    <div class="detail-row" style="background:rgba(255,69,58,0.08);margin:8px -16px;padding:8px 16px;border-radius:8px">
+      <span class="k">⚠ Совпадение</span><span class="v" style="color:#ff453a">НЕТ — высокий риск 161-ФЗ</span>
+    </div>
+  </div>
+
+  <div class="screen-label">Доказательства</div>
+  <div class="evidence-locker">
+    <div class="evidence-item">
+      📷 chek_tinkoff_14_28.png · 312 КБ · от @simba_buyer
+      <div class="e-meta">Загружен 14:32 · MD5 совпадает с известным шаблоном Тинькофф ✓ · Шрифт OK · Шаблон 87% совпадение</div>
+    </div>
+    <div class="evidence-item" style="border-color:#FFC107">
+      ⚠ vypiska.pdf · 1.2 МБ · от @simba_buyer
+      <div class="e-meta">PDF metadata: создан в Photoshop 2024 — подозрительно. Запросить выписку из банк-приложения.</div>
+    </div>
+  </div>
+
+  <div class="screen-label">Чат сделки</div>
+  <div class="chat-block">
+    <div class="chat-msg sys"><div class="bubble">Сделка #4827 создана</div></div>
+    <div class="chat-msg them"><div class="bubble">Реквизиты сверху, жду<div class="time">14:23</div></div></div>
+    <div class="chat-msg me"><div class="bubble">📎 chek.png<div class="time">14:28</div></div></div>
+    <div class="chat-msg me"><div class="bubble">оплатил<div class="time">14:28</div></div></div>
+    <div class="chat-msg them"><div class="bubble">в выписке нет вашего платежа. ФИО на чеке Петров — не вы<div class="time">14:31</div></div></div>
+    <div class="chat-msg me"><div class="bubble">это друг переводил. отпускайте<div class="time">14:32</div></div></div>
+    <div class="chat-msg sys"><div class="bubble">@simba_buyer открыл спор: «Продавец не отпускает USDT»</div></div>
+  </div>
+
+  <div style="padding:8px 16px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">Действия арбитра</div>
+    <div class="arb-actions">
+      <button class="release" onclick="goto('arb-decision')">✓ Отпустить покупателю</button>
+      <button class="refund" onclick="goto('arb-decision')">↩ Вернуть продавцу</button>
+      <button class="partial">⚖ Частично</button>
+      <button class="extend">⏰ +30 мин</button>
+      <button class="fraud">🚫 ФРОД-Бан покупателя</button>
+      <button class="escalate">↑ Эскалация</button>
+    </div>
+  </div>
+
+  <div style="padding:8px 16px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">Шаблоны в чат</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div class="filter-chip">Прислать выписку PDF</div>
+      <div class="filter-chip">Объяснить ФИО</div>
+      <div class="filter-chip">Подождать 30 мин</div>
+      <div class="filter-chip">Решение принято</div>
+    </div>
+  </div>
+
+  <div class="screen-label">Playbook: «ФИО не совпадает с KYC»</div>
+  <div class="detail-block" style="margin:0 16px 16px;font-size:13px;line-height:1.6;color:#dcdcdc">
+    1. ФИО плательщика ≠ ФИО KYC покупателя → <b style="color:#ff453a">критический риск 161-ФЗ</b><br>
+    2. Деньги пришли НЕ со счёта верифицированного покупателя → банк может отозвать<br>
+    3. Стандартное решение: <b style="color:#FFC107">S2 — refund продавцу</b>, покупатель получает warning<br>
+    4. Если повтор → <b style="color:#ff453a">F1 — ban покупателя</b><br>
+    💡 Дополнительные триггеры: VPN, новое устройство, аккаунт &lt;7 дней — этот кейс на 78% RISK
+  </div>
+</div>
+
+<!-- ═════ АРБИТР: РЕШЕНИЕ ═════ -->
+<div class="screen" id="sc-arb-decision">
+  <div class="nav-header">
+    <div class="back" onclick="goto('arb-detail')">←</div>
+    <div class="title">Решение спора #DSP-4827</div>
+    <div class="right"></div>
+  </div>
+  <div class="form-block">
+    <label>Код решения</label>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="reason selected" style="padding:12px;background:rgba(255,193,7,0.1);border:1px solid #FFC107;border-radius:10px"><b>S2</b> — ФИО получателя не совпало с KYC, refund продавцу</div>
+      <div class="reason" style="padding:12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px"><b>R2</b> — продавец прав, refund</div>
+      <div class="reason" style="padding:12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px"><b>F1</b> — фрод покупателя, ban</div>
+      <div class="reason" style="padding:12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px"><b>R3</b> — частично</div>
+    </div>
+
+    <label>Обязательные заметки (min 50 символов)</label>
+    <textarea>ФИО плательщика Петров П.П. не совпадает с KYC покупателя Симба Львов. Покупатель сослался на «друг переводил». Дополнительно RISK 78 (VPN, новое устройство, 3 спора за 24ч, same FP как у банненого #1473). Решение S2 — refund продавцу, выдан warning покупателю. При повторе F1.</textarea>
+
+    <label>Влияние на рейтинг</label>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="padding:10px;background:rgba(255,69,58,0.08);border:1px solid var(--border);border-radius:10px;font-size:13px">
+        @simba_buyer — <b style="color:#ff453a">−1 негативная отметка, предупреждение</b>
+      </div>
+      <div style="padding:10px;background:rgba(52,199,89,0.08);border:1px solid var(--border);border-radius:10px;font-size:13px">
+        @pride_official — <b style="color:#34c759">без изменений</b>
+      </div>
+    </div>
+
+    <label>Вторая подпись (для сумм >5000₽)</label>
+    <div style="padding:12px;background:rgba(255,193,7,0.08);border:1px solid var(--border);border-radius:10px;font-size:13px;color:#FFC107">
+      ⚠ Решение отправлено @arbiter_senior_2 для подтверждения
+    </div>
+  </div>
+  <div class="bottom-cta">
+    <button class="btn-primary" onclick="alert('Demo: решение применено, escrow вернулся продавцу, обе стороны уведомлены')">Принять решение S2</button>
+    <button class="btn-secondary" onclick="goto('arb-detail')">Отмена</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+function goto(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.preview-nav button').forEach(b => b.classList.remove('active'));
+  const el = document.getElementById('sc-' + name);
+  if (el) { el.classList.add('active'); window.scrollTo(0,0); }
+  const nv = document.getElementById('nv-' + name);
+  if (nv) nv.classList.add('active');
+}
+function setTheme(t) {
+  document.body.className = 'theme-' + t;
+  document.querySelectorAll('.preview-nav .theme-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.preview-nav .theme-btn.' + (t === 'sunset' ? 'sun' : t)).classList.add('active');
+}
+// Live timer
+let t1 = 14*60+52;
+let t2 = 14*60+32;
+setInterval(() => {
+  t1 = Math.max(0, t1-1);
+  t2 = Math.max(0, t2-1);
+  const f = (s) => String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+  const e1 = document.getElementById('timer-1');
+  const e2 = document.getElementById('timer-2');
+  if (e1) e1.textContent = f(t1);
+  if (e2) e2.textContent = f(t2);
+}, 1000);
+</script>
+</body>
+</html>
