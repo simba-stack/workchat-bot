@@ -136,6 +136,108 @@
   .h-row .h-amt .a.pos { color:var(--green); }
   .h-row .h-amt .a.neg { color:var(--red); }
 
+  /* History v4.2 — bank-card style cards with expand */
+  .hist-day-chip {
+    display:inline-block;
+    margin:18px 14px 8px;
+    padding:6px 12px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:600;
+    color:#fff;
+    background:linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+    backdrop-filter:blur(8px);
+    -webkit-backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,0.1);
+    letter-spacing:0.3px;
+  }
+  .hist-card {
+    margin:6px 12px;
+    border-radius:16px;
+    background:linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+    border:1px solid rgba(255,255,255,0.08);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    overflow:hidden;
+    transition:background 0.2s ease, border-color 0.2s ease;
+    cursor:pointer;
+  }
+  .hist-card:active { background:rgba(255,255,255,0.10); }
+  .hist-card .hc-head {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:14px 14px;
+  }
+  .hist-card .hc-ic {
+    width:42px; height:42px;
+    border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px;
+    flex-shrink:0;
+    box-shadow:0 4px 12px rgba(0,0,0,0.15);
+  }
+  .hist-card .hc-mid { flex:1; min-width:0; }
+  .hist-card .hc-title { font-size:15px; font-weight:600; color:#fff; }
+  .hist-card .hc-sub { color:rgba(255,255,255,0.55); font-size:12px; margin-top:2px; }
+  .hist-card .hc-amt { text-align:right; flex-shrink:0; }
+  .hist-card .hc-amt .a { font-size:15px; font-weight:700; }
+  .hist-card .hc-amt .a.pos { color:#30D158; }
+  .hist-card .hc-amt .a.neg { color:#FF453A; }
+  .hist-card .hc-amt .r { color:rgba(255,255,255,0.5); font-size:11px; margin-top:2px; }
+  .hist-card .hc-chev {
+    color:rgba(255,255,255,0.4);
+    font-size:14px;
+    margin-left:8px;
+    transition:transform 0.25s ease;
+  }
+  .hist-card.open .hc-chev { transform:rotate(180deg); }
+  .hist-card .hc-detail {
+    max-height:0;
+    overflow:hidden;
+    transition:max-height 0.3s ease;
+    padding:0 14px;
+  }
+  .hist-card.open .hc-detail {
+    max-height:260px;
+    padding:0 14px 14px;
+  }
+  .hist-card .hc-detail-grid {
+    border-top:1px solid rgba(255,255,255,0.08);
+    padding-top:12px;
+    display:grid;
+    gap:10px;
+  }
+  .hist-card .hc-row {
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    font-size:13px;
+  }
+  .hist-card .hc-row .k { color:rgba(255,255,255,0.55); }
+  .hist-card .hc-row .v {
+    color:#fff;
+    text-align:right;
+    word-break:break-all;
+    font-family:ui-monospace,Menlo,monospace;
+    font-size:12px;
+  }
+  .hist-card .hc-tx-link {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    margin-top:4px;
+    padding:8px 14px;
+    border-radius:10px;
+    background:rgba(255,255,255,0.08);
+    color:#fff;
+    font-size:13px;
+    font-weight:600;
+    text-decoration:none;
+    width:fit-content;
+  }
+  .hist-card .hc-tx-link:active { background:rgba(255,255,255,0.14); }
+
   /* Deposit */
   .deposit-content { text-align:center; padding:24px 20px; }
   .deposit-content .lbl { color:var(--muted); font-size:14px; margin-bottom:10px; }
@@ -1045,30 +1147,54 @@ async function loadOperations(silent=false) {
     }
     // Группировка по дням
     const groups = {};
-    items.forEach(op => {
+    items.forEach((op, idx) => {
+      op.__idx = idx;
       const g = fmtDateGroup(op.created_at);
       (groups[g] = groups[g] || []).push(op);
     });
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     let html = '';
     for (const [day, ops] of Object.entries(groups)) {
-      html += `<div class="history-date">${day}</div>`;
+      html += `<div class="hist-day-chip">${esc(day)}</div>`;
       ops.forEach(op => {
         const [ic, col] = opIcons[op.type] || ['•', '#888'];
         const title = opTitles[op.type] || op.type;
-        const isMinus = op.amount < 0;
+        const isMinus = (op.amount || 0) < 0;
         const sign = isMinus ? '−' : '+';
         const time = (op.created_at || '').slice(11, 16);
         const cls = isMinus ? 'neg' : 'pos';
-        const tx = op.tronscan_url ? `<a href="${op.tronscan_url}" target="_blank" style="color:var(--muted);font-size:11px;text-decoration:underline">tx</a>` : '';
-        html += `<div class="h-row" style="display:flex;align-items:center;padding:12px 14px;border-top:1px solid var(--border)">
-          <div style="width:36px;height:36px;border-radius:50%;background:${col}22;color:${col};display:flex;align-items:center;justify-content:center;font-size:18px;margin-right:12px">${ic}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:14px">${title} ${tx}</div>
-            <div style="color:var(--muted);font-size:12px;margin-top:2px">${time}${op.note ? ' · ' + op.note.slice(0, 40) : ''}</div>
+        const dateFull = (op.created_at || '').slice(0, 16).replace('T', ' ');
+        const txShort = op.tx_hash ? (op.tx_hash.slice(0, 10) + '…' + op.tx_hash.slice(-6)) : '';
+        const explorerUrl = op.tronscan_url || op.explorer_url || (op.tx_hash ? `https://tronscan.org/#/transaction/${op.tx_hash}` : '');
+        const noteRow = op.note ? `<div class="hc-row"><span class="k">Заметка</span><span class="v" style="font-family:inherit">${esc(op.note)}</span></div>` : '';
+        const addrRow = op.address ? `<div class="hc-row"><span class="k">Адрес</span><span class="v">${esc(op.address)}</span></div>` : '';
+        const txRow = op.tx_hash ? `<div class="hc-row"><span class="k">TX</span><span class="v">${esc(txShort)}</span></div>` : '';
+        const txBtn = explorerUrl ? `<a class="hc-tx-link" href="${esc(explorerUrl)}" target="_blank" rel="noopener">Открыть в эксплорере →</a>` : '';
+        const idRow = op.id ? `<div class="hc-row"><span class="k">ID</span><span class="v">#${esc(op.id)}</span></div>` : '';
+        const statusRow = op.status ? `<div class="hc-row"><span class="k">Статус</span><span class="v" style="font-family:inherit">${esc(op.status)}</span></div>` : '';
+        html += `<div class="hist-card" data-op-idx="${op.__idx}" onclick="toggleHistCard(this)">
+          <div class="hc-head">
+            <div class="hc-ic" style="background:${col}22;color:${col}">${ic}</div>
+            <div class="hc-mid">
+              <div class="hc-title">${esc(title)}</div>
+              <div class="hc-sub">${esc(time)}${op.note ? ' · ' + esc(op.note.slice(0, 28)) : ''}</div>
+            </div>
+            <div class="hc-amt">
+              <div class="a ${cls}">${sign}${fmt(op.amount_abs, op.coin === 'RUB' ? 0 : 4)} ${esc(op.coin || '')}</div>
+              ${op.rub ? `<div class="r">${fmt(op.rub, 0)} ₽</div>` : ''}
+            </div>
+            <div class="hc-chev">⌃</div>
           </div>
-          <div style="text-align:right">
-            <div class="${cls}" style="font-size:14px;font-weight:600">${sign}${fmt(op.amount_abs, 2)} ${op.coin}</div>
-            <div style="color:var(--muted);font-size:12px">${fmt(op.rub, 0)} ₽</div>
+          <div class="hc-detail">
+            <div class="hc-detail-grid">
+              <div class="hc-row"><span class="k">Дата</span><span class="v" style="font-family:inherit">${esc(dateFull)}</span></div>
+              ${statusRow}
+              ${idRow}
+              ${addrRow}
+              ${txRow}
+              ${noteRow}
+              ${txBtn}
+            </div>
           </div>
         </div>`;
       });
@@ -1077,6 +1203,16 @@ async function loadOperations(silent=false) {
   } catch (e) {
     if (!silent) $('ops-list').innerHTML = '<div class="empty-state" style="color:#FF453A">Ошибка: ' + (e.message || e) + '</div>';
   }
+}
+
+// Раскрытие карточки истории (один открыт за раз — как в банковских приложениях)
+function toggleHistCard(el) {
+  if (!el) return;
+  const wasOpen = el.classList.contains('open');
+  // Закрыть все другие
+  document.querySelectorAll('.hist-card.open').forEach(c => { if (c !== el) c.classList.remove('open'); });
+  el.classList.toggle('open', !wasOpen);
+  try { if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.selectionChanged(); } catch(e) {}
 }
 
 // ── Настройки ──
