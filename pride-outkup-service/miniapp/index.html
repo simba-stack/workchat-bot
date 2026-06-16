@@ -1347,8 +1347,22 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
         <span style="color:var(--muted)">Версия Mini-App: <span id="set-ver">1.0.0</span></span>
       </div>
     </div>
-    <button id="set-logout-btn" style="width:100%;padding:14px;border-radius:12px;background:#222;color:#f55;border:0;font-size:15px;cursor:pointer">Связаться с поддержкой</button>
+    <button onclick="go('payment-methods')" class="p2p-btn-secondary" style="margin-top:8px">💳 Мои реквизиты (для P2P)</button>
+    <button id="set-logout-btn" style="width:100%;padding:14px;border-radius:12px;background:#222;color:#f55;border:0;font-size:15px;cursor:pointer;margin-top:8px">Связаться с поддержкой</button>
   </div>
+</div>
+
+<!-- ═══ МОИ РЕКВИЗИТЫ ═══ -->
+<div class="view" id="view-payment-methods">
+  <div class="nav-header">
+    <button class="nav-back" data-back="settings">←</button>
+    <div class="nav-title">Мои реквизиты</div>
+    <button id="pm-add-btn" style="font-size:22px;color:var(--th-1);background:transparent;border:0;cursor:pointer">+</button>
+  </div>
+  <div style="padding:8px 16px;font-size:12px;color:rgba(255,255,255,0.55);line-height:1.5">
+    Реквизиты используются как реквизиты получателя при продаже USDT через P2P. Покупатели видят их после создания сделки.
+  </div>
+  <div id="pm-list" style="padding:8px 12px"><div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загрузка…</div></div>
 </div>
 
 <!-- ═══ P2P МАРКЕТ ═══ -->
@@ -2198,13 +2212,145 @@ safeBind('p2p-myads-btn', 'click', () => {
   Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Мои объявления — в следующем шаге.') : alert('Мои объявления — следующий шаг.');
 });
 
-// Загружаем офферы при заходе на view-p2p
+// ═══════════════════════════════════════════════════════════
+// МОИ РЕКВИЗИТЫ — CRUD
+// ═══════════════════════════════════════════════════════════
+const PM_TYPES = [
+  { v:'sbp', label:'СБП' },
+  { v:'tinkoff', label:'Т-Банк (Тинькофф)' },
+  { v:'sber', label:'Сбербанк' },
+  { v:'alpha', label:'Альфа-Банк' },
+  { v:'ozon', label:'Озон Банк' },
+  { v:'raif', label:'Райффайзен' },
+  { v:'vtb', label:'ВТБ' },
+  { v:'gazprom', label:'Газпромбанк' },
+  { v:'cash', label:'Наличные' },
+];
+const PM_LABEL = Object.fromEntries(PM_TYPES.map(t => [t.v, t.label]));
+
+async function loadPaymentMethods() {
+  const list = document.getElementById('pm-list');
+  if (!list) return;
+  try {
+    list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загрузка…</div>';
+    const r = await api('/api/v1/users/me/payment_methods').catch(()=>({items:[]}));
+    const items = (r && r.items) || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет реквизитов. Тапни + чтобы добавить.</div>';
+      return;
+    }
+    list.innerHTML = items.map(pm => `
+      <div class="p2p-offer-card">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <div class="avatar" style="background:linear-gradient(135deg,var(--th-1),var(--th-2))">${escHtml((PM_LABEL[pm.type] || pm.type)[0])}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:14px">${escHtml(PM_LABEL[pm.type] || pm.type)} <span style="font-size:11px;color:rgba(255,255,255,0.5)">· ${escHtml(pm.bank_name)}</span></div>
+            <div style="color:rgba(255,255,255,0.6);font-size:11px;margin-top:2px">${escHtml(pm.receiver_name)}</div>
+          </div>
+          <span class="p2p-status ${pm.is_active ? 'released' : 'paid'}">${pm.is_active ? 'АКТИВНО' : 'ПАУЗА'}</span>
+        </div>
+        <div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#fff;margin:4px 0 10px">${escHtml(pm.card_or_phone)}</div>
+        <div style="display:flex;gap:8px">
+          <button class="p2p-cta" style="background:var(--lg-bg);color:#fff;border:1px solid var(--lg-border);box-shadow:none" onclick="editPM(${pm.id})">Изменить</button>
+          <button class="p2p-cta" style="background:${pm.is_active ? 'rgba(255,193,7,0.20)' : 'rgba(52,199,89,0.20)'};color:${pm.is_active ? '#FFC107' : '#5FE388'};border:1px solid ${pm.is_active ? 'rgba(255,193,7,0.30)' : 'rgba(52,199,89,0.30)'};box-shadow:none" onclick="togglePM(${pm.id}, ${!pm.is_active})">${pm.is_active ? 'Пауза' : 'Активировать'}</button>
+          <button class="p2p-cta" style="background:rgba(255,69,58,0.20);color:#FF8B82;border:1px solid rgba(255,69,58,0.30);box-shadow:none" onclick="deletePM(${pm.id})">Удалить</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + (e.message || e) + '</div>';
+  }
+}
+
+window.openPmEdit = function(existing) {
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(8px);animation:pcFade .2s';
+  m.innerHTML = `<div style="width:100%;background:#15161a;border-radius:18px 18px 0 0;padding:20px;animation:pcSlide .3s;max-height:90vh;overflow-y:auto">
+    <div style="text-align:center;font-size:17px;font-weight:700;color:#fff;margin-bottom:14px">${existing ? 'Изменить реквизит' : 'Новый реквизит'}</div>
+    <label class="p2p-label">Тип</label>
+    <select id="pm-type" ${existing ? 'disabled' : ''} style="width:100%;padding:12px;background:rgba(255,255,255,0.06);border:1px solid var(--lg-border);border-radius:10px;color:#fff">
+      ${PM_TYPES.map(t => `<option value="${t.v}" ${existing && existing.type === t.v ? 'selected' : ''}>${t.label}</option>`).join('')}
+    </select>
+    <label class="p2p-label">Название банка (для отображения)</label>
+    <input id="pm-bank" type="text" placeholder="Например: Т-Банк (СБП)" value="${escHtml((existing && existing.bank_name) || '')}">
+    <label class="p2p-label">Карта / Телефон СБП / Счёт</label>
+    <input id="pm-card" type="text" placeholder="2200 7019 4832 1147 или +7 999 123-45-67" value="${escHtml((existing && existing.card_or_phone) || '')}">
+    <label class="p2p-label">ФИО получателя (должно совпадать с банк-данными)</label>
+    <input id="pm-fio" type="text" placeholder="Иванов Иван Иванович" value="${escHtml((existing && existing.receiver_name) || '')}">
+    <label style="display:flex;align-items:center;gap:10px;margin-top:14px;cursor:pointer">
+      <input id="pm-active" type="checkbox" ${(!existing || existing.is_active) ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--th-1)">
+      <span style="color:#fff;font-size:14px">Активен — подставляется в новые сделки</span>
+    </label>
+    <div style="background:rgba(255,193,7,0.10);border:1px solid rgba(255,193,7,0.30);border-radius:10px;padding:10px 12px;font-size:11px;color:#FFC107;line-height:1.5;margin:14px 0">
+      ⚠ ФИО должно совпадать с верифицированным KYC-именем — иначе при споре арбитр откатит сделку.
+    </div>
+    <button id="pm-save" class="p2p-btn-primary">Сохранить</button>
+    <button id="pm-cancel" class="p2p-btn-secondary">Отмена</button>
+  </div>`;
+  document.body.appendChild(m);
+  m.querySelector('#pm-cancel').onclick = () => m.remove();
+  m.querySelector('#pm-save').onclick = async () => {
+    const type = m.querySelector('#pm-type').value;
+    const bank = m.querySelector('#pm-bank').value.trim();
+    const card = m.querySelector('#pm-card').value.trim();
+    const fio  = m.querySelector('#pm-fio').value.trim();
+    const active = m.querySelector('#pm-active').checked;
+    if (!bank || bank.length < 1) { return Telegram?.WebApp?.showAlert?.('Введите название банка') || alert('Банк'); }
+    if (!card || card.length < 4) { return Telegram?.WebApp?.showAlert?.('Введите карту/телефон') || alert('Карта'); }
+    if (!fio  || fio.length < 2)  { return Telegram?.WebApp?.showAlert?.('Введите ФИО') || alert('ФИО'); }
+    try {
+      if (existing) {
+        await api('/api/v1/users/me/payment_methods/' + existing.id, {
+          method:'PATCH',
+          body: JSON.stringify({ bank_name:bank, card_or_phone:card, receiver_name:fio, is_active:active }),
+        });
+      } else {
+        await api('/api/v1/users/me/payment_methods', {
+          method:'POST',
+          body: JSON.stringify({ type, bank_name:bank, card_or_phone:card, receiver_name:fio, is_active:active }),
+        });
+      }
+      m.remove();
+      if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+      loadPaymentMethods();
+    } catch(e) {
+      Telegram?.WebApp?.showAlert?.('Ошибка: ' + (e.message || e)) || alert('Ошибка');
+    }
+  };
+};
+window.editPM = async function(id) {
+  const r = await api('/api/v1/users/me/payment_methods').catch(()=>({items:[]}));
+  const pm = ((r && r.items) || []).find(x => x.id === id);
+  if (pm) openPmEdit(pm);
+};
+window.togglePM = async function(id, newActive) {
+  try {
+    await api('/api/v1/users/me/payment_methods/' + id, {
+      method:'PATCH',
+      body: JSON.stringify({ is_active: newActive }),
+    });
+    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+    loadPaymentMethods();
+  } catch(e) { Telegram?.WebApp?.showAlert?.('Ошибка') || alert(e); }
+};
+window.deletePM = async function(id) {
+  if (!confirm('Удалить реквизит?')) return;
+  try {
+    await api('/api/v1/users/me/payment_methods/' + id, { method:'DELETE' });
+    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('heavy');
+    loadPaymentMethods();
+  } catch(e) { Telegram?.WebApp?.showAlert?.('Ошибка') || alert(e); }
+};
+safeBind('pm-add-btn', 'click', () => openPmEdit(null));
+
+// Загружаем офферы при заходе на view-p2p + my-ads + payment-methods
 const _origGo_p2p = window.go;
 if (typeof _origGo_p2p === 'function') {
   window.go = function(view) {
     _origGo_p2p(view);
     if (view === 'p2p') setTimeout(loadP2POffers, 50);
     if (view === 'p2p-myads') setTimeout(loadMyAds, 50);
+    if (view === 'payment-methods') setTimeout(loadPaymentMethods, 50);
   };
 }
 
