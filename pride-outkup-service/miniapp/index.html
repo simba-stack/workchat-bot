@@ -262,6 +262,64 @@
     background:var(--panel); border-top:1px solid var(--border); }
   .chat-input input { flex:1; padding:10px 14px; background:var(--bg); border-radius:20px; border:0; }
   .chat-input button { padding:10px 16px; background:var(--accent); border-radius:20px; font-weight:600; }
+
+/* ═══ Crypto-Bot стиль v3 — обновления дизайна ═══ */
+:root {
+  --bg: #15161a;
+  --panel: #1a1a1a;
+  --panel-2: #25262e;
+  --accent-blue: #3DA3F0;
+  --accent-blue2: #2A86D6;
+  --green: #4CD964;
+  --red: #FF3B30;
+  --gold: #FFC107;
+}
+body { background: #15161a !important; }
+#bottom-nav { background: #15161a !important; border-top: 1px solid #25262e !important; }
+#bottom-nav button { font-size: 12px !important; font-weight: 500 !important; padding: 8px 4px !important; }
+#bottom-nav button svg { width: 24px !important; height: 24px !important; }
+#bottom-nav button.active { color: #3DA3F0 !important; }
+/* Главная — баланс */
+#view-main { animation: viewFade 0.3s ease-out; }
+@keyframes viewFade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+/* Action кнопки — Crypto-Bot стиль (4 в ряд) */
+.actions-row { display: grid !important; grid-template-columns: repeat(4, 1fr) !important; gap: 8px !important; padding: 0 16px 14px !important; }
+.action-btn { background: transparent !important; padding: 8px 4px !important; display: flex !important; flex-direction: column !important; align-items: center !important; gap: 6px !important; transition: transform 0.1s; }
+.action-btn:active { transform: scale(0.94); }
+.action-btn .circle { width: 44px !important; height: 44px !important; border-radius: 50% !important; background: linear-gradient(135deg, #3DA3F0, #2A86D6) !important; display: flex !important; align-items: center !important; justify-content: center !important; }
+.action-btn .circle svg { width: 20px !important; height: 20px !important; stroke: #fff !important; stroke-width: 2.2 !important; fill: none !important; }
+.action-btn .label { color: #fff !important; font-size: 12px !important; font-weight: 500 !important; }
+/* Список монет — компактные строки с цветными иконками */
+.coins-list { padding: 0 16px !important; }
+.coin-row { display: flex !important; align-items: center !important; gap: 12px !important; padding: 10px 0 !important; cursor: pointer !important; }
+.coin-row:not(:last-child) { border-bottom: 0.5px solid #1f2026; }
+.coin-row .coin-ico { width: 38px !important; height: 38px !important; border-radius: 50% !important; flex-shrink: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; font-weight: 700 !important; color: #fff !important; font-size: 14px !important; }
+.coin-row .coin-ico.usdt { background: #26A17B; }
+.coin-row .coin-ico.trx { background: #FF060A; }
+.coin-row .coin-ico.ton { background: #0098EA; }
+.coin-row .coin-ico.btc { background: #F7931A; }
+.coin-row .coin-ico.eth { background: linear-gradient(135deg, #627EEA, #8a9eff); }
+.coin-row .coin-ico.sol { background: linear-gradient(135deg, #9945FF, #14F195); }
+.coin-row .coin-ico.bnb { background: #F3BA2F; color:#000 !important; }
+.coin-row .coin-ico.usdc { background: #2775CA; }
+.coin-row .coin-ico.doge { background: #C2A633; }
+.coin-row .coin-ico.ltc { background: #BFBBBB; color:#000 !important; }
+.coin-row .coin-ico.dflt { background: #25262e; }
+.coin-row .coin-name { flex: 1; min-width: 0; }
+.coin-row .coin-name b { color: #fff; font-weight: 500; font-size: 14px; display: block; }
+.coin-row .coin-name span { color: #8e9094; font-size: 12px; }
+.coin-row .coin-amt { text-align: right; }
+.coin-row .coin-amt b { color: #fff; font-weight: 500; font-size: 14px; display: block; }
+.coin-row .coin-amt span { font-size: 11px; }
+/* P2P список */
+.p2p-offer-row { transition: transform 0.1s; }
+.p2p-offer-row:active { transform: scale(0.98); }
+/* Скрытие баланса/мелких */
+.coin-row.small-hidden { display: none !important; }
+/* Empty state */
+.empty-state { color: #5f6063; text-align: center; padding: 30px 14px; font-size: 13px; }
+/* View переходы */
+.view { animation: viewFade 0.25s ease-out; }
 </style>
 </head>
 <body>
