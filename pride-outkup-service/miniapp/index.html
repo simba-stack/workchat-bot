@@ -1883,11 +1883,259 @@ window.openP2POffer = function(id) {
   go('p2p-offer');
 };
 
+// Создание сделки — модалка ввода суммы → создаём mock deal → переходим на view-p2p-deal
 window.openP2PCreateDeal = function() {
-  // Stub: пока показываем alert. На следующих шагах подключим к создания deal.
+  const op = window.currentOffer;
+  if (!op) return;
   if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
-  Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Создание сделки — в следующем шаге.') : alert('Создание сделки — следующий шаг.');
+  // Простая модалка ввода суммы
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(6px);animation:pcFade .2s';
+  const def = Math.min(op.maxRub, Math.max(op.minRub, 10000));
+  m.innerHTML = `<div style="width:100%;background:#15161a;border-radius:18px 18px 0 0;padding:20px;animation:pcSlide .3s">
+    <div style="text-align:center;font-size:16px;font-weight:700;color:#fff;margin-bottom:18px">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</div>
+    <div style="text-align:center;margin-bottom:12px">
+      <input id="dlg-amount" type="number" value="${def}" style="font-size:38px;font-weight:700;text-align:center;background:transparent;border:0;color:#fff;width:100%;outline:none;padding:0">
+      <div style="font-size:13px;color:#8a8a8a;margin-top:4px">₽ · получите <span id="dlg-equiv" style="color:#5FE388">${(def / op.price).toFixed(2)} USDT</span></div>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:14px;justify-content:center">
+      ${[op.minRub, 5000, 10000, 25000, op.maxRub].filter((v,i,a) => a.indexOf(v) === i && v <= op.maxRub).slice(0,5).map(v => `<button class="dlg-chip" data-v="${v}" style="padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid var(--lg-border);border-radius:8px;color:#fff;font-size:12px;cursor:pointer">${v.toLocaleString('ru-RU')} ₽</button>`).join('')}
+    </div>
+    <div style="background:rgba(255,193,7,0.10);border:1px solid rgba(255,193,7,0.30);border-radius:10px;padding:10px 12px;font-size:12px;color:#FFC107;line-height:1.5;margin-bottom:14px">
+      ⚠ Переводите ровно указанную сумму, БЕЗ комментария к платежу (115-ФЗ).
+    </div>
+    <button id="dlg-confirm" class="p2p-btn-primary">Подтвердить ордер</button>
+    <button id="dlg-cancel" class="p2p-btn-secondary">Отмена</button>
+  </div>`;
+  document.body.appendChild(m);
+  const ai = m.querySelector('#dlg-amount');
+  const eq = m.querySelector('#dlg-equiv');
+  function updateEquiv() {
+    const v = parseFloat(ai.value) || 0;
+    eq.textContent = (v / op.price).toFixed(2) + ' USDT';
+  }
+  ai.addEventListener('input', updateEquiv);
+  m.querySelectorAll('.dlg-chip').forEach(c => c.onclick = () => { ai.value = c.dataset.v; updateEquiv(); });
+  m.querySelector('#dlg-cancel').onclick = () => m.remove();
+  m.querySelector('#dlg-confirm').onclick = () => {
+    const sum = parseFloat(ai.value) || 0;
+    if (sum < op.minRub || sum > op.maxRub) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Сумма вне лимитов оффера') : alert('Сумма вне лимитов'); return; }
+    m.remove();
+    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+    // Создаём mock deal
+    const deal = {
+      id: 'd' + Date.now(),
+      offer_id: op.id,
+      offer: op,
+      side: p2pState.side,
+      sum_rub: sum,
+      sum_usdt: +(sum / op.price).toFixed(2),
+      price: op.price,
+      status: 'pending', // pending → paid → released → completed | dispute
+      bank: op.banks[0],
+      card: '2200 7019 4832 1147',
+      fio: 'Иванов И. И.',
+      expires_at: Date.now() + 15 * 60 * 1000,
+      chat: [
+        { type: 'sys', text: `Сделка создана. ${(sum / op.price).toFixed(2)} USDT заморожено в Escrow.`, time: nowHHMM() },
+        { type: 'them', text: 'Привет! Реквизиты сверху. Жду оплату ❤️', time: nowHHMM() },
+      ]
+    };
+    window.activeDeal = deal;
+    p2pState.deals = p2pState.deals || [];
+    p2pState.deals.push(deal);
+    openP2PDeal(deal.id);
+  };
 };
+
+function nowHHMM() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+// Активный ордер — рендер view-p2p-deal
+window.openP2PDeal = function(dealId) {
+  const d = (p2pState.deals || []).find(x => x.id === dealId) || window.activeDeal;
+  if (!d) return;
+  window.activeDeal = d;
+  go('p2p-deal');
+  const body = document.getElementById('p2p-deal-body');
+  if (!body) return;
+  const renderBody = () => {
+    const remaining = Math.max(0, Math.floor((d.expires_at - Date.now()) / 1000));
+    const mm = String(Math.floor(remaining / 60)).padStart(2,'0');
+    const ss = String(remaining % 60).padStart(2,'0');
+    const statusBadge = ({
+      pending: '<span class="p2p-status pending">Оплата</span>',
+      paid: '<span class="p2p-status paid">Ожидание</span>',
+      released: '<span class="p2p-status released">Завершено</span>',
+      dispute: '<span class="p2p-status dispute">Спор</span>',
+    })[d.status] || '';
+    const timerCls = d.status === 'paid' ? 'style="color:#7DCEFF;text-shadow:0 4px 16px rgba(125,206,255,0.5)"' : '';
+    const timerLabel = d.status === 'pending' ? 'осталось на оплату' :
+                       d.status === 'paid' ? 'продавец проверяет оплату' :
+                       d.status === 'released' ? 'сделка завершена' : '';
+    const buyerActions = d.status === 'pending'
+      ? `<button class="p2p-btn-primary" onclick="markDealPaid()">Я оплатил</button>
+         <button class="p2p-btn-secondary" onclick="openDispute()">Отменить / Открыть спор</button>`
+      : d.status === 'paid'
+      ? `<button class="p2p-btn-secondary" style="border-color:rgba(255,69,58,0.40);color:#FF8B82" onclick="openDispute()">Открыть спор (продавец не отвечает)</button>`
+      : d.status === 'released'
+      ? `<button class="p2p-btn-primary" onclick="go('p2p')">Купить ещё</button>`
+      : '';
+    body.innerHTML = `
+      <div class="p2p-timer-banner">
+        <div class="timer-big" ${timerCls}>${mm}:${ss}</div>
+        <div class="timer-sub">${timerLabel}</div>
+      </div>
+      ${d.status === 'pending' || d.status === 'paid' ? `
+      <div class="p2p-payment-card">
+        <div class="pc-bank">
+          <div class="pc-bank-icon" style="background:linear-gradient(135deg,#FFE066,#FFC107)">${escHtml(d.bank[0])}</div>
+          <span>${escHtml(d.bank)}</span>
+        </div>
+        <div class="pc-field"><div><div class="pc-k">Номер карты</div><div class="pc-v">${escHtml(d.card)}</div></div><button class="pc-copy" onclick="copyTxt('${escHtml(d.card)}')">📋 Копир.</button></div>
+        <div class="pc-field"><div><div class="pc-k">ФИО получателя</div><div class="pc-v">${escHtml(d.fio)}</div></div><button class="pc-copy" onclick="copyTxt('${escHtml(d.fio)}')">📋</button></div>
+        <div class="pc-field"><div><div class="pc-k">Сумма</div><div class="pc-v" style="color:var(--th-1);font-size:18px">${d.sum_rub.toLocaleString('ru-RU')}.00 ₽</div></div><button class="pc-copy" onclick="copyTxt('${d.sum_rub}')">📋</button></div>
+      </div>
+      <div class="p2p-banner-warn">⚠ Переведите ТОЧНО <b>${d.sum_rub.toLocaleString('ru-RU')}.00 ₽</b>. Не указывайте «крипта», «USDT», «биржа» в комментарии — банк заблокирует!</div>
+      ` : ''}
+      ${d.status === 'paid' ? `<div class="p2p-banner-ok">✓ Вы подтвердили оплату. Продавец проверяет средства. Обычно 1-2 минуты.</div>` : ''}
+      ${d.status === 'released' ? `<div style="text-align:center;padding:30px 20px">
+        <div style="width:88px;height:88px;border-radius:50%;background:linear-gradient(135deg,rgba(52,199,89,0.30),rgba(52,199,89,0.10));backdrop-filter:blur(20px);border:1px solid rgba(52,199,89,0.40);margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:44px;color:#5FE388;box-shadow:0 10px 28px rgba(52,199,89,0.30), inset 0 1px 0 rgba(255,255,255,0.30)">✓</div>
+        <div style="font-size:24px;font-weight:700;margin-top:20px">${d.sum_usdt} USDT получено</div>
+        <div style="color:rgba(255,255,255,0.6);font-size:13px;margin-top:6px">от @${escHtml((d.offer && d.offer.nick) || 'продавца')}</div>
+      </div>` : ''}
+      <div class="p2p-chat-block" id="p2p-deal-chat">
+        ${d.chat.map(m => `<div class="p2p-msg ${m.type}"><div class="bubble">${escHtml(m.text)}${m.time ? '<div class="time">' + m.time + '</div>' : ''}</div></div>`).join('')}
+      </div>
+      <div class="p2p-bottom-cta">${buyerActions}</div>
+    `;
+  };
+  renderBody();
+  // Таймер
+  if (window._dealTimer) clearInterval(window._dealTimer);
+  window._dealTimer = setInterval(() => {
+    if (!window.activeDeal) { clearInterval(window._dealTimer); return; }
+    if (document.getElementById('view-p2p-deal')?.classList.contains('active')) {
+      renderBody();
+    } else {
+      clearInterval(window._dealTimer); window._dealTimer = null;
+    }
+  }, 1000);
+};
+
+window.markDealPaid = function() {
+  const d = window.activeDeal;
+  if (!d) return;
+  d.status = 'paid';
+  d.expires_at = Date.now() + 15 * 60 * 1000; // 15 мин на ответ продавца
+  d.chat.push({ type:'me', text:'📎 chek.png — Скрин платежа', time: nowHHMM() });
+  d.chat.push({ type:'me', text:'Оплатил ' + d.sum_rub, time: nowHHMM() });
+  d.chat.push({ type:'sys', text:'Покупатель отметил «Оплатил» в ' + nowHHMM() });
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+  openP2PDeal(d.id);
+  // Демо: через 8 сек продавец «отпускает»
+  setTimeout(() => {
+    if (window.activeDeal && window.activeDeal.id === d.id && d.status === 'paid') {
+      d.status = 'released';
+      d.chat.push({ type:'them', text:'Проверил, отпускаю!', time: nowHHMM() });
+      d.chat.push({ type:'sys', text:'Продавец отпустил ' + d.sum_usdt + ' USDT — сделка завершена' });
+      if (document.getElementById('view-p2p-deal')?.classList.contains('active')) openP2PDeal(d.id);
+      if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+    }
+  }, 8000);
+};
+
+window.openDispute = function() { go('p2p-dispute'); };
+window.copyTxt = function(t) {
+  try { navigator.clipboard.writeText(t); } catch(_){}
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+};
+
+// ── Мои объявления ──
+window.p2pState.myAds = [
+  { id:'ma1', side:'sell', status:'active', price:95.40, priceType:'floating+0.5%', remaining:4500, total:10000, minRub:1000, maxRub:100000, banks:['СБП','Сбер','Тинькофф'], created:'вчера', deals30d:14 },
+  { id:'ma2', side:'buy', status:'paused', price:94.20, priceType:'fixed', remaining:0, total:0, minRub:5000, maxRub:200000, banks:['СБП','Альфа'], created:'3 дня назад', deals30d:8 },
+];
+
+window.loadMyAds = function() {
+  const list = document.getElementById('p2p-myads-list');
+  if (!list) return;
+  const ads = window.p2pState.myAds || [];
+  if (!ads.length) { list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет объявлений. Тапни +, чтобы создать.</div>'; return; }
+  list.innerHTML = ads.map(a => {
+    const isActive = a.status === 'active';
+    const dir = a.side === 'sell' ? '↑' : '↓';
+    const dirBg = a.side === 'sell' ? 'linear-gradient(135deg,#34c759,#1a6a30)' : 'linear-gradient(135deg,#3DA3F0,#1a4a7a)';
+    const title = a.side === 'sell' ? 'Продаю USDT' : 'Покупаю USDT';
+    const statusBadge = isActive
+      ? '<span class="p2p-status released">АКТИВНО</span>'
+      : '<span class="p2p-status paid">ПАУЗА</span>';
+    return `<div class="p2p-offer-card">
+      <div class="row1">
+        <div class="avatar" style="background:${dirBg}">${dir}</div>
+        <div class="name">
+          <div class="nick">${title} ${statusBadge}</div>
+          <div class="stats">Создано ${escHtml(a.created)} · ${a.deals30d} ордеров за 30 дней</div>
+        </div>
+      </div>
+      <div class="price-row">
+        <span class="price-big">${a.price.toFixed(2)} ₽</span>
+        <span class="price-sub">${escHtml(a.priceType)}</span>
+      </div>
+      <div class="limit-row">${isActive ? 'Остаток: ' + a.remaining.toLocaleString('ru-RU') + ' / ' + a.total.toLocaleString('ru-RU') + ' USDT · ' : ''}Лимит ${a.minRub.toLocaleString('ru-RU')} — ${a.maxRub.toLocaleString('ru-RU')} ₽</div>
+      <div class="pay-row">${a.banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="p2p-cta" style="background:var(--lg-bg);color:#fff;border:1px solid var(--lg-border);box-shadow:none" onclick="alert('Редактирование — в следующем шаге')">${isActive ? 'Редактировать' : 'Активировать'}</button>
+        <button class="p2p-cta" style="background:linear-gradient(135deg,rgba(255,69,58,0.30),rgba(139,20,16,0.20));border:1px solid rgba(255,69,58,0.35);color:#FF8B82;box-shadow:0 4px 12px rgba(255,69,58,0.18)" onclick="snipeMyAd('${a.id}')">${isActive ? 'Снять' : 'Удалить'}</button>
+      </div>
+    </div>`;
+  }).join('');
+};
+window.snipeMyAd = function(id) {
+  if (!confirm('Снять/удалить объявление?')) return;
+  window.p2pState.myAds = window.p2pState.myAds.filter(a => a.id !== id);
+  loadMyAds();
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('heavy');
+};
+
+// myads-btn в доске
+safeBind('p2p-myads-btn', 'click', () => go('p2p-myads'));
+safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
+
+// Submit нового объявления
+safeBind('p2p-ad-submit', 'click', () => {
+  const sideBuyActive = document.getElementById('p2p-ad-buy')?.classList.contains('active');
+  const side = sideBuyActive ? 'buy' : 'sell';
+  const price = parseFloat(document.getElementById('p2p-ad-price')?.value) || 0;
+  const amount = parseFloat(document.getElementById('p2p-ad-amount')?.value) || 0;
+  const min = parseFloat(document.getElementById('p2p-ad-min')?.value) || 0;
+  const max = parseFloat(document.getElementById('p2p-ad-max')?.value) || 0;
+  if (!price || price < 50 || price > 200) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Курс вне разумного диапазона') : alert('Курс вне диапазона'); return; }
+  if (!amount || amount < 10) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Минимум 10 USDT') : alert('Min 10 USDT'); return; }
+  const ad = {
+    id: 'ma' + Date.now(), side, status:'active',
+    price, priceType:'fixed', remaining:amount, total:amount, minRub:min, maxRub:max,
+    banks:['СБП','Сбер','Тинькофф'], created:'только что', deals30d:0
+  };
+  window.p2pState.myAds = window.p2pState.myAds || [];
+  window.p2pState.myAds.unshift(ad);
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+  go('p2p-myads');
+  setTimeout(loadMyAds, 50);
+});
+// Buy/Sell таб переключатель в create
+safeBind('p2p-ad-buy', 'click', () => {
+  document.getElementById('p2p-ad-buy').classList.add('active');
+  document.getElementById('p2p-ad-sell').classList.remove('active');
+});
+safeBind('p2p-ad-sell', 'click', () => {
+  document.getElementById('p2p-ad-sell').classList.add('active');
+  document.getElementById('p2p-ad-buy').classList.remove('active');
+});
+// При активации create — поставим dataset active на buy по дефолту
+document.getElementById('p2p-ad-buy')?.classList.add('active');
 
 // Handlers для view-p2p
 safeBind('p2p-side-buy', 'click', () => {
@@ -1921,6 +2169,7 @@ if (typeof _origGo_p2p === 'function') {
   window.go = function(view) {
     _origGo_p2p(view);
     if (view === 'p2p') setTimeout(loadP2POffers, 50);
+    if (view === 'p2p-myads') setTimeout(loadMyAds, 50);
   };
 }
 
