@@ -1036,20 +1036,7 @@ async function openCoin(code) {
     const items = (tj.items || []).filter(op => (op.coin||'').toUpperCase() === code.toUpperCase());
     if (!items.length) $('coin-history').innerHTML = '<div class="empty-state">Истории пока нет</div>';
     else {
-      $('coin-history').innerHTML = items.map(op => {
-        const isOut = op.amount < 0;
-        const sign = isOut ? '−' : '+';
-        const cls = isOut ? 'neg' : 'pos';
-        const title = ({deposit:'Пополнение', withdraw:'Вывод', withdraw_rollback:'Возврат',
-                        swap:'Обмен', transfer_in:'Получено', transfer_out:'Отправлено',
-                        fee:'Комиссия', earn:'Начисление', spend:'Списание',
-                        cheque_redeem:'Чек активирован'})[op.type] || op.type;
-        return `<div class="h-row" style="display:flex;align-items:center;padding:12px 14px;border-top:1px solid var(--border)">
-          <div class="h-icon" style="width:36px;height:36px;border-radius:50%;background:${isOut?'#FF453A22':'#26A17B22'};color:${isOut?'#FF453A':'#26A17B'};display:flex;align-items:center;justify-content:center;margin-right:12px">${isOut?'↗':'↙'}</div>
-          <div class="h-info" style="flex:1;min-width:0"><div class="t" style="font-size:14px">${title}</div><div class="d" style="color:var(--muted);font-size:12px;margin-top:2px">${(op.created_at||'').replace('T',' ').slice(0,16)}</div></div>
-          <div class="h-amt"><div class="a ${cls}" style="font-size:14px;font-weight:600">${sign}${fmt(op.amount_abs, 6)} ${op.coin}</div></div>
-        </div>`;
-      }).join('');
+      $('coin-history').innerHTML = items.map(op => renderHistCard(op)).join('');
     }
   } catch (e) {}
   go('coin');
@@ -1088,17 +1075,11 @@ setInterval(() => {
       const items = (j.items||[]).filter(o => (o.coin||'').toUpperCase() === code.toUpperCase());
       const el = $('coin-history');
       if (!el) return;
-      if (!items.length && !el.querySelector('.h-row')) return;
-      // Простое обновление: ставим заголовки если есть данные
+      if (!items.length && !el.querySelector('.hist-card')) return;
+      // Не схлопываем раскрытые карточки при auto-refresh
+      if (el.querySelector('.hist-card.open')) return;
       if (items.length) {
-        el.innerHTML = items.map(op => {
-          const isOut = op.amount < 0;
-          const sign = isOut ? '−' : '+';
-          const cls = isOut ? 'neg' : 'pos';
-          const titles = {deposit:'Пополнение', withdraw:'Вывод', withdraw_rollback:'Возврат', swap:'Обмен', transfer_in:'Получено', transfer_out:'Отправлено', fee:'Комиссия', earn:'Начисление', spend:'Списание', cheque_redeem:'Чек активирован'};
-          const title = titles[op.type] || op.type;
-          return `<div class="h-row" style="display:flex;align-items:center;padding:12px 14px;border-top:1px solid var(--border)"><div class="h-icon" style="width:36px;height:36px;border-radius:50%;background:${isOut?'#FF453A22':'#26A17B22'};color:${isOut?'#FF453A':'#26A17B'};display:flex;align-items:center;justify-content:center;margin-right:12px">${isOut?'↗':'↙'}</div><div class="h-info" style="flex:1;min-width:0"><div class="t" style="font-size:14px">${title}</div><div class="d" style="color:var(--muted);font-size:12px;margin-top:2px">${(op.created_at||'').replace('T',' ').slice(0,16)}</div></div><div class="h-amt"><div class="a ${cls}" style="font-size:14px;font-weight:600">${sign}${fmt(op.amount_abs, 6)} ${op.coin}</div></div></div>`;
-        }).join('');
+        el.innerHTML = items.map(op => renderHistCard(op)).join('');
       }
     }).catch(()=>{});
   }
@@ -1145,6 +1126,8 @@ async function loadOperations(silent=false) {
       $('ops-list').innerHTML = '<div class="empty-state">Операций пока нет</div>';
       return;
     }
+    // Не схлопываем раскрытую карточку при автообновлении
+    if (silent && $('ops-list')?.querySelector('.hist-card.open')) return;
     // Группировка по дням
     const groups = {};
     items.forEach((op, idx) => {
@@ -1214,6 +1197,53 @@ function toggleHistCard(el) {
   el.classList.toggle('open', !wasOpen);
   try { if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.selectionChanged(); } catch(e) {}
 }
+
+// Универсальный рендер одной hist-card (используется и для view-history, и для view-coin)
+function renderHistCard(op) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const [ic, col] = (window.opIcons && opIcons[op.type]) || ['•', '#888'];
+  const title = (window.opTitles && opTitles[op.type]) || op.type;
+  const isMinus = (op.amount || 0) < 0;
+  const sign = isMinus ? '−' : '+';
+  const time = (op.created_at || '').slice(11, 16);
+  const cls = isMinus ? 'neg' : 'pos';
+  const dateFull = (op.created_at || '').slice(0, 16).replace('T', ' ');
+  const txShort = op.tx_hash ? (op.tx_hash.slice(0, 10) + '…' + op.tx_hash.slice(-6)) : '';
+  const explorerUrl = op.tronscan_url || op.explorer_url || (op.tx_hash ? `https://tronscan.org/#/transaction/${op.tx_hash}` : '');
+  const noteRow = op.note ? `<div class="hc-row"><span class="k">Заметка</span><span class="v" style="font-family:inherit">${esc(op.note)}</span></div>` : '';
+  const addrRow = op.address ? `<div class="hc-row"><span class="k">Адрес</span><span class="v">${esc(op.address)}</span></div>` : '';
+  const txRow = op.tx_hash ? `<div class="hc-row"><span class="k">TX</span><span class="v">${esc(txShort)}</span></div>` : '';
+  const txBtn = explorerUrl ? `<a class="hc-tx-link" href="${esc(explorerUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Открыть в эксплорере →</a>` : '';
+  const idRow = op.id ? `<div class="hc-row"><span class="k">ID</span><span class="v">#${esc(op.id)}</span></div>` : '';
+  const statusRow = op.status ? `<div class="hc-row"><span class="k">Статус</span><span class="v" style="font-family:inherit">${esc(op.status)}</span></div>` : '';
+  const fmt6 = (typeof fmt === 'function') ? fmt : (n,d) => (Number(n)||0).toFixed(d||2);
+  return `<div class="hist-card" onclick="toggleHistCard(this)">
+    <div class="hc-head">
+      <div class="hc-ic" style="background:${col}22;color:${col}">${ic}</div>
+      <div class="hc-mid">
+        <div class="hc-title">${esc(title)}</div>
+        <div class="hc-sub">${esc(time)}${op.note ? ' · ' + esc(op.note.slice(0, 28)) : ''}</div>
+      </div>
+      <div class="hc-amt">
+        <div class="a ${cls}">${sign}${fmt6(op.amount_abs, op.coin === 'RUB' ? 0 : 4)} ${esc(op.coin || '')}</div>
+        ${op.rub ? `<div class="r">${fmt6(op.rub, 0)} ₽</div>` : ''}
+      </div>
+      <div class="hc-chev">⌃</div>
+    </div>
+    <div class="hc-detail">
+      <div class="hc-detail-grid">
+        <div class="hc-row"><span class="k">Дата</span><span class="v" style="font-family:inherit">${esc(dateFull)}</span></div>
+        ${statusRow}
+        ${idRow}
+        ${addrRow}
+        ${txRow}
+        ${noteRow}
+        ${txBtn}
+      </div>
+    </div>
+  </div>`;
+}
+window.renderHistCard = renderHistCard;
 
 // ── Настройки ──
 function loadSettings() {
@@ -1939,6 +1969,8 @@ loadMain().then(routeFromStart);
 // ════════════════════════════════════════════════════
 (function() {
   const STATE2 = { chart: null, activeCoin: 'USDT', netMode: 'deposit' };
+  window.STATE2 = STATE2; // экспонируем для skin picker (перерисовка графика при смене скина)
+  window.loadChart = null; // будет переопределена ниже
 
   function escH(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function explorerUrl(network, hash) {
@@ -2041,13 +2073,32 @@ loadMain().then(routeFromStart);
     if (!ctx) return;
     if (STATE2.chart) { STATE2.chart.destroy(); STATE2.chart = null; }
     if (window.Chart) {
+      // Цвет fill берём от текущего скина (sunset/night/crown), линия по pct
+      function getSkinColors() {
+        const card = document.getElementById('pcard');
+        const cls = card ? (card.className || '') : '';
+        if (cls.indexOf('pskin-night') >= 0) return { top:'rgba(80,120,255,0.45)', bot:'rgba(80,120,255,0.02)' };
+        if (cls.indexOf('pskin-crown') >= 0) return { top:'rgba(255,200,60,0.50)', bot:'rgba(255,140,40,0.02)' };
+        // default sunset
+        return { top:'rgba(255,140,66,0.50)', bot:'rgba(139,46,15,0.02)' };
+      }
+      const sk = getSkinColors();
+      const canvas = ctx.getContext ? ctx.getContext('2d') : null;
+      let bgFill = col + '20';
+      if (canvas) {
+        const grad = canvas.createLinearGradient(0, 0, 0, ctx.height || 200);
+        grad.addColorStop(0, sk.top);
+        grad.addColorStop(1, sk.bot);
+        bgFill = grad;
+      }
       STATE2.chart = new Chart(ctx, {
         type: 'line',
-        data: { labels: labels, datasets: [{ data: values, borderColor: col, backgroundColor: col + '20', tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2 }] },
+        data: { labels: labels, datasets: [{ data: values, borderColor: col, backgroundColor: bgFill, tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2 }] },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } }, animation: { duration: 600 } }
       });
     }
   }
+  window.loadChart = loadChart;
 
   // Кликабельные периоды графика
   document.addEventListener('click', function(e) {
@@ -2135,6 +2186,15 @@ loadMain().then(routeFromStart);
     const sk = SKINS.find(s => s.id === id) || SKINS[0];
     c.classList.add(sk.cls);
     try { localStorage.setItem('p2p_skin_v4', id); } catch(e) {}
+    // Перерисовать график если он сейчас открыт — чтобы fill подхватил новый скин
+    try {
+      const chartView = document.getElementById('view-coin-chart');
+      if (chartView && chartView.classList.contains('active') && window.STATE2 && window.STATE2.activeCoin && typeof window.loadChart === 'function') {
+        const activePeriod = document.querySelector('.chart-period[style*="3DA3F0"]');
+        const days = activePeriod ? parseInt(activePeriod.dataset.p) || 1 : 1;
+        window.loadChart(window.STATE2.activeCoin, days);
+      }
+    } catch(e) {}
   }
   function getSkin() { try { return localStorage.getItem('p2p_skin_v4') || 'sunset'; } catch(e) { return 'sunset'; } }
   function picker() {
