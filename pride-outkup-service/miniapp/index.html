@@ -15,7 +15,33 @@
     --accent: #ffffff; --accent-2: #cccccc;
     --green: #34c759; --red: #ff453a; --gold: #ffd60a;
     --btn-bg: #1a1a1a;
+    /* Theme palette — переопределяется через body.theme-* */
+    --th-1: #FF8C42; --th-2: #8B2E0F; --th-glow: #FFB347;
+    --th-border: rgba(255,140,66,0.25);
   }
+  /* Theme variants — body class задаёт акценты глобально */
+  body.theme-sunset {
+    --th-1: #FF8C42; --th-2: #8B2E0F; --th-glow: #FFB347;
+    --th-border: rgba(255,140,66,0.28);
+  }
+  body.theme-night {
+    --th-1: #5078ff; --th-2: #1a1f44; --th-glow: #8aa8ff;
+    --th-border: rgba(80,120,255,0.30);
+  }
+  body.theme-crown {
+    --th-1: #FFD700; --th-2: #8B2E0F; --th-glow: #FFE066;
+    --th-border: rgba(255,215,0,0.30);
+  }
+  /* Радиальный glow на фоне body — мягкий, под темой */
+  body::before {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(800px 380px at 50% -120px, color-mix(in srgb, var(--th-glow) 18%, transparent), transparent 70%),
+      radial-gradient(600px 400px at 100% 110%, color-mix(in srgb, var(--th-2) 14%, transparent), transparent 70%);
+    opacity:0.7; transition:background 0.35s ease;
+  }
+  /* Все view'ы должны быть НАД фоновым glow */
+  .view, .nav-header, .bottom-nav, .pcard, .hist-card, .hist-day-chip { position:relative; z-index:1; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin:0; padding:0; min-height:100%; background:var(--bg); color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif;
@@ -96,16 +122,16 @@
     -webkit-tap-highlight-color:transparent; user-select:none; }
   .action-btn .circle {
     position:relative; width:56px; height:56px; border-radius:50%;
-    background:linear-gradient(135deg, #3DA3F0 0%, #2A86D6 100%);
-    box-shadow:0 4px 14px rgba(58,150,221,0.35), inset 0 1px 0 rgba(255,255,255,0.25);
+    background:linear-gradient(135deg, var(--th-1) 0%, var(--th-2) 100%);
+    box-shadow:0 4px 14px color-mix(in srgb, var(--th-1) 35%, transparent), inset 0 1px 0 rgba(255,255,255,0.25);
     display:flex; align-items:center; justify-content:center;
     color:#fff; overflow:hidden;
-    transition:transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s;
+    transition:transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s, background .3s;
   }
   .action-btn .circle svg { width:24px; height:24px; stroke:#fff; fill:none; stroke-width:2.2;
     stroke-linecap:round; stroke-linejoin:round; transition:transform .25s; }
-  .action-btn:hover .circle { transform:translateY(-2px); box-shadow:0 6px 18px rgba(58,150,221,0.5); }
-  .action-btn:active .circle { transform:scale(0.88); box-shadow:0 2px 8px rgba(58,150,221,0.4); }
+  .action-btn:hover .circle { transform:translateY(-2px); box-shadow:0 6px 18px color-mix(in srgb, var(--th-1) 50%, transparent); }
+  .action-btn:active .circle { transform:scale(0.88); box-shadow:0 2px 8px color-mix(in srgb, var(--th-1) 40%, transparent); }
   .action-btn:active .circle svg { transform:scale(1.15); }
   .action-btn .circle::after {
     content:''; position:absolute; inset:0; border-radius:50%;
@@ -113,7 +139,7 @@
     opacity:0; transition:opacity .35s;
   }
   .action-btn:active .circle::after { opacity:1; transition:none; }
-  .action-btn .label { font-size:13px; color:#3390EC; font-weight:500; letter-spacing:0.1px; }
+  .action-btn .label { font-size:13px; color:var(--th-1); font-weight:500; letter-spacing:0.1px; transition:color .3s; }
   .price-card { margin:12px 16px; padding:14px; background:var(--panel); border-radius:14px; }
   .price-card .row1 { display:flex; align-items:baseline; gap:8px; }
   .price-card .price { font-size:18px; font-weight:600; }
@@ -145,23 +171,25 @@
     font-size:12px;
     font-weight:600;
     color:#fff;
-    background:linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+    background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 18%, transparent), color-mix(in srgb, var(--th-2) 12%, transparent));
     backdrop-filter:blur(8px);
     -webkit-backdrop-filter:blur(8px);
-    border:1px solid rgba(255,255,255,0.1);
+    border:1px solid var(--th-border);
     letter-spacing:0.3px;
+    transition:background 0.3s ease;
   }
   .hist-card {
     margin:6px 12px;
     border-radius:16px;
-    background:linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
-    border:1px solid rgba(255,255,255,0.08);
+    background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 6%, rgba(255,255,255,0.04)), rgba(255,255,255,0.02));
+    border:1px solid var(--th-border);
     backdrop-filter:blur(10px);
     -webkit-backdrop-filter:blur(10px);
     overflow:hidden;
-    transition:background 0.2s ease, border-color 0.2s ease;
+    transition:background 0.3s ease, border-color 0.3s ease;
     cursor:pointer;
   }
+  .hist-card.open { border-color:color-mix(in srgb, var(--th-1) 55%, transparent); }
   .hist-card:active { background:rgba(255,255,255,0.10); }
   .hist-card .hc-head {
     display:flex;
@@ -229,14 +257,43 @@
     margin-top:4px;
     padding:8px 14px;
     border-radius:10px;
-    background:rgba(255,255,255,0.08);
+    background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 25%, transparent), color-mix(in srgb, var(--th-2) 20%, transparent));
+    border:1px solid var(--th-border);
     color:#fff;
     font-size:13px;
     font-weight:600;
     text-decoration:none;
     width:fit-content;
   }
-  .hist-card .hc-tx-link:active { background:rgba(255,255,255,0.14); }
+  .hist-card .hc-tx-link:active { background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 45%, transparent), color-mix(in srgb, var(--th-2) 30%, transparent)); }
+
+  /* Wave-декорация снизу секции (как на пресете) — шипастая волна-силуэт под тему */
+  .wave-deco {
+    position:relative;
+    margin-top:24px;
+    height:46px;
+    overflow:hidden;
+    pointer-events:none;
+  }
+  .wave-deco::before {
+    content:''; position:absolute; left:0; right:0; top:0; bottom:0;
+    background:linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--th-2) 35%, transparent) 60%, color-mix(in srgb, var(--th-2) 55%, transparent) 100%);
+  }
+  .wave-deco::after {
+    content:''; position:absolute; left:0; right:0; bottom:0;
+    height:24px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 14' preserveAspectRatio='none'><path d='M0 14 L3 3 L6 14 L9 5 L12 14 L15 2 L18 14 L22 6 L26 14 L30 4 L34 14 L38 3 L42 14 L46 5 L50 14 L54 4 L58 14 L62 7 L66 14 L70 3 L74 14 L78 6 L82 14 L86 3 L90 14 L94 5 L98 14 L100 4 L100 14 Z' fill='%23000'/></svg>");
+    background-repeat:repeat-x;
+    background-size:120px 22px;
+    opacity:0.55;
+  }
+  .wave-deco .silhouette {
+    position:absolute; bottom:12px; right:20px;
+    color:rgba(255,255,255,0.18);
+    font-size:18px;
+    letter-spacing:6px;
+    user-select:none;
+  }
 
   /* Deposit */
   .deposit-content { text-align:center; padding:24px 20px; }
@@ -288,7 +345,7 @@
     stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;
     transition:transform .2s cubic-bezier(.34,1.56,.64,1); }
   #bottom-nav button:active { transform:scale(0.92); }
-  #bottom-nav button.active { color:#3390EC; font-weight:600; }
+  #bottom-nav button.active { color:var(--th-1); font-weight:600; transition:color .3s; }
   #bottom-nav button.active svg { transform:scale(1.08); }
 
   /* Coming soon */
@@ -533,6 +590,7 @@ body { background: #15161a !important; }
     <div class="history-date">Последние операции</div>
     <div id="coin-history"><div class="empty-state">Истории пока нет</div></div>
   </div>
+  <div class="wave-deco"><span class="silhouette">∙ ∙ ∙</span></div>
 </div>
 
 <!-- ═══ DEPOSIT ═══ -->
@@ -669,6 +727,7 @@ body { background: #15161a !important; }
   <div class="history-list" id="ops-list">
     <div class="empty-state">Загружаю…</div>
   </div>
+  <div class="wave-deco"><span class="silhouette">∙ ∙ ∙</span></div>
 </div>
 
 <!-- ═══ SETTINGS ═══ -->
@@ -991,12 +1050,20 @@ async function loadMain() {
     coins.forEach(c => { totalUsd += parseFloat(balances[c.code]||0) * (coinPrice(c.code).price); });
     if (!balanceHidden) $('total-usd').textContent = fmt(totalUsd, 2);
 
-    const sorted = [...coins].sort((a,b) => {
+    // Фильтр скрытых монет (localStorage) + опционально пустых
+    const hidden = getHiddenCoins();
+    const hideEmpty = (localStorage.getItem('p2p_hide_empty') === '1');
+    const visible = coins.filter(c => {
+      if (hidden.indexOf(c.code) >= 0) return false;
+      if (hideEmpty && (+balances[c.code] || 0) <= 0) return false;
+      return true;
+    });
+    const sorted = [...visible].sort((a,b) => {
       const ba=+balances[a.code]||0, bb=+balances[b.code]||0;
       if (ba!==bb) return bb-ba;
       return (a.sort_order||999) - (b.sort_order||999);
     });
-    $('coins-list').innerHTML = sorted.map(c => {
+    const rowsHtml = sorted.map(c => {
       const bal = +balances[c.code] || 0;
       const { price, delta } = coinPrice(c.code);
       const dCls = delta>=0?'pos':'neg', dSign = delta>=0?'+':'';
@@ -1012,6 +1079,12 @@ async function loadMain() {
         </div>
       </div>`;
     }).join('');
+    const manageBtn = `<div style="text-align:center;padding:14px 12px 4px">
+      <button onclick="openCoinManage()" style="padding:10px 18px;border-radius:999px;background:linear-gradient(135deg, color-mix(in srgb, var(--th-1) 22%, transparent), color-mix(in srgb, var(--th-2) 18%, transparent));border:1px solid var(--th-border);color:#fff;font-size:13px;font-weight:600;cursor:pointer">
+        ⚙ Управление монетами${hidden.length ? ' · скрыто ' + hidden.length : ''}${hideEmpty ? ' · без пустых' : ''}
+      </button>
+    </div>`;
+    $('coins-list').innerHTML = (sorted.length ? rowsHtml : '<div class="empty-state">Нет монет в списке</div>') + manageBtn;
   } catch (e) { $('coins-list').innerHTML = `<div class="empty-state">Ошибка: ${e.message}</div>`; }
 }
 
@@ -1187,6 +1260,70 @@ async function loadOperations(silent=false) {
     if (!silent) $('ops-list').innerHTML = '<div class="empty-state" style="color:#FF453A">Ошибка: ' + (e.message || e) + '</div>';
   }
 }
+
+// ── Coin management (скрыть/показать монеты на главной) ──
+function getHiddenCoins() {
+  try { const raw = localStorage.getItem('p2p_hidden_coins'); return raw ? JSON.parse(raw) : []; }
+  catch(e) { return []; }
+}
+function setHiddenCoins(arr) {
+  try { localStorage.setItem('p2p_hidden_coins', JSON.stringify(arr || [])); } catch(e) {}
+}
+function toggleCoinHidden(code) {
+  const h = getHiddenCoins();
+  const idx = h.indexOf(code);
+  if (idx >= 0) h.splice(idx, 1); else h.push(code);
+  setHiddenCoins(h);
+  // обновить чекбокс в модалке
+  const row = document.querySelector('.cm-row[data-code="' + code + '"]');
+  if (row) {
+    const chk = row.querySelector('.cm-chk');
+    const isHidden = h.indexOf(code) >= 0;
+    if (chk) chk.textContent = isHidden ? '○' : '✓';
+    if (chk) chk.style.color = isHidden ? '#5f6063' : 'var(--th-1)';
+  }
+}
+function openCoinManage() {
+  const list = (coins || []).slice();
+  const hidden = getHiddenCoins();
+  const hideEmpty = (localStorage.getItem('p2p_hide_empty') === '1');
+  const m = document.createElement('div');
+  m.id = 'coin-manage-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(4px);animation:pcFade .2s';
+  const rows = list.map(c => {
+    const isHidden = hidden.indexOf(c.code) >= 0;
+    const bal = +(balances||{})[c.code] || 0;
+    return `<div class="cm-row" data-code="${c.code}" onclick="toggleCoinHidden('${c.code}')" style="display:flex;align-items:center;gap:12px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid var(--th-border);border-radius:12px;margin-bottom:6px;cursor:pointer">
+      <div style="width:36px;height:36px;border-radius:50%;background:${c.icon_color||'#444'};display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:13px;flex-shrink:0">${(typeof coinIcon === 'function' ? coinIcon(c.code) : c.code.slice(0,2))}</div>
+      <div style="flex:1;min-width:0">
+        <div style="color:#fff;font-size:14px;font-weight:600">${c.name || c.code}</div>
+        <div style="color:rgba(255,255,255,0.55);font-size:11px">${bal > 0 ? (typeof fmt === 'function' ? fmt(bal, 6) : bal) + ' ' + c.code : 'Пусто'}</div>
+      </div>
+      <span class="cm-chk" style="color:${isHidden ? '#5f6063' : 'var(--th-1)'};font-size:22px;font-weight:700">${isHidden ? '○' : '✓'}</span>
+    </div>`;
+  }).join('');
+  m.innerHTML = `<div style="width:100%;max-height:88vh;overflow-y:auto;background:#1a1a1a;border-radius:18px 18px 0 0;padding:18px;animation:pcSlide .3s">
+    <div style="text-align:center;font-size:16px;font-weight:700;color:#fff;margin-bottom:6px">Управление монетами</div>
+    <div style="text-align:center;font-size:12px;color:rgba(255,255,255,0.55);margin-bottom:14px">Тапни чтобы скрыть/показать</div>
+    <label style="display:flex;align-items:center;justify-content:space-between;padding:14px;background:rgba(255,255,255,0.04);border:1px solid var(--th-border);border-radius:12px;margin-bottom:10px;cursor:pointer">
+      <span style="color:#fff;font-size:14px;font-weight:500">Скрыть монеты с нулевым балансом</span>
+      <input type="checkbox" id="cm-hide-empty" ${hideEmpty ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--th-1)">
+    </label>
+    ${rows}
+    <button id="cm-close" style="width:100%;padding:14px;background:linear-gradient(135deg, var(--th-1), var(--th-2));color:#fff;font-weight:700;border-radius:12px;margin-top:10px;border:0;cursor:pointer;font-size:15px">Готово</button>
+  </div>`;
+  document.body.appendChild(m);
+  document.getElementById('cm-hide-empty').onchange = function(e) {
+    try { localStorage.setItem('p2p_hide_empty', e.target.checked ? '1' : '0'); } catch(_) {}
+  };
+  document.getElementById('cm-close').onclick = function() {
+    m.remove();
+    if (typeof loadMain === 'function') loadMain().catch(()=>{});
+  };
+  m.onclick = e => { if (e.target === m) document.getElementById('cm-close').onclick(); };
+}
+window.openCoinManage = openCoinManage;
+window.toggleCoinHidden = toggleCoinHidden;
 
 // Раскрытие карточки истории (один открыт за раз — как в банковских приложениях)
 function toggleHistCard(el) {
@@ -2181,10 +2318,16 @@ loadMain().then(routeFromStart);
     { id:'crown', name:'Pride crown 👑', cls:'pskin-crown' }
   ];
   function apply(id) {
-    const c = document.getElementById('pcard'); if (!c) return;
-    SKINS.forEach(s => c.classList.remove(s.cls));
+    const c = document.getElementById('pcard');
     const sk = SKINS.find(s => s.id === id) || SKINS[0];
-    c.classList.add(sk.cls);
+    // Скин на саму карту
+    if (c) {
+      SKINS.forEach(s => c.classList.remove(s.cls));
+      c.classList.add(sk.cls);
+    }
+    // Глобальная тема на body — окрашивает hist-card, action-btn, bottom-nav, фон-glow
+    SKINS.forEach(s => document.body.classList.remove('theme-' + s.id));
+    document.body.classList.add('theme-' + sk.id);
     try { localStorage.setItem('p2p_skin_v4', id); } catch(e) {}
     // Перерисовать график если он сейчас открыт — чтобы fill подхватил новый скин
     try {
