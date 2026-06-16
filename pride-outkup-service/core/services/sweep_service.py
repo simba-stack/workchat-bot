@@ -251,31 +251,49 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     if usdt_bal < SWEEP_MIN_USDT:
         return {"address": uda.address, "skipped": "low_balance", "usdt": float(usdt_bal)}
 
-    logger.info("[sweep] %s start: usdt=%s", uda.address, usdt_bal)
-
-    # ШАГ 2: TRX balance check + auto-fund
+    # ШАГ 2: SMART CHECK — узнать current energy/bandwidth/trx ДО любых платных операций
     trx_bal = await _balance_trx(client, uda.address)
-    MIN_TRX = Decimal("12")  # хватает на USDT transfer burn (~13 TRX) с небольшим запасом
-    if trx_bal < MIN_TRX:
-        logger.info("[sweep] %s low TRX (%s<%s) — funding 15 TRX from hot",
-                    uda.address, trx_bal, MIN_TRX)
+    res = await _account_resource(client, uda.address)
+    current_energy = res.get("energy_available", 0)
+    current_bandwidth = res.get("bandwidth_available", 0)
+    logger.info("[sweep] %s start: usdt=%s, trx=%s, energy=%d, bandwidth=%d",
+                uda.address, usdt_bal, trx_bal, current_energy, current_bandwidth)
+
+    # Решаем: нужен ли fund?
+    # USDT transfer на адрес С USDT: ~32k energy + ~25% penalty = ~40k. Buffer → 50k.
+    # bandwidth: ~268 байт.
+    ENERGY_OK = 50_000
+    BANDWIDTH_OK = 300
+    TRX_BURN_NEED = Decimal("12")  # хватит на burn ~13 TRX + bandwidth
+
+    has_resources = current_energy >= ENERGY_OK and current_bandwidth >= BANDWIDTH_OK
+    has_trx = trx_bal >= TRX_BURN_NEED
+
+    if has_resources:
+        logger.info("[sweep] %s SKIP fund: энергии и bandwidth хватает", uda.address)
+        fee_limit_sun = 5_000_000  # 5 TRX cap, не сжигается — есть energy
+    elif has_trx:
+        logger.info("[sweep] %s SKIP fund: TRX (%s) хватит на burn", uda.address, trx_bal)
+        fee_limit_sun = 30_000_000  # 30 TRX cap, burn ~13 TRX
+    else:
+        # Нужен fund — TRX мало И энергии мало
+        logger.info("[sweep] %s FUND нужен: trx=%s, energy=%d — funding 15 TRX",
+                    uda.address, trx_bal, current_energy)
         funded = await fund_trx_from_hot(client, uda.address, amount_trx=Decimal("15"))
         if not funded:
             logger.warning("[sweep] %s fund failed — cooldown 5min", uda.address)
             _COOLDOWN[uda.address] = time.time() + 300
             return {"address": uda.address, "skipped": "fund_failed",
                     "usdt": float(usdt_bal), "trx": float(trx_bal)}
-        # пересчитываем после fund
         trx_bal = await _balance_trx(client, uda.address)
         logger.info("[sweep] %s after fund: trx_bal=%s", uda.address, trx_bal)
+        fee_limit_sun = 30_000_000
 
     # ШАГ 3: build + broadcast USDT transfer
     try:
         priv = PrivateKey(bytes.fromhex(priv_hex))
         contract = client.get_contract(USDT_CONTRACT)
         amount_raw = int(usdt_bal * Decimal(10 ** 6))
-        # 30 TRX fee_limit — реально сжигается ~13 TRX на USDT transfer + penalty
-        fee_limit_sun = 30_000_000
         txn = (
             contract.functions.transfer(hot_wallet, amount_raw)
             .with_owner(uda.address)

@@ -4,7 +4,28 @@
 
 ---
 
-## v1.11.0 — 15 июня 2026 (Sweep v10: убран Feee, простой TRX burn)
+## v1.11.0 — 15 июня 2026 (Sweep v11: умная проверка энергии перед fund)
+
+
+
+### Sweep v11 — smart check перед любым переводом
+
+По запросу SIMBA — не дёргать fund TRX если на адресе УЖЕ ХВАТАЕТ ресурсов.
+
+Перед `fund_trx_from_hot()` проверяем 3 параметра:
+- `current_energy` (из `/wallet/getaccountresource`)
+- `current_bandwidth` (free quota + delegated)
+- `trx_bal`
+
+**Три ветки решения:**
+
+| Сценарий | Условие | fee_limit | Стоимость |
+|---|---|---|---|
+| Есть и energy и bandwidth | energy ≥ 50k & bw ≥ 300 | 5 TRX cap | **БЕСПЛАТНО** (cap не сжигается) |
+| Есть TRX для burn | trx_bal ≥ 12 | 30 TRX cap | ~13 TRX burn |
+| Ничего нет | — | 30 TRX cap | fund 15 TRX → 13 TRX burn |
+
+Реальный сценарий когда v11 экономит: если на адресе осталась арендованная energy от старых попыток sweep'а с Feee (хоть и недостаточно для tx, но close), то новый sweep может ИЗ ОСТАТКА энергии + free bandwidth провести transfer **бесплатно**.
 
 ### Почему отказались от Feee
 
