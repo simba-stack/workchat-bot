@@ -248,6 +248,19 @@ async def mark_paid(
         })
     except Exception:
         pass
+    # Bot-notify продавцу
+    try:
+        from bot.main import notify_user
+        seller = await db.get(User, d.seller_id)
+        if seller:
+            await notify_user(
+                seller.tg_id,
+                f"💰 <b>Покупатель оплатил сделку #{d.deal_number}</b>\n"
+                f"{float(d.amount_rub)} {d.fiat} → {float(d.amount_usdt)} {d.coin}\n"
+                f"Проверьте поступление средств и отпустите USDT.",
+            )
+    except Exception:
+        pass
     return {"ok": True, "status": d.status}
 
 
@@ -269,6 +282,19 @@ async def release_deal(
         await jarvis_sync.send_event("deal_released", {
             "deal_id": d.id, "deal_number": d.deal_number,
         })
+    except Exception:
+        pass
+    # Bot-notify покупателю
+    try:
+        from bot.main import notify_user
+        buyer = await db.get(User, d.buyer_id)
+        if buyer:
+            await notify_user(
+                buyer.tg_id,
+                f"✅ <b>Сделка #{d.deal_number} завершена!</b>\n"
+                f"Получено: <b>{float(d.amount_usdt)} {d.coin}</b>\n"
+                f"Продавец подтвердил оплату.",
+            )
     except Exception:
         pass
     return {"ok": True, "status": d.status}
@@ -293,6 +319,21 @@ async def cancel_deal(
     d.cancelled_reason = reason
     await escrow_service.refund(db, d, reason)
     await db.flush()
+    # Bot-notify другой стороне
+    try:
+        from bot.main import notify_user
+        other_id = d.seller_id if user.id == d.buyer_id else d.buyer_id
+        other = await db.get(User, other_id)
+        if other:
+            who = "покупатель" if user.id == d.buyer_id else "продавец"
+            await notify_user(
+                other.tg_id,
+                f"❌ <b>Сделка #{d.deal_number} отменена</b>\n"
+                f"Отменил {who}. Причина: {reason[:120]}\n"
+                f"Escrow возвращён продавцу.",
+            )
+    except Exception:
+        pass
     return {"ok": True, "status": d.status}
 
 
@@ -347,6 +388,21 @@ async def deal_create_v3(
     if not seller or seller.balance_usdt < amount_usdt:
         raise HTTPException(400, "у продавца недостаточно USDT для escrow")
 
+    # Реквизиты от seller (см. create_deal выше)
+    from core.models import UserPaymentMethod
+    res_pm = await db.execute(
+        select(UserPaymentMethod)
+        .where(UserPaymentMethod.user_id == seller_id)
+        .where(UserPaymentMethod.type == payment_method)
+        .where(UserPaymentMethod.is_active == True)  # noqa: E712
+        .order_by(UserPaymentMethod.id.desc())
+        .limit(1)
+    )
+    seller_pm = res_pm.scalar_one_or_none()
+    deal_bank = seller_pm.bank_name if seller_pm else None
+    deal_card = seller_pm.card_or_phone if seller_pm else None
+    deal_name = seller_pm.receiver_name if seller_pm else None
+
     pay_window = o.pay_window_min or 30
     deadline = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
     deal = Deal(
@@ -358,6 +414,9 @@ async def deal_create_v3(
         rate_rub_per_usdt=rate_used,
         amount_usdt=amount_usdt,
         payment_method=payment_method,
+        bank=deal_bank,
+        phone_or_card=deal_card,
+        receiver_name=deal_name,
         status="awaiting_payment",
         fee_pct=fee_pct, fee_usdt=fee_usdt,
         expires_at=deadline, pay_deadline_at=deadline,
@@ -379,6 +438,34 @@ async def deal_create_v3(
                 text=o.auto_reply[:2000], is_system=False,
             ))
         await db.flush()
+    except Exception:
+        pass
+
+    # Bot-notify обеим сторонам + JARVIS
+    try:
+        from bot.main import notify_user
+        buyer = await db.get(User, buyer_id)
+        if seller and seller.tg_id:
+            await notify_user(
+                seller.tg_id,
+                f"🆕 <b>Новая сделка #{deal.deal_number}</b>\n"
+                f"Покупатель ждёт оплаты: {float(amount_rub)} {deal.fiat}\n"
+                f"USDT заморожено в Escrow до завершения сделки.",
+            )
+        if buyer and buyer.tg_id:
+            await notify_user(
+                buyer.tg_id,
+                f"📋 <b>Сделка #{deal.deal_number} создана</b>\n"
+                f"Откройте Mini-App чтобы увидеть реквизиты и таймер.",
+            )
+    except Exception:
+        pass
+    try:
+        await jarvis_sync.send_event("deal_created", {
+            "deal_id": deal.id, "deal_number": deal.deal_number,
+            "buyer_id": buyer_id, "seller_id": seller_id,
+            "amount_rub": float(amount_rub), "amount_usdt": float(amount_usdt),
+        })
     except Exception:
         pass
 
@@ -546,6 +633,23 @@ async def open_dispute(
             "dispute_id": dispute.id, "opened_by_id": user.id,
             "reason": reason[:240],
         })
+    except Exception:
+        pass
+    # Bot-notify другой стороне + арбитрам (в админ-чат через JARVIS)
+    try:
+        from bot.main import notify_user
+        other_id = d.seller_id if user.id == d.buyer_id else d.buyer_id
+        other = await db.get(User, other_id)
+        if other:
+            who = "покупатель" if user.id == d.buyer_id else "продавец"
+            await notify_user(
+                other.tg_id,
+                f"⚠️ <b>Открыт спор по сделке #{d.deal_number}</b>\n"
+                f"Инициатор: {who}\n"
+                f"Причина: {reason[:240]}\n\n"
+                f"Арбитр получит уведомление и подключится в ближайшее время. "
+                f"USDT заморожено до решения.",
+            )
     except Exception:
         pass
     return {"ok": True, "dispute_id": dispute.id}

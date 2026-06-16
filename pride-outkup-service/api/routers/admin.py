@@ -179,6 +179,88 @@ async def list_disputes(
     }
 
 
+@router.get("/disputes/{dispute_id}")
+async def get_dispute_detail(
+    dispute_id: int,
+    me: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Полные детали спора для арбитра: стороны, deal, история чата, evidence."""
+    d = await db.get(Dispute, dispute_id)
+    if not d:
+        raise HTTPException(404, "dispute not found")
+    deal = await db.get(Deal, d.deal_id) if d.deal_id else None
+    buyer = await db.get(User, deal.buyer_id) if deal else None
+    seller = await db.get(User, deal.seller_id) if deal else None
+    opener = await db.get(User, d.opened_by_id) if d.opened_by_id else None
+
+    # История чата сделки
+    chat = []
+    if deal:
+        from core.models import DealMessage
+        rows = (await db.execute(
+            select(DealMessage)
+            .where(DealMessage.deal_id == deal.id)
+            .order_by(DealMessage.created_at.asc())
+            .limit(500)
+        )).scalars().all()
+        chat = [
+            {
+                "id": m.id,
+                "from_user_id": m.from_user_id,
+                "text": m.text,
+                "system": bool(m.is_system),
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in rows
+        ]
+
+    def user_brief(u):
+        if not u:
+            return None
+        return {
+            "id": u.id, "tg_id": u.tg_id, "username": u.username,
+            "full_name": u.full_name, "kyc_level": u.kyc_level,
+            "total_deals": u.total_deals or 0, "completed_deals": u.completed_deals or 0,
+            "disputed_deals": u.disputed_deals or 0, "trust_score": float(u.trust_score or 0),
+            "maker_tier": u.maker_tier or "none",
+            "completion_rate": float(u.completion_rate_pct or 0),
+        }
+
+    deal_brief = None
+    if deal:
+        deal_brief = {
+            "id": deal.id, "deal_number": deal.deal_number,
+            "status": deal.status,
+            "amount_rub": float(deal.amount_rub),
+            "amount_usdt": float(deal.amount_usdt),
+            "rate": float(deal.rate_rub_per_usdt),
+            "coin": deal.coin, "fiat": deal.fiat,
+            "payment_method": deal.payment_method,
+            "bank": deal.bank, "phone_or_card": deal.phone_or_card,
+            "receiver_name": deal.receiver_name,
+            "receipt_url": deal.receipt_url,
+            "created_at": deal.created_at.isoformat() if deal.created_at else None,
+            "paid_at": deal.paid_at.isoformat() if deal.paid_at else None,
+        }
+    return {
+        "dispute": {
+            "id": d.id, "status": d.status, "resolution": d.resolution,
+            "reason": d.reason, "evidence_urls": d.evidence_urls or [],
+            "resolution_note": d.resolution_note,
+            "resolved_by_admin": d.resolved_by_admin,
+            "resolved_at": d.resolved_at.isoformat() if d.resolved_at else None,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "opened_by_id": d.opened_by_id,
+        },
+        "deal": deal_brief,
+        "buyer": user_brief(buyer),
+        "seller": user_brief(seller),
+        "opener": user_brief(opener),
+        "chat": chat,
+    }
+
+
 @router.post("/disputes/{dispute_id}/resolve")
 async def resolve_dispute(
     dispute_id: int,
@@ -231,6 +313,26 @@ async def resolve_dispute(
                     el.released_at = datetime.now(timezone.utc)
                 deal.released_at = datetime.now(timezone.utc)
     await db.flush()
+    # Bot-notify обеим сторонам о решении арбитра
+    try:
+        from bot.main import notify_user
+        if d.deal_id:
+            deal2 = await db.get(Deal, d.deal_id)
+            if deal2:
+                buyer2 = await db.get(User, deal2.buyer_id)
+                seller2 = await db.get(User, deal2.seller_id)
+                decision_ru = {"buyer": "в пользу покупателя", "seller": "в пользу продавца", "split": "частичный (50/50)"}.get(decision, decision)
+                note_line = f"\n📝 {d.resolution_note[:240]}" if d.resolution_note else ""
+                msg = (
+                    f"⚖️ <b>Арбитр принял решение по сделке #{deal2.deal_number}</b>\n"
+                    f"Резолюция: <b>{decision_ru}</b>{note_line}"
+                )
+                if buyer2 and buyer2.tg_id:
+                    await notify_user(buyer2.tg_id, msg)
+                if seller2 and seller2.tg_id:
+                    await notify_user(seller2.tg_id, msg)
+    except Exception:
+        pass
     return {"ok": True, "resolution": decision}
 
 
