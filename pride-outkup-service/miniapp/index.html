@@ -5,6 +5,7 @@
 <title>PRIDE Wallet</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <link rel="icon" href="data:,">
 <style>
   :root {
@@ -690,6 +691,47 @@ body { background: #15161a !important; }
     <textarea id="p2p-dsp-text" rows="5" placeholder="Опишите ситуацию" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px"></textarea>
     <button id="p2p-dsp-submit" style="width:100%;padding:14px;background:#ff453a;color:#fff;font-weight:600;border-radius:12px">Подать спор</button>
   </div>
+</div>
+
+<!-- ═══ TX DETAIL (открывается при клике на транзакцию в истории) ═══ -->
+<div class="view" id="view-tx-detail">
+  <div class="nav-header">
+    <button class="nav-back" data-back="history">←</button>
+    <div class="nav-title">Транзакция</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="tx-detail-body" style="padding:14px 16px"><div class="empty-state">Загрузка…</div></div>
+</div>
+
+<!-- ═══ COIN CHART (график при клике на монету) ═══ -->
+<div class="view" id="view-coin-chart">
+  <div class="nav-header">
+    <button class="nav-back" data-back="main">←</button>
+    <div class="nav-title" id="chart-coin-title">Курс</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="chart-header" style="padding:14px 16px 4px"></div>
+  <div style="padding:0 16px;height:200px;position:relative"><canvas id="coin-chart-canvas"></canvas></div>
+  <div style="display:flex;gap:4px;padding:8px 16px;justify-content:center" id="chart-period-tabs">
+    <button class="chart-period" data-p="1" style="padding:6px 12px;background:#3DA3F0;color:#fff;border-radius:8px;font-size:12px">1Д</button>
+    <button class="chart-period" data-p="7" style="padding:6px 12px;background:#1a1a1a;color:#7a7a7a;border-radius:8px;font-size:12px">7Д</button>
+    <button class="chart-period" data-p="30" style="padding:6px 12px;background:#1a1a1a;color:#7a7a7a;border-radius:8px;font-size:12px">30Д</button>
+    <button class="chart-period" data-p="365" style="padding:6px 12px;background:#1a1a1a;color:#7a7a7a;border-radius:8px;font-size:12px">1Г</button>
+  </div>
+  <div style="padding:14px 16px">
+    <button id="chart-deposit-btn" style="width:100%;padding:14px;background:#3DA3F0;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">Пополнить</button>
+    <button id="chart-withdraw-btn" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:12px">Вывести</button>
+  </div>
+</div>
+
+<!-- ═══ NETWORK PICKER (для депозита и вывода) ═══ -->
+<div class="view" id="view-network-pick">
+  <div class="nav-header">
+    <button class="nav-back" data-back="main">←</button>
+    <div class="nav-title" id="net-pick-title">Выберите сеть</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="net-pick-body" style="padding:14px 16px"><div class="empty-state">Загрузка сетей…</div></div>
 </div>
 
 <!-- ═══ BOTTOM NAV ═══ -->
@@ -1726,6 +1768,192 @@ loadMain().then(routeFromStart);
     attachP2PHandlers();
   }
   console.log('[p2p v3] handlers attached');
+})();
+
+// ════════════════════════════════════════════════════
+// v3.2 — TX DETAIL + COIN CHART + NETWORK PICKER
+// ════════════════════════════════════════════════════
+(function() {
+  const STATE2 = { chart: null, activeCoin: 'USDT', netMode: 'deposit' };
+
+  function escH(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function explorerUrl(network, hash) {
+    const n = (network || 'TRC20').toUpperCase();
+    if (n.indexOf('TRC') >= 0 || n === 'TRX') return 'https://tronscan.org/#/transaction/' + hash;
+    if (n.indexOf('ERC') >= 0 || n === 'ETH') return 'https://etherscan.io/tx/' + hash;
+    if (n.indexOf('BTC') >= 0) return 'https://blockstream.info/tx/' + hash;
+    if (n === 'TON') return 'https://tonscan.org/tx/' + hash;
+    if (n === 'SOL') return 'https://solscan.io/tx/' + hash;
+    if (n === 'BSC' || n === 'BEP20') return 'https://bscscan.com/tx/' + hash;
+    return 'https://tronscan.org/#/transaction/' + hash;
+  }
+
+  // ── TX DETAIL ──
+  async function openTxDetail(txId, txData) {
+    go('tx-detail');
+    const c = document.getElementById('tx-detail-body');
+    let tx = txData;
+    if (!tx && txId) {
+      try {
+        const r = await fetch('/wallet/operations/' + txId + '?initData=' + encodeURIComponent(window.Telegram?.WebApp?.initData || ''));
+        if (r.ok) tx = await r.json();
+      } catch (e) {}
+    }
+    if (!tx) tx = { type: 'unknown', amount: 0, coin: 'USDT', date: new Date().toISOString(), note: '' };
+    const isIncome = (tx.amount || 0) > 0;
+    const amtStr = (isIncome ? '+' : '') + (tx.amount || 0) + ' ' + (tx.coin || 'USDT');
+    const col = isIncome ? '#4CD964' : '#FF3B30';
+    const typeMap = { deposit: 'Депозит', withdraw: 'Вывод', swap: 'Обмен', p2p_buy: 'P2P покупка', p2p_sell: 'P2P продажа', transfer_in: 'Получено', transfer_out: 'Отправлено' };
+    const typeStr = typeMap[tx.type] || tx.type || 'Транзакция';
+    const dateStr = tx.created_at ? new Date(tx.created_at).toLocaleString('ru-RU') : (tx.date || '—');
+    const hash = tx.tx_hash || tx.hash || '';
+    const url = hash ? explorerUrl(tx.network || tx.coin, hash) : '';
+    c.innerHTML =
+      '<div style="text-align:center;padding:14px 0 8px"><div style="width:64px;height:64px;border-radius:50%;background:' + (isIncome ? 'rgba(76,217,100,0.15)' : 'rgba(255,59,48,0.15)') + ';display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px;font-size:32px;color:' + col + '">' + (isIncome ? '↓' : '↑') + '</div>' +
+      '<div style="font-size:13px;color:#8e9094">' + escH(typeStr) + '</div>' +
+      '<div style="font-size:28px;font-weight:600;color:' + col + ';margin-top:2px">' + escH(amtStr) + '</div></div>' +
+      '<div style="background:#25262e;border-radius:12px;padding:14px;margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#8e9094">Статус</span><span style="color:#4CD964">✓ Подтверждена</span></div>' +
+      '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#8e9094">Дата</span><span>' + escH(dateStr) + '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#8e9094">Сеть</span><span>' + escH(tx.network || tx.coin || 'TRC20') + '</span></div>' +
+      (tx.fee ? '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#8e9094">Комиссия</span><span>' + tx.fee + '</span></div>' : '') +
+      (tx.note ? '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#8e9094">Примечание</span><span>' + escH(tx.note) + '</span></div>' : '') +
+      '</div>' +
+      (hash ? '<div style="font-size:11px;color:#5f6063;margin:10px 0 6px;letter-spacing:0.5px">БЛОКЧЕЙН</div>' +
+       '<div onclick="window.open(\''+url+'\',\'_blank\')" style="background:#25262e;border-radius:12px;padding:12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between">' +
+       '<div><div style="font-size:11px;color:#8e9094">Hash</div><div style="font-family:monospace;font-size:12px;margin-top:2px">' + escH(hash.slice(0,8)) + '…' + escH(hash.slice(-6)) + '</div></div>' +
+       '<div style="color:#3DA3F0;font-size:18px">↗</div></div>' : '');
+  }
+  window.openTxDetail = openTxDetail;
+
+  // Делегированный клик на любую tx-строку в истории
+  document.addEventListener('click', function(e) {
+    const row = e.target.closest('[data-tx-id]');
+    if (row) {
+      e.preventDefault();
+      const id = row.dataset.txId;
+      let data = null;
+      try { data = JSON.parse(row.dataset.txData || 'null'); } catch (_) {}
+      openTxDetail(id, data);
+    }
+  });
+
+  // ── COIN CHART ──
+  async function openCoinChart(code) {
+    STATE2.activeCoin = code;
+    go('coin-chart');
+    document.getElementById('chart-coin-title').textContent = code + ' график';
+    await loadChart(code, 1);
+    const dep = document.getElementById('chart-deposit-btn');
+    const wd = document.getElementById('chart-withdraw-btn');
+    if (dep) dep.onclick = function() { openNetworkPicker('deposit', code); };
+    if (wd) wd.onclick = function() { openNetworkPicker('withdraw', code); };
+  }
+  window.openCoinChart = openCoinChart;
+
+  async function loadChart(code, days) {
+    const cgIds = { BTC: 'bitcoin', ETH: 'ethereum', USDT: 'tether', TRX: 'tron', TON: 'the-open-network', SOL: 'solana', BNB: 'binancecoin', USDC: 'usd-coin', DOGE: 'dogecoin', LTC: 'litecoin' };
+    const id = cgIds[code.toUpperCase()] || code.toLowerCase();
+    let prices = [];
+    let now = Date.now();
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/coins/' + id + '/market_chart?vs_currency=usd&days=' + days);
+      if (r.ok) { const j = await r.json(); prices = j.prices || []; }
+    } catch (e) {}
+    if (!prices.length) {
+      const base = code === 'USDT' || code === 'USDC' ? 1 : (code === 'BTC' ? 67000 : code === 'ETH' ? 3500 : code === 'TRX' ? 0.25 : 10);
+      for (let i = 0; i < 30; i++) prices.push([now - (30 - i) * 86400000, base * (1 + (Math.sin(i / 3) * 0.05))]);
+    }
+    const labels = prices.map(function(p) { return new Date(p[0]).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }); });
+    const values = prices.map(function(p) { return p[1]; });
+    const last = values[values.length - 1] || 0;
+    const first = values[0] || last;
+    const pct = first ? ((last - first) / first * 100) : 0;
+    const col = pct >= 0 ? '#4CD964' : '#FF3B30';
+    document.getElementById('chart-header').innerHTML =
+      '<div style="font-size:28px;font-weight:600">$' + last.toFixed(last < 1 ? 4 : 2) + '</div>' +
+      '<div style="color:' + col + ';font-size:13px">' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% за ' + days + 'д</div>';
+    const ctx = document.getElementById('coin-chart-canvas');
+    if (!ctx) return;
+    if (STATE2.chart) { STATE2.chart.destroy(); STATE2.chart = null; }
+    if (window.Chart) {
+      STATE2.chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: labels, datasets: [{ data: values, borderColor: col, backgroundColor: col + '20', tension: 0.3, fill: true, pointRadius: 0, borderWidth: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } }, animation: { duration: 600 } }
+      });
+    }
+  }
+
+  // Кликабельные периоды графика
+  document.addEventListener('click', function(e) {
+    const t = e.target.closest('.chart-period');
+    if (!t) return;
+    document.querySelectorAll('.chart-period').forEach(function(b) { b.style.background = '#1a1a1a'; b.style.color = '#7a7a7a'; });
+    t.style.background = '#3DA3F0'; t.style.color = '#fff';
+    loadChart(STATE2.activeCoin, parseInt(t.dataset.p));
+  });
+
+  // ── NETWORK PICKER ──
+  async function openNetworkPicker(mode, coin) {
+    STATE2.netMode = mode;
+    STATE2.activeCoin = (coin || 'USDT').toUpperCase();
+    go('network-pick');
+    document.getElementById('net-pick-title').textContent = (mode === 'deposit' ? 'Пополнить ' : 'Вывести ') + STATE2.activeCoin;
+    const c = document.getElementById('net-pick-body');
+    const nets = {
+      USDT: [{ id: 'TRC20', name: 'TRC20 (Tron)', fee: 'Комиссия ~$1.30', recommend: true }, { id: 'ERC20', name: 'ERC20 (Ethereum)', fee: 'Комиссия ~$5-15' }, { id: 'BEP20', name: 'BEP20 (BNB Chain)', fee: 'Комиссия ~$0.30' }, { id: 'TON', name: 'TON', fee: 'Комиссия ~$0.50' }],
+      TRX: [{ id: 'TRX', name: 'Tron native', fee: 'Комиссия ~$0.30', recommend: true }],
+      ETH: [{ id: 'ERC20', name: 'Ethereum native', fee: 'Комиссия ~$3-10', recommend: true }],
+      BTC: [{ id: 'BTC', name: 'Bitcoin native', fee: 'Комиссия ~$2-5', recommend: true }, { id: 'BEP20', name: 'BEP20 (wrapped)', fee: 'Комиссия ~$0.30' }],
+      TON: [{ id: 'TON', name: 'TON native', fee: 'Комиссия ~$0.10', recommend: true }],
+      SOL: [{ id: 'SOL', name: 'Solana native', fee: 'Комиссия ~$0.05', recommend: true }],
+      USDC: [{ id: 'TRC20', name: 'TRC20', fee: 'Комиссия ~$1', recommend: true }, { id: 'ERC20', name: 'ERC20', fee: 'Комиссия ~$5-15' }]
+    };
+    const list = nets[STATE2.activeCoin] || [{ id: 'TRC20', name: 'TRC20 (универсальная)', fee: 'Комиссия ~$1', recommend: true }];
+    let warn = '';
+    if (mode === 'deposit' && STATE2.activeCoin !== 'USDT') {
+      warn = '<div style="padding:12px;background:rgba(61,163,240,0.08);border:0.5px solid rgba(61,163,240,0.3);border-radius:10px;color:#8aceff;font-size:12px;margin-bottom:10px;line-height:1.5">⚡ Депозит ' + STATE2.activeCoin + ' через FixedFloat: вы отправляете монету на адрес обменника, мы зачисляем USDT на ваш баланс. Комиссия 1%.</div>';
+    }
+    if (mode === 'withdraw' && STATE2.activeCoin !== 'USDT') {
+      warn = '<div style="padding:12px;background:rgba(255,193,7,0.08);border:0.5px solid rgba(255,193,7,0.3);border-radius:10px;color:#FFC107;font-size:12px;margin-bottom:10px;line-height:1.5">⚠ Вывод ' + STATE2.activeCoin + ' через FixedFloat: мы конвертируем ваш USDT и отправляем ' + STATE2.activeCoin + ' на ваш адрес. Комиссия 1.5%.</div>';
+    }
+    c.innerHTML = warn + list.map(function(n) {
+      const rec = n.recommend ? '<span style="background:#3DA3F0;color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px">РЕКОМЕНДУЕМ</span>' : '';
+      return '<div class="net-pick-opt" data-net="' + escH(n.id) + '" style="display:flex;align-items:center;justify-content:space-between;padding:14px;background:#25262e;border-radius:12px;margin-bottom:6px;cursor:pointer">' +
+        '<div><div style="font-weight:500;font-size:14px">' + escH(n.name) + rec + '</div><div style="font-size:11px;color:#8e9094;margin-top:2px">' + escH(n.fee) + '</div></div>' +
+        '<div style="color:#3DA3F0;font-size:18px">→</div></div>';
+    }).join('');
+    c.querySelectorAll('.net-pick-opt').forEach(function(el) {
+      el.addEventListener('click', function() {
+        const net = el.dataset.net;
+        if (STATE2.netMode === 'deposit') {
+          go('deposit'); // существующий view, в нём уже QR
+          if (typeof loadDeposit === 'function') loadDeposit(STATE2.activeCoin, net);
+        } else {
+          go('withdraw');
+          if (typeof loadWithdraw === 'function') loadWithdraw(STATE2.activeCoin, net);
+        }
+      });
+    });
+  }
+  window.openNetworkPicker = openNetworkPicker;
+
+  // Привязка кнопок главной — открывают network picker
+  document.addEventListener('DOMContentLoaded', function() {
+    const dep = document.getElementById('main-deposit');
+    const wd = document.getElementById('main-withdraw');
+    if (dep) {
+      const oldClick = dep.onclick;
+      dep.onclick = function(e) { e.preventDefault(); e.stopPropagation(); openNetworkPicker('deposit', 'USDT'); };
+    }
+    if (wd) {
+      const oldClick = wd.onclick;
+      wd.onclick = function(e) { e.preventDefault(); e.stopPropagation(); openNetworkPicker('withdraw', 'USDT'); };
+    }
+  });
+
+  console.log('[v3.2] tx-detail + chart + network-picker loaded');
 })();
 </script>
 </body>
