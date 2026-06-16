@@ -1294,7 +1294,7 @@ function openCoinManage() {
     const isHidden = hidden.indexOf(c.code) >= 0;
     const bal = +(balances||{})[c.code] || 0;
     return `<div class="cm-row" data-code="${c.code}" onclick="toggleCoinHidden('${c.code}')" style="display:flex;align-items:center;gap:12px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid var(--th-border);border-radius:12px;margin-bottom:6px;cursor:pointer">
-      <div style="width:36px;height:36px;border-radius:50%;background:${c.icon_color||'#444'};display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:13px;flex-shrink:0">${(typeof coinIcon === 'function' ? coinIcon(c.code) : c.code.slice(0,2))}</div>
+      <div class="coin-icon" style="width:36px;height:36px;font-size:13px;background:${c.icon_color||'#444'}">${(typeof coinIcon === 'function' ? coinIcon(c.code) : c.code.slice(0,2))}</div>
       <div style="flex:1;min-width:0">
         <div style="color:#fff;font-size:14px;font-weight:600">${c.name || c.code}</div>
         <div style="color:rgba(255,255,255,0.55);font-size:11px">${bal > 0 ? (typeof fmt === 'function' ? fmt(bal, 6) : bal) + ' ' + c.code : 'Пусто'}</div>
