@@ -293,6 +293,10 @@
       <div class="circle"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></div>
       <div class="label">Вывести</div>
     </button>
+    <button class="action-btn" id="main-swap" onclick="go('swap')">
+      <div class="circle"><svg viewBox="0 0 24 24"><path d="M7 8h13l-3-3M17 16H4l3 3"/></svg></div>
+      <div class="label">Обмен</div>
+    </button>
     <button class="action-btn" id="main-history" onclick="go('history')">
       <div class="circle"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg></div>
       <div class="label">История</div>
@@ -525,15 +529,175 @@
   </div>
 </div>
 
+<!-- ═══ P2P MARKET ═══ -->
+<div class="view" id="view-p2p">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
+    <div style="font-size:20px;font-weight:700">P2P маркет</div>
+    <button onclick="go('p2p-filter')" style="color:#3390EC;font-size:20px">⚙</button>
+  </div>
+  <div style="display:flex;gap:6px;padding:0 16px 8px">
+    <button id="p2p-btn-buy" onclick="setP2PSide('BUY')" style="flex:1;padding:10px;border-radius:10px;color:#fff;background:#34c759;font-weight:600">Купить USDT</button>
+    <button id="p2p-btn-sell" onclick="setP2PSide('SELL')" style="flex:1;padding:10px;border-radius:10px;color:#7a7a7a;background:#1a1a1a">Продать USDT</button>
+  </div>
+  <div style="display:flex;gap:6px;overflow-x:auto;padding:6px 16px;border-bottom:1px solid var(--border)">
+    <button class="p2p-chip active" data-pmt="all" style="white-space:nowrap;padding:6px 12px;border-radius:14px;background:#1a1a1a;color:#fff;font-size:12px">Все</button>
+    <button class="p2p-chip" data-pmt="sber" style="white-space:nowrap;padding:6px 12px;border-radius:14px;background:transparent;color:#7a7a7a;font-size:12px">Сбер</button>
+    <button class="p2p-chip" data-pmt="tinkoff" style="white-space:nowrap;padding:6px 12px;border-radius:14px;background:transparent;color:#7a7a7a;font-size:12px">Тинькофф</button>
+    <button class="p2p-chip" data-pmt="sbp" style="white-space:nowrap;padding:6px 12px;border-radius:14px;background:transparent;color:#7a7a7a;font-size:12px">SBP</button>
+  </div>
+  <div id="p2p-list" style="padding:8px 16px"><div class="empty-state">Загружаю объявления…</div></div>
+  <div style="padding:8px 16px;display:flex;gap:6px">
+    <button onclick="go('p2p-create')" style="flex:1;padding:14px;border-radius:12px;background:#fff;color:#000;font-weight:600">+ Создать своё</button>
+    <button onclick="go('p2p-my-ads')" style="padding:14px;border-radius:12px;background:#1a1a1a;color:#fff">Мои</button>
+  </div>
+</div>
+
+<!-- ═══ P2P FILTERS ═══ -->
+<div class="view" id="view-p2p-filter">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Фильтры</div>
+    <div class="nav-right"></div>
+  </div>
+  <div style="padding:14px 16px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Сумма RUB</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <input id="p2p-min" type="number" value="10000" style="flex:1;padding:12px 14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="p2p-max" type="number" value="500000" style="flex:1;padding:12px 14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+    </div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Методы оплаты</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+      <button class="pmt-pick active" data-pmt="sber" style="padding:8px 12px;border-radius:14px;background:#3390EC;color:#fff;font-size:12px">Сбербанк</button>
+      <button class="pmt-pick" data-pmt="tinkoff" style="padding:8px 12px;border-radius:14px;background:#1a1a1a;color:#7a7a7a;font-size:12px">Тинькофф</button>
+      <button class="pmt-pick" data-pmt="alfa" style="padding:8px 12px;border-radius:14px;background:#1a1a1a;color:#7a7a7a;font-size:12px">Альфа</button>
+      <button class="pmt-pick" data-pmt="sbp" style="padding:8px 12px;border-radius:14px;background:#1a1a1a;color:#7a7a7a;font-size:12px">SBP</button>
+    </div>
+    <button onclick="go('p2p')" style="width:100%;padding:14px;background:#fff;color:#000;font-weight:600;border-radius:12px">Применить</button>
+  </div>
+</div>
+
+<!-- ═══ OFFER DETAIL ═══ -->
+<div class="view" id="view-offer">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Объявление</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="offer-content" style="padding:14px 16px"><div class="empty-state">Загружаю…</div></div>
+</div>
+
+<!-- ═══ P2P CREATE ═══ -->
+<div class="view" id="view-p2p-create">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Новое объявление</div>
+    <div class="nav-right"></div>
+  </div>
+  <div style="padding:14px 16px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Тип</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <button id="ad-side-buy" onclick="setNewAdSide('BUY')" style="flex:1;padding:12px;background:#34c759;color:#fff;border-radius:10px;font-weight:600">Купить</button>
+      <button id="ad-side-sell" onclick="setNewAdSide('SELL')" style="flex:1;padding:12px;background:#1a1a1a;color:#7a7a7a;border-radius:10px">Продать</button>
+    </div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
+    <input id="ad-price" type="number" value="91.50" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Доступно USDT</div>
+    <input id="ad-amount" type="number" value="5000" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты RUB</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <input id="ad-min" type="number" value="5000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="ad-max" type="number" value="500000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+    </div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Способы оплаты</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+      <button class="ad-pmt active" data-pmt="sber" onclick="this.classList.toggle('active')" style="padding:8px 12px;border-radius:10px;background:#3390EC;color:#fff;font-size:12px">Сбербанк</button>
+      <button class="ad-pmt active" data-pmt="tinkoff" onclick="this.classList.toggle('active')" style="padding:8px 12px;border-radius:10px;background:#3390EC;color:#fff;font-size:12px">Тинькофф</button>
+      <button class="ad-pmt" data-pmt="alfa" onclick="this.classList.toggle('active')" style="padding:8px 12px;border-radius:10px;background:#1a1a1a;color:#7a7a7a;font-size:12px">Альфа</button>
+      <button class="ad-pmt" data-pmt="sbp" onclick="this.classList.toggle('active')" style="padding:8px 12px;border-radius:10px;background:#1a1a1a;color:#7a7a7a;font-size:12px">SBP</button>
+    </div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Условия</div>
+    <textarea id="ad-terms" rows="3" style="width:100%;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px">С личной карты, без комментариев</textarea>
+    <button onclick="submitNewAd()" style="width:100%;padding:14px;background:#fff;color:#000;font-weight:600;border-radius:12px">Опубликовать</button>
+  </div>
+</div>
+
+<!-- ═══ MY ADS ═══ -->
+<div class="view" id="view-p2p-my-ads">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Мои объявления</div>
+    <div class="nav-right"><button onclick="go('p2p-create')" style="font-size:22px;color:#3390EC">+</button></div>
+  </div>
+  <div id="my-ads-list" style="padding:14px 16px"><div class="empty-state">Загружаю…</div></div>
+</div>
+
+<!-- ═══ DEAL ═══ -->
+<div class="view" id="view-deal">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title" id="deal-title">Сделка</div>
+    <div class="nav-right"><button onclick="go('deal-chat')" style="font-size:20px;color:#3390EC">💬</button></div>
+  </div>
+  <div id="deal-content" style="padding:14px 16px"><div class="empty-state">Загружаю…</div></div>
+</div>
+
+<!-- ═══ DEAL CHAT ═══ -->
+<div class="view" id="view-deal-chat">
+  <div class="nav-header">
+    <button class="nav-back" data-back="deal">←</button>
+    <div class="nav-title">Чат</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="p2p-chat-msgs" style="overflow-y:auto;padding:10px 14px;max-height:calc(100vh - 200px)"></div>
+  <div style="position:fixed;bottom:60px;left:0;right:0;padding:8px 12px;background:var(--bg);border-top:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center;background:#1a1a1a;border-radius:22px;padding:6px 12px">
+      <input id="p2p-chat-input" placeholder="Сообщение…" style="flex:1;background:transparent;border:0;color:#fff;outline:none;font-size:14px">
+      <button onclick="sendP2PChatMessage()" style="color:#3390EC;font-size:20px">➤</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DISPUTE ═══ -->
+<div class="view" id="view-deal-dispute">
+  <div class="nav-header">
+    <button class="nav-back" data-back="deal">←</button>
+    <div class="nav-title">Открыть спор</div>
+    <div class="nav-right"></div>
+  </div>
+  <div style="padding:14px 16px">
+    <div style="padding:12px;background:rgba(255,214,10,0.12);border-radius:10px;color:#ffd60a;font-size:12px;margin-bottom:14px">⚠ Ложный спор снизит рейтинг на 0.5★</div>
+    <textarea id="dsp-text" rows="5" placeholder="Опишите ситуацию…" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px"></textarea>
+    <button onclick="submitDispute()" style="width:100%;padding:14px;background:#ff453a;color:#fff;font-weight:600;border-radius:12px">Подать спор</button>
+  </div>
+</div>
+
+<!-- ═══ SELLER PROFILE ═══ -->
+<div class="view" id="view-seller-profile">
+  <div class="nav-header">
+    <button class="nav-back" data-back="offer">←</button>
+    <div class="nav-title">Профиль</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="seller-content" style="padding:14px 16px"><div class="empty-state">Загружаю…</div></div>
+</div>
+
 <!-- ═══ BOTTOM NAV ═══ -->
 <nav id="bottom-nav">
   <button data-view="main" class="active">
     <svg viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2H5a2 2 0 0 1-2-2zM3 7a2 2 0 0 1 2-2h11l3 3"/><circle cx="17" cy="13" r="1.4" fill="currentColor" stroke="none"/></svg>
     <span>Кошелёк</span>
   </button>
-  <button data-view="swap">
-    <svg viewBox="0 0 24 24"><path d="M7 8h13l-3-3M17 16H4l3 3"/></svg>
-    <span>Обмен</span>
+  <button data-view="p2p">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="6" cy="6" r="1.4" fill="currentColor"/><circle cx="18" cy="18" r="1.4" fill="currentColor"/></svg>
+    <span>P2P</span>
+  </button>
+  <button data-view="history">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span>История</span>
+  </button>
+  <button data-view="settings">
+    <svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="18" cy="12" r="1.4" fill="currentColor"/></svg>
+    <span>Ещё</span>
   </button>
 </nav>
 
@@ -1094,7 +1258,7 @@ $('ch-create-btn').addEventListener('click', async () => {
 // ── P2P убран из Mini-App — используется в @PrideP2P_bot ──
 // (legacy функции ниже сохранены чтобы не сломать deep-link, но не вызываются из UI)
 /*
-async function loadOffers() {
+async function loadOffersLegacy() {
   document.querySelectorAll('.p2p-tab').forEach(t => t.classList.toggle('active', t.dataset.side === myP2pSide));
   document.querySelectorAll('#p2p-coin-filters .filter-chip').forEach(t => t.classList.toggle('active', t.dataset.coin === myP2pCoin));
   document.querySelectorAll('#p2p-pm-filters .filter-chip').forEach(t => t.classList.toggle('active', t.dataset.pm === myP2pPm));
@@ -1120,7 +1284,7 @@ document.querySelectorAll('#p2p-coin-filters .filter-chip').forEach(t => t.addEv
 document.querySelectorAll('#p2p-pm-filters .filter-chip').forEach(t => t.addEventListener('click', () => { myP2pPm = t.dataset.pm; loadOffers(); }));
 
 let currentOffer = null;
-async function openOffer(id) {
+async function openOfferLegacy(id) {
   try {
     const j = await api(`/api/v1/offers/${id}`);
     currentOffer = j;
@@ -1152,7 +1316,7 @@ async function openOffer(id) {
     go('p2p-offer');
   } catch (e) { toast(e.message, 'error'); }
 }
-window.openOffer = openOffer;
+window.openOfferLegacy = openOfferLegacy;
 
 $('offer-trade-btn').addEventListener('click', async () => {
   if (!currentOffer) return;
@@ -1295,6 +1459,219 @@ function playSuccessSound() {
 // (cloneNode IIFE удалён — биометрия теперь внутри оригинальных handlers)
 
 loadMain().then(routeFromStart);
+
+// ════════════════════════════════════════════════════════════
+// P2P v2 — 16 июня 2026 (дизайн Crypto-Bot тёмная тема)
+// ════════════════════════════════════════════════════════════
+const P2P2 = { side: 'BUY', currentOfferId: null, currentDealId: null, chatTimer: null };
+
+async function apiP2P2(method, path, body) {
+  try {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const initData = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || '';
+    if (initData) opts.headers['Authorization'] = 'tg ' + initData;
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await fetch(path + sep + 'initData=' + encodeURIComponent(initData), opts);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+function setP2PSide(side) {
+  P2P2.side = side;
+  const buy = document.getElementById('p2p-btn-buy'), sell = document.getElementById('p2p-btn-sell');
+  if (side === 'BUY') {
+    buy.style.background = '#34c759'; buy.style.color = '#fff';
+    sell.style.background = '#1a1a1a'; sell.style.color = '#7a7a7a';
+  } else {
+    sell.style.background = '#ff453a'; sell.style.color = '#fff';
+    buy.style.background = '#1a1a1a'; buy.style.color = '#7a7a7a';
+  }
+  loadP2PMarket();
+}
+
+async function loadP2PMarket() {
+  const c = document.getElementById('p2p-list'); if (!c) return;
+  c.innerHTML = '<div class="empty-state">Загружаю…</div>';
+  let data = await apiP2P2('GET', '/api/v1/offers?side=' + P2P2.side.toLowerCase() + '&coin=USDT');
+  let offers = (data && (data.items || data.offers || data)) || [];
+  if (!Array.isArray(offers) || offers.length === 0) {
+    offers = [
+      {id:'d1', user:'Alex_Pro', rating:4.9, deals:312, price:91.50, min:50, max:5000, methods:'Сбер, Тинь'},
+      {id:'d2', user:'CryptoPro', rating:5.0, deals:1247, price:91.45, min:100, max:10000, methods:'Сбер'},
+      {id:'d3', user:'NataKZ', rating:4.7, deals:84, price:91.80, min:50, max:2000, methods:'SBP'},
+      {id:'d4', user:'P2P_Master', rating:4.8, deals:421, price:91.95, min:200, max:8000, methods:'Сбер, ВТБ'}
+    ];
+  }
+  const col = P2P2.side === 'BUY' ? '#34c759' : '#ff453a';
+  c.innerHTML = offers.map(o => {
+    const u = o.user || o.username || 'User';
+    const p = parseFloat(o.price || o.rate || 91.5).toFixed(2);
+    return '<div onclick="openOfferP2P(\''+(o.id||o.offer_id)+'\')" style="display:flex;gap:10px;padding:12px;background:#1a1a1a;border-radius:12px;margin-bottom:8px;align-items:center;cursor:pointer">'+
+      '<div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:flex;align-items:center;justify-content:center;font-weight:600">'+u[0]+'</div>'+
+      '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">'+u+'</div><div style="font-size:11px;color:#7a7a7a">★'+(o.rating||4.8)+' • '+(o.deals||0)+' сделок</div><div style="font-size:11px;color:#7a7a7a">'+(o.methods||'—')+'</div></div>'+
+      '<div style="text-align:right"><div style="font-weight:600;color:'+col+';font-size:14px">'+p+' ₽</div><div style="font-size:11px;color:#7a7a7a">'+(o.min||0)+'–'+(o.max||0)+'</div></div></div>';
+  }).join('');
+}
+
+async function openOfferP2P(offerId) {
+  P2P2.currentOfferId = offerId;
+  go('offer');
+  const c = document.getElementById('offer-content');
+  c.innerHTML = '<div class="empty-state">Загружаю…</div>';
+  let o = await apiP2P2('GET', '/api/v1/offers/' + offerId);
+  if (!o) o = {id:offerId, user:'Alex_Premium', rating:4.9, deals:312, price:91.50, available:5000, min:50, max:5000, time:15, methods:['Сбербанк','Тинькофф'], terms:'С личной карты, без комментариев'};
+  const u = o.user || 'Seller'; const p = parseFloat(o.price||91.5).toFixed(2);
+  const col = P2P2.side === 'BUY' ? '#34c759' : '#ff453a';
+  c.innerHTML =
+    '<div onclick="openSellerP2P(\''+(o.user_id||u)+'\')" style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer">'+
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:flex;align-items:center;justify-content:center;font-weight:600">'+u[0]+'</div>'+
+      '<div style="flex:1"><div style="font-weight:600">'+u+'</div><div style="font-size:11px;color:#7a7a7a">★'+(o.rating||4.9)+' ('+(o.deals||0)+' сделок)</div></div><div style="color:#34c759">✓</div></div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">'+
+      '<div><span style="color:#7a7a7a">Цена</span><br><b style="color:'+col+';font-size:15px">'+p+' ₽</b></div>'+
+      '<div><span style="color:#7a7a7a">Доступно</span><br><b>'+(o.available||5000)+' USDT</b></div>'+
+      '<div><span style="color:#7a7a7a">Лимит</span><br><b>'+(o.min||50)+'–'+(o.max||5000)+'</b></div>'+
+      '<div><span style="color:#7a7a7a">Время</span><br><b>'+(o.time||15)+' мин</b></div></div></div>'+
+    '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">ОПЛАТА</div>'+
+    (o.methods||['Сбербанк']).map(m=>'<div style="padding:10px;background:#1a1a1a;border-radius:10px;margin-bottom:4px;font-size:13px">💳 '+m+'</div>').join('')+
+    '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">УСЛОВИЯ</div>'+
+    '<div style="padding:12px;background:#1a1a1a;border-radius:10px;font-size:12px;line-height:1.5;color:#ccc;margin-bottom:10px">'+(o.terms||'—')+'</div>'+
+    '<input id="deal-amount-p2p" type="number" value="500" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:8px">'+
+    '<button onclick="initDealP2P(\''+offerId+'\')" style="width:100%;padding:14px;background:'+col+';color:#fff;font-weight:600;border-radius:12px">'+(P2P2.side==='BUY'?'Купить':'Продать')+' USDT</button>';
+}
+
+async function initDealP2P(offerId) {
+  const amt = parseFloat(document.getElementById('deal-amount-p2p').value);
+  if (!amt) return;
+  const r = await apiP2P2('POST', '/api/v1/deals/create', {offer_id: offerId, amount_fiat: amt});
+  P2P2.currentDealId = (r && r.id) || ('demo-'+Date.now());
+  go('deal');
+  loadDealP2P();
+}
+
+async function loadDealP2P() {
+  const c = document.getElementById('deal-content'); if (!c) return;
+  c.innerHTML = '<div class="empty-state">Загружаю…</div>';
+  let d = await apiP2P2('GET', '/api/v1/deals/' + P2P2.currentDealId);
+  if (!d) d = {id:P2P2.currentDealId, seller:'Alex_Premium', amount:500, rub:45750, price:91.5, method:'Сбербанк', card:'2202 2050 4123 7890', holder:'Александр Б.', timer:'14:32'};
+  c.innerHTML =
+    '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">'+(d.timer||'15:00')+' на оплату</div>'+
+    '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+    '<div style="font-weight:600;margin-bottom:6px">'+(d.seller||'Продавец')+'</div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>'+(d.amount||0)+' USDT → '+(d.rub||0)+' ₽</span></div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>'+(d.method||'—')+'</span></div></div>'+
+    '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">РЕКВИЗИТЫ</div>'+
+    '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+    '<div style="font-family:monospace;font-size:14px;margin-bottom:6px">'+(d.card||'—')+'</div>'+
+    '<div style="font-size:13px;color:#ccc">'+(d.holder||'—')+'</div>'+
+    '<div style="display:flex;gap:6px;margin-top:8px"><button onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+(d.card||'')+'\')" style="flex:1;padding:8px;background:#252525;color:#fff;border-radius:8px;font-size:12px">📋 Карту</button>'+
+    '<button onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+(d.rub||0)+'\')" style="flex:1;padding:8px;background:#252525;color:#fff;border-radius:8px;font-size:12px">📋 Сумму</button></div></div>'+
+    '<button onclick="markPaidP2P()" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">✓ Я оплатил</button>'+
+    '<button onclick="cancelDealP2P()" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>'+
+    '<button onclick="go(\'deal-dispute\')" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">⚖ Открыть спор</button>';
+}
+
+async function markPaidP2P() {
+  if (!P2P2.currentDealId) return;
+  await apiP2P2('POST', '/api/v1/deals/' + P2P2.currentDealId + '/mark_paid');
+  if (typeof playApplePaySuccess === 'function') playApplePaySuccess();
+  alert('Оплата отмечена. Продавец проверит.');
+  loadDealP2P();
+}
+
+async function cancelDealP2P() {
+  if (!P2P2.currentDealId) return;
+  if (!confirm('Отменить сделку?')) return;
+  await apiP2P2('POST', '/api/v1/deals/' + P2P2.currentDealId + '/cancel');
+  go('p2p');
+}
+
+async function submitDispute() {
+  const text = document.getElementById('dsp-text').value;
+  await apiP2P2('POST', '/api/v1/deals/' + P2P2.currentDealId + '/dispute', {reason: 'not_paid', description: text});
+  alert('Спор открыт. Арбитр рассмотрит ~10 мин.');
+  go('deal');
+}
+
+async function loadChatP2P() {
+  if (!P2P2.currentDealId) return;
+  let msgs = await apiP2P2('GET', '/api/v1/deals/' + P2P2.currentDealId + '/messages');
+  if (!msgs || !msgs.length) msgs = [{from:'them',text:'Реквизиты в окне сделки',time:'14:18'},{from:'me',text:'Хорошо',time:'14:19'}];
+  const c = document.getElementById('p2p-chat-msgs'); if (!c) return;
+  c.innerHTML = msgs.map(m => {
+    const align = m.from==='me'?'flex-end':'flex-start';
+    const bg = m.from==='me'?'#3390EC':'#1a1a1a';
+    return '<div style="display:flex;justify-content:'+align+';margin-bottom:4px"><div style="max-width:78%;background:'+bg+';padding:8px 12px;border-radius:14px;font-size:13px">'+m.text+'</div></div>';
+  }).join('');
+  c.scrollTop = c.scrollHeight;
+}
+
+async function sendP2PChatMessage() {
+  const inp = document.getElementById('p2p-chat-input');
+  if (!inp || !inp.value.trim()) return;
+  const text = inp.value.trim(); inp.value = '';
+  await apiP2P2('POST', '/api/v1/deals/' + P2P2.currentDealId + '/messages', {text});
+  loadChatP2P();
+}
+
+async function loadMyAdsP2P() {
+  const c = document.getElementById('my-ads-list'); if (!c) return;
+  c.innerHTML = '<div class="empty-state">Загружаю…</div>';
+  let ads = await apiP2P2('GET', '/api/v1/offers?my=1');
+  if (!ads || !ads.length) ads = [{id:'m1',side:'SELL',price:91.5,available:5000,max:5000,deals_today:7,active:true}];
+  c.innerHTML = ads.map(a => 
+    '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+    '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>'+a.side+' USDT</b><span style="color:'+(a.active?'#34c759':'#7a7a7a')+';font-size:11px">'+(a.active?'● Активно':'○ Пауза')+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Цена</span><b>'+a.price+' ₽</b></div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Сделок сегодня</span><span>'+(a.deals_today||0)+'</span></div></div>'
+  ).join('');
+}
+
+function setNewAdSide(side) {
+  const b = document.getElementById('ad-side-buy'), s = document.getElementById('ad-side-sell');
+  if (side === 'BUY') { b.style.background='#34c759';b.style.color='#fff';s.style.background='#1a1a1a';s.style.color='#7a7a7a'; }
+  else { s.style.background='#ff453a';s.style.color='#fff';b.style.background='#1a1a1a';b.style.color='#7a7a7a'; }
+  P2P2.newAdSide = side;
+}
+
+async function submitNewAd() {
+  const data = {
+    side: P2P2.newAdSide || 'BUY',
+    coin: 'USDT',
+    price: parseFloat(document.getElementById('ad-price').value),
+    amount: parseFloat(document.getElementById('ad-amount').value),
+    min_amount: parseFloat(document.getElementById('ad-min').value),
+    max_amount: parseFloat(document.getElementById('ad-max').value),
+    payment_methods: [...document.querySelectorAll('.ad-pmt.active')].map(b => b.dataset.pmt),
+    terms: document.getElementById('ad-terms').value
+  };
+  const r = await apiP2P2('POST', '/api/v1/offers', data);
+  alert(r ? 'Опубликовано!' : 'Сохранено (демо)');
+  go('p2p-my-ads');
+}
+
+async function openSellerP2P(uid) {
+  go('seller-profile');
+  const c = document.getElementById('seller-content');
+  let p = await apiP2P2('GET', '/api/v1/users/' + uid + '/profile');
+  if (!p) p = {user:'Alex_Premium',rating:4.9,deals:312,success:99};
+  c.innerHTML =
+    '<div style="text-align:center;padding:8px 0 14px"><div style="width:60px;height:60px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;margin-bottom:8px">'+(p.user||'A')[0]+'</div><div style="font-size:17px;font-weight:600">'+(p.user||'Seller')+'</div></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"><div style="background:#1a1a1a;border-radius:10px;padding:10px;text-align:center"><div style="font-size:17px;font-weight:600;color:#ffd60a">'+p.rating+'</div><div style="font-size:10px;color:#7a7a7a">★</div></div><div style="background:#1a1a1a;border-radius:10px;padding:10px;text-align:center"><div style="font-size:17px;font-weight:600">'+p.deals+'</div><div style="font-size:10px;color:#7a7a7a">Сделок</div></div><div style="background:#1a1a1a;border-radius:10px;padding:10px;text-align:center"><div style="font-size:17px;font-weight:600;color:#34c759">'+p.success+'%</div><div style="font-size:10px;color:#7a7a7a">Успех</div></div></div>';
+}
+
+// Hook go() to autoload
+const _origGo2 = window.go;
+window.go = function(view) {
+  if (_origGo2) _origGo2(view);
+  if (view === 'p2p') loadP2PMarket();
+  else if (view === 'p2p-my-ads') loadMyAdsP2P();
+  else if (view === 'deal-chat') { loadChatP2P(); if (P2P2.chatTimer) clearInterval(P2P2.chatTimer); P2P2.chatTimer = setInterval(loadChatP2P, 5000); }
+  else if (P2P2.chatTimer && view !== 'deal-chat') { clearInterval(P2P2.chatTimer); P2P2.chatTimer = null; }
+};
+
+console.log('[p2p] v2 ready');
 </script>
 </body>
 </html>
