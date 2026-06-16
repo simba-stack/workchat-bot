@@ -1602,6 +1602,10 @@ function go(view) {
   else if (view === 'swap') initSwap();
   else if (view === 'history') loadOperations();
   else if (view === 'settings') loadSettings();
+  // P2P v2 хуки (loadP2POffers/loadMyAds/loadPaymentMethods объявлены ниже)
+  else if (view === 'p2p') { try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){} }
+  else if (view === 'p2p-myads') { try { if (typeof loadMyAds === 'function') loadMyAds(); } catch(_){} }
+  else if (view === 'payment-methods') { try { if (typeof loadPaymentMethods === 'function') loadPaymentMethods(); } catch(_){} }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll('#bottom-nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.view)));
@@ -2343,16 +2347,7 @@ window.deletePM = async function(id) {
 };
 safeBind('pm-add-btn', 'click', () => openPmEdit(null));
 
-// Загружаем офферы при заходе на view-p2p + my-ads + payment-methods
-const _origGo_p2p = window.go;
-if (typeof _origGo_p2p === 'function') {
-  window.go = function(view) {
-    _origGo_p2p(view);
-    if (view === 'p2p') setTimeout(loadP2POffers, 50);
-    if (view === 'p2p-myads') setTimeout(loadMyAds, 50);
-    if (view === 'payment-methods') setTimeout(loadPaymentMethods, 50);
-  };
-}
+// Хуки P2P переехали внутрь function go(view) выше — wrapper больше не нужен
 
 // ── Auto-refresh баланса каждые 10 сек когда вкладка main активна ──
 // Авто-обновление: история = 5 сек, баланс = 10 сек
