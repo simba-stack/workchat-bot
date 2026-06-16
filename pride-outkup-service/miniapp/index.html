@@ -1809,22 +1809,38 @@ const MOCK_OFFERS_BUY = [
 function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 function renderOfferCard(op) {
-  const badge = op.tier ? `<span class="p2p-badge ${op.tier}">${escHtml(op.tierLabel)}</span>` : '';
-  const onlineDot = op.online ? '<span style="color:#5FE388">🟢</span> ' : '';
-  return `<div class="p2p-offer-card" onclick="openP2POffer('${escHtml(op.id)}')">
+  // Safe defaults — боевой API может не дать всех полей
+  const id = op.id || ('o' + Math.random().toString(36).slice(2));
+  const nick = op.nick || op.username || op.maker_name || 'Аноним';
+  const avatar = op.avatar || (nick[0] || '?').toUpperCase();
+  const tier = op.tier || '';
+  const tierLabel = op.tierLabel || op.tier_label || '';
+  const rating = +(op.rating || op.maker_rating || 0);
+  const deals = +(op.deals || op.maker_deals || 0);
+  const success = +(op.success || op.maker_success_rate || 0);
+  const avgMin = +(op.avgMin || op.maker_avg_min || 5);
+  const price = +(op.price || 0);
+  const available = +(op.available || op.amount || 0);
+  const minRub = +(op.minRub || op.min_amount || 1000);
+  const maxRub = +(op.maxRub || op.max_amount || 100000);
+  const banks = Array.isArray(op.banks) ? op.banks : (Array.isArray(op.payment_methods) ? op.payment_methods : []);
+  const online = !!op.online;
+  const badge = tier ? `<span class="p2p-badge ${tier}">${escHtml(tierLabel)}</span>` : '';
+  const onlineDot = online ? '<span style="color:#5FE388">🟢</span> ' : '';
+  return `<div class="p2p-offer-card" onclick="openP2POffer('${escHtml(id)}')">
     <div class="row1">
-      <div class="avatar">${escHtml(op.avatar)}</div>
+      <div class="avatar">${escHtml(avatar)}</div>
       <div class="name">
-        <div class="nick">${escHtml(op.nick)}${badge}</div>
-        <div class="stats">⭐ ${op.rating.toFixed(2)} · ${op.deals} сделок · ${op.success}% успех · ~${op.avgMin} мин</div>
+        <div class="nick">${escHtml(nick)}${badge}</div>
+        <div class="stats">⭐ ${rating.toFixed(2)} · ${deals} сделок · ${success}% успех · ~${avgMin} мин</div>
       </div>
     </div>
     <div class="price-row">
-      <span class="price-big">${op.price.toFixed(2)} ₽</span>
+      <span class="price-big">${price.toFixed(2)} ₽</span>
       <span class="price-sub">за 1 USDT</span>
     </div>
-    <div class="limit-row">${onlineDot}Доступно: ${op.available.toLocaleString('ru-RU')} USDT · Лимит ${op.minRub.toLocaleString('ru-RU')} — ${op.maxRub.toLocaleString('ru-RU')} ₽</div>
-    <div class="pay-row">${op.banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
+    <div class="limit-row">${onlineDot}Доступно: ${available.toLocaleString('ru-RU')} USDT · Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
+    <div class="pay-row">${banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
     <button class="p2p-cta">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
   </div>`;
 }
@@ -1832,30 +1848,49 @@ function renderOfferCard(op) {
 async function loadP2POffers() {
   const list = document.getElementById('p2p-list');
   if (!list) return;
-  list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
-  // Попытка боевого API
-  let offers = [];
   try {
-    const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
-    if (r && r.items) offers = r.items;
-  } catch(e) {}
-  // Фолбэк на mock
-  if (!offers.length) offers = MOCK_OFFERS_BUY;
-  // Фильтр по банку
-  if (p2pState.bank && p2pState.bank !== 'all') {
-    const bankMap = { sbp:'СБП', sber:'Сбер', tinkoff:'Тинькофф', alfa:'Альфа', raif:'Райф' };
-    const need = bankMap[p2pState.bank];
-    if (need) offers = offers.filter(o => (o.banks || []).indexOf(need) >= 0);
+    list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+    let offers = [];
+    try {
+      const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
+      if (r && r.items && r.items.length) offers = r.items;
+    } catch(_) {}
+    if (!offers.length) offers = MOCK_OFFERS_BUY;
+    if (p2pState.bank && p2pState.bank !== 'all') {
+      const bankMap = { sbp:'СБП', sber:'Сбер', tinkoff:'Тинькофф', alfa:'Альфа', raif:'Райф' };
+      const need = bankMap[p2pState.bank];
+      if (need) offers = offers.filter(o => (o.banks || []).indexOf(need) >= 0);
+    }
+    p2pState.offers = offers;
+    try {
+      list.innerHTML = offers.length
+        ? offers.map(renderOfferCard).join('')
+        : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет офферов под фильтр</div>';
+    } catch(re) {
+      console.error('P2P render err', re);
+      list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:#FF8B82">Ошибка рендера: ' + (re.message || re) + '</div>';
+    }
+  } catch(e) {
+    console.error('P2P load err', e);
+    if (list) list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:#FF8B82">Ошибка загрузки</div>';
   }
-  p2pState.offers = offers;
-  list.innerHTML = offers.length
-    ? offers.map(renderOfferCard).join('')
-    : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет офферов под фильтр</div>';
 }
 
 window.openP2POffer = function(id) {
   const op = (p2pState.offers || []).find(x => x.id === id);
   if (!op) return;
+  // Заполняем дефолты как в renderOfferCard
+  op.nick = op.nick || op.username || 'Аноним';
+  op.avatar = op.avatar || (op.nick[0] || '?').toUpperCase();
+  op.rating = +(op.rating || 0);
+  op.deals = +(op.deals || 0);
+  op.success = +(op.success || 0);
+  op.avgMin = +(op.avgMin || 5);
+  op.price = +(op.price || 0);
+  op.available = +(op.available || 0);
+  op.minRub = +(op.minRub || 1000);
+  op.maxRub = +(op.maxRub || 100000);
+  if (!Array.isArray(op.banks)) op.banks = [];
   window.currentOffer = op;
   const body = document.getElementById('p2p-offer-body');
   if (!body) { go('p2p-offer'); return; }
@@ -1863,7 +1898,7 @@ window.openP2POffer = function(id) {
     <div class="p2p-profile-card">
       <div class="big-avatar">${escHtml(op.avatar)}</div>
       <div class="info">
-        <div class="nick-line">${escHtml(op.nick)}${op.tier ? '<span class="p2p-badge ' + op.tier + '">' + escHtml(op.tierLabel) + '</span>' : ''}</div>
+        <div class="nick-line">${escHtml(op.nick)}${op.tier ? '<span class="p2p-badge ' + op.tier + '">' + escHtml(op.tierLabel || op.tier) + '</span>' : ''}</div>
         <div class="meta-line">⭐ ${op.rating.toFixed(2)} · ${op.deals} сделок · ${op.success}% успех</div>
         <div class="meta-line">${op.online ? '🟢 Онлайн' : '⚪ Был недавно'} · ~${op.avgMin} мин среднее время</div>
       </div>
@@ -1872,7 +1907,7 @@ window.openP2POffer = function(id) {
       <div class="p2p-detail-row"><span class="k">Цена</span><span class="v" style="font-size:18px;font-weight:700">${op.price.toFixed(2)} ₽ за 1 USDT</span></div>
       <div class="p2p-detail-row"><span class="k">Доступно</span><span class="v">${op.available.toLocaleString('ru-RU')} USDT</span></div>
       <div class="p2p-detail-row"><span class="k">Лимит сделки</span><span class="v">${op.minRub.toLocaleString('ru-RU')} — ${op.maxRub.toLocaleString('ru-RU')} ₽</span></div>
-      <div class="p2p-detail-row"><span class="k">Способы оплаты</span><span class="v">${op.banks.join(', ')}</span></div>
+      <div class="p2p-detail-row"><span class="k">Способы оплаты</span><span class="v">${(op.banks || []).join(', ') || '—'}</span></div>
       <div class="p2p-detail-row"><span class="k">Тайминг оплаты</span><span class="v">15 минут</span></div>
     </div>
     <div class="p2p-screen-label">Условия продавца</div>
