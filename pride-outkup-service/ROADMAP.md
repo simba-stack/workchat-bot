@@ -68,6 +68,24 @@
 
 ## TODO — приоритеты
 
+### Mini-App v2 — НЕ доделано (для следующей сессии)
+
+**Контекст:** В `miniapp/index.html` (1300 строк) **уже есть legacy P2P JS** (строки 583-1163):
+- `loadOffers()`, `openOffer(id)`, `myP2pSide`, `currentOffer`
+- Endpoint: `/api/v1/offers/...`
+- Но **view'ы P2P удалены** из HTML (комментарий на строке 470: «P2P views убраны»)
+
+Перед добавлением P2P-view'ов **обязательно**:
+1. Прочитать legacy JS блок (583-1163)
+2. Решить: переиспользовать функции или заменить чистыми (мои черновики в `*_v12.py.tmp` бекапах)
+3. Backup: `miniapp/index.html.v1.backup` — рабочая v1 на 16 июня 2026
+
+**Дизайн прототипа уже готов** — Crypto-Bot тёмная тема, 28 экранов: market / filters / offer / 5-step create / deal / chat / dispute / profile / reviews / my-ads / appeal / etc.
+
+**Bottom-nav правильный:** Кошелёк / P2P / История / Ещё (без Обмена — Обмен в action-grid под балансом).
+
+---
+
 ### P0 (важно, для прода)
 
 1. **FF withdraw poller + уведомления** ← запросил SIMBA 2026-06-16
