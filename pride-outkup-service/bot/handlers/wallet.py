@@ -38,7 +38,7 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="🚀 Открыть приложение",
-            web_app=WebAppInfo(url=f"{settings.miniapp_url}{settings.miniapp_path}"),
+            web_app=WebAppInfo(url=__import__("bot._miniapp_link", fromlist=["miniapp_link"]).miniapp_link()),
         )
     ]])
 

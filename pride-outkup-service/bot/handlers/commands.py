@@ -25,8 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 def _miniapp_url(view: str = "") -> str:
-    url = f"{settings.miniapp_url}{settings.miniapp_path}"
-    return f"{url}?view={view}" if view else url
+    # Cache-busting: ?v={boot_timestamp} заставляет Telegram перезабирать свежий HTML
+    from bot._miniapp_link import miniapp_link
+    return miniapp_link(view)
 
 
 def _wa(label: str, view: str = "") -> InlineKeyboardButton:

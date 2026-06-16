@@ -24,7 +24,15 @@ logger = logging.getLogger(__name__)
 
 
 def _miniapp_kb(suffix: str = "") -> InlineKeyboardMarkup:
-    url = f"{settings.miniapp_url}{settings.miniapp_path}{suffix}"
+    from bot._miniapp_link import miniapp_link
+    # suffix может быть ?view=kyc; вырежем имя view-параметра
+    view = ""
+    if suffix and "view=" in suffix:
+        try:
+            view = suffix.split("view=", 1)[1].split("&", 1)[0]
+        except Exception:
+            view = ""
+    url = miniapp_link(view)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=url))],
     ])
