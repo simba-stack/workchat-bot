@@ -212,7 +212,7 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
       4. TRX тратится только с Feee на энергию (не с hot wallet)
 
     Если Feee недоступен → cooldown 5 мин, sweep не двигается.
-    Параметры из уроков v6-v9: simulated × 1.5, fee_limit 30 TRX, SKIP только при energy >= REQUIRED × 1.3.
+    Параметры из уроков v6-v9: simulated × 1.3, fee_limit 30 TRX, SKIP только при energy >= REQUIRED × 1.3.
     """
     import time
     from tronpy.keys import PrivateKey
@@ -231,7 +231,7 @@ async def _sweep_one(client, uda: UserDepositAddress, hot_wallet: str, priv_hex:
     # ШАГ 2: симуляция energy → ENERGY_REQUIRED = simulated × 1.5 (с TRON penalty buffer)
     amount_raw = int(usdt_bal * Decimal(10 ** 6))
     energy_simulated = await _simulate_transfer_energy(client, uda.address, hot_wallet, amount_raw)
-    ENERGY_REQUIRED = int(energy_simulated * 1.5)
+    ENERGY_REQUIRED = int(energy_simulated * 1.3)
 
     # ШАГ 3: проверка current energy
     res = await _account_resource(client, uda.address)

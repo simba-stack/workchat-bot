@@ -88,9 +88,9 @@ async def send_usdt(to_address: str, amount: Decimal) -> dict[str, Any]:
     except Exception as e:
         logger.warning("[tron] check receiver balance failed: %s, assuming no USDT", e)
 
-    # Базовая стоимость + 50% буфер (TRON penalty +25-40% на USDT transfers в 2024+)
-    energy_needed = int((32_000 if receiver_has_usdt else 64_000) * 1.5)
-    logger.info("[tron] receiver=%s has_usdt=%s → energy=%d (с буфером penalty)", to_address, receiver_has_usdt, energy_needed)
+    # Базовая стоимость + 30% буфер на TRON penalty (~25-40% на USDT transfers в 2024+)
+    energy_needed = int((32_000 if receiver_has_usdt else 64_000) * 1.3)
+    logger.info("[tron] receiver=%s has_usdt=%s → energy=%d (с буфером penalty 30%%)", to_address, receiver_has_usdt, energy_needed)
 
     # Rent energy через Feee.io (если настроен)
     rented = False
