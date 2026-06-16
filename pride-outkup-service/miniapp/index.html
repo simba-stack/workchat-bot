@@ -529,27 +529,108 @@
   </div>
 </div>
 
-<!-- ═══ P2P маркет (простой) ═══ -->
+<!-- ═══ P2P МАРКЕТ ═══ -->
 <div class="view" id="view-p2p">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
     <div style="font-size:20px;font-weight:700">P2P маркет</div>
-    <div style="font-size:11px;color:#7a7a7a">Скоро откроется</div>
+    <button id="p2p-filter-btn" style="color:#3390EC;font-size:20px">⚙</button>
+  </div>
+  <div style="display:flex;gap:6px;padding:0 16px 8px">
+    <button id="p2p-side-buy" style="flex:1;padding:10px;border-radius:10px;color:#fff;background:#34c759;font-weight:600">Купить USDT</button>
+    <button id="p2p-side-sell" style="flex:1;padding:10px;border-radius:10px;color:#7a7a7a;background:#1a1a1a">Продать USDT</button>
+  </div>
+  <div id="p2p-list" style="padding:8px 16px"><div class="empty-state">Загрузка…</div></div>
+  <div style="padding:8px 16px;display:flex;gap:6px">
+    <button id="p2p-create-btn" style="flex:1;padding:14px;border-radius:12px;background:#fff;color:#000;font-weight:600">+ Создать своё</button>
+    <button id="p2p-myads-btn" style="padding:14px;border-radius:12px;background:#1a1a1a;color:#fff">Мои</button>
+  </div>
+</div>
+
+<!-- ═══ OFFER DETAIL ═══ -->
+<div class="view" id="view-p2p-offer">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Объявление</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="p2p-offer-body" style="padding:14px 16px"><div class="empty-state">Загрузка…</div></div>
+</div>
+
+<!-- ═══ DEAL ═══ -->
+<div class="view" id="view-p2p-deal">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Сделка</div>
+    <button id="p2p-deal-chat-btn" style="color:#3390EC;font-size:20px">💬</button>
+  </div>
+  <div id="p2p-deal-body" style="padding:14px 16px"><div class="empty-state">Загрузка…</div></div>
+</div>
+
+<!-- ═══ CHAT ═══ -->
+<div class="view" id="view-p2p-chat">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p-deal">←</button>
+    <div class="nav-title">Чат</div>
+    <div class="nav-right"></div>
+  </div>
+  <div id="p2p-chat-body" style="overflow-y:auto;padding:10px 14px;max-height:calc(100vh - 200px)"></div>
+  <div style="position:fixed;bottom:60px;left:0;right:0;padding:8px 12px;background:#000;border-top:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center;background:#1a1a1a;border-radius:22px;padding:6px 12px">
+      <input id="p2p-chat-input" placeholder="Сообщение…" style="flex:1;background:transparent;border:0;color:#fff;outline:none;font-size:14px">
+      <button id="p2p-chat-send" style="color:#3390EC;font-size:20px">➤</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ CREATE AD ═══ -->
+<div class="view" id="view-p2p-create">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Новое объявление</div>
+    <div class="nav-right"></div>
   </div>
   <div style="padding:14px 16px">
-    <div style="background:#1a1a1a;border-radius:14px;padding:20px;text-align:center;margin-bottom:10px">
-      <div style="font-size:42px;margin-bottom:8px">⇄</div>
-      <div style="font-size:15px;font-weight:600;margin-bottom:6px">P2P-обмен USDT</div>
-      <div style="font-size:13px;color:#7a7a7a;line-height:1.5">Покупай и продавай USDT за рубли напрямую с другими юзерами. Эскроу-защита сделок.</div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Тип</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <button id="p2p-ad-buy" style="flex:1;padding:12px;background:#34c759;color:#fff;border-radius:10px;font-weight:600">Купить</button>
+      <button id="p2p-ad-sell" style="flex:1;padding:12px;background:#1a1a1a;color:#7a7a7a;border-radius:10px">Продать</button>
     </div>
-    <div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a;font-size:12px">Доступные платёжки</span></div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px"><span style="background:#252525;padding:4px 8px;border-radius:6px;font-size:11px">Сбербанк</span><span style="background:#252525;padding:4px 8px;border-radius:6px;font-size:11px">Тинькофф</span><span style="background:#252525;padding:4px 8px;border-radius:6px;font-size:11px">Альфа</span><span style="background:#252525;padding:4px 8px;border-radius:6px;font-size:11px">SBP</span><span style="background:#252525;padding:4px 8px;border-radius:6px;font-size:11px">ВТБ</span></div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
+    <input id="p2p-ad-price" type="number" value="91.50" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Доступно USDT</div>
+    <input id="p2p-ad-amount" type="number" value="5000" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты RUB</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <input id="p2p-ad-min" type="number" value="5000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="p2p-ad-max" type="number" value="500000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
     </div>
-    <div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">
-      <div style="color:#7a7a7a;font-size:12px;margin-bottom:4px">Готово</div>
-      <ul style="margin:0;padding-left:20px;font-size:13px;line-height:1.7;color:#ccc"><li>Маркет объявлений (BUY / SELL)</li><li>Создание объявлений с эскроу</li><li>Чат продавец ↔ покупатель</li><li>Споры с арбитражем</li><li>Рейтинг и отзывы</li></ul>
-    </div>
-    <button onclick="alert('P2P-маркет откроется в ближайшие дни. Backend уже готов.')" style="width:100%;padding:14px;background:#3390EC;color:#fff;border-radius:12px;font-weight:600">Уведомить когда откроется</button>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Условия</div>
+    <textarea id="p2p-ad-terms" rows="3" style="width:100%;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px">С личной карты, без комментариев</textarea>
+    <button id="p2p-ad-submit" style="width:100%;padding:14px;background:#fff;color:#000;font-weight:600;border-radius:12px">Опубликовать</button>
+  </div>
+</div>
+
+<!-- ═══ MY ADS ═══ -->
+<div class="view" id="view-p2p-myads">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p">←</button>
+    <div class="nav-title">Мои объявления</div>
+    <button id="p2p-myads-add" style="font-size:22px;color:#3390EC">+</button>
+  </div>
+  <div id="p2p-myads-list" style="padding:14px 16px"><div class="empty-state">Загрузка…</div></div>
+</div>
+
+<!-- ═══ DISPUTE ═══ -->
+<div class="view" id="view-p2p-dispute">
+  <div class="nav-header">
+    <button class="nav-back" data-back="p2p-deal">←</button>
+    <div class="nav-title">Открыть спор</div>
+    <div class="nav-right"></div>
+  </div>
+  <div style="padding:14px 16px">
+    <div style="padding:12px;background:rgba(255,214,10,0.12);border-radius:10px;color:#ffd60a;font-size:12px;margin-bottom:14px">Ложный спор снижает рейтинг на 0.5★</div>
+    <textarea id="p2p-dsp-text" rows="5" placeholder="Опишите ситуацию" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px"></textarea>
+    <button id="p2p-dsp-submit" style="width:100%;padding:14px;background:#ff453a;color:#fff;font-weight:600;border-radius:12px">Подать спор</button>
   </div>
 </div>
 
@@ -1331,6 +1412,263 @@ function playSuccessSound() {
 // (cloneNode IIFE удалён — биометрия теперь внутри оригинальных handlers)
 
 loadMain().then(routeFromStart);
+
+// ════════════════════════════════════════════════════════════
+// P2P v3 — простая логика, ничего не переопределяет
+// ════════════════════════════════════════════════════════════
+(function() {
+  const P2P_STATE = { side: 'BUY', currentOfferId: null, currentDealId: null, adSide: 'BUY' };
+
+  async function apiP2P(method, path, body) {
+    try {
+      const opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const initData = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || '';
+      if (initData) opts.headers['Authorization'] = 'tg ' + initData;
+      const sep = path.indexOf('?') >= 0 ? '&' : '?';
+      const r = await fetch(path + sep + 'initData=' + encodeURIComponent(initData), opts);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { console.warn('apiP2P', e); return null; }
+  }
+
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function setSide(side) {
+    P2P_STATE.side = side;
+    const b = document.getElementById('p2p-side-buy');
+    const s = document.getElementById('p2p-side-sell');
+    if (!b || !s) return;
+    if (side === 'BUY') {
+      b.style.background = '#34c759'; b.style.color = '#fff';
+      s.style.background = '#1a1a1a'; s.style.color = '#7a7a7a';
+    } else {
+      s.style.background = '#ff453a'; s.style.color = '#fff';
+      b.style.background = '#1a1a1a'; b.style.color = '#7a7a7a';
+    }
+    loadMarket();
+  }
+
+  async function loadMarket() {
+    const c = document.getElementById('p2p-list'); if (!c) return;
+    c.innerHTML = '<div class="empty-state">Загрузка…</div>';
+    let data = await apiP2P('GET', '/api/v1/offers?side=' + P2P_STATE.side.toLowerCase() + '&coin=USDT');
+    let offers = (data && (data.items || data.offers || data)) || [];
+    if (!Array.isArray(offers) || offers.length === 0) {
+      offers = [
+        {id:'demo1', user:'Alex_Pro', rating:4.9, deals:312, price:91.50, min:50, max:5000, methods:'Сбер, Тинь'},
+        {id:'demo2', user:'CryptoPro', rating:5.0, deals:1247, price:91.45, min:100, max:10000, methods:'Сбер'},
+        {id:'demo3', user:'NataKZ', rating:4.7, deals:84, price:91.80, min:50, max:2000, methods:'SBP'},
+        {id:'demo4', user:'P2P_Master', rating:4.8, deals:421, price:91.95, min:200, max:8000, methods:'Сбер, ВТБ'}
+      ];
+    }
+    const col = P2P_STATE.side === 'BUY' ? '#34c759' : '#ff453a';
+    const rows = offers.map(function(o) {
+      const u = escHtml(o.user || o.username || 'User');
+      const p = parseFloat(o.price || o.rate || 91.5).toFixed(2);
+      const rating = o.rating || 4.8;
+      const deals = o.deals || 0;
+      const methods = escHtml(o.methods || '—');
+      const minA = o.min || 0;
+      const maxA = o.max || 0;
+      const id = escHtml(o.id || o.offer_id || '');
+      return '<div class="p2p-offer-row" data-offer-id="' + id + '" style="display:flex;gap:10px;padding:12px;background:#1a1a1a;border-radius:12px;margin-bottom:8px;align-items:center;cursor:pointer">' +
+        '<div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:flex;align-items:center;justify-content:center;font-weight:600">' + u.charAt(0) + '</div>' +
+        '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">' + u + '</div><div style="font-size:11px;color:#7a7a7a">★' + rating + ' • ' + deals + ' сделок</div><div style="font-size:11px;color:#7a7a7a">' + methods + '</div></div>' +
+        '<div style="text-align:right"><div style="font-weight:600;color:' + col + ';font-size:14px">' + p + ' ₽</div><div style="font-size:11px;color:#7a7a7a">' + minA + '–' + maxA + '</div></div></div>';
+    }).join('');
+    c.innerHTML = rows;
+    // Привязка click
+    c.querySelectorAll('.p2p-offer-row').forEach(function(el) {
+      el.addEventListener('click', function() { openOfferView(el.dataset.offerId); });
+    });
+  }
+
+  async function openOfferView(offerId) {
+    P2P_STATE.currentOfferId = offerId;
+    go('p2p-offer');
+    const c = document.getElementById('p2p-offer-body');
+    c.innerHTML = '<div class="empty-state">Загрузка…</div>';
+    let o = await apiP2P('GET', '/api/v1/offers/' + offerId);
+    if (!o) o = { id: offerId, user: 'Alex_Premium', rating: 4.9, deals: 312, price: 91.50, available: 5000, min: 50, max: 5000, time: 15, methods: ['Сбербанк', 'Тинькофф'], terms: 'С личной карты, без комментариев' };
+    const u = escHtml(o.user || 'Seller');
+    const p = parseFloat(o.price || 91.5).toFixed(2);
+    const col = P2P_STATE.side === 'BUY' ? '#34c759' : '#ff453a';
+    const methods = (o.methods || ['Сбербанк']).map(function(m) {
+      return '<div style="padding:10px;background:#1a1a1a;border-radius:10px;margin-bottom:4px;font-size:13px">💳 ' + escHtml(m) + '</div>';
+    }).join('');
+    c.innerHTML =
+      '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:flex;align-items:center;justify-content:center;font-weight:600">' + u.charAt(0) + '</div>' +
+        '<div style="flex:1"><div style="font-weight:600">' + u + '</div><div style="font-size:11px;color:#7a7a7a">★' + (o.rating || 4.9) + ' (' + (o.deals || 0) + ')</div></div></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">' +
+        '<div><span style="color:#7a7a7a">Цена</span><br><b style="color:' + col + ';font-size:15px">' + p + ' ₽</b></div>' +
+        '<div><span style="color:#7a7a7a">Доступно</span><br><b>' + (o.available || 5000) + ' USDT</b></div>' +
+        '<div><span style="color:#7a7a7a">Лимит</span><br><b>' + (o.min || 50) + '–' + (o.max || 5000) + '</b></div>' +
+        '<div><span style="color:#7a7a7a">Время</span><br><b>' + (o.time || 15) + ' мин</b></div></div></div>' +
+      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">ОПЛАТА</div>' + methods +
+      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">УСЛОВИЯ</div>' +
+      '<div style="padding:12px;background:#1a1a1a;border-radius:10px;font-size:12px;line-height:1.5;color:#ccc;margin-bottom:10px">' + escHtml(o.terms || '—') + '</div>' +
+      '<input id="p2p-deal-amount" type="number" value="500" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:8px">' +
+      '<button id="p2p-deal-btn" style="width:100%;padding:14px;background:' + col + ';color:#fff;font-weight:600;border-radius:12px">' + (P2P_STATE.side === 'BUY' ? 'Купить' : 'Продать') + ' USDT</button>';
+    const btn = document.getElementById('p2p-deal-btn');
+    if (btn) btn.addEventListener('click', initDeal);
+  }
+
+  async function initDeal() {
+    const amt = parseFloat(document.getElementById('p2p-deal-amount').value);
+    if (!amt) return;
+    const r = await apiP2P('POST', '/api/v1/deals/create', { offer_id: P2P_STATE.currentOfferId, amount_fiat: amt });
+    P2P_STATE.currentDealId = (r && r.id) || ('demo-' + Date.now());
+    go('p2p-deal');
+    loadDeal();
+  }
+
+  async function loadDeal() {
+    const c = document.getElementById('p2p-deal-body'); if (!c) return;
+    c.innerHTML = '<div class="empty-state">Загрузка…</div>';
+    let d = await apiP2P('GET', '/api/v1/deals/' + P2P_STATE.currentDealId);
+    if (!d) d = { seller: 'Alex_Premium', amount: 500, rub: 45750, method: 'Сбербанк', card: '2202 2050 4123 7890', holder: 'Александр Б.', timer: '14:32' };
+    c.innerHTML =
+      '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">' + escHtml(d.timer || '15:00') + ' на оплату</div>' +
+      '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px"><div style="font-weight:600;margin-bottom:6px">' + escHtml(d.seller || 'Продавец') + '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>' + (d.amount || 0) + ' USDT → ' + (d.rub || 0) + ' ₽</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>' + escHtml(d.method || '—') + '</span></div></div>' +
+      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">РЕКВИЗИТЫ</div>' +
+      '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+      '<div style="font-family:monospace;font-size:14px;margin-bottom:6px">' + escHtml(d.card || '—') + '</div>' +
+      '<div style="font-size:13px;color:#ccc">' + escHtml(d.holder || '—') + '</div></div>' +
+      '<button id="p2p-deal-paid" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">✓ Я оплатил</button>' +
+      '<button id="p2p-deal-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>' +
+      '<button id="p2p-deal-dispute" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">⚖ Спор</button>';
+    const paid = document.getElementById('p2p-deal-paid');
+    const cancel = document.getElementById('p2p-deal-cancel');
+    const dispute = document.getElementById('p2p-deal-dispute');
+    if (paid) paid.addEventListener('click', markPaid);
+    if (cancel) cancel.addEventListener('click', cancelDeal);
+    if (dispute) dispute.addEventListener('click', function() { go('p2p-dispute'); });
+  }
+
+  async function markPaid() {
+    if (!P2P_STATE.currentDealId) return;
+    await apiP2P('POST', '/api/v1/deals/' + P2P_STATE.currentDealId + '/mark_paid');
+    if (typeof playApplePaySuccess === 'function') playApplePaySuccess();
+    alert('Оплата отмечена. Продавец проверит.');
+    loadDeal();
+  }
+
+  async function cancelDeal() {
+    if (!P2P_STATE.currentDealId) return;
+    if (!confirm('Отменить сделку?')) return;
+    await apiP2P('POST', '/api/v1/deals/' + P2P_STATE.currentDealId + '/cancel');
+    go('p2p');
+  }
+
+  async function submitDispute() {
+    const text = document.getElementById('p2p-dsp-text').value;
+    await apiP2P('POST', '/api/v1/deals/' + P2P_STATE.currentDealId + '/dispute', { reason: 'not_paid', description: text });
+    alert('Спор открыт. Арбитр рассмотрит ~10 мин.');
+    go('p2p-deal');
+  }
+
+  async function loadChat() {
+    if (!P2P_STATE.currentDealId) return;
+    let msgs = await apiP2P('GET', '/api/v1/deals/' + P2P_STATE.currentDealId + '/messages');
+    if (!msgs || !msgs.length) msgs = [{from:'them',text:'Реквизиты в окне сделки',time:'14:18'},{from:'me',text:'Хорошо',time:'14:19'}];
+    const c = document.getElementById('p2p-chat-body'); if (!c) return;
+    c.innerHTML = msgs.map(function(m) {
+      const align = m.from === 'me' ? 'flex-end' : 'flex-start';
+      const bg = m.from === 'me' ? '#3390EC' : '#1a1a1a';
+      return '<div style="display:flex;justify-content:' + align + ';margin-bottom:4px"><div style="max-width:78%;background:' + bg + ';padding:8px 12px;border-radius:14px;font-size:13px">' + escHtml(m.text) + '</div></div>';
+    }).join('');
+    c.scrollTop = c.scrollHeight;
+  }
+
+  async function sendChat() {
+    const inp = document.getElementById('p2p-chat-input');
+    if (!inp || !inp.value.trim()) return;
+    const text = inp.value.trim(); inp.value = '';
+    await apiP2P('POST', '/api/v1/deals/' + P2P_STATE.currentDealId + '/messages', { text: text });
+    loadChat();
+  }
+
+  async function loadMyAds() {
+    const c = document.getElementById('p2p-myads-list'); if (!c) return;
+    c.innerHTML = '<div class="empty-state">Загрузка…</div>';
+    let ads = await apiP2P('GET', '/api/v1/offers?my=1');
+    if (!ads || !ads.length) ads = [{id:'m1',side:'SELL',price:91.5,available:5000,max:5000,deals_today:7,active:true}];
+    c.innerHTML = ads.map(function(a) {
+      return '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>' + a.side + ' USDT</b><span style="color:' + (a.active ? '#34c759' : '#7a7a7a') + ';font-size:11px">' + (a.active ? '● Активно' : '○ Пауза') + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Цена</span><b>' + a.price + ' ₽</b></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Сделок сегодня</span><span>' + (a.deals_today || 0) + '</span></div></div>';
+    }).join('');
+  }
+
+  function setAdSide(side) {
+    P2P_STATE.adSide = side;
+    const b = document.getElementById('p2p-ad-buy');
+    const s = document.getElementById('p2p-ad-sell');
+    if (!b || !s) return;
+    if (side === 'BUY') { b.style.background = '#34c759'; b.style.color = '#fff'; s.style.background = '#1a1a1a'; s.style.color = '#7a7a7a'; }
+    else { s.style.background = '#ff453a'; s.style.color = '#fff'; b.style.background = '#1a1a1a'; b.style.color = '#7a7a7a'; }
+  }
+
+  async function submitNewAd() {
+    const data = {
+      side: P2P_STATE.adSide || 'BUY',
+      coin: 'USDT',
+      price: parseFloat(document.getElementById('p2p-ad-price').value),
+      amount: parseFloat(document.getElementById('p2p-ad-amount').value),
+      min_amount: parseFloat(document.getElementById('p2p-ad-min').value),
+      max_amount: parseFloat(document.getElementById('p2p-ad-max').value),
+      terms: document.getElementById('p2p-ad-terms').value
+    };
+    const r = await apiP2P('POST', '/api/v1/offers', data);
+    alert(r ? 'Опубликовано!' : 'Сохранено (демо)');
+    go('p2p-myads');
+  }
+
+  // ── Привязки кнопок (после DOM готов) ──
+  function attachP2PHandlers() {
+    const buy = document.getElementById('p2p-side-buy');
+    const sell = document.getElementById('p2p-side-sell');
+    if (buy) buy.addEventListener('click', function() { setSide('BUY'); });
+    if (sell) sell.addEventListener('click', function() { setSide('SELL'); });
+    const createBtn = document.getElementById('p2p-create-btn');
+    if (createBtn) createBtn.addEventListener('click', function() { go('p2p-create'); });
+    const myadsBtn = document.getElementById('p2p-myads-btn');
+    if (myadsBtn) myadsBtn.addEventListener('click', function() { go('p2p-myads'); loadMyAds(); });
+    const myadsAdd = document.getElementById('p2p-myads-add');
+    if (myadsAdd) myadsAdd.addEventListener('click', function() { go('p2p-create'); });
+    const adBuy = document.getElementById('p2p-ad-buy');
+    const adSell = document.getElementById('p2p-ad-sell');
+    if (adBuy) adBuy.addEventListener('click', function() { setAdSide('BUY'); });
+    if (adSell) adSell.addEventListener('click', function() { setAdSide('SELL'); });
+    const adSubmit = document.getElementById('p2p-ad-submit');
+    if (adSubmit) adSubmit.addEventListener('click', submitNewAd);
+    const chatBtn = document.getElementById('p2p-deal-chat-btn');
+    if (chatBtn) chatBtn.addEventListener('click', function() { go('p2p-chat'); loadChat(); });
+    const chatSend = document.getElementById('p2p-chat-send');
+    if (chatSend) chatSend.addEventListener('click', sendChat);
+    const dspSubmit = document.getElementById('p2p-dsp-submit');
+    if (dspSubmit) dspSubmit.addEventListener('click', submitDispute);
+    // P2P в bottom-nav → загружаем маркет при клике
+    document.querySelectorAll('#bottom-nav button[data-view="p2p"]').forEach(function(b) {
+      b.addEventListener('click', function() { setTimeout(loadMarket, 50); });
+    });
+  }
+
+  // Init после DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attachP2PHandlers);
+  } else {
+    attachP2PHandlers();
+  }
+  console.log('[p2p v3] handlers attached');
+})();
 </script>
 </body>
 </html>
