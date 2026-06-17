@@ -1,4 +1,4 @@
-"""Конфиг — env → settings (pydantic-settings)."""
+"""Config — env to settings (pydantic-settings)."""
 from functools import lru_cache
 from typing import Optional
 
@@ -12,42 +12,32 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Bot
     bot_token: str
     bot_username: str = "PrideP2P_bot"
 
-    # Mini-App
     miniapp_url: str = "https://pride-outkup-service-production.up.railway.app"
-    miniapp_path: str = "/v7"  # was "/app2" — Telegram-нативный кеш — переезжаем на /v7 (полный nuke)
+    miniapp_path: str = "/v7"
 
-    # Database
     database_url: str
-
-    # Redis
     redis_url: Optional[str] = None
 
-    # JARVIS sync
     jarvis_base_url: str = "https://workchat-bot-production.up.railway.app"
     jarvis_webhook_path: str = "/api/webhook/outkup"
     jarvis_hmac_secret: str = ""
     jarvis_api_token: str = ""
 
-    # TRON
     tron_private_key: str = ""
     tron_hot_wallet_address: str = ""
     trongrid_api_key: str = ""
     tron_network: str = "mainnet"
 
-    # Admin
     admin_tg_ids: str = "8151738775"
 
-    # Limits
     max_concurrent_deals_per_user: int = 5
     kyc_lvl1_daily_limit_usdt: int = 500
     kyc_lvl2_daily_limit_usdt: int = 5000
     kyc_lvl3_daily_limit_usdt: int = 50000
 
-    # Feature flags
     feature_v2_p2p_enabled: bool = False
     feature_referral_enabled: bool = True
 
@@ -57,7 +47,6 @@ class Settings(BaseSettings):
 
     @property
     def database_url_async(self) -> str:
-        """Railway даёт DATABASE_URL=postgresql:// — переводим в asyncpg."""
         url = self.database_url
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
@@ -67,7 +56,8 @@ class Settings(BaseSettings):
 
     @property
     def jarvis_webhook_url(self) -> str:
-        return f"{self.jarvis_base_url.rstrip('/')}{self.jarvis_webhook_path}"
+        base = self.jarvis_base_url.rstrip("/")
+        return base + self.jarvis_webhook_path
 
 
 @lru_cache
