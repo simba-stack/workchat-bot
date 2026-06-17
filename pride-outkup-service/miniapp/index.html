@@ -8,21 +8,37 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <script>
-// === CACHE-BUSTER v6 ===
-// Telegram WebApp кеширует HTML+JS. Если url содержит ?v= и он не совпадает
-// с сохранённой версией — делаем hard reload с no-cache fetch.
+// === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v6.20260617';
+  const APP_BUILD = 'v7.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
       sessionStorage.removeItem('__pride_p2p_build');
-      // hard reload — Telegram WebView должен заново подтянуть HTML
       location.replace(location.pathname + '?v=' + Date.now() + '&hardreload=1');
       throw new Error('reloading');
     }
     sessionStorage.setItem('__pride_p2p_build', APP_BUILD);
   } catch(e) { /* sessionStorage может быть запрещён в Telegram */ }
+})();
+
+// === DOM SNAPSHOT CLEANUP ===
+// Telegram WebApp сохраняет DOM-snapshot между сессиями. При повторном открытии
+// показывает закешированный DOM ДО того как JS успеет отрисовать новый.
+// Чистим контейнеры списков синхронно при первом возможном моменте.
+(function cleanupCachedDOM() {
+  const containers = ['p2p-list', 'p2p-myads-list', 'p2p-offer-body', 'p2p-deal-body', 'pm-list'];
+  function nuke() {
+    containers.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+    });
+  }
+  if (document.readyState !== 'loading') {
+    nuke();
+  } else {
+    document.addEventListener('DOMContentLoaded', nuke);
+  }
 })();
 </script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -2233,6 +2249,20 @@ document.querySelectorAll('#view-p2p .p2p-chip[data-bank]').forEach(chip => {
   });
 });
 safeBind('p2p-create-btn', 'click', () => go('p2p-create'));
+
+// ═══ PREWARM P2P — рисуем новые карточки В DOM сразу при init, чтобы при первом
+// тапе P2P уже видна свежая разметка (а не закешированный Telegram snapshot) ═══
+(function prewarmP2P() {
+  function trigger() {
+    try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){}
+    try { if (typeof loadMyAds === 'function') loadMyAds(); } catch(_){}
+  }
+  if (document.readyState !== 'loading') {
+    setTimeout(trigger, 50);
+  } else {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(trigger, 50));
+  }
+})();
 
 // ═══════════════════════════════════════════════════════════
 // МОИ РЕКВИЗИТЫ — CRUD
