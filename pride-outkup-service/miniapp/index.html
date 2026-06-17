@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v7.20260618';
+  const APP_BUILD = 'v8.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -22,22 +22,38 @@
   } catch(e) { /* sessionStorage может быть запрещён в Telegram */ }
 })();
 
-// === DOM SNAPSHOT CLEANUP ===
-// Telegram WebApp сохраняет DOM-snapshot между сессиями. При повторном открытии
-// показывает закешированный DOM ДО того как JS успеет отрисовать новый.
-// Чистим контейнеры списков синхронно при первом возможном моменте.
+// === DOM SNAPSHOT CLEANUP v2 — ЖЁСТКИЙ NUKE ===
+// Telegram WebApp персистит DOM между сессиями. Не просто кешируем — Telegram
+// держит ПОЛНЫЙ snapshot с legacy ID (view-p2p-my-ads с дефисом, my-ads-list).
+// Решение: 1) удалить legacy ноды; 2) очистить контейнеры; 3) повторять на
+// каждом видимом моменте.
 (function cleanupCachedDOM() {
-  const containers = ['p2p-list', 'p2p-myads-list', 'p2p-offer-body', 'p2p-deal-body', 'pm-list'];
+  const containers = ['p2p-list', 'p2p-myads-list', 'p2p-offer-body', 'p2p-deal-body', 'pm-list',
+                      // legacy id из старых сессий — тоже чистим
+                      'my-ads-list', 'p2p-my-ads-list'];
+  const legacyViews = ['view-p2p-my-ads', 'view-p2p-offer-old', 'view-my-ads'];
   function nuke() {
+    // 1) Снести legacy view-блоки целиком — они из старого Telegram snapshot
+    legacyViews.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    // 2) Очистить контейнеры списков (и старые id и новые)
     containers.forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
     });
   }
-  if (document.readyState !== 'loading') {
+  function run() {
     nuke();
+    // через 100ms повторить — Telegram может восстановить snapshot после первого paint
+    setTimeout(nuke, 100);
+    setTimeout(nuke, 500);
+  }
+  if (document.readyState !== 'loading') {
+    run();
   } else {
-    document.addEventListener('DOMContentLoaded', nuke);
+    document.addEventListener('DOMContentLoaded', run);
   }
 })();
 </script>
@@ -2143,77 +2159,269 @@ window.copyTxt = function(t) {
   if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
 };
 
-// ── Мои объявления ──
-window.p2pState.myAds = [
-  { id:'ma1', side:'sell', status:'active', price:95.40, priceType:'floating+0.5%', remaining:4500, total:10000, minRub:1000, maxRub:100000, banks:['СБП','Сбер','Тинькофф'], created:'вчера', deals30d:14 },
-  { id:'ma2', side:'buy', status:'paused', price:94.20, priceType:'fixed', remaining:0, total:0, minRub:5000, maxRub:200000, banks:['СБП','Альфа'], created:'3 дня назад', deals30d:8 },
+// ══════════════════════════════════════════════════════════
+// МОИ ОБЪЯВЛЕНИЯ — реальные данные из API + полный CRUD UI
+// ══════════════════════════════════════════════════════════
+window.p2pState.myAds = [];
+
+// Mock fallback — если API не отвечает (нет токена/Telegram нет)
+const MOCK_MY_ADS = [
+  { id:'ma1', side:'sell', status:'active', price:95.40, price_type:'floating',
+    remaining:4500, total:10000, min_amount:1000, max_amount:100000,
+    banks:['СБП','Сбер','Тинькофф'], deals_today:14, terms:'Только СБП за 5 мин', created_at:new Date().toISOString() },
+  { id:'ma2', side:'buy', status:'paused', price:94.20, price_type:'fixed',
+    remaining:0, total:0, min_amount:5000, max_amount:200000,
+    banks:['СБП','Альфа'], deals_today:8, terms:'С личной карты', created_at:new Date().toISOString() },
 ];
 
-window.loadMyAds = function() {
+function _myAdsToArr(resp) {
+  if (!resp) return [];
+  if (Array.isArray(resp)) return resp;
+  if (Array.isArray(resp.items)) return resp.items;
+  if (Array.isArray(resp.offers)) return resp.offers;
+  return [];
+}
+
+window.loadMyAds = async function() {
+  // 1) Снести legacy DOM который Telegram мог восстановить из snapshot
+  ['view-p2p-my-ads', 'view-my-ads', 'view-p2p-offer-old'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  });
+  ['my-ads-list', 'p2p-my-ads-list'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+
   const list = document.getElementById('p2p-myads-list');
   if (!list) return;
-  const ads = window.p2pState.myAds || [];
-  if (!ads.length) { list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет объявлений. Тапни +, чтобы создать.</div>'; return; }
+  list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загрузка…</div>';
+
+  // 2) Тянем из API; если упало — мок (только для dev)
+  let ads = [];
+  try {
+    const r = await api('/api/v1/offers/me/list').catch(() => null);
+    ads = _myAdsToArr(r);
+  } catch(_) {}
+  if (!ads.length && (!window.Telegram?.WebApp?.initData)) ads = MOCK_MY_ADS;
+  window.p2pState.myAds = ads;
+
+  if (!ads.length) {
+    list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">У тебя пока нет объявлений.<br>Нажми <b>+</b>, чтобы создать.</div>';
+    return;
+  }
+
   list.innerHTML = ads.map(a => {
-    const isActive = a.status === 'active';
-    const dir = a.side === 'sell' ? '↑' : '↓';
-    const dirBg = a.side === 'sell' ? 'linear-gradient(135deg,#34c759,#1a6a30)' : 'linear-gradient(135deg,#3DA3F0,#1a4a7a)';
-    const title = a.side === 'sell' ? 'Продаю USDT' : 'Покупаю USDT';
+    const side = (a.side || '').toLowerCase();
+    const status = (a.status || 'active').toLowerCase();
+    const isActive = status === 'active';
+    const isPaused = status === 'paused';
+    const price = +(a.price || 0);
+    const priceType = a.price_type || a.priceType || 'fixed';
+    const remaining = +(a.remaining ?? a.amount_remaining ?? 0);
+    const total = +(a.total ?? a.amount ?? remaining);
+    const minRub = +(a.min_amount ?? a.minRub ?? 0);
+    const maxRub = +(a.max_amount ?? a.maxRub ?? 0);
+    const banks = Array.isArray(a.banks) ? a.banks : (Array.isArray(a.payment_methods) ? a.payment_methods : []);
+    const dealsToday = +(a.deals_today ?? a.deals30d ?? 0);
+    const dir = side === 'sell' ? '↑' : '↓';
+    const dirBg = side === 'sell' ? 'linear-gradient(135deg,#34c759,#1a6a30)' : 'linear-gradient(135deg,#3DA3F0,#1a4a7a)';
+    const title = side === 'sell' ? 'Продаю USDT' : 'Покупаю USDT';
     const statusBadge = isActive
-      ? '<span class="p2p-status released">АКТИВНО</span>'
-      : '<span class="p2p-status paid">ПАУЗА</span>';
-    return `<div class="p2p-offer-card">
+      ? '<span style="background:rgba(52,199,89,0.18);color:#5FE388;font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;margin-left:6px">АКТИВНО</span>'
+      : '<span style="background:rgba(255,214,10,0.18);color:#FFD60A;font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;margin-left:6px">ПАУЗА</span>';
+    const pauseBtnLabel = isActive ? '⏸ Пауза' : '▶ Возобновить';
+    const pauseBtnAction = isActive ? 'pause' : 'resume';
+    const safeId = escHtml(String(a.id));
+    return `<div class="p2p-offer-card" style="margin-bottom:14px">
       <div class="row1">
         <div class="avatar" style="background:${dirBg}">${dir}</div>
         <div class="name">
-          <div class="nick">${title} ${statusBadge}</div>
-          <div class="stats">Создано ${escHtml(a.created)} · ${a.deals30d} ордеров за 30 дней</div>
+          <div class="nick">${title}${statusBadge}</div>
+          <div class="stats">~${dealsToday} сделок сегодня · ${escHtml(priceType === 'floating' ? 'плавающий курс' : 'фикс. курс')}</div>
         </div>
       </div>
       <div class="price-row">
-        <span class="price-big">${a.price.toFixed(2)} ₽</span>
-        <span class="price-sub">${escHtml(a.priceType)}</span>
+        <span class="price-big">${price.toFixed(2)} ₽</span>
+        <span class="price-sub">за 1 USDT</span>
       </div>
-      <div class="limit-row">${isActive ? 'Остаток: ' + a.remaining.toLocaleString('ru-RU') + ' / ' + a.total.toLocaleString('ru-RU') + ' USDT · ' : ''}Лимит ${a.minRub.toLocaleString('ru-RU')} — ${a.maxRub.toLocaleString('ru-RU')} ₽</div>
-      <div class="pay-row">${a.banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="p2p-cta" style="background:var(--lg-bg);color:#fff;border:1px solid var(--lg-border);box-shadow:none" onclick="alert('Редактирование — в следующем шаге')">${isActive ? 'Редактировать' : 'Активировать'}</button>
-        <button class="p2p-cta" style="background:linear-gradient(135deg,rgba(255,69,58,0.30),rgba(139,20,16,0.20));border:1px solid rgba(255,69,58,0.35);color:#FF8B82;box-shadow:0 4px 12px rgba(255,69,58,0.18)" onclick="snipeMyAd('${a.id}')">${isActive ? 'Снять' : 'Удалить'}</button>
+      <div class="limit-row">${isActive ? 'Остаток: <b>' + remaining.toLocaleString('ru-RU') + '</b> / ' + total.toLocaleString('ru-RU') + ' USDT · ' : ''}Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
+      <div class="pay-row">${banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+        <button class="p2p-cta" style="background:linear-gradient(135deg,#3DA3F0,#1A6BC4);color:#fff;border:0" onclick="editMyAd('${safeId}')">✏ Редактировать</button>
+        <button class="p2p-cta" style="background:${isActive?'linear-gradient(135deg,#FFD60A,#C8A800)':'linear-gradient(135deg,#34c759,#1a6a30)'};color:#000;border:0" onclick="toggleMyAdStatus('${safeId}','${pauseBtnAction}')">${pauseBtnLabel}</button>
+      </div>
+      <div style="margin-top:8px">
+        <button class="p2p-cta" style="background:linear-gradient(135deg,rgba(255,69,58,0.30),rgba(139,20,16,0.20));border:1px solid rgba(255,69,58,0.35);color:#FF8B82" onclick="deleteMyAd('${safeId}')">🗑 Удалить объявление</button>
       </div>
     </div>`;
   }).join('');
 };
-window.snipeMyAd = function(id) {
-  if (!confirm('Снять/удалить объявление?')) return;
-  window.p2pState.myAds = window.p2pState.myAds.filter(a => a.id !== id);
+
+// Pause/Resume объявление
+window.toggleMyAdStatus = async function(id, action) {
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+  try {
+    await api('/api/v1/offers/' + encodeURIComponent(id) + '/' + action, { method:'PATCH' });
+    toast(action === 'pause' ? 'Объявление на паузе' : 'Объявление возобновлено', 'success');
+  } catch(e) {
+    toast('Ошибка: ' + (e.message || 'не получилось'), 'error');
+  }
   loadMyAds();
-  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('heavy');
 };
+
+// Удалить объявление
+window.deleteMyAd = async function(id) {
+  // Telegram-нативный confirm вместо window.confirm
+  const ok = await new Promise(res => {
+    if (window.Telegram?.WebApp?.showConfirm) {
+      Telegram.WebApp.showConfirm('Удалить объявление? Откатить нельзя.', r => res(!!r));
+    } else { res(confirm('Удалить объявление?')); }
+  });
+  if (!ok) return;
+  try {
+    await api('/api/v1/offers/' + encodeURIComponent(id), { method:'DELETE' });
+    toast('Объявление удалено', 'success');
+    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
+  } catch(e) {
+    toast('Ошибка: ' + (e.message || 'не получилось'), 'error');
+  }
+  loadMyAds();
+};
+
+// Редактирование — модалка
+window.editMyAd = function(id) {
+  const ad = (window.p2pState.myAds || []).find(a => String(a.id) === String(id));
+  if (!ad) { toast('Объявление не найдено','error'); return; }
+  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('light');
+  const banks = Array.isArray(ad.banks) ? ad.banks : (Array.isArray(ad.payment_methods) ? ad.payment_methods : []);
+  const price = +(ad.price || 0);
+  const minRub = +(ad.min_amount ?? ad.minRub ?? 0);
+  const maxRub = +(ad.max_amount ?? ad.maxRub ?? 0);
+  const total = +(ad.total ?? ad.amount ?? 0);
+  const terms = ad.terms || '';
+  const BANK_OPTS = ['СБП','Сбер','Тинькофф','Альфа','Райф','ВТБ','Газпромбанк','Озон','Наличные'];
+
+  const m = document.createElement('div');
+  m.id = 'edit-ad-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(8px);animation:pcFade .2s';
+  m.innerHTML = `<div style="width:100%;max-height:92vh;overflow-y:auto;background:#15161a;border-radius:18px 18px 0 0;padding:20px 18px 30px;animation:pcSlide .3s">
+    <div style="text-align:center;font-size:17px;font-weight:700;color:#fff;margin-bottom:18px">Редактировать объявление</div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
+    <input id="ema-price" type="number" step="0.01" value="${price.toFixed(2)}" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:12px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Объём (USDT)</div>
+    <input id="ema-total" type="number" value="${total}" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;margin-bottom:12px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты ₽ (мин — макс)</div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <input id="ema-min" type="number" value="${minRub}" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="ema-max" type="number" value="${maxRub}" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+    </div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Способы оплаты</div>
+    <div id="ema-banks" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${BANK_OPTS.map(b => `<button data-bank="${escHtml(b)}" class="ema-bank-chip" style="padding:8px 14px;border-radius:20px;border:1px solid ${banks.indexOf(b)>=0?'#5FE388':'rgba(255,255,255,0.15)'};background:${banks.indexOf(b)>=0?'rgba(95,227,136,0.18)':'transparent'};color:${banks.indexOf(b)>=0?'#5FE388':'#fff'};font-size:13px;cursor:pointer">${escHtml(b)}</button>`).join('')}</div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Условия (для покупателей)</div>
+    <textarea id="ema-terms" rows="3" style="width:100%;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px">${escHtml(terms)}</textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <button onclick="document.getElementById('edit-ad-modal').remove()" class="p2p-cta" style="background:#1a1a1a;color:#fff;border:1px solid rgba(255,255,255,0.15)">Отмена</button>
+      <button onclick="saveMyAdEdit('${escHtml(String(id))}')" class="p2p-cta" style="background:linear-gradient(135deg,#3DA3F0,#1A6BC4);color:#fff;border:0">Сохранить</button>
+    </div>
+  </div>`;
+  document.body.appendChild(m);
+  // toggle банков
+  m.querySelectorAll('.ema-bank-chip').forEach(b => {
+    b.addEventListener('click', () => {
+      const active = b.style.color === 'rgb(95, 227, 136)' || b.style.borderColor.includes('95');
+      if (active) {
+        b.style.borderColor = 'rgba(255,255,255,0.15)';
+        b.style.background = 'transparent';
+        b.style.color = '#fff';
+      } else {
+        b.style.borderColor = '#5FE388';
+        b.style.background = 'rgba(95,227,136,0.18)';
+        b.style.color = '#5FE388';
+      }
+    });
+  });
+};
+
+// Сохранить правки объявления
+window.saveMyAdEdit = async function(id) {
+  const m = document.getElementById('edit-ad-modal');
+  if (!m) return;
+  const price = parseFloat(document.getElementById('ema-price')?.value) || 0;
+  const total = parseFloat(document.getElementById('ema-total')?.value) || 0;
+  const minRub = parseFloat(document.getElementById('ema-min')?.value) || 0;
+  const maxRub = parseFloat(document.getElementById('ema-max')?.value) || 0;
+  const terms = (document.getElementById('ema-terms')?.value || '').trim();
+  const banks = Array.from(m.querySelectorAll('.ema-bank-chip')).filter(b => b.style.color === 'rgb(95, 227, 136)').map(b => b.dataset.bank);
+  if (!price || price < 1) { toast('Курс некорректен','error'); return; }
+  if (!banks.length) { toast('Выбери хотя бы один способ оплаты','error'); return; }
+  if (minRub >= maxRub) { toast('Минимум должен быть меньше максимума','error'); return; }
+  try {
+    await api('/api/v1/offers/' + encodeURIComponent(id), {
+      method:'PATCH',
+      body: JSON.stringify({
+        price: price, amount: total,
+        min_amount: minRub, max_amount: maxRub,
+        banks: banks, payment_methods: banks,
+        terms: terms,
+      }),
+    });
+    toast('Сохранено','success');
+    m.remove();
+    loadMyAds();
+  } catch(e) {
+    toast('Ошибка: ' + (e.message || 'не получилось'),'error');
+  }
+};
+
+// legacy alias (на случай если где-то ещё вызывается)
+window.snipeMyAd = function(id) { return window.deleteMyAd(id); };
 
 // myads-btn в доске
 safeBind('p2p-myads-btn', 'click', () => go('p2p-myads'));
 safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
 
-// Submit нового объявления
-safeBind('p2p-ad-submit', 'click', () => {
-  const sideBuyActive = document.getElementById('p2p-ad-buy')?.classList.contains('active');
-  const side = sideBuyActive ? 'buy' : 'sell';
-  const price = parseFloat(document.getElementById('p2p-ad-price')?.value) || 0;
-  const amount = parseFloat(document.getElementById('p2p-ad-amount')?.value) || 0;
-  const min = parseFloat(document.getElementById('p2p-ad-min')?.value) || 0;
-  const max = parseFloat(document.getElementById('p2p-ad-max')?.value) || 0;
-  if (!price || price < 50 || price > 200) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Курс вне разумного диапазона') : alert('Курс вне диапазона'); return; }
-  if (!amount || amount < 10) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Минимум 10 USDT') : alert('Min 10 USDT'); return; }
-  const ad = {
-    id: 'ma' + Date.now(), side, status:'active',
-    price, priceType:'fixed', remaining:amount, total:amount, minRub:min, maxRub:max,
-    banks:['СБП','Сбер','Тинькофф'], created:'только что', deals30d:0
-  };
-  window.p2pState.myAds = window.p2pState.myAds || [];
-  window.p2pState.myAds.unshift(ad);
-  if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-  go('p2p-myads');
-  setTimeout(loadMyAds, 50);
+// Submit нового объявления — реальный POST в API
+safeBind('p2p-ad-submit', 'click', async () => {
+  const btn = document.getElementById('p2p-ad-submit');
+  if (btn) btn.disabled = true;
+  try {
+    const sideBuyActive = document.getElementById('p2p-ad-buy')?.classList.contains('active');
+    const side = sideBuyActive ? 'buy' : 'sell';
+    const price = parseFloat(document.getElementById('p2p-ad-price')?.value) || 0;
+    const amount = parseFloat(document.getElementById('p2p-ad-amount')?.value) || 0;
+    const min = parseFloat(document.getElementById('p2p-ad-min')?.value) || 0;
+    const max = parseFloat(document.getElementById('p2p-ad-max')?.value) || 0;
+    const terms = (document.getElementById('p2p-ad-terms')?.value || '').trim();
+    if (!price || price < 50 || price > 200) { toast('Курс вне разумного диапазона (50-200)','error'); return; }
+    if (!amount || amount < 10) { toast('Минимум 10 USDT','error'); return; }
+    if (min >= max) { toast('Минимум должен быть меньше максимума','error'); return; }
+
+    let created = null;
+    try {
+      created = await api('/api/v1/offers', {
+        method:'POST',
+        body: JSON.stringify({
+          side: side, coin:'USDT', currency:'RUB',
+          price: price, amount: amount,
+          min_amount: min, max_amount: max,
+          banks: ['СБП','Сбер','Тинькофф'],
+          payment_methods: ['СБП','Сбер','Тинькофф'],
+          terms: terms,
+          price_type: 'fixed',
+        }),
+      });
+    } catch(e) {
+      toast('Ошибка создания: ' + (e.message || 'не получилось'),'error');
+      return;
+    }
+    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+    toast('Объявление опубликовано','success');
+    go('p2p-myads');
+    setTimeout(loadMyAds, 100);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 });
 // Buy/Sell таб переключатель в create
 safeBind('p2p-ad-buy', 'click', () => {
