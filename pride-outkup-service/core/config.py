@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     bot_token: str
     bot_username: str = "PrideP2P_bot"
 
-    miniapp_url: str = "https://pride-outkup-service-production.up.railway.app"
+    miniapp_url: str = "https://pride-p2p-production.up.railway.app"
     miniapp_path: str = "/v7"
 
     database_url: str
