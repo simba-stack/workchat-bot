@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v9.20260618';
+  const APP_BUILD = 'v10.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1662,9 +1662,32 @@ function go(view) {
   else if (view === 'history') loadOperations();
   else if (view === 'settings') loadSettings();
   // P2P v2 хуки (loadP2POffers/loadMyAds/loadPaymentMethods объявлены ниже)
-  else if (view === 'p2p') { try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){} }
-  else if (view === 'p2p-myads') { try { if (typeof loadMyAds === 'function') loadMyAds(); } catch(_){} }
-  else if (view === 'payment-methods') { try { if (typeof loadPaymentMethods === 'function') loadPaymentMethods(); } catch(_){} }
+  // ВАЖНО: перед вызовом loader'а — синхронно очищаем контейнер,
+  // чтобы legacy DOM из Telegram-snapshot не "проскакивал" при возврате на вкладку.
+  else if (view === 'p2p') {
+    const list = document.getElementById('p2p-list');
+    if (list) list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+    try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){}
+  }
+  else if (view === 'p2p-myads') {
+    const list = document.getElementById('p2p-myads-list');
+    if (list) list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+    // снести любой legacy DOM который Telegram-snapshot мог вернуть
+    ['view-p2p-my-ads','view-my-ads'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    ['my-ads-list','p2p-my-ads-list'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '';
+    });
+    try { if (typeof loadMyAds === 'function') loadMyAds(); } catch(_){}
+  }
+  else if (view === 'payment-methods') {
+    const list = document.getElementById('pm-list');
+    if (list) list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+    try { if (typeof loadPaymentMethods === 'function') loadPaymentMethods(); } catch(_){}
+  }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll('#bottom-nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.view)));
