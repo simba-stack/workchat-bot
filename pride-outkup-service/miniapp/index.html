@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v10.20260618';
+  const APP_BUILD = 'v11.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1902,28 +1902,7 @@ safeBind('settings-btn','click', () => go('settings'));
 // ═══════════════════════════════════════════════════════════
 window.p2pState = { side: 'buy', bank: 'all', offers: [] };
 
-const MOCK_OFFERS_BUY = [
-  { id:'mk1', nick:'PRIDE Official', avatar:'🦁', tier:'pride', tierLabel:'PRIDE',
-    rating:4.98, deals:1432, success:99.7, avgMin:1,
-    price:95.18, available:12540, minRub:1000, maxRub:500000,
-    banks:['СБП','Сбер','Тинькофф'], online:true,
-    terms:'🟡 Оплата ТОЛЬКО с личной карты, ФИО плательщика должно совпадать с ФИО на профиле.\n🟡 Без комментариев в назначении платежа.\n🟢 Отпускаю USDT в течение 1-2 минут после поступления оплаты.' },
-  { id:'mk2', nick:'MaxTrader', avatar:'M', tier:'gold', tierLabel:'GOLD',
-    rating:4.91, deals:832, success:98.4, avgMin:3,
-    price:95.35, available:8200, minRub:5000, maxRub:200000,
-    banks:['Тинькофф','Сбер'], online:true,
-    terms:'Только СБП. Перевод за 5 минут.' },
-  { id:'mk3', nick:'DenisExchange', avatar:'D', tier:'verified', tierLabel:'✓',
-    rating:4.82, deals:256, success:96.1, avgMin:7,
-    price:95.50, available:3400, minRub:1000, maxRub:100000,
-    banks:['СБП','Альфа'], online:false,
-    terms:'Принимаю только Альфа. ФИО должно совпадать.' },
-  { id:'mk4', nick:'NikitaKursy', avatar:'N', tier:null, tierLabel:null,
-    rating:4.65, deals:41, success:89.1, avgMin:15,
-    price:95.85, available:1200, minRub:500, maxRub:50000,
-    banks:['Райф','ВТБ'], online:true,
-    terms:'Свободные условия, готов договариваться.' },
-];
+// MOCK_OFFERS_BUY ПОЛНОСТЬЮ УДАЛЁН. P2P маркет показывает ТОЛЬКО реальные offer'ы из API.
 
 function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
@@ -1974,7 +1953,7 @@ async function loadP2POffers() {
       const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
       if (r && r.items && r.items.length) offers = r.items;
     } catch(_) {}
-    if (!offers.length) offers = MOCK_OFFERS_BUY;
+    // НИКАКИХ MOCK — только реальные данные. Если нет — показываем пусто.
     if (p2pState.bank && p2pState.bank !== 'all') {
       const bankMap = { sbp:'СБП', sber:'Сбер', tinkoff:'Тинькофф', alfa:'Альфа', raif:'Райф' };
       const need = bankMap[p2pState.bank];
@@ -2211,16 +2190,7 @@ window.copyTxt = function(t) {
 // МОИ ОБЪЯВЛЕНИЯ — реальные данные из API + полный CRUD UI
 // ══════════════════════════════════════════════════════════
 window.p2pState.myAds = [];
-
-// Mock fallback — если API не отвечает (нет токена/Telegram нет)
-const MOCK_MY_ADS = [
-  { id:'ma1', side:'sell', status:'active', price:95.40, price_type:'floating',
-    remaining:4500, total:10000, min_amount:1000, max_amount:100000,
-    banks:['СБП','Сбер','Тинькофф'], deals_today:14, terms:'Только СБП за 5 мин', created_at:new Date().toISOString() },
-  { id:'ma2', side:'buy', status:'paused', price:94.20, price_type:'fixed',
-    remaining:0, total:0, min_amount:5000, max_amount:200000,
-    banks:['СБП','Альфа'], deals_today:8, terms:'С личной карты', created_at:new Date().toISOString() },
-];
+// MOCK данных нет — только API. Если что-то идёт не так — пустой список.
 
 function _myAdsToArr(resp) {
   if (!resp) return [];
@@ -2245,13 +2215,12 @@ window.loadMyAds = async function() {
   if (!list) return;
   list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загрузка…</div>';
 
-  // 2) Тянем из API; если упало — мок (только для dev)
+  // 2) Только реальные данные из API. НИКАКИХ MOCK.
   let ads = [];
   try {
     const r = await api('/api/v1/offers/me/list').catch(() => null);
     ads = _myAdsToArr(r);
   } catch(_) {}
-  if (!ads.length && (!window.Telegram?.WebApp?.initData)) ads = MOCK_MY_ADS;
   window.p2pState.myAds = ads;
 
   if (!ads.length) {
