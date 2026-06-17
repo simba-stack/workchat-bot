@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Mini-App
     miniapp_url: str = "https://pride-outkup-service-production.up.railway.app"
-    miniapp_path: str = "/app"
+    miniapp_path: str = "/app2"  # was "/app" — bumped to force Telegram WebApp cache invalidation
 
     # Database
     database_url: str
