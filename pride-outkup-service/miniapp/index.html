@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v8.20260618';
+  const APP_BUILD = 'v9.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1151,6 +1151,14 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
     <button class="pc-skin" id="pc-skin-btn">🎨 Скин</button>
     <div class="pc-logo">P2P</div>
   </div>
+  <!-- Этап 2: захолдированный баланс — показывается только если > 0 -->
+  <div id="locked-balance-row" style="display:none;margin:8px 14px 0;padding:10px 14px;background:rgba(255,214,10,0.08);border:1px solid rgba(255,214,10,0.20);border-radius:12px;font-size:13px;color:#FFD60A;cursor:pointer" onclick="openLockedDetails()">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span>🔒 <b id="locked-balance-amt">0</b> USDT захолдировано</span>
+      <span style="font-size:11px;color:rgba(255,214,10,0.7)">подробнее →</span>
+    </div>
+    <div id="locked-balance-hint" style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">Заморожено активными объявлениями</div>
+  </div>
   <div style="display:none">
     <span id="total-usd">0.00</span>
     <button id="toggle-balance"></button>
@@ -1501,8 +1509,9 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
     </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
     <input id="p2p-ad-price" type="number" value="91.50" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
-    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Доступно USDT</div>
-    <input id="p2p-ad-amount" type="number" value="5000" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Объём USDT (заморозится в эскроу для sell)</div>
+    <input id="p2p-ad-amount" type="number" value="100" min="10" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:4px">
+    <div id="p2p-ad-balance-hint" style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:10px">Загружаю баланс…</div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты RUB</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
       <input id="p2p-ad-min" type="number" value="5000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
@@ -1709,6 +1718,22 @@ async function loadMain() {
     let totalUsd = 0;
     coins.forEach(c => { totalUsd += parseFloat(balances[c.code]||0) * (coinPrice(c.code).price); });
     if (!balanceHidden) $('total-usd').textContent = fmt(totalUsd, 2);
+
+    // Этап 2: подтянуть locked баланс (USDT захолдировано активными offer'ами)
+    try {
+      const bal2 = await api('/api/v1/users/me/balance').catch(() => null);
+      if (bal2 && bal2.locked_usdt > 0) {
+        const row = document.getElementById('locked-balance-row');
+        const amt = document.getElementById('locked-balance-amt');
+        if (row) row.style.display = 'block';
+        if (amt) amt.textContent = (+bal2.locked_usdt).toFixed(2);
+        // сохраним детали для модалки
+        window.__lockedBalanceLocks = bal2.locks || [];
+      } else {
+        const row = document.getElementById('locked-balance-row');
+        if (row) row.style.display = 'none';
+      }
+    } catch(_) {}
 
     // Фильтр скрытых монет (localStorage) + опционально пустых
     const hidden = getHiddenCoins();
@@ -2318,6 +2343,10 @@ window.editMyAd = function(id) {
     </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Способы оплаты</div>
     <div id="ema-banks" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${BANK_OPTS.map(b => `<button data-bank="${escHtml(b)}" class="ema-bank-chip" style="padding:8px 14px;border-radius:20px;border:1px solid ${banks.indexOf(b)>=0?'#5FE388':'rgba(255,255,255,0.15)'};background:${banks.indexOf(b)>=0?'rgba(95,227,136,0.18)':'transparent'};color:${banks.indexOf(b)>=0?'#5FE388':'#fff'};font-size:13px;cursor:pointer">${escHtml(b)}</button>`).join('')}</div>
+    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Время на оплату (мин)</div>
+    <div id="ema-window" style="display:flex;gap:6px;margin-bottom:12px">
+      ${[15,30,60,120].map(w => `<button data-w="${w}" class="ema-w-chip" style="flex:1;padding:10px;border-radius:10px;border:1px solid ${(+(ad.pay_window_min||30))===w?'#5FE388':'rgba(255,255,255,0.15)'};background:${(+(ad.pay_window_min||30))===w?'rgba(95,227,136,0.18)':'transparent'};color:${(+(ad.pay_window_min||30))===w?'#5FE388':'#fff'};font-size:13px;cursor:pointer">${w}м</button>`).join('')}
+    </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Условия (для покупателей)</div>
     <textarea id="ema-terms" rows="3" style="width:100%;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px">${escHtml(terms)}</textarea>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2341,6 +2370,19 @@ window.editMyAd = function(id) {
       }
     });
   });
+  // toggle pay-window (single select)
+  m.querySelectorAll('.ema-w-chip').forEach(b => {
+    b.addEventListener('click', () => {
+      m.querySelectorAll('.ema-w-chip').forEach(c => {
+        c.style.borderColor = 'rgba(255,255,255,0.15)';
+        c.style.background = 'transparent';
+        c.style.color = '#fff';
+      });
+      b.style.borderColor = '#5FE388';
+      b.style.background = 'rgba(95,227,136,0.18)';
+      b.style.color = '#5FE388';
+    });
+  });
 };
 
 // Сохранить правки объявления
@@ -2353,6 +2395,8 @@ window.saveMyAdEdit = async function(id) {
   const maxRub = parseFloat(document.getElementById('ema-max')?.value) || 0;
   const terms = (document.getElementById('ema-terms')?.value || '').trim();
   const banks = Array.from(m.querySelectorAll('.ema-bank-chip')).filter(b => b.style.color === 'rgb(95, 227, 136)').map(b => b.dataset.bank);
+  const winBtn = Array.from(m.querySelectorAll('.ema-w-chip')).find(b => b.style.color === 'rgb(95, 227, 136)');
+  const payWindow = winBtn ? parseInt(winBtn.dataset.w) : 30;
   if (!price || price < 1) { toast('Курс некорректен','error'); return; }
   if (!banks.length) { toast('Выбери хотя бы один способ оплаты','error'); return; }
   if (minRub >= maxRub) { toast('Минимум должен быть меньше максимума','error'); return; }
@@ -2364,6 +2408,7 @@ window.saveMyAdEdit = async function(id) {
         min_amount: minRub, max_amount: maxRub,
         banks: banks, payment_methods: banks,
         terms: terms,
+        pay_window_min: payWindow,
       }),
     });
     toast('Сохранено','success');
@@ -2377,9 +2422,72 @@ window.saveMyAdEdit = async function(id) {
 // legacy alias (на случай если где-то ещё вызывается)
 window.snipeMyAd = function(id) { return window.deleteMyAd(id); };
 
+// Этап 2: модалка детализации захолдированного баланса
+window.openLockedDetails = function() {
+  const locks = window.__lockedBalanceLocks || [];
+  if (!locks.length) return;
+  const total = locks.reduce((s,l) => s + (+l.amount_usdt || 0), 0);
+  const REASONS_RU = {
+    'offer_active': '🟢 Активное объявление',
+    'deal_locked': '🤝 Открытая сделка',
+    'dispute': '⚖ Заморозка по спору',
+  };
+  const lines = locks.map(l => {
+    const reasonHuman = REASONS_RU[l.reason] || l.reason || 'Хранение';
+    const refLine = l.offer_id ? `<div style="font-size:11px;color:rgba(255,255,255,0.4)">Объявление #${l.offer_id}</div>` :
+                    l.deal_id ? `<div style="font-size:11px;color:rgba(255,255,255,0.4)">Сделка #${l.deal_id}</div>` : '';
+    return `<div style="padding:12px 14px;background:#1a1a1a;border-radius:10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="color:#FFD60A;font-weight:600;font-size:13px">${reasonHuman}</div>
+          ${refLine}
+        </div>
+        <div style="color:#fff;font-weight:700">${(+l.amount_usdt).toFixed(2)} USDT</div>
+      </div>
+    </div>`;
+  }).join('');
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:flex-end;backdrop-filter:blur(8px);animation:pcFade .2s';
+  m.innerHTML = `<div style="width:100%;max-height:80vh;overflow-y:auto;background:#15161a;border-radius:18px 18px 0 0;padding:20px 18px 30px;animation:pcSlide .3s">
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="color:rgba(255,255,255,0.55);font-size:12px">Захолдировано всего</div>
+      <div style="color:#FFD60A;font-weight:700;font-size:28px;margin-top:2px">🔒 ${total.toFixed(2)} USDT</div>
+    </div>
+    <div style="margin-bottom:14px">${lines}</div>
+    <button onclick="this.closest('div[style*=\\"position:fixed\\"]').remove()" class="p2p-cta" style="background:#1a1a1a;color:#fff;border:1px solid rgba(255,255,255,0.15);width:100%">Закрыть</button>
+  </div>`;
+  document.body.appendChild(m);
+  m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+};
+
 // myads-btn в доске
 safeBind('p2p-myads-btn', 'click', () => go('p2p-myads'));
 safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
+
+// Этап 2: подсказка доступного USDT-баланса в форме создания
+window.refreshAdBalanceHint = async function() {
+  try {
+    const r = await api('/api/v1/users/me/balance').catch(() => null);
+    if (!r) return;
+    const hint = document.getElementById('p2p-ad-balance-hint');
+    if (hint) {
+      hint.innerHTML = `Доступно <b style="color:#5FE388">${(+r.available_usdt).toFixed(4)} USDT</b> (захолдировано ${(+r.locked_usdt).toFixed(4)})`;
+      window.__availableUsdt = +r.available_usdt;
+    }
+  } catch(_) {}
+};
+// при переходе на форму — подгрузить баланс
+const _origGo = window.go;
+if (typeof _origGo === 'function' && !window.__goPatchedForAdBalance) {
+  window.__goPatchedForAdBalance = true;
+  window.go = function(view) {
+    const r = _origGo(view);
+    if (view === 'p2p-create') {
+      setTimeout(() => { try { if (typeof refreshAdBalanceHint==='function') refreshAdBalanceHint(); } catch(_){} }, 30);
+    }
+    return r;
+  };
+}
 
 // Submit нового объявления — реальный POST в API
 safeBind('p2p-ad-submit', 'click', async () => {
@@ -2396,18 +2504,31 @@ safeBind('p2p-ad-submit', 'click', async () => {
     if (!price || price < 50 || price > 200) { toast('Курс вне разумного диапазона (50-200)','error'); return; }
     if (!amount || amount < 10) { toast('Минимум 10 USDT','error'); return; }
     if (min >= max) { toast('Минимум должен быть меньше максимума','error'); return; }
+    // Этап 2: для sell — клиент-side check что хватает USDT
+    if (side === 'sell' && typeof window.__availableUsdt === 'number') {
+      if (window.__availableUsdt < amount) {
+        toast(`Недостаточно USDT: доступно ${window.__availableUsdt.toFixed(4)}, нужно ${amount}`,'error');
+        return;
+      }
+    }
+    // Максимум в лимитах не должен быть больше чем amount × rate
+    if (max > amount * price) {
+      toast(`Максимум лимита (${max}₽) больше чем объём ${amount} USDT × ${price}₽ = ${(amount*price).toFixed(0)}₽`,'error');
+      return;
+    }
 
     let created = null;
     try {
       created = await api('/api/v1/offers', {
         method:'POST',
         body: JSON.stringify({
-          side: side, coin:'USDT', currency:'RUB',
-          price: price, amount: amount,
-          min_amount: min, max_amount: max,
-          banks: ['СБП','Сбер','Тинькофф'],
+          side: side, coin:'USDT', fiat:'RUB',
+          rate_rub_per_usdt: price,
+          amount_usdt_total: amount,
+          min_amount_rub: min, max_amount_rub: max,
           payment_methods: ['СБП','Сбер','Тинькофф'],
-          terms: terms,
+          conditions: terms || null,
+          pay_window_min: 30,
           price_type: 'fixed',
         }),
       });

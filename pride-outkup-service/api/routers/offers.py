@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user, require_verified
 from core.db import get_db
 from core.models import Offer, User
-from core.services import price_index as pi_svc, settings_kv
+from core.services import escrow_service, price_index as pi_svc, settings_kv
 
 router = APIRouter()
 
@@ -197,12 +197,31 @@ async def create_offer(
     require_kyc = bool(payload.get("require_kyc") or False)
     region = (payload.get("region") or "").strip()[:16] or None
 
+    # Этап 2: amount_usdt_total — сколько USDT seller вынес на продажу.
+    # Если не указан клиентом — считаем из max_amount_rub / rate (как было).
+    try:
+        amount_usdt = Decimal(str(
+            payload.get("amount_usdt_total") or payload.get("amount") or 0
+        ))
+    except Exception:
+        amount_usdt = Decimal("0")
+    if amount_usdt <= 0:
+        amount_usdt = max_amt / rate
+
     if side == "sell":
-        need = max_amt / rate
-        if user.balance_usdt < need:
+        # СТРОЖАЙШАЯ проверка: на доступном балансе USDT >= amount_usdt.
+        if user.balance_usdt < amount_usdt:
             raise HTTPException(
                 400,
-                f"для sell-оффера нужно >= {float(need):.2f} {coin} на балансе",
+                f"Недостаточно USDT для выставления объявления: нужно {float(amount_usdt):.4f}, "
+                f"доступно {float(user.balance_usdt):.4f}. Лимиты должны быть в пределах баланса.",
+            )
+        # Лимит max_amount тоже должен укладываться в баланс
+        if max_amt / rate > amount_usdt:
+            raise HTTPException(
+                400,
+                f"Максимум лимита ({float(max_amt):.0f}₽) превышает объём USDT в объявлении "
+                f"({float(amount_usdt):.4f} USDT @ {float(rate):.2f}₽).",
             )
 
     o = Offer(
@@ -210,6 +229,8 @@ async def create_offer(
         price_type=price_type, float_margin_pct=float_margin,
         rate_rub_per_usdt=rate,
         min_amount_rub=min_amt, max_amount_rub=max_amt,
+        amount_usdt_total=amount_usdt,
+        amount_usdt_remaining=amount_usdt,
         payment_methods=payment_methods,
         pay_window_min=pay_window,
         min_taker_completed=min_taker_completed,
@@ -220,7 +241,18 @@ async def create_offer(
     )
     db.add(o)
     await db.flush()
-    return {"ok": True, "offer_id": o.id}
+
+    # Этап 2: для sell — лочим USDT в escrow сразу при создании
+    if side == "sell":
+        try:
+            await escrow_service.lock_for_offer(db, user, o, amount_usdt)
+        except HTTPException:
+            # откатываем создание offer'а если lock сорвался
+            await db.delete(o)
+            await db.flush()
+            raise
+
+    return {"ok": True, "offer_id": o.id, "amount_usdt_total": float(amount_usdt)}
 
 
 @router.patch("/{offer_id}")
@@ -258,10 +290,16 @@ async def pause_offer(
     o = await db.get(Offer, offer_id)
     if not o or o.user_id != user.id:
         raise HTTPException(404, "offer not found")
+    if o.status == "paused":
+        return {"ok": True, "status": "paused", "released_usdt": 0}
     o.status = "paused"
     o.paused_reason = "user_paused"
+    # Этап 2: при паузе sell-offer возвращаем escrow юзеру
+    released = Decimal("0")
+    if o.side == "sell":
+        released = await escrow_service.release_offer_lock(db, user, o)
     await db.flush()
-    return {"ok": True, "status": o.status}
+    return {"ok": True, "status": o.status, "released_usdt": float(released)}
 
 
 @router.patch("/{offer_id}/resume")
@@ -273,10 +311,25 @@ async def resume_offer(
     o = await db.get(Offer, offer_id)
     if not o or o.user_id != user.id:
         raise HTTPException(404, "offer not found")
+    if o.status == "active":
+        return {"ok": True, "status": "active"}
+    # Этап 2: при возобновлении sell-offer повторно лочим escrow на remaining
+    locked = Decimal("0")
+    if o.side == "sell":
+        need = o.amount_usdt_remaining or Decimal("0")
+        if need > 0:
+            if user.balance_usdt < need:
+                raise HTTPException(
+                    400,
+                    f"Недостаточно USDT для возобновления: нужно {float(need):.4f}, "
+                    f"доступно {float(user.balance_usdt):.4f}",
+                )
+            await escrow_service.lock_for_offer(db, user, o, need)
+            locked = need
     o.status = "active"
     o.paused_reason = None
     await db.flush()
-    return {"ok": True, "status": o.status}
+    return {"ok": True, "status": o.status, "locked_usdt": float(locked)}
 
 
 @router.delete("/{offer_id}")
@@ -288,9 +341,14 @@ async def archive_offer(
     o = await db.get(Offer, offer_id)
     if not o or o.user_id != user.id:
         raise HTTPException(404, "offer not found")
+    # Этап 2: возврат escrow при удалении sell-offer
+    released = Decimal("0")
+    if o.side == "sell" and o.status != "archived":
+        released = await escrow_service.release_offer_lock(db, user, o)
     o.status = "archived"
+    o.amount_usdt_remaining = Decimal("0")
     await db.flush()
-    return {"ok": True}
+    return {"ok": True, "released_usdt": float(released)}
 
 
 @router.get("/me/list")

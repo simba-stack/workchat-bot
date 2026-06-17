@@ -44,6 +44,13 @@ class EscrowLock(Base):
         BigInteger, ForeignKey("deals.id", ondelete="SET NULL"),
     )
 
+    # Этап 2: лок может быть привязан к offer (без deal) — когда sell-offer активен
+    offer_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("offers.id", ondelete="SET NULL"),
+    )
+    # Причина холда — для отображения юзеру на экране баланса
+    reason: Mapped[Optional[str]] = mapped_column(String(128))
+
     status: Mapped[str] = mapped_column(
         String(16), default="locked", nullable=False,
     )

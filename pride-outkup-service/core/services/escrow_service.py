@@ -146,3 +146,127 @@ async def refund(db: AsyncSession, deal: Deal, reason: str = "cancelled") -> Non
     await db.flush()
     logger.info("[escrow] REFUNDED %s USDT seller=%s deal=%s (%s)",
                 lock_row.amount_usdt, seller.id, deal.id, reason)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Этап 2: Offer-level escrow (заморозка USDT под активный sell-offer)
+# ═══════════════════════════════════════════════════════════════════════
+async def lock_for_offer(db: AsyncSession, user: User, offer, amount: Decimal):
+    """Залочить USDT под активный sell-offer.
+
+    Списывает с user.balance_usdt, создаёт EscrowLock(offer_id, amount).
+    Если уже есть lock на этот offer — суммирует.
+
+    Raises HTTPException(400) если на балансе не хватает.
+    """
+    if amount <= 0:
+        raise HTTPException(400, "amount must be > 0")
+    if user.balance_usdt < amount:
+        raise HTTPException(
+            400,
+            f"недостаточно USDT: нужно {float(amount):.4f}, доступно {float(user.balance_usdt):.4f}",
+        )
+
+    existing = await db.execute(
+        select(EscrowLock).where(
+            EscrowLock.offer_id == offer.id,
+            EscrowLock.user_id == user.id,
+            EscrowLock.status == "locked",
+        )
+    )
+    lock_row = existing.scalar_one_or_none()
+    if lock_row:
+        lock_row.amount_usdt = (lock_row.amount_usdt or Decimal("0")) + amount
+    else:
+        lock_row = EscrowLock(
+            user_id=user.id,
+            amount_usdt=amount,
+            offer_id=offer.id,
+            reason="offer_active",
+            status="locked",
+        )
+        db.add(lock_row)
+
+    user.balance_usdt -= amount
+    db.add(OperationLog(
+        user_id=user.id,
+        type="escrow_lock_offer",
+        amount_usdt=-amount,
+        balance_after=user.balance_usdt,
+        ref_table="offers",
+        ref_id=offer.id,
+        note=f"lock for active offer #{offer.id}",
+    ))
+    await db.flush()
+    logger.info("[escrow] LOCKED %s USDT user=%s offer=%s", amount, user.id, offer.id)
+    return lock_row
+
+
+async def release_offer_lock(db: AsyncSession, user: User, offer) -> Decimal:
+    """Освободить все escrow-локи привязанные к offer.
+
+    Используется при pause/delete sell-offer. Возвращает USDT на баланс юзеру.
+    Returns: сумма освобождённых USDT.
+    """
+    r = await db.execute(
+        select(EscrowLock).where(
+            EscrowLock.offer_id == offer.id,
+            EscrowLock.user_id == user.id,
+            EscrowLock.status == "locked",
+        )
+    )
+    locks = list(r.scalars().all())
+    if not locks:
+        return Decimal("0")
+
+    released = Decimal("0")
+    for l in locks:
+        amt = l.amount_usdt or Decimal("0")
+        user.balance_usdt += amt
+        l.status = "released"
+        l.released_at = datetime.now(timezone.utc)
+        released += amt
+        db.add(OperationLog(
+            user_id=user.id,
+            type="escrow_release_offer",
+            amount_usdt=amt,
+            balance_after=user.balance_usdt,
+            ref_table="offers",
+            ref_id=offer.id,
+            note=f"release for offer #{offer.id}",
+        ))
+    await db.flush()
+    logger.info("[escrow] RELEASED %s USDT user=%s offer=%s (offer-level)",
+                released, user.id, offer.id)
+    return released
+
+
+async def get_balance_breakdown(db: AsyncSession, user: User) -> dict:
+    """Возвращает доступный/захолдированный баланс + список причин холда.
+
+    Используется на главном экране Mini-App и в боте /balance.
+    """
+    r = await db.execute(
+        select(EscrowLock).where(
+            EscrowLock.user_id == user.id,
+            EscrowLock.status == "locked",
+        )
+    )
+    locks = list(r.scalars().all())
+    locked_total = sum((l.amount_usdt or Decimal("0")) for l in locks)
+    available = user.balance_usdt
+    return {
+        "total_usdt": float(available + locked_total),
+        "available_usdt": float(available),
+        "locked_usdt": float(locked_total),
+        "locks": [
+            {
+                "id": l.id,
+                "amount_usdt": float(l.amount_usdt or 0),
+                "reason": l.reason or "active_offer",
+                "offer_id": l.offer_id,
+                "deal_id": l.deal_id,
+            }
+            for l in locks
+        ],
+    }

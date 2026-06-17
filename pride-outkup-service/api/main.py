@@ -57,6 +57,12 @@ P2P_INDUSTRIAL_ALTERS = [
     "ALTER TABLE deals ADD COLUMN IF NOT EXISTS coin VARCHAR(16) NOT NULL DEFAULT 'USDT'",
     "ALTER TABLE deals ADD COLUMN IF NOT EXISTS fiat VARCHAR(8) NOT NULL DEFAULT 'RUB'",
     "ALTER TABLE deals ADD COLUMN IF NOT EXISTS pay_deadline_at TIMESTAMP WITH TIME ZONE",
+    # Этап 2: Offer-level escrow — заморозка USDT под активный sell-offer
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS amount_usdt_total NUMERIC(16,4) NOT NULL DEFAULT 0",
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS amount_usdt_remaining NUMERIC(16,4) NOT NULL DEFAULT 0",
+    "ALTER TABLE escrow_locks ADD COLUMN IF NOT EXISTS offer_id BIGINT REFERENCES offers(id) ON DELETE SET NULL",
+    "ALTER TABLE escrow_locks ADD COLUMN IF NOT EXISTS reason VARCHAR(128)",
+    "CREATE INDEX IF NOT EXISTS idx_escrow_offer ON escrow_locks(offer_id)",
 ]
 
 

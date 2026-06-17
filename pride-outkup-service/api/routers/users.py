@@ -57,13 +57,26 @@ async def update_me(
 
 
 @router.get("/me/balance")
-async def get_balance(user: User = Depends(get_current_user)):
-    # TODO: вычислить total_earned/paid/pending из operations_log
+async def get_balance(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Баланс с разбивкой available/locked + причины холда.
+
+    Этап 2: locked_usdt — сумма всех EscrowLock(status=locked).
+    locks[] — список с причинами (active offers, активные сделки).
+    """
+    from core.services import escrow_service
+    breakdown = await escrow_service.get_balance_breakdown(db, user)
     return {
-        "balance_usdt": float(user.balance_usdt),
+        "balance_usdt": breakdown["total_usdt"],
+        "available_usdt": breakdown["available_usdt"],
+        "locked_usdt": breakdown["locked_usdt"],
+        "locks": breakdown["locks"],
+        # legacy fields для обратной совместимости
         "total_earned": 0.0,
         "total_paid": 0.0,
-        "pending_usdt": 0.0,
+        "pending_usdt": breakdown["locked_usdt"],
     }
 
 

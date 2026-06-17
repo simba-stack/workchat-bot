@@ -52,6 +52,18 @@ class Offer(Base):
     min_amount_rub: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     max_amount_rub: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
 
+    # ─── Этап 2: Volume tracking + escrow on sell-offer ──────────────────
+    # amount_usdt_total — сколько USDT seller выставил под продажу.
+    # amount_usdt_remaining — сколько ещё доступно для входа в сделки.
+    # При создании Deal — remaining уменьшается; при cancel/decline — возвращается.
+    # При release Deal — total/remaining уменьшается, USDT уходит покупателю.
+    amount_usdt_total: Mapped[Decimal] = mapped_column(
+        Numeric(16, 4), default=Decimal("0"), nullable=False, server_default="0",
+    )
+    amount_usdt_remaining: Mapped[Decimal] = mapped_column(
+        Numeric(16, 4), default=Decimal("0"), nullable=False, server_default="0",
+    )
+
     payment_methods: Mapped[list[str]] = mapped_column(
         ARRAY(String(32)), default=list, nullable=False,
     )
