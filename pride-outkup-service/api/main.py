@@ -354,6 +354,55 @@ async def debug_offers_in_db():
         return {"error": str(e)}
 
 
+@app.get("/debug/me/{tg_id}")
+async def debug_me(tg_id: int):
+    """Публичный debug: показывает всё что есть у юзера по tg_id."""
+    from sqlalchemy import select as _select
+    from core.db import AsyncSessionLocal
+    from core.models import User, OperationLog
+    from core.models.escrow import EscrowLock
+    try:
+        async with AsyncSessionLocal() as db:
+            u = (await db.execute(_select(User).where(User.tg_id == tg_id))).scalar_one_or_none()
+            if not u:
+                return {"error": f"user with tg_id={tg_id} not found"}
+            locks = (await db.execute(
+                _select(EscrowLock).where(EscrowLock.user_id == u.id, EscrowLock.status == "locked")
+            )).scalars().all()
+            ops = (await db.execute(
+                _select(OperationLog).where(OperationLog.user_id == u.id)
+                .order_by(OperationLog.created_at.desc()).limit(20)
+            )).scalars().all()
+            return {
+                "user": {
+                    "id": u.id, "tg_id": u.tg_id, "username": u.username,
+                    "full_name": u.full_name,
+                    "balance_usdt": float(u.balance_usdt or 0),
+                    "kyc_status": u.kyc_status, "kyc_level": u.kyc_level,
+                    "total_deals": u.total_deals or 0,
+                    "completed_deals": u.completed_deals or 0,
+                },
+                "escrow_locks": [
+                    {"id": l.id, "amount_usdt": float(l.amount_usdt or 0),
+                     "reason": l.reason, "offer_id": l.offer_id, "deal_id": l.deal_id,
+                     "status": l.status, "created_at": l.created_at.isoformat() if l.created_at else None}
+                    for l in locks
+                ],
+                "locked_total_usdt": float(sum((l.amount_usdt or 0) for l in locks)),
+                "recent_operations": [
+                    {"id": o.id, "type": o.type, "amount_usdt": float(o.amount_usdt or 0),
+                     "balance_after": float(o.balance_after) if o.balance_after else None,
+                     "note": o.note,
+                     "created_at": o.created_at.isoformat() if o.created_at else None}
+                    for o in ops
+                ],
+                "operations_count": len(ops),
+            }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
+
+
 @app.get("/debug/nuke_demo_offers")
 async def debug_nuke_demo_offers():
     """Публичный nuke: удаляет ВСЕ active offers с username Alex_Pro/CryptoPro/NataKZ/P2P_Master.
