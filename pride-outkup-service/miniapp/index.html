@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v13 — ФОРСИРОВАННЫЙ MISS BROWSER-CACHE ===
 (function() {
-  const APP_BUILD = 'v13.20260618';
+  const APP_BUILD = 'v15.20260618';
   // Если URL не содержит cache-bust query — делаем reload с timestamp.
   // Это форсит браузер запросить страницу заново (cache miss).
   // Защита от цикла: ставим session flag "уже сделал".
@@ -1470,10 +1470,10 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
     <div class="p2p-chip" data-bank="raif">Райф</div>
   </div>
   <div class="p2p-filter-row" style="margin-top:6px">
-    <div class="p2p-chip">RUB</div>
-    <div class="p2p-chip">Сумма ↓</div>
-    <div class="p2p-chip">★ верифиц.</div>
-    <div class="p2p-chip">Онлайн</div>
+    <div class="p2p-chip active" data-fiat="RUB">RUB</div>
+    <div class="p2p-chip" data-sort="price-asc">Сумма ↓</div>
+    <div class="p2p-chip" data-verified="1">★ верифиц.</div>
+    <div class="p2p-chip" data-online="1">Онлайн</div>
   </div>
   <div id="p2p-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
   <div class="p2p-bottom-cta" style="display:flex;gap:8px">
@@ -1532,14 +1532,14 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
       <button id="p2p-ad-sell" style="flex:1;padding:12px;background:#1a1a1a;color:#7a7a7a;border-radius:10px">Продать</button>
     </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
-    <input id="p2p-ad-price" type="number" value="91.50" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
+    <input id="p2p-ad-price" type="number" inputmode="decimal" placeholder="91.50" step="0.01" autocomplete="off" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Объём USDT (заморозится в эскроу для sell)</div>
-    <input id="p2p-ad-amount" type="number" value="100" min="10" step="0.01" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:4px">
+    <input id="p2p-ad-amount" type="number" inputmode="decimal" placeholder="100" min="10" step="0.01" autocomplete="off" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:4px">
     <div id="p2p-ad-balance-hint" style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:10px">Загружаю баланс…</div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты RUB</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
-      <input id="p2p-ad-min" type="number" value="5000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
-      <input id="p2p-ad-max" type="number" value="500000" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="p2p-ad-min" type="number" inputmode="numeric" placeholder="мин" autocomplete="off" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
+      <input id="p2p-ad-max" type="number" inputmode="numeric" placeholder="макс" autocomplete="off" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
     </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Условия</div>
     <textarea id="p2p-ad-terms" rows="3" style="width:100%;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;resize:none;margin-bottom:14px">С личной карты, без комментариев</textarea>
@@ -1977,11 +1977,35 @@ async function loadP2POffers() {
       const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
       if (r && r.items && r.items.length) offers = r.items;
     } catch(_) {}
+    // CLIENT-SIDE BLACKLIST — никогда не показываем демо-юзеров
+    const BLOCKED = ['alex_pro','cryptopro','natakz','p2p_master','pride official','maxtrader','denisexchange','nikitakursy'];
+    offers = offers.filter(o => {
+      const u = String(o?.author?.username || o?.nick || o?.username || o?.maker_name || '').toLowerCase();
+      return !BLOCKED.includes(u);
+    });
     // НИКАКИХ MOCK — только реальные данные. Если нет — показываем пусто.
     if (p2pState.bank && p2pState.bank !== 'all') {
       const bankMap = { sbp:'СБП', sber:'Сбер', tinkoff:'Тинькофф', alfa:'Альфа', raif:'Райф' };
       const need = bankMap[p2pState.bank];
-      if (need) offers = offers.filter(o => (o.banks || []).indexOf(need) >= 0);
+      if (need) offers = offers.filter(o => {
+        const banks = o.banks || o.payment_methods || [];
+        return banks.indexOf(need) >= 0 || banks.indexOf(p2pState.bank) >= 0;
+      });
+    }
+    // Этап 2: ★ верифиц. — только верифицированные makers
+    if (p2pState.verifiedOnly) {
+      offers = offers.filter(o => {
+        const t = (o.author?.maker_tier || o.tier || '').toLowerCase();
+        return ['pride','gold','verified'].indexOf(t) >= 0 || o.is_pride_official || o.author?.is_pride_official;
+      });
+    }
+    // Онлайн
+    if (p2pState.onlineOnly) {
+      offers = offers.filter(o => !!o.online);
+    }
+    // Сортировка
+    if (p2pState.sortMode === 'price-asc') {
+      offers = offers.slice().sort((a,b) => (+(a.price||0)) - (+(b.price||0)));
     }
     p2pState.offers = offers;
     try {
@@ -2594,6 +2618,36 @@ document.querySelectorAll('#view-p2p .p2p-chip[data-bank]').forEach(chip => {
     chip.classList.add('active');
     p2pState.bank = chip.dataset.bank;
     loadP2POffers();
+  });
+});
+
+// Этап 2: фильтры RUB / Сумма / верифиц / Онлайн
+window.p2pState.sortMode = 'best';      // 'price-asc' | 'best'
+window.p2pState.verifiedOnly = false;
+window.p2pState.onlineOnly = false;
+document.querySelectorAll('#view-p2p .p2p-chip[data-sort]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const cur = chip.classList.toggle('active');
+    p2pState.sortMode = cur ? chip.dataset.sort : 'best';
+    if (typeof loadP2POffers === 'function') loadP2POffers();
+  });
+});
+document.querySelectorAll('#view-p2p .p2p-chip[data-verified]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    p2pState.verifiedOnly = chip.classList.toggle('active');
+    if (typeof loadP2POffers === 'function') loadP2POffers();
+  });
+});
+document.querySelectorAll('#view-p2p .p2p-chip[data-online]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    p2pState.onlineOnly = chip.classList.toggle('active');
+    if (typeof loadP2POffers === 'function') loadP2POffers();
+  });
+});
+document.querySelectorAll('#view-p2p .p2p-chip[data-fiat]').forEach(chip => {
+  // RUB просто визуально активен — других фиатов пока нет
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#view-p2p .p2p-chip[data-fiat]').forEach(c => c.classList.add('active'));
   });
 });
 safeBind('p2p-create-btn', 'click', () => go('p2p-create'));
