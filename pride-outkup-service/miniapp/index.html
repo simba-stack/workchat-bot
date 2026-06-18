@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v18.20260618';
+  const APP_BUILD = 'v19.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1760,20 +1760,24 @@ async function loadMain() {
     coins.forEach(c => { totalUsd += parseFloat(balances[c.code]||0) * (coinPrice(c.code).price); });
     if (!balanceHidden) $('total-usd').textContent = fmt(totalUsd, 2);
 
-    // Этап 2: подтянуть locked баланс (USDT захолдировано активными offer'ами)
+    // Этап 2: locked-balance — НЕ блокирует основной рендер. Грузим в фоне.
+    // Раньше тут был `await` — это добавляло 200-500 мс к каждой загрузке main.
+    setTimeout(async () => {
+      try {
+        const bal2 = await api('/api/v1/users/me/balance').catch(() => null);
+        const row = document.getElementById('locked-balance-row');
+        if (bal2 && bal2.locked_usdt > 0) {
+          const amt = document.getElementById('locked-balance-amt');
+          if (row) row.style.display = 'block';
+          if (amt) amt.textContent = (+bal2.locked_usdt).toFixed(2);
+          window.__lockedBalanceLocks = bal2.locks || [];
+        } else if (row) {
+          row.style.display = 'none';
+        }
+      } catch(_) {}
+    }, 0);
+    // Безопасный no-op чтобы оригинальная структура try/catch не сломалась
     try {
-      const bal2 = await api('/api/v1/users/me/balance').catch(() => null);
-      if (bal2 && bal2.locked_usdt > 0) {
-        const row = document.getElementById('locked-balance-row');
-        const amt = document.getElementById('locked-balance-amt');
-        if (row) row.style.display = 'block';
-        if (amt) amt.textContent = (+bal2.locked_usdt).toFixed(2);
-        // сохраним детали для модалки
-        window.__lockedBalanceLocks = bal2.locks || [];
-      } else {
-        const row = document.getElementById('locked-balance-row');
-        if (row) row.style.display = 'none';
-      }
     } catch(_) {}
 
     // Фильтр скрытых монет (localStorage) + опционально пустых
