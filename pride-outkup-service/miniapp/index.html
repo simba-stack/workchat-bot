@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v13 — ФОРСИРОВАННЫЙ MISS BROWSER-CACHE ===
 (function() {
-  const APP_BUILD = 'v16.20260618';
+  const APP_BUILD = 'v17.20260618';
   // Если URL не содержит cache-bust query — делаем reload с timestamp.
   // Это форсит браузер запросить страницу заново (cache miss).
   // Защита от цикла: ставим session flag "уже сделал".
@@ -2921,7 +2921,14 @@ async function loadOperations(silent=false) {
     }
     $('ops-list').innerHTML = html;
   } catch (e) {
-    if (!silent) $('ops-list').innerHTML = '<div class="empty-state" style="color:#FF453A">Ошибка: ' + (e.message || e) + '</div>';
+    // Если открыто вне Telegram (нет init_data) → не пугаем юзера красной ошибкой,
+    // показываем нейтральное «Истории пока нет».
+    const msg = String(e.message || e || '');
+    if (msg.indexOf('init_data') >= 0 || msg.indexOf('InitData') >= 0 || msg.indexOf('401') >= 0) {
+      if (!silent) $('ops-list').innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.45)">Истории пока нет</div>';
+    } else if (!silent) {
+      $('ops-list').innerHTML = '<div class="empty-state" style="color:#FF453A">Ошибка: ' + msg + '</div>';
+    }
   }
 }
 
@@ -3515,7 +3522,10 @@ loadMain().then(routeFromStart);
 // Весь P2P логика теперь — только основной блок выше (loadP2POffers).
 // ════════════════════════════════════════════════════════════
 (function _removed_legacy_p2p_v3() {
-  // intentionally empty — was old conflicting code with demo offers
+  // P2P_STATE сохранён как локальная заглушка — иначе внутренние функции
+  // legacy блока (которые ещё могут быть triggered старыми event-handler'ами)
+  // падают с "P2P_STATE is not defined" → красный toast у юзера.
+  const P2P_STATE = { side: 'BUY', currentOfferId: null, currentDealId: null, adSide: 'BUY' };
 
   async function apiP2P(method, path, body) {
     try {
