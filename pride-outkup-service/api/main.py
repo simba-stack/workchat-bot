@@ -94,6 +94,25 @@ async def _ensure_schema_and_seed():
     except Exception as e:
         logger.warning("[schema] industrial alter block failed: %s", e)
 
+    # === Cleanup demo/seed P2P offers (Alex_Pro, CryptoPro, NataKZ, P2P_Master) ===
+    # Эти юзеры засеяны на ранних этапах разработки и засоряют P2P-маркет.
+    # Удаляем их offer'ы (active) — пользователи их видят как "старый дизайн" mock'ов.
+    try:
+        async with engine.begin() as conn:
+            r = await conn.execute(_sql(
+                "DELETE FROM offers WHERE user_id IN ("
+                " SELECT id FROM users WHERE username IN ('Alex_Pro','CryptoPro','NataKZ','P2P_Master') "
+                " OR full_name IN ('Alex_Pro','CryptoPro','NataKZ','P2P_Master')"
+                ")"
+            ))
+            try:
+                cnt = r.rowcount if hasattr(r, "rowcount") else "?"
+            except Exception:
+                cnt = "?"
+            logger.info("[seed-cleanup] deleted demo offers: %s rows", cnt)
+    except Exception as e:
+        logger.warning("[seed-cleanup] skipped: %s", e)
+
     # Coin fees update -> $4.5 equivalent
     try:
         async with engine.begin() as conn:
