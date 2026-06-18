@@ -328,6 +328,60 @@ async def root():
             "owner": "/owner", "api": "/api/v1", "health": "/health"}
 
 
+@app.get("/debug/offers_in_db")
+async def debug_offers_in_db():
+    """Публичный debug: показывает что РЕАЛЬНО в БД среди offers (без авторизации)."""
+    from sqlalchemy import select as _select
+    from core.db import AsyncSessionLocal
+    from core.models import Offer, User
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(
+                _select(Offer.id, Offer.user_id, Offer.side, Offer.status,
+                        Offer.rate_rub_per_usdt, User.username, User.full_name)
+                .join(User, User.id == Offer.user_id, isouter=True)
+                .where(Offer.status == "active")
+                .limit(50)
+            )
+            rows = r.all()
+            return {"count": len(rows), "offers": [
+                {"id": x[0], "user_id": x[1], "side": x[2], "status": x[3],
+                 "rate": float(x[4]) if x[4] else 0,
+                 "username": x[5], "full_name": x[6]}
+                for x in rows
+            ]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/debug/nuke_demo_offers")
+async def debug_nuke_demo_offers():
+    """Публичный nuke: удаляет ВСЕ active offers с username Alex_Pro/CryptoPro/NataKZ/P2P_Master.
+
+    Открой эту URL один раз в браузере → возвращает JSON с количеством удалённых.
+    """
+    from sqlalchemy import text as _t
+    from core.db import engine
+    deleted = 0
+    try:
+        async with engine.begin() as conn:
+            r = await conn.execute(_t(
+                "DELETE FROM offers WHERE user_id IN ("
+                " SELECT id FROM users WHERE LOWER(username) IN "
+                "  ('alex_pro','cryptopro','natakz','p2p_master','pride official','maxtrader','denisexchange','nikitakursy')"
+                " OR LOWER(full_name) IN "
+                "  ('alex_pro','cryptopro','natakz','p2p_master','pride official','maxtrader','denisexchange','nikitakursy')"
+                ")"
+            ))
+            try:
+                deleted = r.rowcount if hasattr(r, "rowcount") else -1
+            except Exception:
+                deleted = -1
+    except Exception as e:
+        return {"error": str(e), "deleted": deleted}
+    return {"ok": True, "deleted": deleted}
+
+
 @app.get("/owner", response_class=HTMLResponse)
 async def owner_panel():
     if OWNER_HTML.exists():
