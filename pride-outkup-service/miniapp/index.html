@@ -10,7 +10,7 @@
 <script>
 // === CACHE-BUSTER v7 ===
 (function() {
-  const APP_BUILD = 'v11.20260618';
+  const APP_BUILD = 'v12.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -22,31 +22,30 @@
   } catch(e) { /* sessionStorage может быть запрещён в Telegram */ }
 })();
 
-// === DOM SNAPSHOT CLEANUP v2 — ЖЁСТКИЙ NUKE ===
-// Telegram WebApp персистит DOM между сессиями. Не просто кешируем — Telegram
-// держит ПОЛНЫЙ snapshot с legacy ID (view-p2p-my-ads с дефисом, my-ads-list).
-// Решение: 1) удалить legacy ноды; 2) очистить контейнеры; 3) повторять на
-// каждом видимом моменте.
+// === DOM SNAPSHOT CLEANUP v3 — РАБОТАЕТ С CSS ANTI-SNAPSHOT GUARD ===
+// CSS уже прячет все .p2p-offer-card в контейнерах без data-fresh="1".
+// JS просто гарантирует: на момент init у контейнеров НЕТ data-fresh.
+// Когда renderer (loadP2POffers/loadMyAds) закончит — он ставит data-fresh="1"
+// → CSS показывает свежие карточки.
 (function cleanupCachedDOM() {
   const containers = ['p2p-list', 'p2p-myads-list', 'p2p-offer-body', 'p2p-deal-body', 'pm-list',
-                      // legacy id из старых сессий — тоже чистим
                       'my-ads-list', 'p2p-my-ads-list'];
   const legacyViews = ['view-p2p-my-ads', 'view-p2p-offer-old', 'view-my-ads'];
   function nuke() {
-    // 1) Снести legacy view-блоки целиком — они из старого Telegram snapshot
     legacyViews.forEach(id => {
       const el = document.getElementById(id);
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
-    // 2) Очистить контейнеры списков (и старые id и новые)
     containers.forEach(id => {
       const el = document.getElementById(id);
-      if (el) el.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+      if (el) {
+        el.removeAttribute('data-fresh');
+        el.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
+      }
     });
   }
   function run() {
     nuke();
-    // через 100ms повторить — Telegram может восстановить snapshot после первого paint
     setTimeout(nuke, 100);
     setTimeout(nuke, 500);
   }
@@ -61,6 +60,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <link rel="icon" href="data:,">
 <style>
+  /* === ANTI-SNAPSHOT GUARD ===
+     Telegram WebApp восстанавливает DOM прошлой сессии (Alex_Pro и т.д.)
+     ДО того как мой JS успевает её очистить. Этот CSS НАМЕРТВО прячет
+     все .p2p-offer-card в #p2p-list / #p2p-myads-list, пока JS-render
+     не пометит контейнер атрибутом data-fresh="1". В первый paint
+     legacy-snapshot физически НЕВИДИМ. */
+  #p2p-list:not([data-fresh="1"]) .p2p-offer-card,
+  #p2p-myads-list:not([data-fresh="1"]) .p2p-offer-card {
+    display: none !important;
+  }
   :root {
     --bg: #000000; --panel: #131313; --panel-2: #1f1f1f;
     --border: rgba(255,255,255,0.06);
@@ -1964,6 +1973,7 @@ async function loadP2POffers() {
       list.innerHTML = offers.length
         ? offers.map(renderOfferCard).join('')
         : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет офферов под фильтр</div>';
+      list.setAttribute('data-fresh', '1');  // CSS-guard: разрешаем показ карточек
     } catch(re) {
       console.error('P2P render err', re);
       list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:#FF8B82">Ошибка рендера: ' + (re.message || re) + '</div>';
@@ -2225,6 +2235,7 @@ window.loadMyAds = async function() {
 
   if (!ads.length) {
     list.innerHTML = '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">У тебя пока нет объявлений.<br>Нажми <b>+</b>, чтобы создать.</div>';
+    list.setAttribute('data-fresh', '1');
     return;
   }
 
@@ -2273,6 +2284,7 @@ window.loadMyAds = async function() {
       </div>
     </div>`;
   }).join('');
+  list.setAttribute('data-fresh', '1');  // CSS-guard: разрешаем показ карточек
 };
 
 // Pause/Resume объявление
