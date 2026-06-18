@@ -8,27 +8,21 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <script>
-// === CACHE-BUSTER v13 — ФОРСИРОВАННЫЙ MISS BROWSER-CACHE ===
+// === CACHE-BUSTER v18 — БЕЗ ФОРСИРОВАННОГО RELOAD ===
+// Прежний force-reload убивал Telegram-хеш #tgWebAppData=... → initData
+// становился пустым → API возвращал 401 → баланс 0, история пустая.
+// /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v17.20260618';
-  // Если URL не содержит cache-bust query — делаем reload с timestamp.
-  // Это форсит браузер запросить страницу заново (cache miss).
-  // Защита от цикла: ставим session flag "уже сделал".
-  try {
-    if (!location.search.includes('cb=') && !sessionStorage.getItem('__cb_reloaded_' + APP_BUILD)) {
-      sessionStorage.setItem('__cb_reloaded_' + APP_BUILD, '1');
-      location.replace(location.pathname + '?cb=' + Date.now());
-      throw new Error('reloading for cache bust');
-    }
-  } catch(e) {
-    if (String(e.message || '').indexOf('reloading') >= 0) throw e;
-  }
-  // Build-version watchdog (старый механизм)
+  const APP_BUILD = 'v18.20260618';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
       sessionStorage.removeItem('__pride_p2p_build');
-      location.replace(location.pathname + '?cb=' + Date.now() + '&hardreload=1');
+      // КРИТИЧНО: сохраняем хеш — он содержит tgWebAppData от Telegram
+      const hashPart = location.hash || '';
+      const sepCb = location.search ? (location.search + '&') : '?';
+      // Не меняем URL — только мягкий reload. Telegram-хеш на месте.
+      try { location.reload(); } catch(_) {}
       throw new Error('reloading for build mismatch');
     }
     sessionStorage.setItem('__pride_p2p_build', APP_BUILD);
