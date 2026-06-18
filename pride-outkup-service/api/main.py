@@ -255,6 +255,7 @@ if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
     app.mount("/app2", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v2")
     app.mount("/v7", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v7")
+    app.mount("/m8", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_m8")
 else:
     @app.get("/app", response_class=HTMLResponse)
     async def miniapp_root():
@@ -262,17 +263,21 @@ else:
             return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
-    # Cache-bust alias — Telegram воспринимает /app2 как новую Mini-App,
-    # сбрасывает весь JS/HTML/DOM кеш.
     @app.get("/app2", response_class=HTMLResponse)
     async def miniapp_v2():
         if INDEX_HTML.exists():
             return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
-    # NUKE — полностью новый URL, Telegram гарантированно не имеет кеша
     @app.get("/v7", response_class=HTMLResponse)
     async def miniapp_v7():
+        if INDEX_HTML.exists():
+            return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
+        return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
+
+    # /m8 — финальный nuke URL, Telegram физически такого URL не видел
+    @app.get("/m8", response_class=HTMLResponse)
+    async def miniapp_m8():
         if INDEX_HTML.exists():
             return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
