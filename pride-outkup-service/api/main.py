@@ -274,7 +274,23 @@ if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
     app.mount("/app2", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v2")
     app.mount("/v7", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v7")
-    app.mount("/m8", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_m8")
+    # /m8 НЕ mount — явный handler с no-cache headers (mount не ставит их)
+    @app.get("/m8", response_class=HTMLResponse)
+    async def miniapp_m8_strict():
+        idx = MINIAPP_DIST / "index.html"
+        if idx.exists():
+            return FileResponse(idx, headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            })
+        if INDEX_HTML.exists():
+            return FileResponse(INDEX_HTML, headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            })
+        return HTMLResponse("<h1>PRIDE P2P</h1>")
 else:
     @app.get("/app", response_class=HTMLResponse)
     async def miniapp_root():
@@ -294,11 +310,15 @@ else:
             return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
-    # /m8 — финальный nuke URL, Telegram физически такого URL не видел
+    # /m8 — со строгими no-cache headers, чтобы браузер не закешировал
     @app.get("/m8", response_class=HTMLResponse)
     async def miniapp_m8():
         if INDEX_HTML.exists():
-            return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
+            return FileResponse(INDEX_HTML, headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            })
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
 

@@ -8,18 +8,33 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <script>
-// === CACHE-BUSTER v7 ===
+// === CACHE-BUSTER v13 — ФОРСИРОВАННЫЙ MISS BROWSER-CACHE ===
 (function() {
-  const APP_BUILD = 'v12.20260618';
+  const APP_BUILD = 'v13.20260618';
+  // Если URL не содержит cache-bust query — делаем reload с timestamp.
+  // Это форсит браузер запросить страницу заново (cache miss).
+  // Защита от цикла: ставим session flag "уже сделал".
+  try {
+    if (!location.search.includes('cb=') && !sessionStorage.getItem('__cb_reloaded_' + APP_BUILD)) {
+      sessionStorage.setItem('__cb_reloaded_' + APP_BUILD, '1');
+      location.replace(location.pathname + '?cb=' + Date.now());
+      throw new Error('reloading for cache bust');
+    }
+  } catch(e) {
+    if (String(e.message || '').indexOf('reloading') >= 0) throw e;
+  }
+  // Build-version watchdog (старый механизм)
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
       sessionStorage.removeItem('__pride_p2p_build');
-      location.replace(location.pathname + '?v=' + Date.now() + '&hardreload=1');
-      throw new Error('reloading');
+      location.replace(location.pathname + '?cb=' + Date.now() + '&hardreload=1');
+      throw new Error('reloading for build mismatch');
     }
     sessionStorage.setItem('__pride_p2p_build', APP_BUILD);
-  } catch(e) { /* sessionStorage может быть запрещён в Telegram */ }
+  } catch(e) {
+    if (String(e.message || '').indexOf('reloading') >= 0) throw e;
+  }
 })();
 
 // === DOM SNAPSHOT CLEANUP v3 — РАБОТАЕТ С CSS ANTI-SNAPSHOT GUARD ===
