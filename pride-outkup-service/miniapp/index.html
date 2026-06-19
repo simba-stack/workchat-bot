@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v28.20260619-render-fix';
+  const APP_BUILD = 'v29.20260619-deadcode-noop';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2313,7 +2313,7 @@ window.loadMyAds = async function() {
         <span class="price-big">${price.toFixed(2)} ₽</span>
         <span class="price-sub">за 1 USDT</span>
       </div>
-      <div class="limit-row">${isActive ? 'Остаток: <b>' + remaining.toLocaleString('ru-RU') + '</b> / ' + total.toLocaleString('ru-RU') + ' USDT · ' : ''}Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
+      <div class="limit-row">${(isActive && side === 'sell') ? 'Остаток: <b>' + remaining.toLocaleString('ru-RU') + '</b> / ' + total.toLocaleString('ru-RU') + ' USDT · ' : ''}Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
       <div class="pay-row">${banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
         <button class="p2p-cta" style="background:linear-gradient(135deg,#3DA3F0,#1A6BC4);color:#fff;border:0" onclick="editMyAd('${safeId}')">✏ Редактировать</button>
@@ -3920,6 +3920,10 @@ loadMain().then(routeFromStart);
   }
 
   async function submitNewAd() {
+    // DEPRECATED — реальный submit делается через safeBind('p2p-ad-submit') выше.
+    // Эта функция оставлена как no-op чтобы не было ошибок при возможных вызовах.
+    return;
+    /* eslint-disable */
     const sideLower = (P2P_STATE.adSide || 'BUY').toLowerCase();
     const price = parseFloat(document.getElementById('p2p-ad-price').value);
     const minA = parseFloat(document.getElementById('p2p-ad-min').value);
@@ -3948,6 +3952,7 @@ loadMain().then(routeFromStart);
     alert('Опубликовано! ' + (sideLower === 'sell' ? 'USDT в эскроу.' : 'Без блокировки баланса.'));
     go('p2p-myads');
     if (typeof loadMyAds === 'function') loadMyAds();
+    /* eslint-enable */
   }
 
   // ── Привязки кнопок (после DOM готов) ──
