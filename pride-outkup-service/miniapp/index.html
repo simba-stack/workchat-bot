@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v19.20260618';
+  const APP_BUILD = 'v20.20260619-p2p-stage2';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3597,35 +3597,106 @@ loadMain().then(routeFromStart);
     c.innerHTML = '<div class="empty-state">Загрузка…</div>';
     let o = await apiP2P('GET', '/api/v1/offers/' + offerId);
     if (!o) { c.innerHTML = '<div class="empty-state">Оффер не найден</div>'; return; }
-    const u = escHtml(o.user || 'Seller');
-    const p = parseFloat(o.price || 91.5).toFixed(2);
-    const col = P2P_STATE.side === 'BUY' ? '#34c759' : '#ff453a';
-    const methods = (o.methods || ['Сбербанк']).map(function(m) {
+    P2P_STATE.currentOffer = o;
+    const u = escHtml(o.user || o.username || 'Seller');
+    const price = parseFloat(o.price || o.rate_rub_per_usdt || 91.5);
+    P2P_STATE.currentPrice = price;
+    // Если оффер SELL — юзер ПОКУПАЕТ USDT. Если BUY — юзер ПРОДАЁТ USDT (и должен дать СВОЙ реквизит).
+    const offerSide = (o.side || '').toLowerCase();
+    const userIsBuyer = (offerSide === 'sell');
+    P2P_STATE.userIsBuyer = userIsBuyer;
+    const col = userIsBuyer ? '#34c759' : '#ff453a';
+    const allowed = o.payment_methods || o.methods || [];
+    const minA = o.min_amount_rub || o.min || 0;
+    const maxA = o.max_amount_rub || o.max || 0;
+    const avail = o.amount_usdt_remaining || o.available || 0;
+    const methods = allowed.map(function(m) {
       return '<div style="padding:10px;background:#1a1a1a;border-radius:10px;margin-bottom:4px;font-size:13px">💳 ' + escHtml(m) + '</div>';
     }).join('');
+
+    let pmsBlock = '';
+    if (!userIsBuyer) {
+      let myPms = [];
+      try { const rp = await apiP2P('GET', '/api/v1/payment-methods'); myPms = (rp && rp.items) ? rp.items : []; } catch(_){}
+      const filtered = myPms.filter(function(p){ return !allowed.length || allowed.includes(p.type); });
+      pmsBlock =
+        '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">ВАШ РЕКВИЗИТ ДЛЯ ПОЛУЧЕНИЯ РУБЛЕЙ</div>' +
+        '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+        '<select id="p2p-pm-select" style="width:100%;padding:10px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+        filtered.map(function(p){return '<option value="'+p.id+'">'+escHtml(p.bank_name)+' · '+escHtml(p.card_or_phone)+' · '+escHtml(p.receiver_name)+'</option>';}).join('') +
+        '<option value="__new__">+ Новый реквизит…</option>' +
+        '</select>' +
+        '<div id="p2p-pm-new" style="display:'+(filtered.length?'none':'flex')+';flex-direction:column;gap:8px;margin-top:10px">' +
+          '<select id="p2p-pm-type" style="padding:10px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+            (allowed.length?allowed:['sbp','tinkoff','sber','alpha','vtb','raif']).map(function(t){return '<option value="'+t+'">'+t.toUpperCase()+'</option>';}).join('') +
+          '</select>' +
+          '<input id="p2p-pm-bank" placeholder="Название банка" style="padding:10px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+          '<input id="p2p-pm-card" placeholder="Карта или телефон СБП" style="padding:10px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+          '<input id="p2p-pm-name" placeholder="ФИО получателя" style="padding:10px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+          '<label style="color:#7a7a7a;font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="p2p-pm-save" checked> сохранить в реквизиты</label>' +
+        '</div></div>';
+    }
+
     c.innerHTML =
       '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#3390EC,#6f5dfb);display:flex;align-items:center;justify-content:center;font-weight:600">' + u.charAt(0) + '</div>' +
-        '<div style="flex:1"><div style="font-weight:600">' + u + '</div><div style="font-size:11px;color:#7a7a7a">★' + (o.rating || 4.9) + ' (' + (o.deals || 0) + ')</div></div></div>' +
+        '<div style="flex:1"><div style="font-weight:600">' + u + '</div><div style="font-size:11px;color:#7a7a7a">★' + (o.rating || 4.9) + ' (' + (o.total_deals || o.deals || 0) + ')</div></div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">' +
-        '<div><span style="color:#7a7a7a">Цена</span><br><b style="color:' + col + ';font-size:15px">' + p + ' ₽</b></div>' +
-        '<div><span style="color:#7a7a7a">Доступно</span><br><b>' + (o.available || 5000) + ' USDT</b></div>' +
-        '<div><span style="color:#7a7a7a">Лимит</span><br><b>' + (o.min || 50) + '–' + (o.max || 5000) + '</b></div>' +
-        '<div><span style="color:#7a7a7a">Время</span><br><b>' + (o.time || 15) + ' мин</b></div></div></div>' +
+        '<div><span style="color:#7a7a7a">Цена</span><br><b style="color:' + col + ';font-size:15px">' + price.toFixed(2) + ' ₽</b></div>' +
+        '<div><span style="color:#7a7a7a">Доступно</span><br><b>' + parseFloat(avail).toFixed(2) + ' USDT</b></div>' +
+        '<div><span style="color:#7a7a7a">Лимит</span><br><b>' + minA + '–' + maxA + ' ₽</b></div>' +
+        '<div><span style="color:#7a7a7a">Время</span><br><b>' + (o.pay_window_min || o.time || 15) + ' мин</b></div></div></div>' +
       '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">ОПЛАТА</div>' + methods +
-      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">УСЛОВИЯ</div>' +
-      '<div style="padding:12px;background:#1a1a1a;border-radius:10px;font-size:12px;line-height:1.5;color:#ccc;margin-bottom:10px">' + escHtml(o.terms || '—') + '</div>' +
-      '<input id="p2p-deal-amount" type="number" value="500" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:8px">' +
-      '<button id="p2p-deal-btn" style="width:100%;padding:14px;background:' + col + ';color:#fff;font-weight:600;border-radius:12px">' + (P2P_STATE.side === 'BUY' ? 'Купить' : 'Продать') + ' USDT</button>';
+      ((o.terms||o.conditions) ?
+        '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">УСЛОВИЯ</div>' +
+        '<div style="padding:12px;background:#1a1a1a;border-radius:10px;font-size:12px;line-height:1.5;color:#ccc;margin-bottom:10px">' + escHtml(o.terms || o.conditions || '') + '</div>' : '') +
+      '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+        '<div style="flex:1;background:#1a1a1a;border-radius:12px;padding:10px"><div style="font-size:11px;color:#7a7a7a">В рублях</div>' +
+          '<input id="p2p-deal-rub" type="number" inputmode="decimal" placeholder="' + minA + '" style="width:100%;background:transparent;border:0;color:#fff;font-size:18px;font-weight:600;padding:4px 0"></div>' +
+        '<div style="flex:1;background:#1a1a1a;border-radius:12px;padding:10px"><div style="font-size:11px;color:#7a7a7a">В USDT</div>' +
+          '<input id="p2p-deal-usdt" type="number" inputmode="decimal" step="0.01" placeholder="0" style="width:100%;background:transparent;border:0;color:#fff;font-size:18px;font-weight:600;padding:4px 0"></div>' +
+      '</div>' +
+      '<div style="text-align:center;color:#7a7a7a;font-size:11px;margin-bottom:8px">Курс: 1 USDT = ' + price.toFixed(2) + ' ₽</div>' +
+      pmsBlock +
+      '<button id="p2p-deal-btn" style="width:100%;padding:14px;background:' + col + ';color:#fff;font-weight:600;border-radius:12px;margin-top:8px">' + (userIsBuyer ? 'Купить' : 'Продать') + ' USDT</button>';
+
+    const rubEl = document.getElementById('p2p-deal-rub');
+    const usdtEl = document.getElementById('p2p-deal-usdt');
+    let lk = false;
+    rubEl.addEventListener('input', function(){ if (lk||!price) return; lk=true; usdtEl.value=((+rubEl.value||0)/price).toFixed(4); lk=false; });
+    usdtEl.addEventListener('input', function(){ if (lk||!price) return; lk=true; rubEl.value=((+usdtEl.value||0)*price).toFixed(2); lk=false; });
+    const pmSel = document.getElementById('p2p-pm-select');
+    if (pmSel) pmSel.addEventListener('change', function(){ document.getElementById('p2p-pm-new').style.display = pmSel.value === '__new__' ? 'flex' : 'none'; });
     const btn = document.getElementById('p2p-deal-btn');
     if (btn) btn.addEventListener('click', initDeal);
   }
 
   async function initDeal() {
-    const amt = parseFloat(document.getElementById('p2p-deal-amount').value);
-    if (!amt) return;
-    const r = await apiP2P('POST', '/api/v1/deals/create', { offer_id: P2P_STATE.currentOfferId, amount_fiat: amt });
-    P2P_STATE.currentDealId = (r && r.id) || ('demo-' + Date.now());
+    const rubEl = document.getElementById('p2p-deal-rub');
+    const rub = parseFloat(rubEl ? rubEl.value : 0);
+    if (!rub || rub <= 0) { alert('Введи сумму'); return; }
+    const o = P2P_STATE.currentOffer || {};
+    const minA = +(o.min_amount_rub || o.min || 0);
+    const maxA = +(o.max_amount_rub || o.max || 0);
+    if (minA && rub < minA) { alert('Минимум ' + minA + ' ₽'); return; }
+    if (maxA && rub > maxA) { alert('Максимум ' + maxA + ' ₽'); return; }
+    const body = { offer_id: P2P_STATE.currentOfferId, amount_fiat: rub };
+    if (!P2P_STATE.userIsBuyer) {
+      const sel = document.getElementById('p2p-pm-select');
+      if (sel && sel.value && sel.value !== '__new__') {
+        body.payment_method_id = +sel.value;
+      } else {
+        const t = (document.getElementById('p2p-pm-type')||{}).value || 'sbp';
+        const bank = (document.getElementById('p2p-pm-bank')||{}).value || '';
+        const card = (document.getElementById('p2p-pm-card')||{}).value || '';
+        const name = (document.getElementById('p2p-pm-name')||{}).value || '';
+        if (!card.trim() || !name.trim()) { alert('Заполни реквизит и ФИО'); return; }
+        body.payment_method_inline = { type:t, bank_name:bank, card_or_phone:card, receiver_name:name, save_to_pool: !!(document.getElementById('p2p-pm-save')||{}).checked };
+      }
+    }
+    const r = await apiP2P('POST', '/api/v1/deals/create', body);
+    if (!r || (r.error && !r.ok)) { alert((r && (r.error||r.detail)) || 'Не удалось создать сделку'); return; }
+    P2P_STATE.currentDealId = r.id || r.deal_id;
     go('p2p-deal');
     loadDeal();
   }
@@ -3634,25 +3705,142 @@ loadMain().then(routeFromStart);
     const c = document.getElementById('p2p-deal-body'); if (!c) return;
     c.innerHTML = '<div class="empty-state">Загрузка…</div>';
     let d = await apiP2P('GET', '/api/v1/deals/' + P2P_STATE.currentDealId); if (!d) { return; }
-    if (!d) { return; } // legacy mock УБРАН
+    const meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
+    const iAmSeller = (d.seller_tg_id == meTg) || (d.iam === 'seller');
+    const iAmBuyer  = (d.buyer_tg_id  == meTg) || (d.iam === 'buyer');
+    const status = d.status || 'created';
+
+    let header = '';
+    if (status === 'pending_seller') {
+      header = iAmSeller
+        ? '<div style="text-align:center;padding:10px;background:rgba(51,144,236,0.12);border-radius:10px;color:#3390ec;font-size:14px;font-weight:600;margin-bottom:10px">Покупатель ждёт. Примите сделку и выдайте реквизит.</div>'
+        : '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.10);border-radius:10px;color:#ffd60a;font-size:14px;font-weight:600;margin-bottom:10px">Ждём принятия продавцом…</div>';
+    } else if (status === 'awaiting_payment') {
+      header = '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">⏱ На оплату · до ' + ((d.pay_deadline_at||'').slice(11,16) || '—') + '</div>';
+    } else if (status === 'paid') {
+      header = '<div style="text-align:center;padding:10px;background:rgba(52,199,89,0.10);border-radius:10px;color:#34c759;font-size:14px;font-weight:600;margin-bottom:10px">Покупатель отметил оплату. Продавец проверяет…</div>';
+    } else if (status === 'released') {
+      header = '<div style="text-align:center;padding:10px;background:rgba(52,199,89,0.18);border-radius:10px;color:#34c759;font-size:16px;font-weight:600;margin-bottom:10px">✅ Сделка завершена</div>';
+    } else if (status === 'cancelled') {
+      header = '<div style="text-align:center;padding:10px;background:rgba(255,69,58,0.15);border-radius:10px;color:#ff453a;font-size:14px;font-weight:600;margin-bottom:10px">❌ Сделка отменена</div>';
+    } else if (status === 'disputed') {
+      header = '<div style="text-align:center;padding:10px;background:rgba(255,159,10,0.15);border-radius:10px;color:#ff9f0a;font-size:14px;font-weight:600;margin-bottom:10px">⚖ Спор. Арбитр подключится…</div>';
+    }
+
+    const sellerName = d.seller_username ? '@'+d.seller_username : (d.seller || 'Продавец #'+(d.seller_id||''));
+    const buyerName = d.buyer_username ? '@'+d.buyer_username : (d.buyer || 'Покупатель #'+(d.buyer_id||''));
+    const amtUsdt = d.amount_usdt || d.amount || 0;
+    const amtRub  = d.amount_rub  || d.amount_fiat || d.rub || 0;
+    const pmType  = d.payment_method || d.method || '—';
+    const showRequisites = !!(d.bank || d.phone_or_card || d.receiver_name);
+
+    let actions = '';
+    if (status === 'pending_seller' && iAmSeller) {
+      actions += '<button id="p2p-deal-accept" style="width:100%;padding:14px;background:#3390ec;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">📥 Принять и выдать реквизит</button>';
+    }
+    if (status === 'awaiting_payment') {
+      if (iAmBuyer) actions += '<button id="p2p-deal-paid" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">✓ Я оплатил</button>';
+      actions += '<button id="p2p-deal-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>';
+    }
+    if (status === 'paid' && iAmSeller) {
+      actions += '<button id="p2p-deal-release" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">✅ Оплата получена — отпустить USDT</button>';
+    }
+    if (status === 'pending_seller' && !iAmSeller) {
+      actions += '<button id="p2p-deal-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>';
+    }
+    if (status === 'awaiting_payment' || status === 'paid') {
+      actions += '<button id="p2p-deal-dispute" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">⚖ Открыть спор</button>';
+    }
+
     c.innerHTML =
-      '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">' + escHtml(d.timer || '15:00') + ' на оплату</div>' +
-      '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px"><div style="font-weight:600;margin-bottom:6px">' + escHtml(d.seller || 'Продавец') + '</div>' +
-      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>' + (d.amount || 0) + ' USDT → ' + (d.rub || 0) + ' ₽</span></div>' +
-      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>' + escHtml(d.method || '—') + '</span></div></div>' +
-      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">РЕКВИЗИТЫ</div>' +
+      header +
       '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
-      '<div style="font-family:monospace;font-size:14px;margin-bottom:6px">' + escHtml(d.card || '—') + '</div>' +
-      '<div style="font-size:13px;color:#ccc">' + escHtml(d.holder || '—') + '</div></div>' +
-      '<button id="p2p-deal-paid" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">✓ Я оплатил</button>' +
-      '<button id="p2p-deal-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>' +
-      '<button id="p2p-deal-dispute" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">⚖ Спор</button>';
+      '<div style="font-weight:600;margin-bottom:6px">' + escHtml(iAmBuyer ? sellerName : buyerName) + '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>' + parseFloat(amtUsdt).toFixed(4) + ' USDT → ' + parseFloat(amtRub).toFixed(2) + ' ₽</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>' + escHtml(pmType) + '</span></div></div>' +
+      (showRequisites ?
+        '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">' + (iAmBuyer ? 'РЕКВИЗИТ ДЛЯ ОПЛАТЫ' : 'РЕКВИЗИТ ПОЛУЧЕНИЯ') + '</div>' +
+        '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+        '<div style="font-size:13px;color:#7a7a7a;margin-bottom:4px">' + escHtml(d.bank || '') + '</div>' +
+        '<div style="font-family:monospace;font-size:16px;margin-bottom:6px">' + escHtml(d.phone_or_card || '—') + '</div>' +
+        '<div style="font-size:13px;color:#ccc">' + escHtml(d.receiver_name || '') + '</div></div>'
+       : '') +
+      actions;
+
+    const accept = document.getElementById('p2p-deal-accept');
     const paid = document.getElementById('p2p-deal-paid');
+    const release = document.getElementById('p2p-deal-release');
     const cancel = document.getElementById('p2p-deal-cancel');
     const dispute = document.getElementById('p2p-deal-dispute');
+    if (accept) accept.addEventListener('click', acceptDeal);
     if (paid) paid.addEventListener('click', markPaid);
+    if (release) release.addEventListener('click', releaseDeal);
     if (cancel) cancel.addEventListener('click', cancelDeal);
     if (dispute) dispute.addEventListener('click', function() { go('p2p-dispute'); });
+  }
+
+  async function acceptDeal() {
+    const dealId = P2P_STATE.currentDealId;
+    if (!dealId) return;
+    let pms = []; let allowed = [];
+    try {
+      const r = await apiP2P('GET', '/api/v1/deals/'+dealId+'/seller_pms');
+      pms = (r && r.items) ? r.items : [];
+      allowed = (r && r.allowed_types) ? r.allowed_types : [];
+    } catch(_){}
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;padding:20px';
+    overlay.innerHTML =
+      '<div style="background:#0e0e0e;border:1px solid #2a2a2a;border-radius:14px;padding:18px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto">' +
+        '<div style="font-weight:700;font-size:17px;margin-bottom:12px">Принять сделку — выдайте реквизит</div>' +
+        '<select id="acc-pm-select" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin-bottom:10px">' +
+          pms.map(function(p){return '<option value="'+p.id+'">'+escHtml(p.bank_name)+' · '+escHtml(p.card_or_phone)+' · '+escHtml(p.receiver_name)+'</option>';}).join('') +
+          '<option value="__new__">+ Новый реквизит…</option>' +
+        '</select>' +
+        '<div id="acc-pm-new" style="display:'+(pms.length?'none':'flex')+';flex-direction:column;gap:8px;margin-bottom:10px">' +
+          '<select id="acc-pm-type" style="padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a">' +
+            (allowed.length?allowed:['sbp','tinkoff','sber','alpha','vtb','raif']).map(function(t){return '<option value="'+t+'">'+t.toUpperCase()+'</option>';}).join('') +
+          '</select>' +
+          '<input id="acc-pm-bank" placeholder="Название банка" style="padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a">' +
+          '<input id="acc-pm-card" placeholder="Карта или телефон СБП" style="padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a">' +
+          '<input id="acc-pm-name" placeholder="ФИО получателя" style="padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a">' +
+          '<label style="color:#7a7a7a;font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="acc-pm-save" checked> сохранить в реквизиты</label>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:6px">' +
+          '<button id="acc-cancel" style="flex:1;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">Отмена</button>' +
+          '<button id="acc-confirm" style="flex:2;padding:12px;background:#34c759;color:#fff;font-weight:600;border-radius:10px">Принять и выдать</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    const close = function(){ try { overlay.remove(); } catch(_){} };
+    document.getElementById('acc-cancel').onclick = close;
+    const sel = document.getElementById('acc-pm-select');
+    sel.addEventListener('change', function(){ document.getElementById('acc-pm-new').style.display = sel.value === '__new__' ? 'flex' : 'none'; });
+    document.getElementById('acc-confirm').onclick = async function(){
+      const body = {};
+      if (sel.value && sel.value !== '__new__') {
+        body.payment_method_id = +sel.value;
+      } else {
+        const t = (document.getElementById('acc-pm-type')||{}).value || 'sbp';
+        const bank = (document.getElementById('acc-pm-bank')||{}).value || '';
+        const card = (document.getElementById('acc-pm-card')||{}).value || '';
+        const name = (document.getElementById('acc-pm-name')||{}).value || '';
+        if (!card.trim() || !name.trim()) { alert('Заполни реквизит и ФИО'); return; }
+        body.payment_method_inline = { type:t, bank_name:bank, card_or_phone:card, receiver_name:name, save_to_pool: !!(document.getElementById('acc-pm-save')||{}).checked };
+      }
+      const r = await apiP2P('POST', '/api/v1/deals/'+dealId+'/accept', body);
+      if (!r || r.error) { alert((r && (r.error||r.detail)) || 'Не удалось принять сделку'); return; }
+      close();
+      loadDeal();
+    };
+  }
+
+  async function releaseDeal() {
+    if (!P2P_STATE.currentDealId) return;
+    if (!confirm('Покупатель оплатил? Отпустить USDT?')) return;
+    const r = await apiP2P('POST', '/api/v1/deals/' + P2P_STATE.currentDealId + '/release');
+    if (!r || r.error) { alert((r && (r.error||r.detail)) || 'Не удалось отпустить'); return; }
+    loadDeal();
   }
 
   async function markPaid() {
