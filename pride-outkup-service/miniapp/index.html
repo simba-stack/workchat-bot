@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v29.20260619-deadcode-noop';
+  const APP_BUILD = 'v30.20260619-tg-alert-deal';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3672,15 +3672,25 @@ loadMain().then(routeFromStart);
     if (btn) btn.addEventListener('click', initDeal);
   }
 
+  function _tgAlert(msg) {
+    try {
+      if (window.Telegram && Telegram.WebApp && typeof Telegram.WebApp.showAlert === 'function') {
+        Telegram.WebApp.showAlert(String(msg));
+        return;
+      }
+    } catch(_) {}
+    try { alert(msg); } catch(_) {}
+  }
   async function initDeal() {
+    console.log('[initDeal] click', P2P_STATE);
     const rubEl = document.getElementById('p2p-deal-rub');
     const rub = parseFloat(rubEl ? rubEl.value : 0);
-    if (!rub || rub <= 0) { alert('Введи сумму'); return; }
+    if (!rub || rub <= 0) { _tgAlert('Введи сумму в рублях'); return; }
     const o = P2P_STATE.currentOffer || {};
     const minA = +(o.min_amount_rub || o.min || 0);
     const maxA = +(o.max_amount_rub || o.max || 0);
-    if (minA && rub < minA) { alert('Минимум ' + minA + ' ₽'); return; }
-    if (maxA && rub > maxA) { alert('Максимум ' + maxA + ' ₽'); return; }
+    if (minA && rub < minA) { _tgAlert('Минимум ' + minA + ' ₽'); return; }
+    if (maxA && rub > maxA) { _tgAlert('Максимум ' + maxA + ' ₽'); return; }
     const body = { offer_id: P2P_STATE.currentOfferId, amount_fiat: rub };
     if (!P2P_STATE.userIsBuyer) {
       const sel = document.getElementById('p2p-pm-select');
@@ -3691,12 +3701,31 @@ loadMain().then(routeFromStart);
         const bank = (document.getElementById('p2p-pm-bank')||{}).value || '';
         const card = (document.getElementById('p2p-pm-card')||{}).value || '';
         const name = (document.getElementById('p2p-pm-name')||{}).value || '';
-        if (!card.trim() || !name.trim()) { alert('Заполни реквизит и ФИО'); return; }
+        if (!card.trim() || !name.trim()) {
+          _tgAlert('Заполни реквизит (карта/телефон) и ФИО получателя — без этого продавец не сможет тебе заплатить');
+          return;
+        }
         body.payment_method_inline = { type:t, bank_name:bank, card_or_phone:card, receiver_name:name, save_to_pool: !!(document.getElementById('p2p-pm-save')||{}).checked };
       }
     }
-    const r = await apiP2P('POST', '/api/v1/deals/create', body);
-    if (!r || (r.error && !r.ok)) { alert((r && (r.error||r.detail)) || 'Не удалось создать сделку'); return; }
+    console.log('[initDeal] body', body);
+    let r;
+    try {
+      r = await apiP2P('POST', '/api/v1/deals/create', body);
+    } catch(e) {
+      console.error('[initDeal] api error', e);
+      _tgAlert('Сетевая ошибка: ' + (e && e.message || 'unknown'));
+      return;
+    }
+    console.log('[initDeal] response', r);
+    if (!r || r.error || r.detail) {
+      _tgAlert((r && (r.error||r.detail)) || 'Не удалось создать сделку. Проверь баланс USDT.');
+      return;
+    }
+    if (!r.id && !r.deal_id) {
+      _tgAlert('Сервер вернул некорректный ответ');
+      return;
+    }
     P2P_STATE.currentDealId = r.id || r.deal_id;
     go('p2p-deal');
     loadDeal();
