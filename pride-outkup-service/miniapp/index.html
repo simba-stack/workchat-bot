@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v24.20260619-hide-bal-for-buy';
+  const APP_BUILD = 'v25.20260619-no-amount-field';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1531,9 +1531,8 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
     </div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Курс ₽/USDT</div>
     <input id="p2p-ad-price" type="number" inputmode="decimal" placeholder="91.50" step="0.01" autocomplete="off" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:10px">
-    <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Объём USDT (заморозится в эскроу для sell)</div>
-    <input id="p2p-ad-amount" type="number" inputmode="decimal" placeholder="100" min="10" step="0.01" autocomplete="off" style="width:100%;padding:14px;background:#1a1a1a;border:0;border-radius:10px;color:#fff;font-size:16px;margin-bottom:4px">
-    <div id="p2p-ad-balance-hint" style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:10px">Загружаю баланс…</div>
+    <input id="p2p-ad-amount" type="hidden" value="0">
+    <div id="p2p-ad-balance-hint" style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:10px;display:none"></div>
     <div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Лимиты RUB</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
       <input id="p2p-ad-min" type="number" inputmode="numeric" placeholder="мин" autocomplete="off" style="flex:1;padding:12px;background:#1a1a1a;border:0;border-radius:10px;color:#fff">
@@ -2514,17 +2513,17 @@ window.refreshAdBalanceHint = async function() {
   const hint = document.getElementById('p2p-ad-balance-hint');
   if (!hint) return;
   const adSide = (window.P2P_STATE && window.P2P_STATE.adSide) || (window.p2pState && window.p2pState.adSide) || 'BUY';
-  // Для BUY (я покупаю USDT) — баланс USDT не нужен, я отдаю рубли
+  // Для BUY (я покупаю USDT) — баланс USDT не нужен, я плачу рубли
   if (String(adSide).toUpperCase() === 'BUY') {
-    hint.style.display = 'none';
-    hint.innerHTML = '';
+    hint.style.display = 'none'; hint.innerHTML = '';
     return;
   }
-  hint.style.display = '';
+  // Для SELL — показать сколько USDT доступно для эскроу одной сделки (= макс лимит / курс)
   try {
     const r = await api('/api/v1/users/me/balance').catch(() => null);
     if (!r) return;
-    hint.innerHTML = `Доступно <b style="color:#5FE388">${(+r.available_usdt).toFixed(4)} USDT</b> (захолдировано ${(+r.locked_usdt).toFixed(4)})`;
+    hint.style.display = '';
+    hint.innerHTML = `Для продажи доступно <b style="color:#5FE388">${(+r.available_usdt).toFixed(4)} USDT</b>. На каждую сделку заморозится ≈ макс. лимит ₽ / курс.`;
     window.__availableUsdt = +r.available_usdt;
   } catch(_) {}
 };
