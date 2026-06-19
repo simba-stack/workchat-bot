@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v35.20260619-confirmbtn-scope';
+  const APP_BUILD = 'v36.20260619-give-vs-get-balance';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2103,13 +2103,31 @@ window.openP2POffer = function(id) {
 };
 
 // Создание сделки — модалка ввода суммы → создаём mock deal → переходим на view-p2p-deal
-window.openP2PCreateDeal = function() {
+window.openP2PCreateDeal = async function() {
   console.log('[openP2PCreateDeal] called, currentOffer=', window.currentOffer);
   const op = window.currentOffer;
   if (!op) {
     alert('Сначала откройте детали оффера');
     console.warn('[openP2PCreateDeal] no currentOffer');
     return;
+  }
+  // Если юзер продаёт USDT (оффер мейкера = buy) — нужен USDT баланс
+  const offerSideForCheck = (op.side || '').toLowerCase();
+  const userIsSellerSide = (offerSideForCheck === 'buy');
+  if (userIsSellerSide) {
+    try {
+      const bal = await api('/api/v1/users/me/balance').catch(() => null);
+      const avail = bal && (+bal.available_usdt) || 0;
+      const minRubReq = +(op.minRub || op.min_amount_rub || op.min_amount || 0);
+      const pr = +(op.price || 1);
+      const minUsdtReq = pr > 0 ? (minRubReq / pr) : 0;
+      if (avail < minUsdtReq) {
+        const msg = 'Чтобы продать USDT по этому объявлению, нужно минимум ' + minUsdtReq.toFixed(2) + ' USDT на балансе. У вас ' + avail.toFixed(4) + ' USDT.';
+        if (window.Telegram?.WebApp?.showAlert) Telegram.WebApp.showAlert(msg);
+        else alert(msg);
+        return;
+      }
+    } catch(_) {}
   }
   if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
   // Простая модалка ввода суммы
@@ -2120,7 +2138,7 @@ window.openP2PCreateDeal = function() {
     <div style="text-align:center;font-size:16px;font-weight:700;color:#fff;margin-bottom:18px">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</div>
     <div style="text-align:center;margin-bottom:12px">
       <input id="dlg-amount" type="number" value="${def}" style="font-size:38px;font-weight:700;text-align:center;background:transparent;border:0;color:#fff;width:100%;outline:none;padding:0">
-      <div style="font-size:13px;color:#8a8a8a;margin-top:4px">₽ · получите <span id="dlg-equiv" style="color:#5FE388">${(def / op.price).toFixed(2)} USDT</span></div>
+      <div style="font-size:13px;color:#8a8a8a;margin-top:4px">₽ · <span id="dlg-equiv-label">получите</span> <span id="dlg-equiv" style="color:#5FE388">${(def / op.price).toFixed(2)} USDT</span></div>
     </div>
     <div style="display:flex;gap:6px;margin-bottom:14px;justify-content:center">
       ${[op.minRub, 5000, 10000, 25000, op.maxRub].filter((v,i,a) => a.indexOf(v) === i && v <= op.maxRub).slice(0,5).map(v => `<button class="dlg-chip" data-v="${v}" style="padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid var(--lg-border);border-radius:8px;color:#fff;font-size:12px;cursor:pointer">${v.toLocaleString('ru-RU')} ₽</button>`).join('')}
@@ -2139,6 +2157,16 @@ window.openP2PCreateDeal = function() {
     eq.textContent = (v / op.price).toFixed(2) + ' USDT';
   }
   ai.addEventListener('input', updateEquiv);
+  // Лейбл "получите/отдадите" зависит от стороны сделки.
+  // Если оффер sell (мейкер продаёт) → юзер покупает → получает USDT.
+  // Если оффер buy  (мейкер покупает) → юзер продаёт → отдаёт USDT (получает рубли).
+  try {
+    const offerSideForLabel = (op.side || '').toLowerCase();
+    const userIsBuyerForLabel = (offerSideForLabel === 'sell');
+    const labelEl = m.querySelector('#dlg-equiv-label');
+    if (labelEl) labelEl.textContent = userIsBuyerForLabel ? 'получите' : 'отдадите';
+    if (eq) eq.style.color = userIsBuyerForLabel ? '#5FE388' : '#FFD60A';
+  } catch(_) {}
   m.querySelectorAll('.dlg-chip').forEach(c => c.onclick = () => { ai.value = c.dataset.v; updateEquiv(); });
   m.querySelector('#dlg-cancel').onclick = () => m.remove();
   // Если юзер продаёт USDT (= мейкер покупает), нужны реквизиты получения рублей
