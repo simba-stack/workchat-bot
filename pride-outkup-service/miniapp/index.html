@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v31.20260619-real-deal-create';
+  const APP_BUILD = 'v32.20260619-debug-load-p2p';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1970,14 +1970,23 @@ function renderOfferCard(op) {
 
 async function loadP2POffers() {
   const list = document.getElementById('p2p-list');
-  if (!list) return;
+  if (!list) { console.warn('[p2p] #p2p-list not found in DOM'); return; }
   try {
     list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
     let offers = [];
+    let apiErr = null;
+    let rawCount = 0;
     try {
-      const r = await api('/api/v1/offers?side=' + p2pState.side).catch(() => null);
-      if (r && r.items && r.items.length) offers = r.items;
-    } catch(_) {}
+      const r = await api('/api/v1/offers?side=' + p2pState.side).catch((e) => { apiErr = e; return null; });
+      console.log('[p2p] /offers?side=' + p2pState.side + ' →', r);
+      if (r && r.items) { offers = r.items; rawCount = r.items.length; }
+      else if (r && r.detail) apiErr = new Error(r.detail);
+    } catch(e) { apiErr = e; console.error('[p2p] api throw', e); }
+    if (apiErr) {
+      list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82;font-size:13px">API ошибка: ' + escHtml(apiErr.message || String(apiErr)) + '<br><small style="color:rgba(255,255,255,0.5)">side=' + p2pState.side + '</small></div>';
+      list.setAttribute('data-fresh', '1');
+      return;
+    }
     // CLIENT-SIDE BLACKLIST — никогда не показываем демо-юзеров
     const BLOCKED = ['alex_pro','cryptopro','natakz','p2p_master','pride official','maxtrader','denisexchange','nikitakursy'];
     offers = offers.filter(o => {
@@ -2012,7 +2021,7 @@ async function loadP2POffers() {
     try {
       list.innerHTML = offers.length
         ? offers.map(renderOfferCard).join('')
-        : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет офферов под фильтр</div>';
+        : '<div class="empty-state" style="padding:40px 20px;text-align:center;color:rgba(255,255,255,0.55)">Нет активных офферов<br><small>side=' + p2pState.side + ', получено с API: ' + rawCount + '</small></div>';
       list.setAttribute('data-fresh', '1');  // CSS-guard: разрешаем показ карточек
     } catch(re) {
       console.error('P2P render err', re);
