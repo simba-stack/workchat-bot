@@ -39,6 +39,7 @@ async def lock(db: AsyncSession, seller: User, deal: Deal) -> EscrowLock:
     """
     await _sync_usdt_from_coin_balances(db, seller)
     amount = deal.amount_usdt
+    await _sync_usdt_from_coin_balances(db, seller)
     if seller.balance_usdt < amount:
         raise HTTPException(400, "недостаточно USDT в эскроу: пополни баланс")
 

@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v36.20260619-give-vs-get-balance';
+  const APP_BUILD = 'v39.20260619-renderDeal-clean';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2103,6 +2103,90 @@ window.openP2POffer = function(id) {
 };
 
 // Создание сделки — модалка ввода суммы → создаём mock deal → переходим на view-p2p-deal
+
+// === renderDealView: универсальная загрузка экрана сделки из любого scope ===
+window.renderDealView = async function(dealId) {
+  var c = document.getElementById('p2p-deal-body');
+  if (!c) return;
+  c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загружаю сделку...</div>';
+  var d;
+  try { d = await api('/api/v1/deals/' + encodeURIComponent(dealId)); }
+  catch(e) {
+    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + (e && e.message ? e.message : e) + '</div>';
+    return;
+  }
+  if (!d || d.error || d.detail) {
+    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Сделка не найдена</div>';
+    return;
+  }
+  var meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
+  var iAmSeller = (d.seller_tg_id == meTg);
+  var iAmBuyer  = (d.buyer_tg_id  == meTg);
+  var status = d.status || 'created';
+  var headerColor = {pending_seller:'#3390ec', awaiting_payment:'#FFD60A', paid:'#34c759', released:'#5FE388', cancelled:'#FF8B82', disputed:'#FF9F0A'}[status] || '#7a7a7a';
+  var headerText = ({
+    pending_seller: iAmSeller ? 'Покупатель ждёт. Примите и выдайте реквизит.' : 'Ждём принятия продавцом...',
+    awaiting_payment: iAmBuyer ? 'Переведите оплату на реквизит ниже' : 'Ждём оплату от покупателя',
+    paid: iAmSeller ? 'Покупатель отметил оплату. Проверьте и отпустите USDT.' : 'Ждём подтверждение продавца...',
+    released: 'Сделка завершена',
+    cancelled: 'Сделка отменена',
+    disputed: 'Спор. Арбитр подключится.'
+  })[status] || status;
+
+  var actions = '';
+  if (status === 'pending_seller' && iAmSeller) actions += '<button id="rdv-accept" style="width:100%;padding:14px;background:#3390ec;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px;border:0">Принять и выдать реквизит</button>';
+  if (status === 'awaiting_payment' && iAmBuyer) actions += '<button id="rdv-paid" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px;border:0">Я оплатил</button>';
+  if (status === 'awaiting_payment' || status === 'pending_seller') actions += '<button id="rdv-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;border:0;margin-bottom:4px">Отменить</button>';
+  if (status === 'paid' && iAmSeller) actions += '<button id="rdv-release" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px;border:0">Оплата получена — отпустить USDT</button>';
+  if (status === 'awaiting_payment' || status === 'paid') actions += '<button id="rdv-dispute" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px;border:0">Открыть спор</button>';
+
+  var hasReq = !!(d.bank || d.phone_or_card || d.receiver_name);
+  c.innerHTML =
+    '<div style="text-align:center;padding:12px;background:rgba(' + (status==='awaiting_payment'?'255,214,10':'51,144,236') + ',0.10);border-radius:10px;color:' + headerColor + ';font-size:14px;font-weight:600;margin-bottom:10px">' + headerText + '</div>' +
+    '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+      '<div style="font-weight:600;margin-bottom:6px">Сделка #' + (d.deal_number || d.id) + '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>' + parseFloat(d.amount_usdt||0).toFixed(4) + ' USDT · ' + parseFloat(d.amount_rub||d.amount_fiat||0).toFixed(2) + ' ₽</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>' + escHtml(d.payment_method||'—') + '</span></div></div>' +
+    (hasReq ?
+      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">' + (iAmBuyer ? 'РЕКВИЗИТ ДЛЯ ОПЛАТЫ' : 'РЕКВИЗИТ ПОЛУЧЕНИЯ') + '</div>' +
+      '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+      '<div style="font-size:13px;color:#7a7a7a;margin-bottom:4px">' + escHtml(d.bank||'') + '</div>' +
+      '<div style="font-family:monospace;font-size:16px;margin-bottom:6px">' + escHtml(d.phone_or_card||'—') + '</div>' +
+      '<div style="font-size:13px;color:#ccc">' + escHtml(d.receiver_name||'') + '</div></div>'
+      : '') +
+    actions;
+
+  function _showAlert(msg){ try{ if(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.showAlert) return Telegram.WebApp.showAlert(String(msg)); }catch(_){} alert(msg); }
+  async function doAction(path, body){
+    try {
+      var r = await api(path, body ? {method:'POST', body: JSON.stringify(body)} : {method:'POST'});
+      if (!r || r.error) { _showAlert((r&&(r.error||r.detail))||'Ошибка'); return; }
+      renderDealView(dealId);
+    } catch(e) { _showAlert(e.message||String(e)); }
+  }
+  function bind(id, fn){ var b=document.getElementById(id); if(b) b.addEventListener('click', fn); }
+  bind('rdv-paid', function(){ doAction('/api/v1/deals/' + d.id + '/mark_paid'); });
+  bind('rdv-release', function(){ doAction('/api/v1/deals/' + d.id + '/release'); });
+  bind('rdv-cancel', function(){ if(confirm('Отменить сделку?')) doAction('/api/v1/deals/' + d.id + '/cancel'); });
+  bind('rdv-dispute', function(){ go('p2p-dispute'); });
+  bind('rdv-accept', function(){
+    var pm_type = prompt('Тип реквизита (sbp/sber/tinkoff/alpha/vtb/raif)', 'sbp') || 'sbp';
+    var bank = prompt('Банк (Сбер/Тинькофф/...)', '') || '';
+    var card = prompt('Карта или телефон СБП', '') || '';
+    var name = prompt('ФИО получателя', '') || '';
+    if (!card || !name) return;
+    doAction('/api/v1/deals/' + d.id + '/accept', { payment_method_inline: { type: pm_type, bank_name: bank, card_or_phone: card, receiver_name: name, save_to_pool: true } });
+  });
+};
+
+// Polling: автообновляем активную сделку каждые 5 сек
+window.__rdvPoll = window.__rdvPoll || null;
+window.startDealPolling = function(dealId) {
+  if (window.__rdvPoll) clearInterval(window.__rdvPoll);
+  window.__rdvPoll = setInterval(function(){ try { renderDealView(dealId); } catch(_){} }, 5000);
+};
+window.stopDealPolling = function() { if (window.__rdvPoll) { clearInterval(window.__rdvPoll); window.__rdvPoll = null; } };
+
 window.openP2PCreateDeal = async function() {
   console.log('[openP2PCreateDeal] called, currentOffer=', window.currentOffer);
   const op = window.currentOffer;
