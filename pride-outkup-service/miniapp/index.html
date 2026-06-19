@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v33.20260619-initdata-ttl';
+  const APP_BUILD = 'v34.20260619-click-debug';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1950,7 +1950,7 @@ function renderOfferCard(op) {
   const online = !!op.online;
   const badge = tier ? `<span class="p2p-badge ${tier}">${escHtml(tierLabel)}</span>` : '';
   const onlineDot = online ? '<span style="color:#5FE388">🟢</span> ' : '';
-  return `<div class="p2p-offer-card" onclick="openP2POffer('${escHtml(id)}')">
+  return `<div class="p2p-offer-card" onclick="try{openP2POffer('${escHtml(id)}')}catch(e){console.error('openP2POffer fail',e);alert('JS ошибка: '+e.message)}">
     <div class="row1">
       <div class="avatar">${escHtml(avatar)}</div>
       <div class="name">
@@ -1964,7 +1964,7 @@ function renderOfferCard(op) {
     </div>
     <div class="limit-row">${onlineDot}Доступно: ${available.toLocaleString('ru-RU')} USDT · Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
     <div class="pay-row">${banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
-    <button class="p2p-cta" onclick="event.stopPropagation(); openP2POffer('${escHtml(id)}')">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
+    <button class="p2p-cta" onclick="event.stopPropagation(); try{openP2POffer('${escHtml(id)}')}catch(e){console.error('btn openP2POffer fail',e);alert('JS ошибка: '+e.message)}">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
   </div>`;
 }
 
@@ -2046,8 +2046,22 @@ async function loadP2POffers() {
 }
 
 window.openP2POffer = function(id) {
-  const op = (p2pState.offers || []).find(x => x.id === id);
-  if (!op) return;
+  console.log('[openP2POffer] called id=', id, 'offers cached:', (p2pState.offers||[]).length);
+  let op = (p2pState.offers || []).find(x => String(x.id) === String(id));
+  if (!op) {
+    console.warn('[openP2POffer] offer not in cache, refetching...');
+    // fallback: запросим оффер напрямую
+    (async () => {
+      try {
+        const r = await api('/api/v1/offers/' + encodeURIComponent(id));
+        const fresh = (r && r.offer) || r;
+        if (fresh) { p2pState.offers = (p2pState.offers||[]).concat([fresh]); window.openP2POffer(id); }
+        else { alert('Оффер не найден'); }
+      } catch(e) { alert('Не удалось загрузить оффер: '+e.message); }
+    })();
+    return;
+  }
+  console.log('[openP2POffer] op=', op);
   // Заполняем дефолты как в renderOfferCard
   op.nick = op.nick || op.username || 'Аноним';
   op.avatar = op.avatar || (op.nick[0] || '?').toUpperCase();
@@ -2090,8 +2104,13 @@ window.openP2POffer = function(id) {
 
 // Создание сделки — модалка ввода суммы → создаём mock deal → переходим на view-p2p-deal
 window.openP2PCreateDeal = function() {
+  console.log('[openP2PCreateDeal] called, currentOffer=', window.currentOffer);
   const op = window.currentOffer;
-  if (!op) return;
+  if (!op) {
+    alert('Сначала откройте детали оффера');
+    console.warn('[openP2PCreateDeal] no currentOffer');
+    return;
+  }
   if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('medium');
   // Простая модалка ввода суммы
   const m = document.createElement('div');
