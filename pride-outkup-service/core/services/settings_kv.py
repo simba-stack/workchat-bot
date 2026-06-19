@@ -63,5 +63,5 @@ async def get_fee_v2_pct(db: AsyncSession) -> Decimal:
 
 
 async def is_v2_p2p_public(db: AsyncSession) -> bool:
-    v = await get_setting(db, "feature_v2_p2p_public", False)
+    v = await get_setting(db, "feature_v2_p2p_public", True)
     return bool(v)
