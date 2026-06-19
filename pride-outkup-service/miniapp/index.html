@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v30.20260619-tg-alert-deal';
+  const APP_BUILD = 'v31.20260619-fix-card-btn';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1964,7 +1964,7 @@ function renderOfferCard(op) {
     </div>
     <div class="limit-row">${onlineDot}Доступно: ${available.toLocaleString('ru-RU')} USDT · Лимит ${minRub.toLocaleString('ru-RU')} — ${maxRub.toLocaleString('ru-RU')} ₽</div>
     <div class="pay-row">${banks.map(b => '<span class="p2p-pay-chip">' + escHtml(b) + '</span>').join('')}</div>
-    <button class="p2p-cta">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
+    <button class="p2p-cta" onclick="event.stopPropagation(); openP2POffer('${escHtml(id)}')">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
   </div>`;
 }
 
@@ -2036,8 +2036,9 @@ window.openP2POffer = function(id) {
   op.avgMin = +(op.avgMin || 5);
   op.price = +(op.price || 0);
   op.available = +(op.available || 0);
-  op.minRub = +(op.minRub || 1000);
-  op.maxRub = +(op.maxRub || 100000);
+  op.minRub = +(op.minRub || op.min_amount_rub || op.min_amount || 1000);
+  op.maxRub = +(op.maxRub || op.max_amount_rub || op.max_amount || 100000);
+  op.available = +(op.available || op.amount_usdt_remaining || op.amount_usdt_total || 0);
   if (!Array.isArray(op.banks)) op.banks = [];
   window.currentOffer = op;
   const body = document.getElementById('p2p-offer-body');
@@ -2059,7 +2060,7 @@ window.openP2POffer = function(id) {
       <div class="p2p-detail-row"><span class="k">Тайминг оплаты</span><span class="v">15 минут</span></div>
     </div>
     <div class="p2p-screen-label">Условия продавца</div>
-    <div class="p2p-detail-block" style="font-size:13px;line-height:1.6;white-space:pre-wrap">${escHtml(op.terms || 'Стандартные условия')}</div>
+    <div class="p2p-detail-block" style="font-size:13px;line-height:1.6;white-space:pre-wrap">${escHtml(op.terms || op.conditions || 'Стандартные условия')}</div>
     <div class="p2p-bottom-cta">
       <button class="p2p-btn-primary" onclick="openP2PCreateDeal()">${p2pState.side === 'buy' ? 'Купить' : 'Продать'} USDT</button>
     </div>`;
