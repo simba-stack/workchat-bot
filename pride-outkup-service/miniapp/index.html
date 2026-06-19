@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v20.20260619-p2p-stage2';
+  const APP_BUILD = 'v21.20260619-fix-side';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3548,6 +3548,8 @@ loadMain().then(routeFromStart);
 
   function setSide(side) {
     P2P_STATE.side = side;
+    // Синхронизируем adSide: если юзер на табе "Продать USDT" → создание тоже SELL
+    P2P_STATE.adSide = side;
     const b = document.getElementById('p2p-side-buy');
     const s = document.getElementById('p2p-side-sell');
     if (!b || !s) return;
@@ -3564,7 +3566,11 @@ loadMain().then(routeFromStart);
   async function loadMarket() {
     const c = document.getElementById('p2p-list'); if (!c) return;
     c.innerHTML = '<div class="empty-state">Загрузка…</div>';
-    let data = await apiP2P('GET', '/api/v1/offers?side=' + P2P_STATE.side.toLowerCase() + '&coin=USDT');
+    // СЕМАНТИКА: side в БД хранится с точки зрения МЕЙКЕРА (создателя оффера).
+    // Юзер на табе "Купить USDT" → нужны офферы где мейкер ПРОДАЁТ (side=sell).
+    // Юзер на табе "Продать USDT" → нужны офферы где мейкер ПОКУПАЕТ (side=buy).
+    const counterSide = (P2P_STATE.side === 'BUY') ? 'sell' : 'buy';
+    let data = await apiP2P('GET', '/api/v1/offers?side=' + counterSide + '&coin=USDT');
     let offers = (data && (data.items || data.offers || data)) || [];
     // legacy mock УБРАН — никаких Alex_Pro/CryptoPro/...
     if (!Array.isArray(offers) || offers.length === 0) offers = [];
@@ -3892,10 +3898,13 @@ loadMain().then(routeFromStart);
     let ads = await apiP2P('GET', '/api/v1/offers?my=1');
     if (!ads || !ads.length) ads = []; // legacy mock УБРАН
     c.innerHTML = ads.map(function(a) {
+      const sideRaw = (a.side || '').toLowerCase();
+      const sideTxt = sideRaw === 'sell' ? 'Продаю USDT' : (sideRaw === 'buy' ? 'Покупаю USDT' : (a.side || ''));
+      const active = (a.status === 'active') || a.active;
       return '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
-        '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>' + a.side + ' USDT</b><span style="color:' + (a.active ? '#34c759' : '#7a7a7a') + ';font-size:11px">' + (a.active ? '● Активно' : '○ Пауза') + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Цена</span><b>' + a.price + ' ₽</b></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Сделок сегодня</span><span>' + (a.deals_today || 0) + '</span></div></div>';
+        '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>' + sideTxt + '</b><span style="color:' + (active ? '#34c759' : '#7a7a7a') + ';font-size:11px">' + (active ? '● Активно' : '○ Пауза') + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Цена</span><b>' + parseFloat(a.price || a.rate_rub_per_usdt || 0).toFixed(2) + ' ₽</b></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Остаток</span><span>' + parseFloat(a.amount_usdt_remaining || a.amount || 0).toFixed(2) + ' USDT</span></div></div>';
     }).join('');
   }
 
@@ -3909,18 +3918,30 @@ loadMain().then(routeFromStart);
   }
 
   async function submitNewAd() {
+    const sideLower = (P2P_STATE.adSide || 'BUY').toLowerCase();
+    const price = parseFloat(document.getElementById('p2p-ad-price').value);
+    const amount = parseFloat(document.getElementById('p2p-ad-amount').value);
+    const minA = parseFloat(document.getElementById('p2p-ad-min').value);
+    const maxA = parseFloat(document.getElementById('p2p-ad-max').value);
+    if (!price || !amount) { alert('Заполни цену и сумму'); return; }
+    // Бэкенд использует поля amount_usdt_total + min_amount_rub + max_amount_rub + rate_rub_per_usdt
     const data = {
-      side: P2P_STATE.adSide || 'BUY',
-      coin: 'USDT',
-      price: parseFloat(document.getElementById('p2p-ad-price').value),
-      amount: parseFloat(document.getElementById('p2p-ad-amount').value),
-      min_amount: parseFloat(document.getElementById('p2p-ad-min').value),
-      max_amount: parseFloat(document.getElementById('p2p-ad-max').value),
-      terms: document.getElementById('p2p-ad-terms').value
+      side: sideLower,
+      coin: 'USDT', fiat: 'RUB',
+      rate_rub_per_usdt: price,
+      amount_usdt_total: amount,
+      min_amount_rub: minA, max_amount_rub: maxA,
+      // для обратной совместимости старых валидаторов
+      price: price, amount: amount, min_amount: minA, max_amount: maxA,
+      terms: document.getElementById('p2p-ad-terms').value,
+      conditions: document.getElementById('p2p-ad-terms').value,
+      payment_methods: ['sbp','sber','tinkoff'],
     };
     const r = await apiP2P('POST', '/api/v1/offers', data);
-    alert(r ? 'Опубликовано!' : 'Сохранено (демо)');
+    if (!r || r.error) { alert((r && (r.error||r.detail)) || 'Не удалось создать. Если продаёшь USDT — проверь, что баланса хватает.'); return; }
+    alert('Опубликовано! ' + (sideLower === 'sell' ? 'USDT в эскроу.' : 'Без блокировки баланса.'));
     go('p2p-myads');
+    if (typeof loadMyAds === 'function') loadMyAds();
   }
 
   // ── Привязки кнопок (после DOM готов) ──
