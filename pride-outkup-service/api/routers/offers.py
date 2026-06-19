@@ -360,9 +360,14 @@ async def my_offers(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Свои офферы."""
+    """Свои офферы — без archived/cancelled (их юзер удалил)."""
     res = await db.execute(
-        select(Offer).where(Offer.user_id == user.id).order_by(desc(Offer.created_at))
+        select(Offer)
+        .where(
+            Offer.user_id == user.id,
+            Offer.status.in_(("active", "paused", "completed")),
+        )
+        .order_by(desc(Offer.created_at))
     )
     items = []
     for o in res.scalars().all():
