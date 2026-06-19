@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v22.20260619-fix-side2';
+  const APP_BUILD = 'v23.20260619-fix-adside';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3548,8 +3548,8 @@ loadMain().then(routeFromStart);
 
   function setSide(side) {
     P2P_STATE.side = side;
-    // Синхронизируем adSide: если юзер на табе "Продать USDT" → создание тоже SELL
-    P2P_STATE.adSide = side;
+    // НЕ синхронизируем adSide: форма создания и таб доски — разные вещи.
+    // Юзер может смотреть "Продать USDT" на доске, но создавать оффер "Купить".
     const b = document.getElementById('p2p-side-buy');
     const s = document.getElementById('p2p-side-sell');
     if (!b || !s) return;
@@ -3958,6 +3958,11 @@ loadMain().then(routeFromStart);
     const adSell = document.getElementById('p2p-ad-sell');
     if (adBuy) adBuy.addEventListener('click', function() { setAdSide('BUY'); });
     if (adSell) adSell.addEventListener('click', function() { setAdSide('SELL'); });
+    // При входе в форму создания через кнопку "+ Создать своё" — сбрасываем на BUY (соответствует визуалу)
+    const createBtnReset = document.getElementById('p2p-create-btn');
+    if (createBtnReset) createBtnReset.addEventListener('click', function(){ setAdSide('BUY'); });
+    const myadsAddReset = document.getElementById('p2p-myads-add');
+    if (myadsAddReset) myadsAddReset.addEventListener('click', function(){ setAdSide('BUY'); });
     const adSubmit = document.getElementById('p2p-ad-submit');
     if (adSubmit) adSubmit.addEventListener('click', submitNewAd);
     const chatBtn = document.getElementById('p2p-deal-chat-btn');
