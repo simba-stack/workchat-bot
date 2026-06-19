@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v34.20260619-click-debug';
+  const APP_BUILD = 'v35.20260619-confirmbtn-scope';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2144,7 +2144,8 @@ window.openP2PCreateDeal = function() {
   // Если юзер продаёт USDT (= мейкер покупает), нужны реквизиты получения рублей
   const offerSideRaw = (op.side || '').toLowerCase();
   const userIsBuyer = (offerSideRaw === 'sell'); // мейкер продаёт → юзер покупает
-  if (!userIsBuyer) {
+  const confirmBtn = m.querySelector('#dlg-confirm'); // outer scope чтобы видеть в onclick
+  if (!userIsBuyer && confirmBtn) {
     // Добавляем блок реквизита перед кнопкой
     const reqBlock = document.createElement('div');
     reqBlock.style.cssText = 'background:rgba(51,144,236,0.10);border:1px solid rgba(51,144,236,0.30);border-radius:10px;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px';
@@ -2155,7 +2156,6 @@ window.openP2PCreateDeal = function() {
       '</select>' +
       '<input id="dlg-pm-card" placeholder="Карта или телефон СБП" style="padding:8px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
       '<input id="dlg-pm-name" placeholder="ФИО получателя" style="padding:8px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">';
-    const confirmBtn = m.querySelector('#dlg-confirm');
     confirmBtn.parentNode.insertBefore(reqBlock, confirmBtn);
   }
 
