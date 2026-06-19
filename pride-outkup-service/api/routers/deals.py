@@ -277,6 +277,11 @@ async def release_deal(
     if d.status != "paid":
         raise HTTPException(400, "deal не в статусе paid")
     await escrow_service.release(db, d)
+    # Statistics: filled_count + total_volume_usdt на оффере
+    o_rel = await db.get(Offer, d.offer_id)
+    if o_rel:
+        o_rel.filled_count = (o_rel.filled_count or 0) + 1
+        o_rel.total_volume_usdt = (o_rel.total_volume_usdt or Decimal("0")) + (d.amount_usdt or Decimal("0"))
     await db.flush()
     try:
         await jarvis_sync.send_event("deal_released", {
@@ -311,13 +316,22 @@ async def cancel_deal(
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
-    if d.status not in ("awaiting_payment",):
+    if d.status not in ("awaiting_payment", "pending_seller"):
         raise HTTPException(400, "уже оплачено — открывайте dispute")
     reason = ((payload or {}).get("reason") or "user_cancelled")[:256]
+    was_status = d.status
     d.status = "cancelled"
     d.cancelled_at = datetime.now(timezone.utc)
     d.cancelled_reason = reason
-    await escrow_service.refund(db, d, reason)
+    # эскроу возвращаем только если он был залочен (pending_seller — лока на сделке ещё нет)
+    if was_status == "awaiting_payment":
+        await escrow_service.refund(db, d, reason)
+    # Partial-fill: вернуть остаток в offer.amount_usdt_remaining
+    o_back = await db.get(Offer, d.offer_id)
+    if o_back:
+        o_back.amount_usdt_remaining = (o_back.amount_usdt_remaining or Decimal("0")) + (d.amount_usdt or Decimal("0"))
+        if o_back.status == "completed" and o_back.amount_usdt_remaining > 0:
+            o_back.status = "active"
     await db.flush()
     # Bot-notify другой стороне
     try:
@@ -379,32 +393,58 @@ async def deal_create_v3(
     fee_pct = await settings_kv.get_fee_v2_pct(db)
     fee_usdt = (amount_usdt * fee_pct / 100).quantize(Decimal("0.0001"))
 
+    # SELL-offer = я продаю USDT (юзер покупает у меня)
+    # BUY-offer  = я покупаю USDT (юзер продаёт мне)
     if o.side == "sell":
         buyer_id, seller_id = user.id, o.user_id
     else:
         buyer_id, seller_id = o.user_id, user.id
 
     seller = await db.get(User, seller_id)
-    if not seller or seller.balance_usdt < amount_usdt:
-        raise HTTPException(400, "у продавца недостаточно USDT для escrow")
+    if not seller:
+        raise HTTPException(500, "seller not found")
 
-    # Реквизиты от seller (см. create_deal выше)
+    # Partial fill: проверка остатка объявления
+    if (o.amount_usdt_remaining or Decimal("0")) < amount_usdt:
+        raise HTTPException(
+            400,
+            f"остаток объявления {float(o.amount_usdt_remaining or 0):.4f} USDT, нужно {float(amount_usdt):.4f}",
+        )
+
     from core.models import UserPaymentMethod
-    res_pm = await db.execute(
-        select(UserPaymentMethod)
-        .where(UserPaymentMethod.user_id == seller_id)
-        .where(UserPaymentMethod.type == payment_method)
-        .where(UserPaymentMethod.is_active == True)  # noqa: E712
-        .order_by(UserPaymentMethod.id.desc())
-        .limit(1)
-    )
-    seller_pm = res_pm.scalar_one_or_none()
-    deal_bank = seller_pm.bank_name if seller_pm else None
-    deal_card = seller_pm.card_or_phone if seller_pm else None
-    deal_name = seller_pm.receiver_name if seller_pm else None
+    deal_bank = None
+    deal_card = None
+    deal_name = None
 
-    pay_window = o.pay_window_min or 30
-    deadline = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
+    if o.side == "sell":
+        # SELL-flow: продавец примет позже и укажет реквизит -> pending_seller
+        deal_status = "pending_seller"
+        deadline = None
+        do_lock_now = False
+    else:
+        # BUY-flow: юзер (= seller) сразу даёт мне свой реквизит
+        pm_id = (payload or {}).get("payment_method_id")
+        if pm_id:
+            pm = await db.get(UserPaymentMethod, int(pm_id))
+            if not pm or pm.user_id != user.id:
+                raise HTTPException(404, "реквизит не найден")
+            deal_bank = pm.bank_name
+            deal_card = pm.card_or_phone
+            deal_name = pm.receiver_name
+            payment_method = pm.type or payment_method
+        else:
+            inline = (payload or {}).get("payment_method_inline") or {}
+            deal_bank = (inline.get("bank_name") or "").strip()[:64] or None
+            deal_card = (inline.get("card_or_phone") or "").strip()[:64] or None
+            deal_name = (inline.get("receiver_name") or "").strip()[:128] or None
+            if not deal_card or not deal_name:
+                raise HTTPException(400, "укажите реквизит для получения оплаты")
+        if seller.balance_usdt < amount_usdt:
+            raise HTTPException(400, "у вас недостаточно USDT для эскроу-блокировки")
+        deal_status = "awaiting_payment"
+        deadline = datetime.now(timezone.utc) + timedelta(minutes=(o.pay_window_min or 30))
+        do_lock_now = True
+
     deal = Deal(
         deal_number=await _next_deal_number(db),
         offer_id=o.id,
@@ -417,13 +457,21 @@ async def deal_create_v3(
         bank=deal_bank,
         phone_or_card=deal_card,
         receiver_name=deal_name,
-        status="awaiting_payment",
+        status=deal_status,
         fee_pct=fee_pct, fee_usdt=fee_usdt,
         expires_at=deadline, pay_deadline_at=deadline,
     )
     db.add(deal)
     await db.flush()
-    await escrow_service.lock(db, seller, deal)
+    if do_lock_now:
+        await escrow_service.lock(db, seller, deal)
+
+    # Partial fill: уменьшаем remaining оффера
+    o.amount_usdt_remaining = (o.amount_usdt_remaining or Decimal("0")) - amount_usdt
+    if o.amount_usdt_remaining <= Decimal("0.0001"):
+        o.status = "completed"
+        o.amount_usdt_remaining = Decimal("0")
+    await db.flush()
 
     try:
         from core.models import DealMessage
@@ -653,3 +701,137 @@ async def open_dispute(
     except Exception:
         pass
     return {"ok": True, "dispute_id": dispute.id}
+
+
+# ─── Sell-flow: accept by seller + seller's payment_methods pool ────────
+@router.post("/{deal_id}/accept")
+async def accept_deal(
+    deal_id: int,
+    payload: dict | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Продавец принимает sell-deal и выдаёт реквизит.
+
+    payload: {payment_method_id: int}
+       или   {payment_method_inline: {type, bank_name, card_or_phone, receiver_name, save_to_pool?}}
+    """
+    d = await db.get(Deal, deal_id)
+    if not d or d.seller_id != user.id:
+        raise HTTPException(404, "deal not found")
+    if d.status != "pending_seller":
+        raise HTTPException(400, "сделка уже принята/завершена")
+
+    from core.models import UserPaymentMethod, DealMessage
+    payload = payload or {}
+    pm_id = payload.get("payment_method_id")
+    if pm_id:
+        pm = await db.get(UserPaymentMethod, int(pm_id))
+        if not pm or pm.user_id != user.id:
+            raise HTTPException(404, "реквизит не найден")
+        deal_bank = pm.bank_name
+        deal_card = pm.card_or_phone
+        deal_name = pm.receiver_name
+        deal_pm_type = pm.type
+    else:
+        inline = payload.get("payment_method_inline") or {}
+        deal_bank = (inline.get("bank_name") or "").strip()[:64] or None
+        deal_card = (inline.get("card_or_phone") or "").strip()[:64] or None
+        deal_name = (inline.get("receiver_name") or "").strip()[:128] or None
+        deal_pm_type = (inline.get("type") or d.payment_method or "sbp").strip()[:32]
+        if not deal_card or not deal_name:
+            raise HTTPException(400, "укажите реквизит и ФИО получателя")
+        if inline.get("save_to_pool"):
+            try:
+                db.add(UserPaymentMethod(
+                    user_id=user.id, type=deal_pm_type,
+                    bank_name=deal_bank or "", card_or_phone=deal_card,
+                    receiver_name=deal_name, is_active=True,
+                ))
+                await db.flush()
+            except Exception:
+                pass
+
+    # Эскроу-лок только сейчас (а не при создании сделки)
+    if user.balance_usdt < d.amount_usdt:
+        raise HTTPException(400, "недостаточно USDT для эскроу-блокировки")
+    await escrow_service.lock(db, user, d)
+
+    d.bank = deal_bank
+    d.phone_or_card = deal_card
+    d.receiver_name = deal_name
+    d.payment_method = deal_pm_type
+    d.status = "awaiting_payment"
+    o_acc = await db.get(Offer, d.offer_id)
+    pay_window = (o_acc.pay_window_min if o_acc else 30) or 30
+    d.pay_deadline_at = datetime.now(timezone.utc) + timedelta(minutes=pay_window)
+    d.expires_at = d.pay_deadline_at
+    await db.flush()
+
+    try:
+        from bot.main import notify_user
+        buyer = await db.get(User, d.buyer_id)
+        if buyer and buyer.tg_id:
+            await notify_user(
+                buyer.tg_id,
+                f"✅ <b>Продавец принял сделку #{d.deal_number}</b>\n\n"
+                f"Реквизит для оплаты:\n"
+                f"  Банк: <b>{deal_bank or '-'}</b>\n"
+                f"  Карта/телефон: <code>{deal_card}</code>\n"
+                f"  Получатель: <b>{deal_name}</b>\n\n"
+                f"Сумма: <b>{float(d.amount_rub)} {d.fiat}</b>\n"
+                f"⏱ Оплатите в течение {pay_window} мин.",
+            )
+        db.add(DealMessage(
+            deal_id=d.id, from_user_id=None,
+            text=f"Продавец принял сделку. Оплатите {float(d.amount_rub)} {d.fiat} -> {deal_bank} ({deal_card})",
+            is_system=True,
+        ))
+        await db.flush()
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "status": d.status,
+        "pay_deadline_at": d.pay_deadline_at.isoformat() if d.pay_deadline_at else None,
+        "payment_method": {
+            "type": deal_pm_type,
+            "bank_name": deal_bank,
+            "card_or_phone": deal_card,
+            "receiver_name": deal_name,
+        },
+    }
+
+
+@router.get("/{deal_id}/seller_pms")
+async def get_seller_pms(
+    deal_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Реквизиты продавца (фильтр по offer.payment_methods) для модалки accept."""
+    d = await db.get(Deal, deal_id)
+    if not d or d.seller_id != user.id:
+        raise HTTPException(404, "deal not found")
+    o_pm = await db.get(Offer, d.offer_id)
+    allowed = set(o_pm.payment_methods or []) if o_pm else set()
+
+    from core.models import UserPaymentMethod
+    res = await db.execute(
+        select(UserPaymentMethod)
+        .where(UserPaymentMethod.user_id == user.id)
+        .where(UserPaymentMethod.is_active == True)  # noqa: E712
+        .order_by(UserPaymentMethod.id.desc())
+    )
+    items = []
+    for pm in res.scalars().all():
+        if allowed and pm.type not in allowed:
+            continue
+        items.append({
+            "id": pm.id, "type": pm.type,
+            "bank_name": pm.bank_name,
+            "card_or_phone": pm.card_or_phone,
+            "receiver_name": pm.receiver_name,
+        })
+    return {"ok": True, "items": items, "allowed_types": sorted(list(allowed))}
