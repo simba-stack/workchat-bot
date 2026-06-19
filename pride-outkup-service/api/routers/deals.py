@@ -440,7 +440,19 @@ async def deal_create_v3(
             if not deal_card or not deal_name:
                 raise HTTPException(400, "укажите реквизит для получения оплаты")
         if seller.balance_usdt < amount_usdt:
-            raise HTTPException(400, "у вас недостаточно USDT для эскроу-блокировки")
+            from core.services.escrow_service import get_balance_breakdown
+            try:
+                br = await get_balance_breakdown(db, seller)
+                locked = br.get("locked_usdt", 0)
+                avail = br.get("available_usdt", float(seller.balance_usdt or 0))
+            except Exception:
+                locked = 0
+                avail = float(seller.balance_usdt or 0)
+            raise HTTPException(
+                400,
+                f"Нужно {float(amount_usdt):.4f} USDT, у вас доступно {float(avail):.4f} USDT (захолдировано {float(locked):.4f}). "
+                f"Освободите USDT — снимите активные sell-объявления или дождитесь завершения сделок.",
+            )
         deal_status = "awaiting_payment"
         deadline = datetime.now(timezone.utc) + timedelta(minutes=(o.pay_window_min or 30))
         do_lock_now = True
