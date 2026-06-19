@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v32.20260619-debug-load-p2p';
+  const APP_BUILD = 'v33.20260619-initdata-ttl';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1983,7 +1983,19 @@ async function loadP2POffers() {
       else if (r && r.detail) apiErr = new Error(r.detail);
     } catch(e) { apiErr = e; console.error('[p2p] api throw', e); }
     if (apiErr) {
-      list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82;font-size:13px">API ошибка: ' + escHtml(apiErr.message || String(apiErr)) + '<br><small style="color:rgba(255,255,255,0.5)">side=' + p2pState.side + '</small></div>';
+      const msg = (apiErr.message || String(apiErr));
+      // initData expired / 401 → нужно перезагрузить страницу чтобы Telegram дал свежий tgWebAppData
+      if (msg.indexOf('initData expired') >= 0 || msg.indexOf('expired') >= 0 || msg.indexOf('401') >= 0) {
+        list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FFD60A;font-size:13px">Сессия Telegram истекла. Обновляем...<br><small style="color:rgba(255,255,255,0.5)">Если экран не обновился — закрой Mini-App и открой заново</small></div>';
+        list.setAttribute('data-fresh', '1');
+        // Пробуем перезагрузить (Telegram при reload подставит свежий initData)
+        setTimeout(function(){
+          try { if (window.Telegram && Telegram.WebApp) { /* пусть Telegram переинициализирует */ } } catch(_){}
+          try { location.reload(); } catch(_){}
+        }, 1500);
+        return;
+      }
+      list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82;font-size:13px">API ошибка: ' + escHtml(msg) + '<br><small style="color:rgba(255,255,255,0.5)">side=' + p2pState.side + '</small></div>';
       list.setAttribute('data-fresh', '1');
       return;
     }
