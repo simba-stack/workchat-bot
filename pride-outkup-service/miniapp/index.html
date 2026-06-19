@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v25.20260619-no-amount-field';
+  const APP_BUILD = 'v27.20260619-fix-submit-both';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2545,28 +2545,20 @@ safeBind('p2p-ad-submit', 'click', async () => {
   const btn = document.getElementById('p2p-ad-submit');
   if (btn) btn.disabled = true;
   try {
-    const sideBuyActive = document.getElementById('p2p-ad-buy')?.classList.contains('active');
-    const side = sideBuyActive ? 'buy' : 'sell';
+    // Берём adSide из реального state (P2P_STATE / p2pState), а не по classList
+    const adSideRaw = (window.P2P_STATE && window.P2P_STATE.adSide)
+                   || (window.p2pState && window.p2pState.adSide)
+                   || 'BUY';
+    const side = String(adSideRaw).toLowerCase() === 'sell' ? 'sell' : 'buy';
     const price = parseFloat(document.getElementById('p2p-ad-price')?.value) || 0;
-    const amount = parseFloat(document.getElementById('p2p-ad-amount')?.value) || 0;
     const min = parseFloat(document.getElementById('p2p-ad-min')?.value) || 0;
     const max = parseFloat(document.getElementById('p2p-ad-max')?.value) || 0;
     const terms = (document.getElementById('p2p-ad-terms')?.value || '').trim();
     if (!price || price < 50 || price > 200) { toast('Курс вне разумного диапазона (50-200)','error'); return; }
-    if (!amount || amount < 10) { toast('Минимум 10 USDT','error'); return; }
-    if (min >= max) { toast('Минимум должен быть меньше максимума','error'); return; }
-    // Этап 2: для sell — клиент-side check что хватает USDT
-    if (side === 'sell' && typeof window.__availableUsdt === 'number') {
-      if (window.__availableUsdt < amount) {
-        toast(`Недостаточно USDT: доступно ${window.__availableUsdt.toFixed(4)}, нужно ${amount}`,'error');
-        return;
-      }
-    }
-    // Максимум в лимитах не должен быть больше чем amount × rate
-    if (max > amount * price) {
-      toast(`Максимум лимита (${max}₽) больше чем объём ${amount} USDT × ${price}₽ = ${(amount*price).toFixed(0)}₽`,'error');
-      return;
-    }
+    if (!min || min < 100) { toast('Минимум >= 100 ₽','error'); return; }
+    if (!max || max < min) { toast('Максимум должен быть >= минимума','error'); return; }
+    // amount_usdt_total больше не вводится — бэк сам рассчитает = max/rate
+    // Для sell бэк проверит баланс USDT и вернёт 400 если не хватает
 
     let created = null;
     try {
@@ -2575,9 +2567,8 @@ safeBind('p2p-ad-submit', 'click', async () => {
         body: JSON.stringify({
           side: side, coin:'USDT', fiat:'RUB',
           rate_rub_per_usdt: price,
-          amount_usdt_total: amount,
           min_amount_rub: min, max_amount_rub: max,
-          payment_methods: ['СБП','Сбер','Тинькофф'],
+          payment_methods: ['sbp','sber','tinkoff'],
           conditions: terms || null,
           pay_window_min: 30,
           price_type: 'fixed',
@@ -3931,25 +3922,29 @@ loadMain().then(routeFromStart);
   async function submitNewAd() {
     const sideLower = (P2P_STATE.adSide || 'BUY').toLowerCase();
     const price = parseFloat(document.getElementById('p2p-ad-price').value);
-    const amount = parseFloat(document.getElementById('p2p-ad-amount').value);
     const minA = parseFloat(document.getElementById('p2p-ad-min').value);
     const maxA = parseFloat(document.getElementById('p2p-ad-max').value);
-    if (!price || !amount) { alert('Заполни цену и сумму'); return; }
-    // Бэкенд использует поля amount_usdt_total + min_amount_rub + max_amount_rub + rate_rub_per_usdt
+    if (!price || price <= 0) { alert('Заполни курс ₽/USDT'); return; }
+    if (!minA || minA < 100) { alert('Минимум должен быть >= 100 ₽'); return; }
+    if (!maxA || maxA < minA) { alert('Максимум должен быть >= минимума'); return; }
+    // amount_usdt_total больше не вводится — бэк рассчитает = max_rub / rate
+    // Для sell бэк проверит что баланса хватает, иначе вернёт 400
     const data = {
       side: sideLower,
       coin: 'USDT', fiat: 'RUB',
-      rate_rub_per_usdt: price,
-      amount_usdt_total: amount,
+      rate_rub_per_usdt: price, price: price,
       min_amount_rub: minA, max_amount_rub: maxA,
-      // для обратной совместимости старых валидаторов
-      price: price, amount: amount, min_amount: minA, max_amount: maxA,
+      min_amount: minA, max_amount: maxA,
       terms: document.getElementById('p2p-ad-terms').value,
       conditions: document.getElementById('p2p-ad-terms').value,
       payment_methods: ['sbp','sber','tinkoff'],
     };
     const r = await apiP2P('POST', '/api/v1/offers', data);
-    if (!r || r.error) { alert((r && (r.error||r.detail)) || 'Не удалось создать. Если продаёшь USDT — проверь, что баланса хватает.'); return; }
+    if (!r || r.error) {
+      const msg = (r && (r.error||r.detail)) || 'Не удалось создать. Если продаёшь USDT — проверь баланс.';
+      alert(msg);
+      return;
+    }
     alert('Опубликовано! ' + (sideLower === 'sell' ? 'USDT в эскроу.' : 'Без блокировки баланса.'));
     go('p2p-myads');
     if (typeof loadMyAds === 'function') loadMyAds();
