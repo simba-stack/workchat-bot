@@ -354,6 +354,64 @@ async def debug_offers_in_db():
         return {"error": str(e)}
 
 
+@app.get("/debug/offers_full")
+async def debug_offers_full():
+    """Расширенный debug: статус + лимиты + остаток."""
+    from sqlalchemy import select as _select
+    from core.db import AsyncSessionLocal
+    from core.models import Offer, User
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(
+                _select(
+                    Offer.id, Offer.user_id, Offer.side, Offer.status,
+                    Offer.rate_rub_per_usdt, Offer.min_amount_rub, Offer.max_amount_rub,
+                    Offer.amount_usdt_total, Offer.amount_usdt_remaining,
+                    User.username,
+                ).join(User, User.id == Offer.user_id, isouter=True).limit(100)
+            )
+            rows = r.all()
+            return {"count": len(rows), "offers": [
+                {"id": x[0], "user_id": x[1], "side": x[2], "status": x[3],
+                 "rate": float(x[4] or 0),
+                 "min_rub": float(x[5] or 0), "max_rub": float(x[6] or 0),
+                 "total_usdt": float(x[7] or 0), "remaining_usdt": float(x[8] or 0),
+                 "username": x[9]}
+                for x in rows
+            ]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/debug/cleanup_broken_offers")
+async def debug_cleanup_broken_offers():
+    """Удаляет офферы с битыми лимитами/суммой. Эскроу возвращает."""
+    from sqlalchemy import select as _select
+    from decimal import Decimal as _D
+    from core.db import AsyncSessionLocal
+    from core.models import Offer, User
+    from core.services import escrow_service
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(_select(Offer).where(Offer.status.in_(("active", "paused"))))
+            broken = []
+            for o in r.scalars().all():
+                if (o.max_amount_rub or _D("0")) <= 0 or (o.amount_usdt_total or _D("0")) <= 0:
+                    broken.append({"id": o.id, "user_id": o.user_id, "side": o.side})
+                    if o.side == "sell":
+                        try:
+                            u = await db.get(User, o.user_id)
+                            if u:
+                                await escrow_service.release_offer_lock(db, u, o)
+                        except Exception:
+                            pass
+                    o.status = "cancelled"
+            await db.commit()
+            return {"ok": True, "deleted_count": len(broken), "deleted": broken}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/debug/me/{tg_id}")
 async def debug_me(tg_id: int):
     """Публичный debug: показывает всё что есть у юзера по tg_id."""
