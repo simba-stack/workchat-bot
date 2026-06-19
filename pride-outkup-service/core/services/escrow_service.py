@@ -12,11 +12,32 @@ from core.models import Deal, EscrowLock, OperationLog, User
 logger = logging.getLogger(__name__)
 
 
+async def _sync_usdt_from_coin_balances(db: AsyncSession, user: User) -> None:
+    """Синхронизирует User.balance_usdt с UserCoinBalance[USDT].
+
+    Новые юзера пополняют через TRC20 → баланс попадает в UserCoinBalance.
+    Старая логика P2P/эскроу работает с User.balance_usdt напрямую.
+    Этот helper берёт MAX из двух источников и обновляет User.balance_usdt.
+    """
+    try:
+        from core.services import balance_service
+        from decimal import Decimal as _D
+        coin_bal = await balance_service.get_balance(db, user.id, "USDT")
+        legacy = user.balance_usdt or _D("0")
+        if coin_bal > legacy:
+            # Подтягиваем — есть USDT в coin_balances но нет в legacy
+            user.balance_usdt = coin_bal
+            await db.flush()
+    except Exception as e:
+        logger.warning("[escrow] sync usdt failed for user=%s: %s", user.id, e)
+
+
 async def lock(db: AsyncSession, seller: User, deal: Deal) -> EscrowLock:
     """Блокировать USDT продавца под сделку.
 
     Списывает с seller.balance_usdt, создаёт EscrowLock(status='locked').
     """
+    await _sync_usdt_from_coin_balances(db, seller)
     amount = deal.amount_usdt
     if seller.balance_usdt < amount:
         raise HTTPException(400, "недостаточно USDT в эскроу: пополни баланс")
@@ -161,6 +182,7 @@ async def lock_for_offer(db: AsyncSession, user: User, offer, amount: Decimal):
     """
     if amount <= 0:
         raise HTTPException(400, "amount must be > 0")
+    await _sync_usdt_from_coin_balances(db, user)
     if user.balance_usdt < amount:
         raise HTTPException(
             400,

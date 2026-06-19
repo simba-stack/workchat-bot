@@ -439,6 +439,12 @@ async def deal_create_v3(
             deal_name = (inline.get("receiver_name") or "").strip()[:128] or None
             if not deal_card or not deal_name:
                 raise HTTPException(400, "укажите реквизит для получения оплаты")
+        # Синхронизировать User.balance_usdt с UserCoinBalance перед проверкой
+        try:
+            from core.services.escrow_service import _sync_usdt_from_coin_balances
+            await _sync_usdt_from_coin_balances(db, seller)
+        except Exception:
+            pass
         if seller.balance_usdt < amount_usdt:
             from core.services.escrow_service import get_balance_breakdown
             try:
