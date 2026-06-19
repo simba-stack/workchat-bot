@@ -511,46 +511,21 @@ async def deal_create_v3(
     try:
         from bot.main import notify_user
         buyer = await db.get(User, buyer_id)
-        # Определяем кто мейкер (создатель оффера), а кто тейкер
-        maker_is_seller = (o.user_id == seller_id)
         if seller and seller.tg_id:
-            if maker_is_seller:
-                # Мейкер продаёт USDT — должен ПРИНЯТЬ сделку
-                txt = (
-                    f"🆕 <b>Новая сделка #{deal.deal_number}</b>\n\n"
-                    f"Покупатель хочет купить <b>{float(amount_usdt):.4f} USDT</b> за <b>{float(amount_rub):.2f} {deal.fiat}</b>.\n\n"
-                    f"📥 Откройте Mini-App → P2P → Мои сделки → примите и выдайте реквизит."
-                )
-            else:
-                # Юзер-тейкер продаёт USDT мейкеру — USDT уже в эскроу
-                txt = (
-                    f"💰 <b>Сделка #{deal.deal_number} создана</b>\n\n"
-                    f"Вы продаёте <b>{float(amount_usdt):.4f} USDT</b> за <b>{float(amount_rub):.2f} {deal.fiat}</b>.\n"
-                    f"USDT заморожены в эскроу. Ждите оплату на ваш реквизит."
-                )
-            try: await notify_user(seller.tg_id, txt)
-            except Exception: pass
+            await notify_user(
+                seller.tg_id,
+                f"🆕 <b>Новая сделка #{deal.deal_number}</b>\n"
+                f"Покупатель ждёт оплаты: {float(amount_rub)} {deal.fiat}\n"
+                f"USDT заморожено в Escrow до завершения сделки.",
+            )
         if buyer and buyer.tg_id:
-            if maker_is_seller:
-                # Тейкер покупает USDT — ждёт принятия + реквизит от мейкера
-                txt = (
-                    f"📋 <b>Сделка #{deal.deal_number} создана</b>\n\n"
-                    f"Вы покупаете <b>{float(amount_usdt):.4f} USDT</b> за <b>{float(amount_rub):.2f} {deal.fiat}</b>.\n"
-                    f"Ждём, пока продавец примет и выдаст реквизит."
-                )
-            else:
-                # Мейкер покупает USDT — НОВАЯ СДЕЛКА для него! Должен оплатить.
-                txt = (
-                    f"🆕 <b>Новая сделка #{deal.deal_number} по вашему объявлению</b>\n\n"
-                    f"Юзер продаёт вам <b>{float(amount_usdt):.4f} USDT</b> за <b>{float(amount_rub):.2f} {deal.fiat}</b>.\n"
-                    f"Реквизиты для перевода рублей уже в сделке.\n\n"
-                    f"📥 Откройте Mini-App → P2P → Мои сделки → переведите рубли → отметьте 'Я оплатил'."
-                )
-            try: await notify_user(buyer.tg_id, txt)
-            except Exception: pass
-    except Exception as _e:
-        import logging
-        logging.getLogger(__name__).warning("notify failed: %s", _e)
+            await notify_user(
+                buyer.tg_id,
+                f"📋 <b>Сделка #{deal.deal_number} создана</b>\n"
+                f"Откройте Mini-App чтобы увидеть реквизиты и таймер.",
+            )
+    except Exception:
+        pass
     try:
         await jarvis_sync.send_event("deal_created", {
             "deal_id": deal.id, "deal_number": deal.deal_number,

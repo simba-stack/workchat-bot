@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v38.20260619-mydeals-tab';
+  const APP_BUILD = 'v36.20260619-give-vs-get-balance';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1476,8 +1476,7 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
   <div id="p2p-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
   <div class="p2p-bottom-cta" style="display:flex;gap:8px">
     <button id="p2p-create-btn" class="p2p-btn-primary" style="flex:1">+ Создать своё</button>
-    <button id="p2p-mydeals-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 14px;margin-top:0">Сделки</button>
-    <button id="p2p-myads-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 14px;margin-top:0">Объяв.</button>
+    <button id="p2p-myads-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 18px;margin-top:0">Мои</button>
   </div>
 </div>
 
@@ -1546,15 +1545,6 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 </div>
 
 <!-- ═══ MY ADS ═══ -->
-<div class="view" id="view-p2p-mydeals">
-  <div class="p2p-top-bar">
-    <button class="p2p-back" onclick="go('p2p')">←</button>
-    <div class="p2p-title">Мои сделки <span class="m8-badge">M8</span></div>
-    <button onclick="loadMyDealsList()" style="font-size:18px;background:transparent;border:0;color:var(--th-1);cursor:pointer">↻</button>
-  </div>
-  <div id="p2p-mydeals-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
-</div>
-
 <div class="view" id="view-p2p-myads">
   <div class="nav-header">
     <button class="nav-back" data-back="p2p">←</button>
@@ -2113,92 +2103,6 @@ window.openP2POffer = function(id) {
 };
 
 // Создание сделки — модалка ввода суммы → создаём mock deal → переходим на view-p2p-deal
-// Универсальный рендер активной сделки — работает из любого scope
-window.renderDealView = async function(dealId) {
-  const c = document.getElementById('p2p-deal-body');
-  if (!c) return;
-  c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загружаю сделку...</div>';
-  let d;
-  try {
-    d = await api('/api/v1/deals/' + encodeURIComponent(dealId));
-  } catch(e) {
-    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка загрузки: ' + (e.message || e) + '</div>';
-    return;
-  }
-  if (!d || d.error || d.detail) {
-    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Сделка не найдена: ' + ((d && (d.error||d.detail)) || dealId) + '</div>';
-    return;
-  }
-  const meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
-  const iAmSeller = (d.seller_tg_id == meTg) || (d.iam === 'seller');
-  const iAmBuyer  = (d.buyer_tg_id  == meTg) || (d.iam === 'buyer');
-  const status = d.status || 'created';
-  const amtUsdt = d.amount_usdt || 0;
-  const amtRub  = d.amount_rub  || d.amount_fiat || 0;
-  const pmType  = d.payment_method || '—';
-  const showReq = !!(d.bank || d.phone_or_card || d.receiver_name);
-  let header = '';
-  if (status === 'pending_seller') {
-    header = iAmSeller
-      ? '<div style="text-align:center;padding:10px;background:rgba(51,144,236,0.12);border-radius:10px;color:#3390ec;font-size:14px;font-weight:600;margin-bottom:10px">Покупатель ждёт. Примите сделку и выдайте реквизит.</div>'
-      : '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.10);border-radius:10px;color:#ffd60a;font-size:14px;font-weight:600;margin-bottom:10px">Ждём принятия продавцом...</div>';
-  } else if (status === 'awaiting_payment') {
-    header = '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:16px;font-weight:600;margin-bottom:10px">' + (iAmBuyer ? 'Переведите оплату' : 'Ждём оплату от покупателя') + (d.pay_deadline_at ? ' · до ' + d.pay_deadline_at.slice(11,16) : '') + '</div>';
-  } else if (status === 'paid') {
-    header = '<div style="text-align:center;padding:10px;background:rgba(52,199,89,0.10);border-radius:10px;color:#34c759;font-size:14px;font-weight:600;margin-bottom:10px">' + (iAmSeller ? 'Покупатель отметил оплату. Проверьте перевод и отпустите USDT.' : 'Вы отметили оплату. Ждём подтверждения продавца.') + '</div>';
-  } else if (status === 'released') {
-    header = '<div style="text-align:center;padding:10px;background:rgba(52,199,89,0.18);border-radius:10px;color:#34c759;font-size:16px;font-weight:600;margin-bottom:10px">Сделка завершена</div>';
-  } else if (status === 'cancelled') {
-    header = '<div style="text-align:center;padding:10px;background:rgba(255,69,58,0.15);border-radius:10px;color:#ff453a;font-size:14px;font-weight:600;margin-bottom:10px">Сделка отменена</div>';
-  } else if (status === 'disputed') {
-    header = '<div style="text-align:center;padding:10px;background:rgba(255,159,10,0.15);border-radius:10px;color:#ff9f0a;font-size:14px;font-weight:600;margin-bottom:10px">Спор. Арбитр подключится.</div>';
-  }
-  let actions = '';
-  if (status === 'pending_seller' && iAmSeller) actions += '<button id="rdv-accept" style="width:100%;padding:14px;background:#3390ec;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">Принять и выдать реквизит</button>';
-  if (status === 'awaiting_payment' && iAmBuyer) actions += '<button id="rdv-paid" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">Я оплатил</button>';
-  if (status === 'awaiting_payment') actions += '<button id="rdv-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>';
-  if (status === 'paid' && iAmSeller) actions += '<button id="rdv-release" style="width:100%;padding:14px;background:#34c759;color:#fff;font-weight:600;border-radius:12px;margin-bottom:6px">Оплата получена — отпустить USDT</button>';
-  if (status === 'pending_seller' && !iAmSeller) actions += '<button id="rdv-cancel" style="width:100%;padding:12px;background:rgba(255,69,58,0.15);color:#ff453a;border-radius:10px;margin-bottom:4px">Отменить</button>';
-  if (status === 'awaiting_payment' || status === 'paid') actions += '<button id="rdv-dispute" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px">Открыть спор</button>';
-
-  c.innerHTML =
-    header +
-    '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
-      '<div style="font-weight:600;margin-bottom:6px">Сделка #' + (d.deal_number || d.id) + '</div>' +
-      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Сумма</span><span>' + parseFloat(amtUsdt).toFixed(4) + ' USDT → ' + parseFloat(amtRub).toFixed(2) + ' ₽</span></div>' +
-      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Метод</span><span>' + escHtml(pmType) + '</span></div>' +
-      '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:#7a7a7a">Статус</span><span>' + escHtml(status) + '</span></div></div>' +
-    (showReq ?
-      '<div style="font-size:11px;color:#7a7a7a;margin:10px 0 6px">' + (iAmBuyer ? 'РЕКВИЗИТ ДЛЯ ОПЛАТЫ' : 'РЕКВИЗИТ ПОЛУЧЕНИЯ') + '</div>' +
-      '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">' +
-      '<div style="font-size:13px;color:#7a7a7a;margin-bottom:4px">' + escHtml(d.bank || '') + '</div>' +
-      '<div style="font-family:monospace;font-size:16px;margin-bottom:6px">' + escHtml(d.phone_or_card || '—') + '</div>' +
-      '<div style="font-size:13px;color:#ccc">' + escHtml(d.receiver_name || '') + '</div></div>'
-     : '') +
-    actions;
-
-  function bind(id, fn){ const b=document.getElementById(id); if(b) b.addEventListener('click', fn); }
-  async function doAction(path, body) {
-    try {
-      const r = await api(path, body ? {method:'POST', body: JSON.stringify(body)} : {method:'POST'});
-      if (!r || r.error) { (window.Telegram?.WebApp?.showAlert||alert)((r&&(r.error||r.detail))||'Ошибка'); return; }
-      renderDealView(dealId);
-    } catch(e) { (window.Telegram?.WebApp?.showAlert||alert)(e.message||String(e)); }
-  }
-  bind('rdv-paid', () => doAction('/api/v1/deals/' + d.id + '/mark_paid'));
-  bind('rdv-release', () => doAction('/api/v1/deals/' + d.id + '/release'));
-  bind('rdv-cancel', () => doAction('/api/v1/deals/' + d.id + '/cancel'));
-  bind('rdv-dispute', () => go('p2p-dispute'));
-  bind('rdv-accept', () => {
-    const pm_type = prompt('Тип реквизита (sbp/sber/tinkoff/...)', 'sbp') || 'sbp';
-    const bank = prompt('Банк (Сбер/Тинькофф/...)', '') || '';
-    const card = prompt('Карта или телефон СБП', '') || '';
-    const name = prompt('ФИО получателя', '') || '';
-    if (!card || !name) return;
-    doAction('/api/v1/deals/' + d.id + '/accept', { payment_method_inline: { type: pm_type, bank_name: bank, card_or_phone: card, receiver_name: name, save_to_pool: true } });
-  });
-};
-
 window.openP2PCreateDeal = async function() {
   console.log('[openP2PCreateDeal] called, currentOffer=', window.currentOffer);
   const op = window.currentOffer;
@@ -2316,10 +2220,10 @@ window.openP2PCreateDeal = async function() {
       if (!dealId) { _showAlert('Сервер вернул некорректный ответ'); confirmBtn.disabled = false; confirmBtn.textContent = 'Подтвердить ордер'; return; }
       m.remove();
       if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-      // Переход на страницу сделки + явный рендер из API (loadDeal сидит в IIFE и часто не доступен)
+      // Переход на страницу сделки — через P2P_STATE используется loadDeal в IIFE
       try { if (window.P2P_STATE) window.P2P_STATE.currentDealId = dealId; } catch(_){}
       go('p2p-deal');
-      try { renderDealView(dealId); } catch(e) { console.error('renderDealView fail', e); }
+      if (typeof loadDeal === 'function') { try { loadDeal(); } catch(_){} }
     } catch(e) {
       console.error('[deal-create] error', e);
       _showAlert('Сетевая ошибка: ' + (e && e.message || 'unknown'));
@@ -2703,32 +2607,6 @@ window.openLockedDetails = function() {
 };
 
 // myads-btn в доске
-
-// === Мои сделки ===
-window.loadMyDealsList = async function() {
-  const c = document.getElementById('p2p-mydeals-list');
-  if (!c) return;
-  c.innerHTML = '<div class="empty-state">Загрузка…</div>';
-  let r;
-  try { r = await api('/api/v1/deals/my'); }
-  catch(e) { c.innerHTML = '<div class="empty-state" style="color:#FF8B82">Ошибка: ' + (e.message||e) + '</div>'; return; }
-  const items = (r && r.items) || [];
-  if (!items.length) { c.innerHTML = '<div class="empty-state">Пока нет сделок</div>'; return; }
-  const meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
-  c.innerHTML = items.map(function(d){
-    const iAmBuyer = (d.buyer_id == (window.currentUserId||0)) || false;
-    const sideTxt = iAmBuyer ? 'Покупаю' : 'Продаю';
-    const statusColor = ({pending_seller:'#3390ec',awaiting_payment:'#FFD60A',paid:'#34c759',released:'#5FE388',cancelled:'#FF8B82',disputed:'#FF9F0A'})[d.status]||'#7a7a7a';
-    return '<div onclick="renderDealView(' + d.id + '); go(\'p2p-deal\')" style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-        '<b>Сделка #' + (d.deal_number||d.id) + '</b>' +
-        '<span style="color:' + statusColor + ';font-size:11px;font-weight:700;text-transform:uppercase">' + escHtml(d.status||'') + '</span></div>' +
-      '<div style="font-size:13px;color:#ccc;margin-bottom:4px">' + parseFloat(d.amount_usdt||0).toFixed(4) + ' USDT · ' + parseFloat(d.amount_fiat||d.amount_rub||0).toFixed(2) + ' ₽</div>' +
-      '<div style="font-size:11px;color:#7a7a7a">' + (d.created_at||'').slice(0,16).replace('T',' ') + '</div></div>';
-  }).join('');
-};
-safeBind('p2p-mydeals-btn', 'click', function(){ go('p2p-mydeals'); loadMyDealsList(); });
-
 safeBind('p2p-myads-btn', 'click', () => go('p2p-myads'));
 safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
 
@@ -4540,4 +4418,9 @@ loadMain().then(routeFromStart);
   else init();
   // Keyframes для модалки
   const st = document.createElement('style');
-  st.textContent = '@keyframes pcFade{from{opacity:0}to{opacity:
+  st.textContent = '@keyframes pcFade{from{opacity:0}to{opacity:1}}@keyframes pcSlide{from{transform:translateY(100%)}to{transform:translateY(0)}}';
+  document.head.appendChild(st);
+})();
+</script>
+</body>
+</html>
