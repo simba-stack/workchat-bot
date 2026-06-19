@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v41.20260619-readable-errors';
+  const APP_BUILD = 'v42.20260619-errMsg-helper';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1673,6 +1673,19 @@ async function api(path, opts={}) {
   if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
   return j;
 }
+
+// Универсальный конвертер любого error в читаемую строку (фикс [object Object])
+window._errMsg = function(e) {
+  if (e == null) return 'unknown error';
+  if (typeof e === 'string') return e;
+  if (e.message && typeof e.message === 'string') return e.message;
+  if (e.detail) {
+    if (typeof e.detail === 'string') return e.detail;
+    try { return JSON.stringify(e.detail); } catch(_) {}
+  }
+  try { return JSON.stringify(e); } catch(_) { return String(e); }
+};
+
 function toast(msg, type='success') {
   const t = document.createElement('div'); t.className='toast '+type; t.textContent=msg;
   document.body.appendChild(t); setTimeout(()=>t.remove(), 3500);
@@ -2122,7 +2135,7 @@ window.renderDealView = async function(dealId) {
   var d;
   try { d = await api('/api/v1/deals/' + encodeURIComponent(dealId)); }
   catch(e) {
-    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + (e && e.message ? e.message : e) + '</div>';
+    c.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + _errMsg(e) + '</div>';
     return;
   }
   if (!d || d.error || d.detail) {
@@ -2531,7 +2544,7 @@ window.toggleMyAdStatus = async function(id, action) {
     await api('/api/v1/offers/' + encodeURIComponent(id) + '/' + action, { method:'PATCH' });
     toast(action === 'pause' ? 'Объявление на паузе' : 'Объявление возобновлено', 'success');
   } catch(e) {
-    toast('Ошибка: ' + (e.message || 'не получилось'), 'error');
+    toast('Ошибка: ' + (_errMsg(e) || 'не получилось'), 'error');
   }
   loadMyAds();
 };
@@ -2550,7 +2563,7 @@ window.deleteMyAd = async function(id) {
     toast('Объявление удалено', 'success');
     if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
   } catch(e) {
-    toast('Ошибка: ' + (e.message || 'не получилось'), 'error');
+    toast('Ошибка: ' + (_errMsg(e) || 'не получилось'), 'error');
   }
   loadMyAds();
 };
@@ -2656,7 +2669,7 @@ window.saveMyAdEdit = async function(id) {
     m.remove();
     loadMyAds();
   } catch(e) {
-    toast('Ошибка: ' + (e.message || 'не получилось'),'error');
+    toast('Ошибка: ' + (_errMsg(e) || 'не получилось'),'error');
   }
 };
 
@@ -2710,7 +2723,7 @@ window.loadMyDealsList = async function() {
   c.innerHTML = '<div class="empty-state">Загрузка…</div>';
   var r;
   try { r = await api('/api/v1/deals/my'); }
-  catch(e) { c.innerHTML = '<div class="empty-state" style="color:#FF8B82">Ошибка: ' + (e && e.message ? e.message : e) + '</div>'; return; }
+  catch(e) { c.innerHTML = '<div class="empty-state" style="color:#FF8B82">Ошибка: ' + _errMsg(e) + '</div>'; return; }
   var items = (r && r.items) || [];
   if (!items.length) { c.innerHTML = '<div class="empty-state" style="padding:40px 20px;color:rgba(255,255,255,0.55)">Пока нет сделок</div>'; return; }
   var meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
@@ -2798,7 +2811,7 @@ safeBind('p2p-ad-submit', 'click', async () => {
         }),
       });
     } catch(e) {
-      toast('Ошибка создания: ' + (e.message || 'не получилось'),'error');
+      toast('Ошибка создания: ' + (_errMsg(e) || 'не получилось'),'error');
       return;
     }
     if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
@@ -2934,7 +2947,7 @@ async function loadPaymentMethods() {
       </div>
     `).join('');
   } catch(e) {
-    list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + (e.message || e) + '</div>';
+    list.innerHTML = '<div class="empty-state" style="padding:30px 20px;text-align:center;color:#FF8B82">Ошибка: ' + _errMsg(e) + '</div>';
   }
 }
 
@@ -2990,7 +3003,7 @@ window.openPmEdit = function(existing) {
       if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
       loadPaymentMethods();
     } catch(e) {
-      Telegram?.WebApp?.showAlert?.('Ошибка: ' + (e.message || e)) || alert('Ошибка');
+      Telegram?.WebApp?.showAlert?.('Ошибка: ' + _errMsg(e)) || alert('Ошибка');
     }
   };
 };
