@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v21.20260619-fix-side';
+  const APP_BUILD = 'v22.20260619-fix-side2';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3566,11 +3566,9 @@ loadMain().then(routeFromStart);
   async function loadMarket() {
     const c = document.getElementById('p2p-list'); if (!c) return;
     c.innerHTML = '<div class="empty-state">Загрузка…</div>';
-    // СЕМАНТИКА: side в БД хранится с точки зрения МЕЙКЕРА (создателя оффера).
-    // Юзер на табе "Купить USDT" → нужны офферы где мейкер ПРОДАЁТ (side=sell).
-    // Юзер на табе "Продать USDT" → нужны офферы где мейкер ПОКУПАЕТ (side=buy).
-    const counterSide = (P2P_STATE.side === 'BUY') ? 'sell' : 'buy';
-    let data = await apiP2P('GET', '/api/v1/offers?side=' + counterSide + '&coin=USDT');
+    // Бэк сам инвертирует: фронт шлёт точку зрения ТЕЙКЕРА (=P2P_STATE.side).
+    // На бэке: offer_side = "sell" if side=="buy" else "buy" → возвращает встречные офферы.
+    let data = await apiP2P('GET', '/api/v1/offers?side=' + P2P_STATE.side.toLowerCase() + '&coin=USDT');
     let offers = (data && (data.items || data.offers || data)) || [];
     // legacy mock УБРАН — никаких Alex_Pro/CryptoPro/...
     if (!Array.isArray(offers) || offers.length === 0) offers = [];

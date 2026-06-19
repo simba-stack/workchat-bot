@@ -93,7 +93,11 @@ async def list_offers(
     offer_side = "sell" if side == "buy" else "buy"
     q = (
         select(Offer)
-        .where(Offer.side == offer_side, Offer.status == "active")
+        .where(
+            Offer.side == offer_side,
+            Offer.status == "active",
+            Offer.user_id != user.id,  # свои офферы не показываем на доске
+        )
         .order_by(
             desc(Offer.is_pride_official),
             Offer.rate_rub_per_usdt.asc() if side == "buy" else Offer.rate_rub_per_usdt.desc(),
