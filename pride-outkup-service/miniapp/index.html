@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v23.20260619-fix-adside';
+  const APP_BUILD = 'v24.20260619-hide-bal-for-buy';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2511,14 +2511,21 @@ safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
 
 // Этап 2: подсказка доступного USDT-баланса в форме создания
 window.refreshAdBalanceHint = async function() {
+  const hint = document.getElementById('p2p-ad-balance-hint');
+  if (!hint) return;
+  const adSide = (window.P2P_STATE && window.P2P_STATE.adSide) || (window.p2pState && window.p2pState.adSide) || 'BUY';
+  // Для BUY (я покупаю USDT) — баланс USDT не нужен, я отдаю рубли
+  if (String(adSide).toUpperCase() === 'BUY') {
+    hint.style.display = 'none';
+    hint.innerHTML = '';
+    return;
+  }
+  hint.style.display = '';
   try {
     const r = await api('/api/v1/users/me/balance').catch(() => null);
     if (!r) return;
-    const hint = document.getElementById('p2p-ad-balance-hint');
-    if (hint) {
-      hint.innerHTML = `Доступно <b style="color:#5FE388">${(+r.available_usdt).toFixed(4)} USDT</b> (захолдировано ${(+r.locked_usdt).toFixed(4)})`;
-      window.__availableUsdt = +r.available_usdt;
-    }
+    hint.innerHTML = `Доступно <b style="color:#5FE388">${(+r.available_usdt).toFixed(4)} USDT</b> (захолдировано ${(+r.locked_usdt).toFixed(4)})`;
+    window.__availableUsdt = +r.available_usdt;
   } catch(_) {}
 };
 // при переходе на форму — подгрузить баланс
@@ -3908,11 +3915,18 @@ loadMain().then(routeFromStart);
 
   function setAdSide(side) {
     P2P_STATE.adSide = side;
+    // Зеркало в window.p2pState (другая часть кода читает оттуда)
+    try { if (window.p2pState) window.p2pState.adSide = side; } catch(_){}
     const b = document.getElementById('p2p-ad-buy');
     const s = document.getElementById('p2p-ad-sell');
-    if (!b || !s) return;
-    if (side === 'BUY') { b.style.background = '#34c759'; b.style.color = '#fff'; s.style.background = '#1a1a1a'; s.style.color = '#7a7a7a'; }
-    else { s.style.background = '#ff453a'; s.style.color = '#fff'; b.style.background = '#1a1a1a'; b.style.color = '#7a7a7a'; }
+    if (b && s) {
+      if (side === 'BUY') { b.style.background = '#34c759'; b.style.color = '#fff'; s.style.background = '#1a1a1a'; s.style.color = '#7a7a7a'; }
+      else { s.style.background = '#ff453a'; s.style.color = '#fff'; b.style.background = '#1a1a1a'; b.style.color = '#7a7a7a'; }
+    }
+    // Скрываем подсказку про USDT-баланс для BUY (я покупаю, баланс не нужен)
+    const hint = document.getElementById('p2p-ad-balance-hint');
+    if (hint) hint.style.display = (side === 'BUY') ? 'none' : '';
+    if (typeof refreshAdBalanceHint === 'function') { try { refreshAdBalanceHint(); } catch(_){} }
   }
 
   async function submitNewAd() {
