@@ -216,6 +216,36 @@ async def list_my_deals(
     return {"items": [_deal_to_dict(d) for d in items], "count": len(items)}
 
 
+@router.get("/my")
+async def deals_my_v3(
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    q = (
+        select(Deal)
+        .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+        .order_by(desc(Deal.created_at))
+        .limit(max(1, min(limit, 200)))
+    )
+    rows = (await db.execute(q)).scalars().all()
+    return {
+        "ok": True,
+        "items": [
+            {
+                "id": d.id, "deal_number": d.deal_number,
+                "coin": d.coin or "USDT", "fiat": d.fiat or "RUB",
+                "amount_usdt": float(d.amount_usdt),
+                "amount_fiat": float(d.amount_rub),
+                "status": d.status,
+                "buyer_id": d.buyer_id, "seller_id": d.seller_id,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in rows
+        ],
+    }
+
+
 @router.get("/{deal_id}")
 async def get_deal(
     deal_id: int,
@@ -546,36 +576,6 @@ async def deal_create_v3(
         pass
 
     return {"ok": True, "id": deal.id, "deal_number": deal.deal_number}
-
-
-@router.get("/my")
-async def deals_my_v3(
-    limit: int = 50,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    q = (
-        select(Deal)
-        .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
-        .order_by(desc(Deal.created_at))
-        .limit(max(1, min(limit, 200)))
-    )
-    rows = (await db.execute(q)).scalars().all()
-    return {
-        "ok": True,
-        "items": [
-            {
-                "id": d.id, "deal_number": d.deal_number,
-                "coin": d.coin or "USDT", "fiat": d.fiat or "RUB",
-                "amount_usdt": float(d.amount_usdt),
-                "amount_fiat": float(d.amount_rub),
-                "status": d.status,
-                "buyer_id": d.buyer_id, "seller_id": d.seller_id,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            }
-            for d in rows
-        ],
-    }
 
 
 @router.get("/{deal_id}/info")
