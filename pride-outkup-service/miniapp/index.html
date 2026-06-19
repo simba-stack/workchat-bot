@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v42.20260619-errMsg-helper';
+  const APP_BUILD = 'v43.20260619-flat-deal-response';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -3405,7 +3405,7 @@ $('wd-submit').addEventListener('click', async () => {
     else if (r.status==='pending_2fa') toast('Заявка на подтверждении');
     else toast('Заявка принята');
     setTimeout(() => { loadMain(); go('main'); }, 1500);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
   finally { $('wd-submit').disabled = false; $('wd-submit').textContent = 'Вывести'; }
 });
 
@@ -3446,7 +3446,7 @@ $('sw-submit').addEventListener('click', async () => {
     playSuccessSound();
     toast(`Обмен: ${amt} ${swFrom} → ${swTo}`);
     setTimeout(() => { loadMain(); go('main'); }, 1500);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
   finally { $('sw-submit').disabled = false; $('sw-submit').textContent = 'Продолжить'; }
 });
 
@@ -3541,7 +3541,7 @@ $('ch-create-btn').addEventListener('click', async () => {
     const r = await api('/api/v1/cheques/create', { method:'POST', body: JSON.stringify({coin, amount:amt, comment:cmt}) });
     go('checks');
     setTimeout(() => window.shareCheque(r.code, amt, coin, cmt), 300);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
   finally { $('ch-create-btn').disabled = false; }
 });
 
@@ -3604,7 +3604,7 @@ async function openOffer(id) {
       $('offer-coin-amt').textContent = fmt(v / j.price, 6);
     });
     go('p2p-offer');
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 }
 window.openOffer = openOffer;
 
@@ -3617,7 +3617,7 @@ $('offer-trade-btn').addEventListener('click', async () => {
     const r = await api('/api/v1/deals/create', { method:'POST', body: JSON.stringify({offer_id: currentOffer.id, amount_fiat: fiat}) });
     toast('Сделка создана');
     setTimeout(() => openDealChat(r.id), 500);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 });
 
 async function openDealChat(dealId) {
@@ -3634,7 +3634,7 @@ async function openDealChat(dealId) {
     go('deal-chat');
     loadChatMessages();
     chatPollTimer = setInterval(loadChatMessages, 4000);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 }
 window.openDealChat = openDealChat;
 async function loadChatMessages() {
@@ -3659,14 +3659,14 @@ async function sendMsg() {
     await api(`/api/v1/deals/${activeDeal}/messages`, { method:'POST', body: JSON.stringify({text}) });
     $('chat-input').value = '';
     loadChatMessages();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 }
 $('deal-cancel-btn').addEventListener('click', async () => {
   if (!activeDeal || !confirm('Отменить сделку?')) return;
   try {
     await api(`/api/v1/deals/${activeDeal}/cancel`, { method:'POST', body: JSON.stringify({}) });
     toast('Сделка отменена'); go('p2p');
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 });
 
 $('my-deals-btn').addEventListener('click', () => go('my-deals'));
@@ -3702,7 +3702,7 @@ async function redeemCheque(code) {
     const r = await api(`/api/v1/cheques/${code}/redeem`, { method:'POST' });
     toast(`+${r.amount} ${r.coin} зачислено`);
     setTimeout(loadMain, 500);
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(_errMsg(e), 'error'); }
 }
 
 

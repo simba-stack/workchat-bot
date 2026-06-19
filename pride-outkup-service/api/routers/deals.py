@@ -31,16 +31,21 @@ async def _next_deal_number(db: AsyncSession) -> str:
     return f"dl{last + 1:05d}"
 
 
-def _deal_to_dict(d: Deal) -> dict:
+def _deal_to_dict(d: Deal, buyer: User | None = None, seller: User | None = None) -> dict:
     return {
         "id": d.id,
         "deal_number": d.deal_number,
         "offer_id": d.offer_id,
         "buyer_id": d.buyer_id,
         "seller_id": d.seller_id,
+        "buyer_tg_id": (buyer.tg_id if buyer else None),
+        "seller_tg_id": (seller.tg_id if seller else None),
+        "buyer_username": (buyer.username if buyer else None),
+        "seller_username": (seller.username if seller else None),
         "coin": d.coin or "USDT",
         "fiat": d.fiat or "RUB",
         "amount_rub": float(d.amount_rub),
+        "amount_fiat": float(d.amount_rub),
         "rate_rub_per_usdt": float(d.rate_rub_per_usdt),
         "amount_usdt": float(d.amount_usdt),
         "payment_method": d.payment_method,
@@ -220,7 +225,12 @@ async def get_deal(
     d = await db.get(Deal, deal_id)
     if not d or user.id not in (d.buyer_id, d.seller_id):
         raise HTTPException(404, "deal not found")
-    return {"deal": _deal_to_dict(d)}
+    buyer = await db.get(User, d.buyer_id)
+    seller = await db.get(User, d.seller_id)
+    # Возвращаем плоско (без обёртки "deal") + tg_id обоих сторон для фронта
+    out = _deal_to_dict(d, buyer=buyer, seller=seller)
+    out["iam"] = "buyer" if user.id == d.buyer_id else "seller"
+    return out
 
 
 @router.post("/{deal_id}/mark_paid")
