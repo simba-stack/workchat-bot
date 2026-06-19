@@ -119,6 +119,10 @@
     font-size:15px; }
   body { padding-bottom:60px; }
   button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  /* Fix v19: select/option — белый текст на тёмном фоне (default было: белый на белом — невидно) */
+  select { color:#fff !important; background-color:#1a1a1a !important; }
+  select option { color:#fff !important; background-color:#1a1a1a !important; }
+  select option:checked, select option:hover { background-color:#2a2a2a !important; color:#fff !important; }
   /* CTA-кнопки v0.2.3 — accent=white в чёрной теме, ВСЕ белые кнопки должны
      иметь чёрный читаемый текст. Используем nuclear !important селекторы. */
   button[class*="-btn"], button.copy-btn, button.submit-btn, button.create-btn,
@@ -1414,9 +1418,9 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
     </div>
     <div style="background:var(--card);border-radius:14px;padding:14px 16px;margin-bottom:12px">
       <div style="color:var(--muted);font-size:13px;margin-bottom:8px">Язык</div>
-      <select id="set-lang" style="width:100%;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:15px">
-        <option value="ru">Русский</option>
-        <option value="en">English</option>
+      <select id="set-lang" style="width:100%;background:#1a1a1a;color:#fff;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:15px">
+        <option value="ru" style="background:#1a1a1a;color:#fff">Русский</option>
+        <option value="en" style="background:#1a1a1a;color:#fff">English</option>
       </select>
     </div>
     <div style="background:var(--card);border-radius:14px;padding:14px 16px;margin-bottom:12px">
