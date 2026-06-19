@@ -89,11 +89,7 @@ async def list_offers(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """V2 список offers (стакан с точки зрения тейкера)."""
-    if not await settings_kv.is_v2_p2p_public(db):
-        if user.tg_id not in __import__("core.config", fromlist=["settings"]).settings.admin_ids:
-            raise HTTPException(503, "V2 P2P stack пока в закрытой бете")
-
+    """V2 список offers (стакан с точки зрения тейкера). Публичный — без бета-блокировки."""
     offer_side = "sell" if side == "buy" else "buy"
     q = (
         select(Offer)
@@ -396,11 +392,6 @@ async def list_offers_v3(
     db: AsyncSession = Depends(get_db),
 ):
     """Industrial список офферов — фильтры + пагинация + effective price."""
-    if not await settings_kv.is_v2_p2p_public(db):
-        from core.config import settings as _s
-        if user.tg_id not in _s.admin_ids:
-            return {"ok": True, "items": [], "count": 0}
-
     offer_side = "sell" if side == "buy" else "buy"
     coin_u, fiat_u = coin.upper(), fiat.upper()
     page_size = max(1, min(limit, 100))
