@@ -383,6 +383,73 @@ async def debug_offers_full():
         return {"error": str(e)}
 
 
+@app.get("/debug/release_locks/{tg_id}")
+async def debug_release_locks(tg_id: int):
+    """Освобождает ВСЕ active escrow_locks у юзера → USDT возвращается в balance.
+    Также удаляет sell-офферы юзера (status=archived), отменяет pending/awaiting-сделки.
+    """
+    from sqlalchemy import select as _select
+    from decimal import Decimal as _D
+    from core.db import AsyncSessionLocal
+    from core.models import User, Offer, Deal
+    from core.models.escrow import EscrowLock
+    from core.services import escrow_service
+    try:
+        async with AsyncSessionLocal() as db:
+            u = (await db.execute(_select(User).where(User.tg_id == tg_id))).scalar_one_or_none()
+            if not u:
+                return {"error": f"user tg_id={tg_id} not found"}
+
+            # 1) Отменить незавершённые сделки юзера (как seller или buyer)
+            cancelled_deals = []
+            res_d = await db.execute(_select(Deal).where(
+                ((Deal.seller_id == u.id) | (Deal.buyer_id == u.id)),
+                Deal.status.in_(("pending_seller", "awaiting_payment", "paid"))
+            ))
+            for d in res_d.scalars().all():
+                try:
+                    if d.status == "awaiting_payment" or d.status == "paid":
+                        await escrow_service.refund(db, d, "admin cleanup")
+                    d.status = "cancelled"
+                    d.cancelled_reason = "admin cleanup"
+                    cancelled_deals.append({"id": d.id, "deal_number": d.deal_number, "amount": float(d.amount_usdt or 0)})
+                except Exception as _e:
+                    cancelled_deals.append({"id": d.id, "err": str(_e)})
+
+            # 2) Освободить все оставшиеся offer-уровневые локи
+            released_offers = []
+            res_o = await db.execute(_select(Offer).where(Offer.user_id == u.id, Offer.status.in_(("active","paused"))))
+            for o in res_o.scalars().all():
+                try:
+                    if o.side == "sell":
+                        amt = await escrow_service.release_offer_lock(db, u, o)
+                        released_offers.append({"id": o.id, "released_usdt": float(amt)})
+                    o.status = "archived"
+                except Exception as _e:
+                    released_offers.append({"id": o.id, "err": str(_e)})
+
+            # 3) Hard-cleanup: orphan locks (если ещё остались)
+            orphan_released = _D("0")
+            res_l = await db.execute(_select(EscrowLock).where(EscrowLock.user_id == u.id, EscrowLock.status == "locked"))
+            for l in res_l.scalars().all():
+                u.balance_usdt = (u.balance_usdt or _D("0")) + (l.amount_usdt or _D("0"))
+                orphan_released += l.amount_usdt or _D("0")
+                l.status = "released"
+
+            await db.commit()
+            return {
+                "ok": True,
+                "user_id": u.id, "tg_id": u.tg_id, "username": u.username,
+                "new_balance_usdt": float(u.balance_usdt or 0),
+                "cancelled_deals": cancelled_deals,
+                "released_offers": released_offers,
+                "orphan_released_usdt": float(orphan_released),
+            }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()[-500:]}
+
+
 @app.get("/debug/cleanup_broken_offers")
 async def debug_cleanup_broken_offers():
     """Удаляет офферы с битыми лимитами/суммой. Эскроу возвращает."""
