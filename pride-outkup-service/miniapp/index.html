@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v31.20260619-fix-card-btn';
+  const APP_BUILD = 'v31.20260619-real-deal-create';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2101,34 +2101,67 @@ window.openP2PCreateDeal = function() {
   ai.addEventListener('input', updateEquiv);
   m.querySelectorAll('.dlg-chip').forEach(c => c.onclick = () => { ai.value = c.dataset.v; updateEquiv(); });
   m.querySelector('#dlg-cancel').onclick = () => m.remove();
-  m.querySelector('#dlg-confirm').onclick = () => {
+  // Если юзер продаёт USDT (= мейкер покупает), нужны реквизиты получения рублей
+  const offerSideRaw = (op.side || '').toLowerCase();
+  const userIsBuyer = (offerSideRaw === 'sell'); // мейкер продаёт → юзер покупает
+  if (!userIsBuyer) {
+    // Добавляем блок реквизита перед кнопкой
+    const reqBlock = document.createElement('div');
+    reqBlock.style.cssText = 'background:rgba(51,144,236,0.10);border:1px solid rgba(51,144,236,0.30);border-radius:10px;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px';
+    reqBlock.innerHTML =
+      '<div style="font-size:12px;color:#5BB8FF;margin-bottom:4px">ВАШ РЕКВИЗИТ ДЛЯ ПОЛУЧЕНИЯ РУБЛЕЙ</div>' +
+      '<select id="dlg-pm-type" style="padding:8px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+        '<option value="sbp">СБП</option><option value="sber">Сбер</option><option value="tinkoff">Тинькофф</option><option value="alpha">Альфа</option><option value="vtb">ВТБ</option><option value="raif">Райф</option>' +
+      '</select>' +
+      '<input id="dlg-pm-card" placeholder="Карта или телефон СБП" style="padding:8px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">' +
+      '<input id="dlg-pm-name" placeholder="ФИО получателя" style="padding:8px;border-radius:8px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a">';
+    const confirmBtn = m.querySelector('#dlg-confirm');
+    confirmBtn.parentNode.insertBefore(reqBlock, confirmBtn);
+  }
+
+  function _showAlert(msg) {
+    try {
+      if (window.Telegram && Telegram.WebApp && typeof Telegram.WebApp.showAlert === 'function') {
+        Telegram.WebApp.showAlert(String(msg));
+        return;
+      }
+    } catch(_) {}
+    alert(msg);
+  }
+
+  m.querySelector('#dlg-confirm').onclick = async () => {
     const sum = parseFloat(ai.value) || 0;
-    if (sum < op.minRub || sum > op.maxRub) { Telegram?.WebApp?.showAlert ? Telegram.WebApp.showAlert('Сумма вне лимитов оффера') : alert('Сумма вне лимитов'); return; }
-    m.remove();
-    if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-    // Создаём mock deal
-    const deal = {
-      id: 'd' + Date.now(),
-      offer_id: op.id,
-      offer: op,
-      side: p2pState.side,
-      sum_rub: sum,
-      sum_usdt: +(sum / op.price).toFixed(2),
-      price: op.price,
-      status: 'pending', // pending → paid → released → completed | dispute
-      bank: op.banks[0],
-      card: '2200 7019 4832 1147',
-      fio: 'Иванов И. И.',
-      expires_at: Date.now() + 15 * 60 * 1000,
-      chat: [
-        { type: 'sys', text: `Сделка создана. ${(sum / op.price).toFixed(2)} USDT заморожено в Escrow.`, time: nowHHMM() },
-        { type: 'them', text: 'Привет! Реквизиты сверху. Жду оплату ❤️', time: nowHHMM() },
-      ]
-    };
-    window.activeDeal = deal;
-    p2pState.deals = p2pState.deals || [];
-    p2pState.deals.push(deal);
-    openP2PDeal(deal.id);
+    if (sum < op.minRub || sum > op.maxRub) { _showAlert('Сумма вне лимитов: ' + op.minRub + '—' + op.maxRub + ' ₽'); return; }
+
+    const body = { offer_id: op.id, amount_fiat: sum };
+    if (!userIsBuyer) {
+      const t = (m.querySelector('#dlg-pm-type') || {}).value || 'sbp';
+      const card = ((m.querySelector('#dlg-pm-card') || {}).value || '').trim();
+      const name = ((m.querySelector('#dlg-pm-name') || {}).value || '').trim();
+      if (!card || !name) { _showAlert('Заполни карту/телефон и ФИО получателя — без этого продавец не сможет перевести рубли'); return; }
+      body.payment_method_inline = { type: t, bank_name: t.toUpperCase(), card_or_phone: card, receiver_name: name, save_to_pool: true };
+    }
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Создание сделки...';
+    try {
+      const r = await api('/api/v1/deals/create', { method: 'POST', body: JSON.stringify(body) });
+      console.log('[deal-create] response', r);
+      if (!r || r.error || r.detail) { _showAlert((r && (r.error||r.detail)) || 'Не удалось создать сделку'); confirmBtn.disabled = false; confirmBtn.textContent = 'Подтвердить ордер'; return; }
+      const dealId = r.id || r.deal_id;
+      if (!dealId) { _showAlert('Сервер вернул некорректный ответ'); confirmBtn.disabled = false; confirmBtn.textContent = 'Подтвердить ордер'; return; }
+      m.remove();
+      if (window.Telegram?.WebApp?.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+      // Переход на страницу сделки — через P2P_STATE используется loadDeal в IIFE
+      try { if (window.P2P_STATE) window.P2P_STATE.currentDealId = dealId; } catch(_){}
+      go('p2p-deal');
+      if (typeof loadDeal === 'function') { try { loadDeal(); } catch(_){} }
+    } catch(e) {
+      console.error('[deal-create] error', e);
+      _showAlert('Сетевая ошибка: ' + (e && e.message || 'unknown'));
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Подтвердить ордер';
+    }
   };
 };
 
