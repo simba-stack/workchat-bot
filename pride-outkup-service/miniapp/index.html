@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v27.20260619-fix-submit-both';
+  const APP_BUILD = 'v28.20260619-render-fix';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2286,10 +2286,10 @@ window.loadMyAds = async function() {
     const isPaused = status === 'paused';
     const price = +(a.price || 0);
     const priceType = a.price_type || a.priceType || 'fixed';
-    const remaining = +(a.remaining ?? a.amount_remaining ?? 0);
-    const total = +(a.total ?? a.amount ?? remaining);
-    const minRub = +(a.min_amount ?? a.minRub ?? 0);
-    const maxRub = +(a.max_amount ?? a.maxRub ?? 0);
+    const remaining = +(a.amount_usdt_remaining ?? a.remaining ?? a.amount_remaining ?? 0);
+    const total = +(a.amount_usdt_total ?? a.total ?? a.amount ?? remaining);
+    const minRub = +(a.min_amount_rub ?? a.min_amount ?? a.minRub ?? 0);
+    const maxRub = +(a.max_amount_rub ?? a.max_amount ?? a.maxRub ?? 0);
     const banks = Array.isArray(a.banks) ? a.banks : (Array.isArray(a.payment_methods) ? a.payment_methods : []);
     const dealsToday = +(a.deals_today ?? a.deals30d ?? 0);
     const dir = side === 'sell' ? '↑' : '↓';
@@ -3972,7 +3972,7 @@ loadMain().then(routeFromStart);
     const myadsAddReset = document.getElementById('p2p-myads-add');
     if (myadsAddReset) myadsAddReset.addEventListener('click', function(){ setAdSide('BUY'); });
     const adSubmit = document.getElementById('p2p-ad-submit');
-    if (adSubmit) adSubmit.addEventListener('click', submitNewAd);
+    // submitNewAd привязан через safeBind('p2p-ad-submit') выше — не дублируем
     const chatBtn = document.getElementById('p2p-deal-chat-btn');
     if (chatBtn) chatBtn.addEventListener('click', function() { go('p2p-chat'); loadChat(); });
     const chatSend = document.getElementById('p2p-chat-send');
