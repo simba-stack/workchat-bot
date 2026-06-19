@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v39.20260619-renderDeal-clean';
+  const APP_BUILD = 'v40.20260619-mydeals+renderDeal';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -1476,7 +1476,8 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
   <div id="p2p-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
   <div class="p2p-bottom-cta" style="display:flex;gap:8px">
     <button id="p2p-create-btn" class="p2p-btn-primary" style="flex:1">+ Создать своё</button>
-    <button id="p2p-myads-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 18px;margin-top:0">Мои</button>
+    <button id="p2p-mydeals-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 14px;margin-top:0;background:rgba(52,199,89,0.15);color:#5FE388;border:1px solid rgba(52,199,89,0.30)">Сделки</button>
+    <button id="p2p-myads-btn" class="p2p-btn-secondary" style="flex:0 0 auto;width:auto;padding:15px 14px;margin-top:0">Объяв.</button>
   </div>
 </div>
 
@@ -1545,6 +1546,15 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 </div>
 
 <!-- ═══ MY ADS ═══ -->
+<div class="view" id="view-p2p-mydeals">
+  <div class="p2p-top-bar">
+    <button class="p2p-back" onclick="go('p2p')">←</button>
+    <div class="p2p-title">Мои сделки <span class="m8-badge">M8</span></div>
+    <button onclick="loadMyDealsList()" style="font-size:18px;background:transparent;border:0;color:var(--th-1);cursor:pointer">↻</button>
+  </div>
+  <div id="p2p-mydeals-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
+</div>
+
 <div class="view" id="view-p2p-myads">
   <div class="nav-header">
     <button class="nav-back" data-back="p2p">←</button>
@@ -2307,7 +2317,8 @@ window.openP2PCreateDeal = async function() {
       // Переход на страницу сделки — через P2P_STATE используется loadDeal в IIFE
       try { if (window.P2P_STATE) window.P2P_STATE.currentDealId = dealId; } catch(_){}
       go('p2p-deal');
-      if (typeof loadDeal === 'function') { try { loadDeal(); } catch(_){} }
+      // renderDealView в outer scope — точно сработает (loadDeal внутри IIFE может быть недоступен)
+      try { if (typeof renderDealView === 'function') renderDealView(dealId); else if (typeof loadDeal === 'function') loadDeal(); } catch(e){ console.error('open deal fail', e); }
     } catch(e) {
       console.error('[deal-create] error', e);
       _showAlert('Сетевая ошибка: ' + (e && e.message || 'unknown'));
@@ -2691,6 +2702,32 @@ window.openLockedDetails = function() {
 };
 
 // myads-btn в доске
+
+// === Мои сделки (всё что я создал и взял в работу) ===
+window.loadMyDealsList = async function() {
+  var c = document.getElementById('p2p-mydeals-list');
+  if (!c) return;
+  c.innerHTML = '<div class="empty-state">Загрузка…</div>';
+  var r;
+  try { r = await api('/api/v1/deals/my'); }
+  catch(e) { c.innerHTML = '<div class="empty-state" style="color:#FF8B82">Ошибка: ' + (e && e.message ? e.message : e) + '</div>'; return; }
+  var items = (r && r.items) || [];
+  if (!items.length) { c.innerHTML = '<div class="empty-state" style="padding:40px 20px;color:rgba(255,255,255,0.55)">Пока нет сделок</div>'; return; }
+  var meTg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) ? Telegram.WebApp.initDataUnsafe.user.id : null;
+  c.innerHTML = items.map(function(d){
+    var statusColor = ({pending_seller:'#3390ec',awaiting_payment:'#FFD60A',paid:'#34c759',released:'#5FE388',cancelled:'#FF8B82',disputed:'#FF9F0A'})[d.status] || '#7a7a7a';
+    var sideTxt = ({pending_seller:'Ждёт принятия',awaiting_payment:'Ждёт оплаты',paid:'Оплачено, проверка',released:'Завершено',cancelled:'Отменено',disputed:'Спор'})[d.status] || d.status;
+    var dt = (d.created_at || '').slice(0,16).replace('T',' ');
+    return '<div onclick="renderDealView(' + d.id + '); go(\'p2p-deal\')" style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<b>Сделка #' + escHtml(d.deal_number || String(d.id)) + '</b>' +
+        '<span style="color:' + statusColor + ';font-size:11px;font-weight:700;text-transform:uppercase">' + escHtml(sideTxt) + '</span></div>' +
+      '<div style="font-size:14px;color:#fff;margin-bottom:4px"><b>' + parseFloat(d.amount_usdt||0).toFixed(4) + ' USDT</b> · ' + parseFloat(d.amount_fiat||d.amount_rub||0).toFixed(2) + ' ₽</div>' +
+      '<div style="font-size:11px;color:#7a7a7a">' + escHtml(dt) + '</div></div>';
+  }).join('');
+};
+safeBind('p2p-mydeals-btn', 'click', function(){ go('p2p-mydeals'); loadMyDealsList(); });
+
 safeBind('p2p-myads-btn', 'click', () => go('p2p-myads'));
 safeBind('p2p-myads-add', 'click', () => go('p2p-create'));
 
