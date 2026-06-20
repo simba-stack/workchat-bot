@@ -69,15 +69,12 @@ async def lock(db: AsyncSession, seller: User, deal: Deal) -> EscrowLock:
 
 async def release(db: AsyncSession, deal: Deal) -> None:
     """Освободить escrow — USDT переходит buyer'у.
-
-    seller теряет окончательно, buyer.balance_usdt += amount - fee.
-    fee.usdt -> системный счёт (logged).
-    Также обновляет stats обоим участникам (для maker tier).
+    Pessimistic lock на EscrowLock row — защита от дублей при гонке.
     """
     res = await db.execute(
         select(EscrowLock).where(
             EscrowLock.deal_id == deal.id, EscrowLock.status == "locked",
-        )
+        ).with_for_update()
     )
     lock_row = res.scalar_one_or_none()
     if not lock_row:

@@ -13,7 +13,7 @@
 // становился пустым → API возвращал 401 → баланс 0, история пустая.
 // /m8 endpoint уже отдаёт Cache-Control: no-store, no-cache — этого достаточно.
 (function() {
-  const APP_BUILD = 'v44.20260619-route-order';
+  const APP_BUILD = 'v45.20260619-CRIT-race-fix';
   try {
     const stored = sessionStorage.getItem('__pride_p2p_build');
     if (stored && stored !== APP_BUILD) {
@@ -2180,17 +2180,27 @@ window.renderDealView = async function(dealId) {
     actions;
 
   function _showAlert(msg){ try{ if(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.showAlert) return Telegram.WebApp.showAlert(String(msg)); }catch(_){} alert(msg); }
-  async function doAction(path, body){
+  async function doAction(path, body, srcBtn){
+    // Защита от двойных кликов
+    if (window.__rdvBusy) return;
+    window.__rdvBusy = true;
+    var btn = srcBtn || null;
+    var oldTxt = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
       var r = await api(path, body ? {method:'POST', body: JSON.stringify(body)} : {method:'POST'});
       if (!r || r.error) { _showAlert((r&&(r.error||r.detail))||'Ошибка'); return; }
       renderDealView(dealId);
-    } catch(e) { _showAlert(e.message||String(e)); }
+    } catch(e) { _showAlert(_errMsg ? _errMsg(e) : (e.message||String(e))); }
+    finally {
+      window.__rdvBusy = false;
+      if (btn) { btn.disabled = false; if (oldTxt) btn.textContent = oldTxt; }
+    }
   }
   function bind(id, fn){ var b=document.getElementById(id); if(b) b.addEventListener('click', fn); }
-  bind('rdv-paid', function(){ doAction('/api/v1/deals/' + d.id + '/mark_paid'); });
-  bind('rdv-release', function(){ doAction('/api/v1/deals/' + d.id + '/release'); });
-  bind('rdv-cancel', function(){ if(confirm('Отменить сделку?')) doAction('/api/v1/deals/' + d.id + '/cancel'); });
+  bind('rdv-paid', function(ev){ doAction('/api/v1/deals/' + d.id + '/mark_paid', null, ev && ev.currentTarget); });
+  bind('rdv-release', function(ev){ doAction('/api/v1/deals/' + d.id + '/release', null, ev && ev.currentTarget); });
+  bind('rdv-cancel', function(ev){ if(confirm('Отменить сделку?')) doAction('/api/v1/deals/' + d.id + '/cancel', null, ev && ev.currentTarget); });
   bind('rdv-dispute', function(){ go('p2p-dispute'); });
   bind('rdv-accept', function(){
     var pm_type = prompt('Тип реквизита (sbp/sber/tinkoff/alpha/vtb/raif)', 'sbp') || 'sbp';

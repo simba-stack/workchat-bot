@@ -274,8 +274,11 @@ async def mark_paid(
     d = await db.get(Deal, deal_id)
     if not d or d.buyer_id != user.id:
         raise HTTPException(404, "deal not found")
+    # IDEMPOTENT
+    if d.status == "paid":
+        return {"ok": True, "status": "paid", "idempotent": True}
     if d.status != "awaiting_payment":
-        raise HTTPException(400, "сделка не в awaiting_payment")
+        raise HTTPException(400, f"сделка в статусе {d.status}, ожидалось awaiting_payment")
     d.status = "paid"
     d.paid_at = datetime.now(timezone.utc)
     if payload and payload.get("receipt_url"):
@@ -310,12 +313,18 @@ async def release_deal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Seller подтверждает что деньги получены → release escrow."""
-    d = await db.get(Deal, deal_id)
+    """Seller подтверждает что деньги получены → release escrow.
+    Idempotent + pessimistic lock на row чтобы избежать дублей payout при множественных кликах.
+    """
+    res = await db.execute(select(Deal).where(Deal.id == deal_id).with_for_update())
+    d = res.scalar_one_or_none()
     if not d or d.seller_id != user.id:
         raise HTTPException(404, "deal not found")
+    # IDEMPOTENT: если уже released — просто вернуть текущий статус без повторного payout
+    if d.status == "released":
+        return {"ok": True, "status": "released", "idempotent": True}
     if d.status != "paid":
-        raise HTTPException(400, "deal не в статусе paid")
+        raise HTTPException(400, f"deal в статусе {d.status}, ожидалось paid")
     await escrow_service.release(db, d)
     # Statistics: filled_count + total_volume_usdt на оффере
     o_rel = await db.get(Offer, d.offer_id)

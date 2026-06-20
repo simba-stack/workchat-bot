@@ -23,6 +23,10 @@ from core.services import (
     rates_service, sweep_service, tron_monitor,
 )
 
+from p2p import models as p2p_models
+from p2p.workers import outbox_publisher as p2p_outbox_worker, scheduler as p2p_scheduler_worker, reconciliation as p2p_recon_worker
+from p2p.api import commands as p2p_commands_router, queries as p2p_queries_router, admin as p2p_admin_router  # noqa: E501  # noqa: F401 — регистрирует таблицы в Base.metadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -196,6 +200,14 @@ async def lifespan(app: FastAPI):
     bg_tasks.append(asyncio.create_task(deal_lifecycle.lifecycle_loop()))
     bg_tasks.append(asyncio.create_task(maker_stats.tier_loop()))
     logger.info("FastAPI ready: %d background tasks scheduled", len(bg_tasks))
+    # === P2P workers ===
+    try:
+        asyncio.create_task(p2p_outbox_worker.run())
+        asyncio.create_task(p2p_scheduler_worker.run())
+        asyncio.create_task(p2p_recon_worker.run())
+        logger.info("[lifespan] p2p workers scheduled")
+    except Exception as e:
+        logger.warning("[lifespan] p2p workers failed to start: %s", e)
     yield
     logger.info("FastAPI stopping...")
     for t in bg_tasks:
@@ -256,6 +268,11 @@ app.include_router(owner.router, prefix="/api/v1/owner", tags=["owner"])
 app.include_router(cheques.router, prefix="/api/v1/cheques", tags=["cheques"])
 app.include_router(audit.router, prefix="/api/v1/admin/audit", tags=["audit"])
 app.include_router(payment_methods.router, prefix="/api/v1/users/me/payment_methods", tags=["payment_methods"])
+
+# === P2P v2 (новый ядро) ===
+app.include_router(p2p_commands_router.router)
+app.include_router(p2p_queries_router.router)
+app.include_router(p2p_admin_router.router)
 
 
 MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"

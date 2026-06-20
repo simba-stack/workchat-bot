@@ -12,3 +12,4 @@ venv/
 receipts/
 apply_outkup_ui_fix.py
 apply_outkup_ui_fix.ps1
+*.v2.bak
