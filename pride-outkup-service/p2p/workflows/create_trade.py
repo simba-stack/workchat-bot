@@ -12,7 +12,7 @@ from p2p.enums import (
     TradeStatus, AdvertisementStatus, AdvertisementType, EventType,
     RiskDecision,
 )
-from p2p.models import P2PAdvertisement, P2PTrade
+from p2p.models import P2PAdvertisement, P2PPaymentMethod, P2PTrade
 from p2p.orchestrator import WorkflowContext
 
 logger = logging.getLogger("p2p.wf.create_trade")
@@ -40,7 +40,6 @@ async def handle(ctx: WorkflowContext) -> dict:
     if amount_crypto <= 0:
         raise HTTPException(422, "amount_crypto must be > 0")
 
-    # payment_method_id — UUID FK на p2p_payment_methods (опционально на этом этапе)
     payment_method_id = p.get("payment_method_id") or p.get("payment_method_type")
 
     # ---------- Lock advertisement ----------
@@ -63,7 +62,6 @@ async def handle(ctx: WorkflowContext) -> dict:
     if ad.pricing_mode == "FIXED":
         price = ad.price
     else:
-        # Floating: пока берём market_index если есть, иначе fixed fallback
         from core.services import settings_kv
         try:
             rate = await settings_kv.get_rate_buy(db) if ad.type == AdvertisementType.SELL.value else await settings_kv.get_rate_sell(db)
@@ -73,11 +71,10 @@ async def handle(ctx: WorkflowContext) -> dict:
             raise HTTPException(500, "cannot determine floating price")
     amount_fiat = (amount_crypto * price).quantize(Decimal("0.01"))
 
-    # Min/max checks
     if amount_fiat < ad.min_amount_fiat or amount_fiat > ad.max_amount_fiat:
         raise HTTPException(400, f"fiat amount {amount_fiat} out of range [{ad.min_amount_fiat}; {ad.max_amount_fiat}]")
 
-    # ---------- Risk Engine pre-check (ТЗ Том 10) ----------
+    # ---------- Risk Engine pre-check ----------
     ctx.step("risk.assess")
     try:
         r_assess = await risk.assess_create_trade(
@@ -137,6 +134,37 @@ async def handle(ctx: WorkflowContext) -> dict:
     fee_pct = await policies.get_decimal(db, "PLATFORM_FEE_PCT")
     fee_crypto = (amount_crypto * fee_pct / Decimal("100")).quantize(Decimal("0.000001"))
 
+    # ---------- Payment Snapshot ----------
+    ctx.step("payment.snapshot")
+    payment_snapshot: dict = {}
+    valid_payment_method_id = None
+    if payment_method_id:
+        try:
+            pmq = await db.execute(
+                select(P2PPaymentMethod).where(P2PPaymentMethod.id == payment_method_id)
+            )
+            pm = pmq.scalar_one_or_none()
+        except Exception:
+            pm = None
+        if pm is not None:
+            valid_payment_method_id = pm.id
+            payment_snapshot = {
+                "payment_method_id": str(pm.id),
+                "type": pm.type,
+                "bank_name": pm.bank_name,
+                "account_holder": pm.account_holder,
+                "card_number_masked": pm.card_number_masked,
+                "phone": pm.phone,
+                "iban": pm.iban,
+                "country": pm.country,
+                "snapshot_at": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            logger.warning(
+                "[create_trade] payment_method_id=%s not found, snapshot stays empty",
+                payment_method_id,
+            )
+
     # ---------- Создать trade ----------
     ctx.step("trade.create")
     pay_timeout_min = await policies.get_int(db, "TRADE_PAYMENT_TIMEOUT_MIN")
@@ -153,8 +181,8 @@ async def handle(ctx: WorkflowContext) -> dict:
         fiat_amount=amount_fiat,
         fee_pct=fee_pct,
         fee_crypto=fee_crypto,
-        payment_method_id=payment_method_id,
-        payment_snapshot={},
+        payment_method_id=valid_payment_method_id,
+        payment_snapshot=payment_snapshot,
         status=TradeStatus.CREATED.value,
         version=1,
         pay_deadline_at=datetime.now(timezone.utc) + timedelta(minutes=pay_timeout_min),
@@ -175,7 +203,6 @@ async def handle(ctx: WorkflowContext) -> dict:
     ctx.step("ledger.escrow")
     await locks.lock_user_wallet(db, seller_id, ad.crypto_currency)
     if ad.type == AdvertisementType.SELL.value:
-        # Seller уже зарезервировал в advertisement_hold — двигаем в trade_escrow
         await ledger.move_ad_hold_to_escrow(
             db,
             user_id=seller_id,
@@ -187,7 +214,6 @@ async def handle(ctx: WorkflowContext) -> dict:
             correlation_id=ctx.correlation_id,
         )
     else:
-        # Объявление BUY — seller это taker, надо заморозить из available
         breakdown = await wallet.get_breakdown(db, seller_id, ad.crypto_currency)
         if breakdown.available < amount_crypto:
             raise HTTPException(400, f"seller insufficient available: {breakdown.available}")

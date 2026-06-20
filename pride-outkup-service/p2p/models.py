@@ -629,3 +629,33 @@ class P2PIdempotencyKey(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_utc, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# FAVORITES (Том 24 — UI пины: ad/merchant)
+# ═══════════════════════════════════════════════════════════════════════
+
+class P2PFavorite(Base):
+    """Избранные объявления или мерчанты."""
+    __tablename__ = "p2p_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "advertisement_id", name="uq_p2p_fav_user_ad"),
+        UniqueConstraint("user_id", "target_user_id", name="uq_p2p_fav_user_merchant"),
+        Index("ix_p2p_fav_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(PG_UUID(as_uuid=False), primary_key=True, default=_uuid)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False,
+    )
+    advertisement_id: Mapped[str | None] = mapped_column(
+        PG_UUID(as_uuid=False),
+        ForeignKey("p2p_advertisements.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    target_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now_utc, nullable=False,
+    )

@@ -41,6 +41,10 @@ from p2p.api import (
     notifications as p2p_notif_router,
     chat as p2p_chat_router,
     disputes as p2p_disputes_router,
+    sync as p2p_sync_router,
+    favorites as p2p_favorites_router,
+    merchant_dashboard as p2p_merchant_router,
+    evidence as p2p_evidence_router,
 )  # noqa: F401 — регистрирует таблицы в Base.metadata
 from p2p.ws import router as p2p_ws_router
 from p2p.ws.manager import publish_to_channels as p2p_ws_publish
@@ -345,6 +349,10 @@ app.include_router(p2p_reviews_router.router)
 app.include_router(p2p_notif_router.router)
 app.include_router(p2p_chat_router.router)
 app.include_router(p2p_disputes_router.router)
+app.include_router(p2p_sync_router.router)
+app.include_router(p2p_favorites_router.router)
+app.include_router(p2p_merchant_router.router)
+app.include_router(p2p_evidence_router.router)
 app.include_router(p2p_ws_router.router)
 
 
