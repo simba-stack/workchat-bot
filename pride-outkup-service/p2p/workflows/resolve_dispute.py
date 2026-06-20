@@ -76,7 +76,7 @@ async def handle(ctx: WorkflowContext) -> dict:
             buyer_id=trade.buyer_id,
             currency=trade.crypto_currency,
             amount=trade.crypto_amount,
-            platform_fee=trade.fee_crypto or Decimal("0"),
+            fee=trade.fee_crypto or Decimal("0"),
             trade_id=trade.id,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
@@ -109,7 +109,7 @@ async def handle(ctx: WorkflowContext) -> dict:
             db,
             seller_id=trade.seller_id, buyer_id=trade.buyer_id,
             currency=trade.crypto_currency, amount=to_buyer,
-            platform_fee=Decimal("0"),
+            fee=Decimal("0"),
             trade_id=trade.id, workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )

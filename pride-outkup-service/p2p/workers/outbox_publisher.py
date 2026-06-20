@@ -30,45 +30,170 @@ def register_ws_publisher(fn) -> None:
 
 
 # Bot notify helper
-async def _bot_notify(event_type: str, payload: dict) -> None:
+# Tg ID нужен (а не User.id) — резолвим из БД при первом обращении и кешируем
+_TGID_CACHE: dict[int, int] = {}
+
+
+async def _resolve_tg_id(user_id: int) -> int | None:
+    """Резолв User.id → User.tg_id с in-memory кешем."""
+    if user_id in _TGID_CACHE:
+        return _TGID_CACHE[user_id]
     try:
-        from bot.main import notify_user  # type: ignore
+        from sqlalchemy import select
+        from core.db import AsyncSessionLocal
+        from core.models import User
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(User.tg_id).where(User.id == user_id))
+            tg = r.scalar_one_or_none()
+            if tg:
+                _TGID_CACHE[user_id] = int(tg)
+            return tg
+    except Exception as e:
+        logger.warning("[outbox] resolve tg_id user=%s failed: %s", user_id, e)
+        return None
+
+
+def _trade_card(event_type: str, p: dict, role: str) -> tuple[str, str | None, list[tuple[str, str]] | None]:
+    """Возвращает (title, body, deeplinks).
+
+    role: 'buyer' | 'seller' | 'owner' | 'opener' — кому шлём.
+    """
+    trade_id = p.get("trade_id", "")
+    short = str(trade_id)[:8]
+    crypto = p.get("crypto") or p.get("crypto_currency") or "USDT"
+    fiat = p.get("fiat") or p.get("fiat_currency") or "RUB"
+
+    if event_type == EventType.TRADE_CREATED.value:
+        amt = p.get("amount_crypto") or p.get("crypto_amount")
+        amt_fiat = p.get("amount_fiat") or p.get("fiat_amount")
+        title = f"🆕 Новая сделка #{short}"
+        body = f"Сумма: {amt} {crypto} / {amt_fiat} {fiat}"
+        if role == "buyer":
+            return title, body + "\n\nНужно оплатить продавцу.", [
+                ("💳 Открыть сделку", f"trade_{trade_id}"),
+                ("❌ Отменить", f"trade_{trade_id}"),
+            ]
+        else:  # seller
+            return title, body + "\n\nЭскроу заблокирован, ждём оплату.", [
+                ("💬 Открыть сделку", f"trade_{trade_id}"),
+            ]
+
+    if event_type == EventType.TRADE_PAYMENT_MARKED.value:
+        title = f"💸 Покупатель отметил оплату #{short}"
+        if role == "seller":
+            return title, "Проверь получение средств и подтверди или открой диспут.", [
+                ("✅ Подтвердить", f"trade_{trade_id}"),
+                ("⚠️ Открыть диспут", f"dispute_{trade_id}"),
+            ]
+        else:
+            return title, "Ждём подтверждения от продавца.", [
+                ("💬 Открыть сделку", f"trade_{trade_id}"),
+            ]
+
+    if event_type == EventType.TRADE_COMPLETED.value:
+        amt = p.get("amount") or p.get("crypto_amount")
+        return f"✅ Сделка #{short} завершена", f"Сумма: {amt} {crypto}\n\nОставь отзыв партнёру!", [
+            ("⭐ Оставить отзыв", f"trade_{trade_id}"),
+        ]
+
+    if event_type == EventType.TRADE_CANCELLED.value:
+        reason = (p.get("reason") or "").strip()[:120]
+        return f"❌ Сделка #{short} отменена", reason or "Эскроу возвращён.", [
+            ("📄 Подробнее", f"trade_{trade_id}"),
+        ]
+
+    if event_type == EventType.TRADE_DEADLINE_EXTENDED.value:
+        return f"⏰ Таймер сделки #{short} продлён", "У тебя больше времени на оплату.", [
+            ("💬 Открыть сделку", f"trade_{trade_id}"),
+        ]
+
+    if event_type == EventType.DISPUTE_OPENED.value:
+        return f"⚠️ Открыт диспут #{short}", "Арбитр рассмотрит ситуацию в течение 24 часов.", [
+            ("⚖️ Открыть диспут", f"dispute_{trade_id}"),
+        ]
+
+    if event_type == EventType.DISPUTE_RESOLVED.value:
+        resolution = p.get("resolution") or "решён"
+        return f"⚖️ Диспут #{short} решён", f"Решение арбитра: {resolution}", [
+            ("📄 Подробнее", f"dispute_{trade_id}"),
+        ]
+
+    if event_type == EventType.CHAT_MESSAGE_SENT.value:
+        return f"💬 Новое сообщение #{short}", None, [
+            ("✉️ Открыть чат", f"trade_{trade_id}"),
+        ]
+
+    if event_type == EventType.MERCHANT_RATING_CHANGED.value:
+        rating = p.get("rating", "")
+        return f"⭐ Тебе оставили отзыв ({rating}/5)", None, [
+            ("📊 Профиль", f"profile"),
+        ]
+
+    if event_type == EventType.SYSTEM_ALERT.value:
+        return "🚨 Системное уведомление", str(p.get("description", "Подробнее в админке"))[:200], [
+            ("🛡 Admin", "admin"),
+        ]
+
+    return "", None, None
+
+
+async def _bot_notify(event_type: str, payload: dict) -> None:
+    """Шлёт кастомизированные карточки участникам события."""
+    try:
+        from bot.main import notify_p2p_event  # type: ignore
     except Exception:
         return  # bot не загружен — пропустим
-    # Простой маппинг: используем buyer_id/seller_id из payload
-    targets: set[int] = set()
-    for k in ("buyer_id", "seller_id", "owner_id", "opener_id"):
-        if k in payload and payload[k]:
-            try:
-                targets.add(int(payload[k]))
-            except Exception:
-                pass
-    # текст уведомления
-    text = _format_notification(event_type, payload)
-    if not text:
-        return
-    for uid in targets:
+
+    # Маппинг: (user_id, role)
+    sends: list[tuple[int, str]] = []
+    if payload.get("buyer_id"):
+        sends.append((int(payload["buyer_id"]), "buyer"))
+    if payload.get("seller_id"):
+        sends.append((int(payload["seller_id"]), "seller"))
+    # Если нет buyer/seller — owner для ad-only events, opener для dispute
+    if not sends:
+        if payload.get("owner_id"):
+            sends.append((int(payload["owner_id"]), "owner"))
+        if payload.get("opener_id") or payload.get("opened_by_id"):
+            uid = payload.get("opener_id") or payload.get("opened_by_id")
+            sends.append((int(uid), "opener"))
+
+    for uid, role in sends:
+        tg_id = await _resolve_tg_id(uid)
+        if not tg_id:
+            continue
+        title, body, links = _trade_card(event_type, payload, role)
+        if not title:
+            continue
         try:
-            await notify_user(uid, text)
+            await notify_p2p_event(tg_id, title=title, body=body, deeplinks=links)
         except Exception as e:
-            logger.debug("[outbox] bot notify failed user=%s: %s", uid, e)
+            logger.debug("[outbox] bot notify failed user=%s tg=%s: %s", uid, tg_id, e)
 
 
 def _format_notification(event_type: str, p: dict) -> str | None:
+    """Только для in-app notifications (короткий текст без кнопок)."""
+    short = str(p.get("trade_id", ""))[:8]
+    crypto = p.get("crypto") or p.get("crypto_currency") or "USDT"
     if event_type == EventType.TRADE_CREATED.value:
-        return f"🆕 Новая сделка #{p.get('trade_id','?')[:8]} — {p.get('amount_crypto')} {p.get('crypto')} / {p.get('amount_fiat')} {p.get('fiat')}"
+        amt = p.get("amount_crypto") or p.get("crypto_amount")
+        return f"🆕 Новая сделка #{short} — {amt} {crypto}"
     if event_type == EventType.TRADE_PAYMENT_MARKED.value:
-        return f"💸 Покупатель отметил оплату по сделке #{str(p.get('trade_id',''))[:8]}"
+        return f"💸 Покупатель отметил оплату #{short}"
     if event_type == EventType.TRADE_COMPLETED.value:
-        return f"✅ Сделка #{str(p.get('trade_id',''))[:8]} завершена — {p.get('amount')} {p.get('crypto')}"
+        return f"✅ Сделка #{short} завершена"
     if event_type == EventType.TRADE_CANCELLED.value:
-        return f"❌ Сделка #{str(p.get('trade_id',''))[:8]} отменена — {p.get('reason','')}"
+        return f"❌ Сделка #{short} отменена"
     if event_type == EventType.DISPUTE_OPENED.value:
-        return f"⚠️ Открыт диспут по сделке #{str(p.get('trade_id',''))[:8]}"
+        return f"⚠️ Открыт диспут #{short}"
     if event_type == EventType.DISPUTE_RESOLVED.value:
-        return f"⚖️ Диспут решён ({p.get('resolution')})"
-    if event_type == EventType.ADVERTISEMENT_CREATED.value:
-        return None  # не уведомлять никого по создании ad
+        return f"⚖️ Диспут #{short} решён ({p.get('resolution','')})"
+    if event_type == EventType.CHAT_MESSAGE_SENT.value:
+        return f"💬 Новое сообщение #{short}"
+    if event_type == EventType.MERCHANT_RATING_CHANGED.value:
+        return f"⭐ Тебе оставили отзыв ({p.get('rating','')}/5)"
+    if event_type == EventType.TRADE_DEADLINE_EXTENDED.value:
+        return f"⏰ Таймер сделки #{short} продлён"
     return None
 
 

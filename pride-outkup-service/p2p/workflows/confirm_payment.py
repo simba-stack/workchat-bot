@@ -51,7 +51,7 @@ async def handle(ctx: WorkflowContext) -> dict:
         buyer_id=trade.buyer_id,
         currency=trade.crypto_currency,
         amount=trade.crypto_amount,
-        platform_fee=trade.fee_crypto or Decimal("0"),
+        fee=trade.fee_crypto or Decimal("0"),
         trade_id=trade_id,
         workflow_id=ctx.workflow_id,
         correlation_id=ctx.correlation_id,
@@ -95,7 +95,7 @@ async def handle(ctx: WorkflowContext) -> dict:
         event_type=EventType.TRADE_COMPLETED.value,
         payload={
             "trade_id": trade_id, "buyer_id": trade.buyer_id, "seller_id": trade.seller_id,
-            "crypto": trade.crypto_currency_currency, "amount": str(trade.crypto_amount),
+            "crypto": trade.crypto_currency, "amount": str(trade.crypto_amount),
         },
         aggregate_type="trade",
         aggregate_id=trade_id,

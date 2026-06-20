@@ -4566,5 +4566,941 @@ loadMain().then(routeFromStart);
   document.head.appendChild(st);
 })();
 </script>
+<!-- ═══════════════ window.P2P v2 (CQRS API) ═══════════════ -->
+<script>
+(function(){
+"use strict";
+if (window.P2P && window.P2P.__v2) { console.warn('[P2P v2] already loaded'); return; }
+
+// ─────────── Telegram WebApp shortcut ───────────
+var TG = (window.Telegram && window.Telegram.WebApp) || null;
+function tgAlert(t){ if(TG && TG.showAlert) TG.showAlert(t); else alert(t); }
+function tgConfirm(t){ return new Promise(function(res){
+  if(TG && TG.showConfirm) TG.showConfirm(t, function(ok){res(!!ok);});
+  else res(window.confirm(t));
+});}
+function tgHaptic(kind){
+  try { if(TG && TG.HapticFeedback){
+    if(kind==='success') TG.HapticFeedback.notificationOccurred('success');
+    else if(kind==='error') TG.HapticFeedback.notificationOccurred('error');
+    else if(kind==='warn') TG.HapticFeedback.notificationOccurred('warning');
+    else TG.HapticFeedback.impactOccurred('light');
+  }} catch(_){}
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+
+// ─────────── API client ───────────
+var API = {
+  base: '/api/v2/p2p',
+  async call(method, path, body, opts){
+    opts = opts || {};
+    var initData = (TG && TG.initData) || '';
+    var headers = { 'Content-Type':'application/json' };
+    if (initData) headers['Authorization'] = 'tg ' + initData;
+    if (opts.idem) headers['Idempotency-Key'] = opts.idem;
+    var url = (path.indexOf('http')===0 || path.indexOf('/api')===0) ? path : (this.base + path);
+    var sep = url.indexOf('?')>=0 ? '&' : '?';
+    url = url + sep + 'initData=' + encodeURIComponent(initData);
+    var init = { method: method, headers: headers };
+    if (body !== undefined && body !== null) init.body = JSON.stringify(body);
+    try {
+      var r = await fetch(url, init);
+      var ct = r.headers.get('content-type')||'';
+      var data = ct.indexOf('json')>=0 ? await r.json().catch(function(){return null;}) : null;
+      if (!r.ok) {
+        var code = (data && (data.code || data.detail && data.detail.code)) || ('HTTP_'+r.status);
+        var msg = (data && (data.message || (data.detail && (data.detail.message||data.detail)) || data.error)) || ('Ошибка '+r.status);
+        var err = new Error(msg);
+        err.code = code; err.status = r.status; err.meta = data && data.meta;
+        if (!opts.silent) tgAlert('['+code+'] '+msg);
+        throw err;
+      }
+      return data;
+    } catch(e){
+      if (e.code) throw e;
+      if (!opts.silent) tgAlert('Сеть: '+e.message);
+      throw e;
+    }
+  },
+  // shortcuts
+  ads: {
+    list(q){ var qs = []; q = q||{};
+      ['type','crypto','fiat','status','limit','offset'].forEach(function(k){ if(q[k]!=null) qs.push(k+'='+encodeURIComponent(q[k])); });
+      return API.call('GET','/advertisements'+(qs.length?'?'+qs.join('&'):''));
+    },
+    get(id){ return API.call('GET','/advertisements/'+id); },
+    mine(){ return API.call('GET','/my/advertisements'); },
+    create(p){ return API.call('POST','/advertisements', p, {idem:'ad-'+Date.now()}); },
+    update(id,p){ return API.call('PATCH','/advertisements/'+id, p); },
+    pause(id, reason){ return API.call('POST','/advertisements/'+id+'/pause', {reason:reason||'manual'}); },
+    resume(id){ return API.call('POST','/advertisements/'+id+'/resume'); },
+    archive(id){ return API.call('POST','/advertisements/'+id+'/archive'); },
+    del(id){ return API.call('DELETE','/advertisements/'+id); },
+  },
+  trades: {
+    get(id){ return API.call('GET','/trades/'+id); },
+    mine(status){ return API.call('GET','/my/trades'+(status?'?status='+status:'')); },
+    create(p){ return API.call('POST','/trades', p, {idem:'tr-'+Date.now()}); },
+    markPaid(id){ return API.call('POST','/trades/'+id+'/mark-paid', {}, {idem:'mp-'+id}); },
+    confirm(id){ return API.call('POST','/trades/'+id+'/confirm-payment', {}, {idem:'cp-'+id}); },
+    cancel(id, reason){ return API.call('POST','/trades/'+id+'/cancel', {reason:reason||'user'}); },
+    extend(id, minutes){ return API.call('POST','/trades/'+id+'/extend-deadline', {minutes: minutes||15}); },
+    openDispute(id, reason, description){ return API.call('POST','/trades/'+id+'/dispute', {reason:reason||'not_paid', description:description||''}); },
+  },
+  wallet: { get(c){ return API.call('GET','/wallet?crypto='+(c||'USDT')); } },
+  paymentMethods: {
+    list(){ return API.call('GET','/payment-methods'); },
+    create(p){ return API.call('POST','/payment-methods', p); },
+    update(id,p){ return API.call('PATCH','/payment-methods/'+id, p); },
+    del(id){ return API.call('DELETE','/payment-methods/'+id); },
+  },
+  chat: {
+    list(tradeId, afterSeq){ return API.call('GET','/trades/'+tradeId+'/messages?after_seq='+(afterSeq||0)); },
+    send(tradeId, text){ return API.call('POST','/trades/'+tradeId+'/messages', {body_text:text, message_type:'TEXT'}, {idem:'msg-'+tradeId+'-'+Date.now()}); },
+  },
+  reviews: {
+    forUser(userId){ return API.call('GET','/users/'+userId+'/reviews'); },
+    summary(userId){ return API.call('GET','/users/'+userId+'/rating-summary'); },
+    create(tradeId, rating, comment){ return API.call('POST','/trades/'+tradeId+'/review', {rating:rating, comment:comment||''}); },
+  },
+  notifications: {
+    list(onlyUnread){ return API.call('GET','/notifications'+(onlyUnread?'?only_unread=true':'')); },
+    unread(){ return API.call('GET','/notifications/unread-count'); },
+    read(id){ return API.call('POST','/notifications/'+id+'/read'); },
+    readAll(){ return API.call('POST','/notifications/read-all'); },
+  },
+  disputes: {
+    get(id){ return API.call('GET','/disputes/'+id); },
+    evidence(id){ return API.call('GET','/disputes/'+id+'/evidence'); },
+    reopen(id, reason){ return API.call('POST','/disputes/'+id+'/reopen', {reason:reason||''}); },
+  },
+  admin: {
+    disputes(status){ return API.call('GET','/admin/disputes'+(status?'?status='+status:''), null, {silent:true}); },
+    resolveDispute(id, resolution, note){ return API.call('POST','/admin/disputes/'+id+'/resolve', {resolution:resolution, resolution_note:note||''}); },
+  },
+  myStats(){ return API.call('GET','/my/stats'); },
+};
+
+// ─────────── WebSocket ───────────
+var WS = {
+  socket: null,
+  subscriptions: new Set(),
+  listeners: {},     // eventType → [cb]
+  channelCbs: {},    // channel → [cb]
+  reconnectTimer: null,
+  connect(){
+    var self = this;
+    try { if (this.socket && this.socket.readyState===1) return; } catch(_){}
+    var initData = (TG && TG.initData) || '';
+    var proto = location.protocol==='https:' ? 'wss:' : 'ws:';
+    var url = proto + '//' + location.host + '/ws/p2p?init_data=' + encodeURIComponent(initData);
+    try { this.socket = new WebSocket(url); } catch(e){ console.warn('[ws] ctor fail',e); this._reconnect(); return; }
+    this.socket.onopen = function(){
+      console.log('[P2P ws] open');
+      // re-subscribe
+      self.subscriptions.forEach(function(ch){ self._raw({action:'subscribe', channel:ch}); });
+    };
+    this.socket.onmessage = function(ev){
+      var msg = null; try { msg = JSON.parse(ev.data); } catch(_){ return; }
+      if (!msg) return;
+      var et = msg.event;
+      if (et === 'ping') { self._raw({action:'pong'}); return; }
+      if (et === 'connected') { self.userId = msg.user_id; return; }
+      if (et === 'subscribed' || et === 'unsubscribed') return;
+      if (et === 'error') { console.warn('[P2P ws err]', msg); return; }
+      // domain event
+      (self.listeners[et]||[]).forEach(function(cb){ try{cb(msg);}catch(e){console.error(e);} });
+      var ch = msg.channel;
+      if (ch && self.channelCbs[ch]) self.channelCbs[ch].forEach(function(cb){ try{cb(msg);}catch(e){console.error(e);} });
+    };
+    this.socket.onclose = function(){ console.log('[P2P ws] close'); self._reconnect(); };
+    this.socket.onerror = function(e){ console.warn('[P2P ws] err', e); };
+  },
+  _reconnect(){
+    var self = this;
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(function(){ self.reconnectTimer=null; self.connect(); }, 3000);
+  },
+  _raw(obj){ try { if (this.socket && this.socket.readyState===1) this.socket.send(JSON.stringify(obj)); } catch(e){} },
+  subscribe(channel, cb){
+    this.subscriptions.add(channel);
+    if (cb) { (this.channelCbs[channel]=this.channelCbs[channel]||[]).push(cb); }
+    this._raw({action:'subscribe', channel:channel});
+  },
+  unsubscribe(channel){
+    this.subscriptions.delete(channel);
+    delete this.channelCbs[channel];
+    this._raw({action:'unsubscribe', channel:channel});
+  },
+  on(eventType, cb){ (this.listeners[eventType]=this.listeners[eventType]||[]).push(cb); },
+};
+
+// ─────────── State ───────────
+var STATE = {
+  user: null,
+  activeScreen: 'ads',
+  currentTradeId: null,
+  currentAdId: null,
+  wallet: null,
+  notifications: { items: [], unread: 0 },
+  ads: [],
+  myAds: [],
+  paymentMethods: [],
+  isAdmin: false,
+  wizard: null,
+  countdownTimers: {},
+};
+
+// ─────────── Utils ───────────
+var UTILS = {
+  fmt(amount, currency, decimals){
+    if (decimals == null) decimals = 8;
+    var n = parseFloat(amount||0);
+    var fixed = n.toFixed(decimals).replace(/\.?0+$/,'');
+    return fixed + (currency?(' '+currency):'');
+  },
+  fmtMoney(amount, currency){
+    var n = parseFloat(amount||0);
+    return n.toFixed(2) + (currency?(' '+currency):'');
+  },
+  timeAgo(iso){
+    if(!iso) return '—';
+    var t = new Date(iso).getTime();
+    var d = (Date.now() - t) / 1000;
+    if (d < 60) return Math.floor(d)+'с назад';
+    if (d < 3600) return Math.floor(d/60)+'м назад';
+    if (d < 86400) return Math.floor(d/3600)+'ч назад';
+    return Math.floor(d/86400)+'д назад';
+  },
+  statusColor(s){
+    s = String(s||'').toUpperCase();
+    if(['ACTIVE','COMPLETED','RESOLVED'].indexOf(s)>=0) return '#34c759';
+    if(['PAUSED','WAITING_FOR_PAYMENT','PAYMENT_MARKED','PAYMENT_CONFIRMATION','OPENED','CREATED','ESCROW_LOCKED'].indexOf(s)>=0) return '#ffcc00';
+    if(['CANCELLED','DISPUTE_OPENED','ARBITRATION','FAILED','DEAD'].indexOf(s)>=0) return '#ff453a';
+    return '#7a7a7a';
+  },
+  statusLabel(s){
+    var L = {
+      ACTIVE:'Активно', PAUSED:'Пауза', ARCHIVED:'Архив', DELETED:'Удалено', DRAFT:'Черновик',
+      CREATED:'Создана', ESCROW_LOCKED:'Эскроу',
+      WAITING_FOR_PAYMENT:'Ждёт оплаты', PAYMENT_MARKED:'Оплачено покупателем',
+      PAYMENT_CONFIRMATION:'Проверка', COMPLETED:'Завершена', CANCELLED:'Отменена',
+      DISPUTE_OPENED:'Спор', ARBITRATION:'Арбитраж', RESOLVED:'Решено',
+      OPENED:'Открыт', CLOSED:'Закрыт'
+    };
+    return L[String(s||'').toUpperCase()] || s || '';
+  },
+  statusBadge(s){
+    return '<span style="display:inline-block;padding:3px 9px;border-radius:8px;font-size:11px;background:'+UTILS.statusColor(s)+'20;color:'+UTILS.statusColor(s)+';font-weight:600">'+esc(UTILS.statusLabel(s))+'</span>';
+  },
+  countdown(elId, deadlineIso, onZero){
+    if (!deadlineIso) return;
+    if (STATE.countdownTimers[elId]) clearInterval(STATE.countdownTimers[elId]);
+    var target = new Date(deadlineIso).getTime();
+    var tick = function(){
+      var el = document.getElementById(elId);
+      if(!el){ clearInterval(STATE.countdownTimers[elId]); return; }
+      var ms = target - Date.now();
+      if (ms <= 0) {
+        el.textContent = '00:00';
+        clearInterval(STATE.countdownTimers[elId]);
+        STATE.countdownTimers[elId] = null;
+        if (onZero) onZero();
+        return;
+      }
+      var s = Math.floor(ms/1000);
+      var m = Math.floor(s/60); s = s%60;
+      el.textContent = (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+    };
+    tick();
+    STATE.countdownTimers[elId] = setInterval(tick, 1000);
+  },
+  alert: tgAlert,
+  confirm: tgConfirm,
+  haptic: tgHaptic,
+  esc: esc,
+  copy(text){
+    try { navigator.clipboard.writeText(text); tgHaptic('success'); tgAlert('Скопировано'); }
+    catch(e){ tgAlert(text); }
+  },
+};
+
+// ─────────── Root container ───────────
+function root(){
+  var r = document.getElementById('p2p-v2-root');
+  if (!r) {
+    r = document.createElement('div');
+    r.id = 'p2p-v2-root';
+    r.style.cssText = 'position:fixed;inset:0;background:#0e0e0e;color:#fff;font-family:system-ui,-apple-system,sans-serif;z-index:9000;display:none;flex-direction:column;overflow:hidden;font-size:14px';
+    document.body.appendChild(r);
+  }
+  return r;
+}
+function open(){ root().style.display='flex'; document.body.style.overflow='hidden'; }
+function close(){ root().style.display='none'; document.body.style.overflow=''; }
+
+function shell(title, bodyHtml, opts){
+  opts = opts || {};
+  var backBtn = opts.back ? '<button onclick="P2P.nav(\''+esc(opts.back)+'\')" style="background:transparent;color:#3390EC;border:0;font-size:15px;padding:0;cursor:pointer">‹ Назад</button>' : '<div></div>';
+  var closeBtn = opts.noClose ? '' : '<button onclick="P2P.hide()" style="background:transparent;color:#7a7a7a;border:0;font-size:18px;padding:0 4px;cursor:pointer">×</button>';
+  return ''+
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #1a1a1a;background:#0e0e0e">'+
+      backBtn+
+      '<div style="font-weight:700;font-size:15px">'+esc(title)+'</div>'+
+      closeBtn+
+    '</div>'+
+    '<div id="p2p-v2-body" style="flex:1;overflow-y:auto;padding:12px 14px 90px">'+bodyHtml+'</div>'+
+    (opts.bottom||'')+
+    bottomTabs();
+}
+
+function bottomTabs(){
+  var tabs = [
+    {id:'ads', icon:'⇄', label:'Доска'},
+    {id:'my_trades', icon:'⏱', label:'Сделки'},
+    {id:'wallet', icon:'$', label:'Кошелёк'},
+    {id:'notifications', icon:'★', label:'Уведомл.', badge: STATE.notifications.unread},
+    {id:'profile', icon:'👤', label:'Профиль'}
+  ];
+  if (STATE.isAdmin) tabs.push({id:'admin', icon:'⚙', label:'Admin'});
+  var cur = STATE.activeScreen;
+  return '<div style="position:absolute;left:0;right:0;bottom:0;background:#0e0e0e;border-top:1px solid #1a1a1a;display:flex;justify-content:space-around;padding:6px 0 calc(env(safe-area-inset-bottom,0px) + 6px)">'+
+    tabs.map(function(t){
+      var active = cur === t.id || (cur==='ads' && t.id==='ads');
+      var col = active ? '#3390EC' : '#7a7a7a';
+      var badge = (t.badge>0) ? '<span style="position:absolute;top:-2px;right:-8px;background:#ff453a;color:#fff;font-size:10px;padding:1px 5px;border-radius:8px">'+t.badge+'</span>' : '';
+      return '<button onclick="P2P.nav(\''+t.id+'\')" style="background:transparent;border:0;color:'+col+';font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 8px;cursor:pointer;position:relative;flex:1">'+
+        '<span style="font-size:18px;position:relative">'+t.icon+badge+'</span>'+
+        '<span>'+t.label+'</span>'+
+        '</button>';
+    }).join('')+
+    '</div>';
+}
+
+function setHtml(html){ root().innerHTML = html; }
+
+// ─────────── SCREENS ───────────
+var SCREENS = {
+  async ads(){
+    STATE.activeScreen = 'ads';
+    setHtml(shell('P2P Маркет',
+      '<div style="display:flex;gap:8px;margin-bottom:10px">'+
+        '<button id="p2p2-tab-buy" onclick="P2P._setAdsType(\'buy\')" style="flex:1;padding:10px;border-radius:10px;background:#34c759;color:#fff;border:0;font-weight:600;cursor:pointer">Купить</button>'+
+        '<button id="p2p2-tab-sell" onclick="P2P._setAdsType(\'sell\')" style="flex:1;padding:10px;border-radius:10px;background:#1a1a1a;color:#7a7a7a;border:0;font-weight:600;cursor:pointer">Продать</button>'+
+      '</div>'+
+      '<div style="display:flex;gap:6px;margin-bottom:10px">'+
+        '<select id="p2p2-fiat" onchange="P2P._loadAds()" style="padding:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;font-size:13px"><option value="RUB">RUB</option><option value="USD">USD</option><option value="EUR">EUR</option></select>'+
+        '<input id="p2p2-min-amt" placeholder="Мин. сумма" oninput="P2P._debouncedReload()" style="flex:1;padding:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;font-size:13px">'+
+        '<button onclick="P2P.nav(\'create_ad\')" style="padding:8px 12px;background:#3390EC;color:#fff;border-radius:8px;border:0;font-weight:600;cursor:pointer">+</button>'+
+      '</div>'+
+      '<div id="p2p2-ads-list"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>'
+    ));
+    STATE._adsType = STATE._adsType || 'sell'; // показываем sell (юзер покупает у sell-мейкеров)
+    await P2P._loadAds();
+  },
+
+  async create_ad(){
+    STATE.activeScreen = 'create_ad';
+    STATE.wizard = STATE.wizard || { step:1, type:'SELL', crypto:'USDT', fiat:'RUB', total:'100', price:'95', priceMode:'FIXED', margin:'0', min:'500', max:'9500', payIds:[], terms:'', payWindow:15 };
+    var pms = STATE.paymentMethods.length ? STATE.paymentMethods : await API.paymentMethods.list().then(function(r){ STATE.paymentMethods=r.items||[]; return STATE.paymentMethods;}).catch(function(){return [];});
+    var w = STATE.wizard;
+    var stepBody = '';
+    if (w.step === 1) {
+      stepBody = '<div style="font-weight:600;margin-bottom:8px">Шаг 1/5 · Тип</div>'+
+        '<div style="display:flex;gap:8px;margin-bottom:12px">'+
+          '<button onclick="P2P._w(\'type\',\'SELL\')" style="flex:1;padding:14px;border-radius:10px;background:'+(w.type==='SELL'?'#ff453a':'#1a1a1a')+';color:#fff;border:0;font-weight:600">Продаю USDT</button>'+
+          '<button onclick="P2P._w(\'type\',\'BUY\')" style="flex:1;padding:14px;border-radius:10px;background:'+(w.type==='BUY'?'#34c759':'#1a1a1a')+';color:#fff;border:0;font-weight:600">Покупаю USDT</button>'+
+        '</div>'+
+        '<div style="color:#7a7a7a;font-size:12px;margin-bottom:14px">При продаже USDT уйдут в Advertisement Hold до момента сделки.</div>';
+    } else if (w.step === 2) {
+      stepBody = '<div style="font-weight:600;margin-bottom:8px">Шаг 2/5 · Валюты и объём</div>'+
+        '<label style="font-size:12px;color:#7a7a7a">Криптовалюта</label>'+
+        '<input id="w-crypto" value="'+esc(w.crypto)+'" onchange="P2P._w(\'crypto\',this.value.toUpperCase())" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0 10px">'+
+        '<label style="font-size:12px;color:#7a7a7a">Фиатная валюта</label>'+
+        '<select id="w-fiat" onchange="P2P._w(\'fiat\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0 10px">'+
+          ['RUB','USD','EUR','UAH','BYN','KZT'].map(function(f){return '<option value="'+f+'"'+(w.fiat===f?' selected':'')+'>'+f+'</option>';}).join('')+
+        '</select>'+
+        '<label style="font-size:12px;color:#7a7a7a">Общий объём ('+esc(w.crypto)+')</label>'+
+        '<input id="w-total" type="number" value="'+esc(w.total)+'" onchange="P2P._w(\'total\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0 10px">';
+    } else if (w.step === 3) {
+      stepBody = '<div style="font-weight:600;margin-bottom:8px">Шаг 3/5 · Цена</div>'+
+        '<div style="display:flex;gap:8px;margin-bottom:10px">'+
+          '<button onclick="P2P._w(\'priceMode\',\'FIXED\')" style="flex:1;padding:10px;border-radius:8px;background:'+(w.priceMode==='FIXED'?'#3390EC':'#1a1a1a')+';color:#fff;border:0">Фикс</button>'+
+          '<button onclick="P2P._w(\'priceMode\',\'FLOATING\')" style="flex:1;padding:10px;border-radius:8px;background:'+(w.priceMode==='FLOATING'?'#3390EC':'#1a1a1a')+';color:#fff;border:0">Плавающая</button>'+
+        '</div>'+
+        (w.priceMode==='FIXED'
+          ? '<label style="font-size:12px;color:#7a7a7a">Курс '+esc(w.fiat)+' за 1 '+esc(w.crypto)+'</label><input id="w-price" type="number" value="'+esc(w.price)+'" onchange="P2P._w(\'price\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0">'
+          : '<label style="font-size:12px;color:#7a7a7a">Маржа от рыночной цены (%)</label><input id="w-margin" type="number" step="0.1" value="'+esc(w.margin)+'" onchange="P2P._w(\'margin\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0">'
+        );
+    } else if (w.step === 4) {
+      stepBody = '<div style="font-weight:600;margin-bottom:8px">Шаг 4/5 · Лимиты и оплата</div>'+
+        '<div style="display:flex;gap:8px;margin-bottom:10px">'+
+          '<div style="flex:1"><label style="font-size:12px;color:#7a7a7a">Мин. '+esc(w.fiat)+'</label><input id="w-min" type="number" value="'+esc(w.min)+'" onchange="P2P._w(\'min\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin-top:4px"></div>'+
+          '<div style="flex:1"><label style="font-size:12px;color:#7a7a7a">Макс. '+esc(w.fiat)+'</label><input id="w-max" type="number" value="'+esc(w.max)+'" onchange="P2P._w(\'max\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin-top:4px"></div>'+
+        '</div>'+
+        '<label style="font-size:12px;color:#7a7a7a">Способы оплаты</label>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px">'+
+          (pms.length===0
+            ? '<div style="color:#7a7a7a;font-size:12px">Нет реквизитов. <a onclick="P2P.nav(\'payment_methods\')" style="color:#3390EC;cursor:pointer">Добавить →</a></div>'
+            : pms.map(function(p){
+                var on = w.payIds.indexOf(p.id)>=0;
+                return '<button onclick="P2P._togglePay('+JSON.stringify(p.id)+')" style="padding:8px 12px;border-radius:8px;background:'+(on?'#3390EC':'#1a1a1a')+';color:#fff;border:0;font-size:12px">'+esc(p.bank_name||p.type)+'</button>';
+              }).join('')
+          )+
+        '</div>'+
+        '<label style="font-size:12px;color:#7a7a7a">Время на оплату (мин)</label>'+
+        '<input id="w-payw" type="number" value="'+esc(w.payWindow)+'" onchange="P2P._w(\'payWindow\',parseInt(this.value)||15)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0 10px">'+
+        '<label style="font-size:12px;color:#7a7a7a">Условия / комментарий</label>'+
+        '<textarea id="w-terms" onchange="P2P._w(\'terms\',this.value)" style="width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;margin:4px 0;min-height:60px">'+esc(w.terms)+'</textarea>';
+    } else if (w.step === 5) {
+      stepBody = '<div style="font-weight:600;margin-bottom:8px">Шаг 5/5 · Превью</div>'+
+        '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a">Тип</span><b>'+(w.type==='SELL'?'Продаю':'Покупаю')+' '+esc(w.crypto)+'</b></div>'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a">Объём</span><b>'+esc(w.total)+' '+esc(w.crypto)+'</b></div>'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a">Цена</span><b>'+(w.priceMode==='FIXED'?(esc(w.price)+' '+esc(w.fiat)):('Рынок '+esc(w.margin)+'%'))+'</b></div>'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a">Лимиты</span><b>'+esc(w.min)+'–'+esc(w.max)+' '+esc(w.fiat)+'</b></div>'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#7a7a7a">Окно</span><b>'+esc(w.payWindow)+' мин</b></div>'+
+          '<div style="display:flex;justify-content:space-between"><span style="color:#7a7a7a">Реквизиты</span><b>'+w.payIds.length+'</b></div>'+
+        '</div>';
+    }
+    var navBtns = '<div style="position:fixed;left:0;right:0;bottom:60px;padding:10px 14px;background:#0e0e0e;border-top:1px solid #1a1a1a;display:flex;gap:8px;z-index:1">'+
+      (w.step>1 ? '<button onclick="P2P._wStep(-1)" style="flex:1;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;font-weight:600">Назад</button>' : '')+
+      (w.step<5 ? '<button onclick="P2P._wStep(1)" style="flex:'+(w.step>1?'2':'1')+';padding:14px;background:#3390EC;color:#fff;border-radius:10px;border:0;font-weight:600">Далее →</button>'
+                : '<button onclick="P2P._submitAd()" style="flex:2;padding:14px;background:#34c759;color:#fff;border-radius:10px;border:0;font-weight:600">Создать</button>')+
+      '</div>';
+    setHtml(shell('Новое объявление', stepBody, {back:'ads', bottom: navBtns}));
+  },
+
+  async my_ads(){
+    STATE.activeScreen = 'my_ads';
+    setHtml(shell('Мои объявления', '<div id="p2p2-myads"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>', {back:'profile'}));
+    try {
+      var r = await API.ads.mine();
+      STATE.myAds = r.items || [];
+      var c = document.getElementById('p2p2-myads');
+      if (!STATE.myAds.length) { c.innerHTML = '<div style="padding:30px;text-align:center;color:#7a7a7a">У вас нет объявлений</div>'; return; }
+      c.innerHTML = STATE.myAds.map(function(a){
+        var btns = '';
+        if (a.status==='ACTIVE') btns += '<button onclick="P2P._adAction(\'pause\','+JSON.stringify(a.id)+')" style="padding:6px 10px;background:#1a1a1a;color:#fff;border-radius:6px;border:0;font-size:12px">⏸</button>';
+        if (a.status==='PAUSED') btns += '<button onclick="P2P._adAction(\'resume\','+JSON.stringify(a.id)+')" style="padding:6px 10px;background:#34c759;color:#fff;border-radius:6px;border:0;font-size:12px">▶</button>';
+        if (a.status!=='ARCHIVED') btns += ' <button onclick="P2P._adAction(\'archive\','+JSON.stringify(a.id)+')" style="padding:6px 10px;background:#1a1a1a;color:#fff;border-radius:6px;border:0;font-size:12px">Архив</button>';
+        btns += ' <button onclick="P2P._adAction(\'del\','+JSON.stringify(a.id)+')" style="padding:6px 10px;background:#ff453a20;color:#ff453a;border-radius:6px;border:0;font-size:12px">×</button>';
+        return '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>'+(a.type==='SELL'?'Продаю':'Покупаю')+' '+esc(a.crypto)+'</b>'+UTILS.statusBadge(a.status)+'</div>'+
+          '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="color:#7a7a7a">Цена</span><span>'+(a.price_fixed||'~')+' '+esc(a.fiat)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:#7a7a7a">Остаток</span><span>'+UTILS.fmt(a.amount_available,a.crypto,4)+'</span></div>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+btns+'</div>'+
+        '</div>';
+      }).join('');
+    } catch(e){ document.getElementById('p2p2-myads').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  async my_trades(){
+    STATE.activeScreen = 'my_trades';
+    setHtml(shell('Мои сделки', '<div id="p2p2-trades"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>'));
+    try {
+      var r = await API.trades.mine();
+      var items = r.items || [];
+      var c = document.getElementById('p2p2-trades');
+      if (!items.length) { c.innerHTML = '<div style="padding:30px;text-align:center;color:#7a7a7a">Нет сделок</div>'; return; }
+      c.innerHTML = items.map(function(t){
+        var role = (t.buyer_id===(STATE.user&&STATE.user.id)) ? 'Покупаю' : 'Продаю';
+        return '<div onclick="P2P.nav(\'trade_room\','+JSON.stringify(t.id)+')" style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>#'+esc(String(t.trade_number||t.id).slice(0,8))+'</b>'+UTILS.statusBadge(t.status)+'</div>'+
+          '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">'+role+'</span><b>'+UTILS.fmt(t.amount_crypto,t.crypto,4)+' / '+UTILS.fmtMoney(t.amount_fiat,t.fiat)+'</b></div>'+
+          '<div style="font-size:11px;color:#7a7a7a;margin-top:4px">'+UTILS.timeAgo(t.created_at)+'</div>'+
+        '</div>';
+      }).join('');
+    } catch(e){ document.getElementById('p2p2-trades').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  async trade_room(tradeId){
+    STATE.activeScreen = 'trade_room';
+    STATE.currentTradeId = tradeId;
+    setHtml(shell('Сделка', '<div id="p2p2-trade-body"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>', {back:'my_trades'}));
+    await P2P._renderTrade(tradeId);
+    WS.subscribe('trade:'+tradeId, function(){ P2P._renderTrade(tradeId); });
+  },
+
+  async wallet(){
+    STATE.activeScreen = 'wallet';
+    setHtml(shell('P2P Кошелёк', '<div id="p2p2-wallet"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>', {bottom:
+      '<div style="position:fixed;left:0;right:0;bottom:60px;padding:10px 14px;background:#0e0e0e;border-top:1px solid #1a1a1a;z-index:1">'+
+        '<button onclick="P2P._loadWallet()" style="width:100%;padding:12px;background:#3390EC;color:#fff;border-radius:10px;border:0;font-weight:600">Обновить</button>'+
+      '</div>'}));
+    await P2P._loadWallet();
+  },
+
+  async payment_methods(){
+    STATE.activeScreen = 'payment_methods';
+    setHtml(shell('Реквизиты', '<div id="p2p2-pm-list"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>'+
+      '<button onclick="P2P._showPmForm()" style="width:100%;padding:14px;background:#3390EC;color:#fff;border-radius:10px;border:0;font-weight:600;margin-top:10px">+ Добавить реквизит</button>',
+      {back:'profile'}));
+    try {
+      var r = await API.paymentMethods.list();
+      STATE.paymentMethods = r.items || [];
+      var c = document.getElementById('p2p2-pm-list');
+      if (!STATE.paymentMethods.length) { c.innerHTML = '<div style="padding:20px;text-align:center;color:#7a7a7a">Нет реквизитов</div>'; return; }
+      c.innerHTML = STATE.paymentMethods.map(function(p){
+        return '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>'+esc(p.bank_name)+'</b><button onclick="P2P._pmDel('+JSON.stringify(p.id)+')" style="background:#ff453a20;color:#ff453a;border:0;padding:4px 8px;border-radius:6px;font-size:11px">Удалить</button></div>'+
+          '<div style="font-size:13px;color:#7a7a7a">'+esc(p.type)+' · '+esc(p.account_holder)+'</div>'+
+          (p.card_number_masked?'<div style="font-family:monospace;font-size:13px;margin-top:4px">'+esc(p.card_number_masked)+'</div>':'')+
+          (p.phone?'<div style="font-size:13px;margin-top:4px">'+esc(p.phone)+'</div>':'')+
+        '</div>';
+      }).join('');
+    } catch(e){ document.getElementById('p2p2-pm-list').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  async notifications(){
+    STATE.activeScreen = 'notifications';
+    setHtml(shell('Уведомления', '<div id="p2p2-notif"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>',
+      {bottom: '<div style="position:fixed;left:0;right:0;bottom:60px;padding:10px 14px;background:#0e0e0e;border-top:1px solid #1a1a1a;z-index:1"><button onclick="P2P._readAll()" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px;border:0">Прочитать все</button></div>'}));
+    try {
+      var r = await API.notifications.list();
+      STATE.notifications.items = r.items || [];
+      var c = document.getElementById('p2p2-notif');
+      if (!STATE.notifications.items.length) { c.innerHTML = '<div style="padding:30px;text-align:center;color:#7a7a7a">Пусто</div>'; return; }
+      c.innerHTML = STATE.notifications.items.map(function(n){
+        return '<div onclick="P2P._readNotif('+JSON.stringify(n.id)+')" style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px;border-left:3px solid '+(n.is_read?'#1a1a1a':'#3390EC')+';cursor:pointer">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>'+esc(n.title)+'</b><span style="font-size:11px;color:#7a7a7a">'+UTILS.timeAgo(n.created_at)+'</span></div>'+
+          (n.body?'<div style="font-size:13px;color:#bfbfbf">'+esc(n.body)+'</div>':'')+
+        '</div>';
+      }).join('');
+    } catch(e){ document.getElementById('p2p2-notif').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  async dispute(disputeId){
+    STATE.activeScreen = 'dispute';
+    setHtml(shell('Диспут', '<div id="p2p2-dsp"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>', {back:'my_trades'}));
+    try {
+      var d = await API.disputes.get(disputeId);
+      var ev = await API.disputes.evidence(disputeId).catch(function(){return {items:[]};});
+      var canReopen = d.status==='RESOLVED' && d.resolved_at && (Date.now()-new Date(d.resolved_at).getTime() < 86400000);
+      var c = document.getElementById('p2p2-dsp');
+      c.innerHTML = '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">'+
+        '<div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>Спор</b>'+UTILS.statusBadge(d.status)+'</div>'+
+        '<div style="font-size:13px;color:#7a7a7a;margin-bottom:4px">Причина</div>'+
+        '<div style="font-size:14px;margin-bottom:8px">'+esc(d.reason)+'</div>'+
+        (d.description?'<div style="font-size:13px;color:#bfbfbf;margin-bottom:8px">'+esc(d.description)+'</div>':'')+
+        (d.resolution?'<div style="margin-top:6px;padding:8px;background:#0e0e0e;border-radius:8px"><b>Решение:</b> '+esc(d.resolution)+(d.resolution_note?' — '+esc(d.resolution_note):'')+'</div>':'')+
+      '</div>'+
+      '<div style="font-weight:600;margin-bottom:6px">Доказательства ('+(ev.items||[]).length+')</div>'+
+      ((ev.items||[]).map(function(e){
+        return '<div style="background:#1a1a1a;border-radius:8px;padding:10px;margin-bottom:6px;font-size:13px">'+
+          '<div style="display:flex;justify-content:space-between"><span>'+esc(e.file_name||e.mime_type||'файл')+'</span><span style="color:#7a7a7a">'+(e.file_size?(Math.round(e.file_size/1024)+' KB'):'')+'</span></div>'+
+          (e.caption?'<div style="color:#7a7a7a;font-size:12px;margin-top:4px">'+esc(e.caption)+'</div>':'')+
+        '</div>';
+      }).join('')||'<div style="color:#7a7a7a;padding:10px">Нет вложений</div>')+
+      (canReopen ? '<button onclick="P2P._reopen('+JSON.stringify(disputeId)+')" style="width:100%;padding:14px;background:#ff453a;color:#fff;border-radius:10px;border:0;font-weight:600;margin-top:10px">Переоткрыть спор</button>' : '')+
+      (d.trade_id ? '<button onclick="P2P.nav(\'trade_room\','+JSON.stringify(d.trade_id)+')" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;margin-top:8px">К сделке →</button>' : '');
+    } catch(e){ document.getElementById('p2p2-dsp').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  async profile(){
+    STATE.activeScreen = 'profile';
+    var stats = await API.myStats().catch(function(){return {};});
+    setHtml(shell('Профиль',
+      '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px">'+
+        '<div style="font-weight:600;margin-bottom:8px">Статистика</div>'+
+        '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="color:#7a7a7a">Сделок завершено</span><b>'+(stats.completed_trades||0)+'</b></div>'+
+        '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="color:#7a7a7a">Рейтинг</span><b>'+(stats.rating||'—')+'</b></div>'+
+        '<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:#7a7a7a">Отзывов</span><b>'+(stats.reviews_count||0)+'</b></div>'+
+      '</div>'+
+      '<button onclick="P2P.nav(\'my_ads\')" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;text-align:left;margin-bottom:6px">📋 Мои объявления →</button>'+
+      '<button onclick="P2P.nav(\'payment_methods\')" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;text-align:left;margin-bottom:6px">💳 Реквизиты →</button>'+
+      '<button onclick="P2P.nav(\'wallet\')" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;text-align:left;margin-bottom:6px">💰 Кошелёк →</button>'+
+      (STATE.isAdmin ? '<button onclick="P2P.nav(\'admin\')" style="width:100%;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0;text-align:left">⚙ Админ-панель →</button>' : '')
+    ));
+  },
+
+  async admin(){
+    if (!STATE.isAdmin) { tgAlert('Только для админов'); return; }
+    STATE.activeScreen = 'admin';
+    setHtml(shell('Админ · Споры',
+      '<div style="display:flex;gap:6px;margin-bottom:10px">'+
+        ['OPENED','ARBITRATION','RESOLVED'].map(function(s){
+          return '<button onclick="P2P._adminFilter(\''+s+'\')" id="p2p2-adm-f-'+s+'" style="flex:1;padding:8px;background:#1a1a1a;color:#fff;border-radius:8px;border:0;font-size:12px">'+UTILS.statusLabel(s)+'</button>';
+        }).join('')+
+      '</div>'+
+      '<div id="p2p2-adm-list"><div style="padding:30px;text-align:center;color:#7a7a7a">Загрузка…</div></div>'
+    ));
+    STATE._admFilter = STATE._admFilter || 'OPENED';
+    await P2P._loadAdminDisputes();
+  },
+};
+
+// ─────────── Helper methods exposed via P2P ───────────
+var P2P = window.P2P = {
+  __v2: true,
+  api: API,
+  ws: WS,
+  state: STATE,
+  utils: UTILS,
+  screens: SCREENS,
+
+  async init(opts){
+    opts = opts || {};
+    try {
+      var w = await API.wallet.get('USDT');
+      STATE.wallet = w;
+      if (w && w.user_id) STATE.user = { id: w.user_id };
+    } catch(e){ console.warn('[P2P init] wallet fail', e); }
+    // detect admin
+    try {
+      await API.admin.disputes();
+      STATE.isAdmin = true;
+    } catch(e){ STATE.isAdmin = false; }
+    // notifications unread
+    try { var un = await API.notifications.unread(); STATE.notifications.unread = un.unread_count||0; } catch(_){}
+    // ws
+    try { WS.connect(); if (STATE.user) WS.subscribe('user:'+STATE.user.id); } catch(_){}
+
+    // deeplink
+    var sp = (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) || opts.start_param || '';
+    if (sp) {
+      try { TG.initDataUnsafe.start_param = ''; } catch(_){}
+      if (sp.indexOf('trade_')===0) { P2P.show(); return P2P.nav('trade_room', sp.slice(6)); }
+      if (sp.indexOf('dispute_')===0) { P2P.show(); return P2P.nav('dispute', sp.slice(8)); }
+      if (sp === 'wallet') { P2P.show(); return P2P.nav('wallet'); }
+      if (sp === 'p2p' || sp === 'ads') { P2P.show(); return P2P.nav('ads'); }
+    }
+  },
+
+  show(){ open(); if(!STATE.activeScreen || STATE.activeScreen==='ads') SCREENS.ads(); },
+  hide(){ close(); },
+
+  nav(screen, arg){
+    if (!SCREENS[screen]) { console.warn('[P2P] no screen:', screen); return; }
+    // unsubscribe trade WS on leave
+    if (STATE.activeScreen==='trade_room' && STATE.currentTradeId) WS.unsubscribe('trade:'+STATE.currentTradeId);
+    open();
+    return SCREENS[screen](arg);
+  },
+
+  // ── ads helpers ──
+  _setAdsType(t){ STATE._adsType = t;
+    var b = document.getElementById('p2p2-tab-buy'), s = document.getElementById('p2p2-tab-sell');
+    if (b && s) {
+      if (t==='buy') { b.style.background='#34c759'; b.style.color='#fff'; s.style.background='#1a1a1a'; s.style.color='#7a7a7a'; }
+      else { s.style.background='#ff453a'; s.style.color='#fff'; b.style.background='#1a1a1a'; b.style.color='#7a7a7a'; }
+    }
+    P2P._loadAds();
+  },
+  _debouncedReload(){ if(P2P.__rt) clearTimeout(P2P.__rt); P2P.__rt = setTimeout(function(){ P2P._loadAds(); }, 400); },
+  async _loadAds(){
+    var fiat = (document.getElementById('p2p2-fiat')||{}).value || 'RUB';
+    // sell tab in UI = таker покупает у sell ads
+    var type = STATE._adsType === 'buy' ? 'buy' : 'sell';
+    try {
+      var r = await API.ads.list({type:type, fiat:fiat, status:'ACTIVE', limit:50});
+      var items = r.items || [];
+      var minAmt = parseFloat((document.getElementById('p2p2-min-amt')||{}).value||0);
+      if (minAmt) items = items.filter(function(a){ return parseFloat(a.min_order_fiat)<=minAmt && parseFloat(a.max_order_fiat)>=minAmt; });
+      var c = document.getElementById('p2p2-ads-list');
+      if (!items.length) { c.innerHTML = '<div style="padding:30px;text-align:center;color:#7a7a7a">Нет объявлений</div>'; return; }
+      c.innerHTML = items.map(function(a){
+        return '<div onclick="P2P._openAd('+JSON.stringify(a.id)+')" style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><b>#'+esc(String(a.owner_id))+'</b><span style="font-size:18px;color:#3390EC;font-weight:600">'+(a.price_fixed?parseFloat(a.price_fixed).toFixed(2):'~')+' '+esc(a.fiat)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;font-size:12px;color:#7a7a7a"><span>Лимит: '+esc(a.min_order_fiat)+'–'+esc(a.max_order_fiat)+' '+esc(a.fiat)+'</span><span>Остаток: '+UTILS.fmt(a.amount_available,a.crypto,2)+'</span></div>'+
+          (a.terms_text?'<div style="font-size:12px;color:#bfbfbf;margin-top:6px">'+esc(a.terms_text.slice(0,80))+'</div>':'')+
+        '</div>';
+      }).join('');
+    } catch(e){
+      var c2 = document.getElementById('p2p2-ads-list');
+      if (c2) c2.innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>';
+    }
+  },
+  async _openAd(adId){
+    var amount = prompt('Сколько '+'?', '1000');
+    if (!amount) return;
+    try {
+      var trade = await API.trades.create({ advertisement_id: adId, fiat_amount: parseFloat(amount) });
+      tgHaptic('success');
+      P2P.nav('trade_room', trade.id || trade.trade_id);
+    } catch(e){}
+  },
+
+  // ── wizard helpers ──
+  _w(key, val){ STATE.wizard[key] = val; SCREENS.create_ad(); },
+  _wStep(d){ STATE.wizard.step = Math.max(1, Math.min(5, STATE.wizard.step + d)); SCREENS.create_ad(); },
+  _togglePay(id){
+    var w = STATE.wizard, i = w.payIds.indexOf(id);
+    if (i>=0) w.payIds.splice(i,1); else w.payIds.push(id);
+    SCREENS.create_ad();
+  },
+  async _submitAd(){
+    var w = STATE.wizard;
+    if (!w.payIds.length) { tgAlert('Выберите хотя бы один способ оплаты'); return; }
+    var payload = {
+      type: w.type, crypto: w.crypto, fiat: w.fiat,
+      total_amount: parseFloat(w.total), min_amount_fiat: parseFloat(w.min), max_amount_fiat: parseFloat(w.max),
+      pricing_mode: w.priceMode, payment_method_ids: w.payIds,
+      pay_window_min: w.payWindow, description: w.terms,
+    };
+    if (w.priceMode==='FIXED') payload.price = parseFloat(w.price);
+    else payload.price_margin_pct = parseFloat(w.margin);
+    try {
+      await API.ads.create(payload);
+      tgHaptic('success'); tgAlert('Объявление опубликовано');
+      STATE.wizard = null;
+      P2P.nav('my_ads');
+    } catch(e){}
+  },
+
+  // ── ad actions ──
+  async _adAction(act, id){
+    if (act==='del' && !(await tgConfirm('Удалить объявление?'))) return;
+    try {
+      if (act==='pause') await API.ads.pause(id);
+      else if (act==='resume') await API.ads.resume(id);
+      else if (act==='archive') await API.ads.archive(id);
+      else if (act==='del') await API.ads.del(id);
+      tgHaptic('success'); SCREENS.my_ads();
+    } catch(e){}
+  },
+
+  // ── trade room render ──
+  async _renderTrade(tradeId){
+    try {
+      var t = await API.trades.get(tradeId);
+      var me = STATE.user && STATE.user.id;
+      var iAmBuyer = t.buyer_id === me;
+      var iAmSeller = t.seller_id === me;
+      var deadline = t.pay_deadline_at || t.confirm_deadline_at;
+      var amountCrypto = UTILS.fmt(t.amount_crypto, t.crypto, 4);
+      var amountFiat = UTILS.fmtMoney(t.amount_fiat, t.fiat);
+
+      // load chat & payment method
+      var msgs = await API.chat.list(tradeId).catch(function(){return {items:[]};});
+
+      var actions = '';
+      if (t.status === 'WAITING_FOR_PAYMENT' && iAmBuyer) {
+        actions = '<button onclick="P2P._tAction(\'mark_paid\','+JSON.stringify(tradeId)+')" style="flex:2;padding:14px;background:#34c759;color:#fff;border-radius:10px;border:0;font-weight:600">Я оплатил</button>'+
+          '<button onclick="P2P._tAction(\'dispute\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#ff453a20;color:#ff453a;border-radius:10px;border:0">Спор</button>'+
+          '<button onclick="P2P._tAction(\'cancel\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0">×</button>';
+      } else if (t.status==='WAITING_FOR_PAYMENT' && iAmSeller) {
+        actions = '<button onclick="P2P._tAction(\'extend\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#1a1a1a;color:#fff;border-radius:10px;border:0">+15м</button>'+
+          '<button onclick="P2P._tAction(\'cancel\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#ff453a20;color:#ff453a;border-radius:10px;border:0">Отменить</button>';
+      } else if ((t.status==='PAYMENT_MARKED'||t.status==='PAYMENT_CONFIRMATION') && iAmSeller) {
+        actions = '<button onclick="P2P._tAction(\'confirm\','+JSON.stringify(tradeId)+')" style="flex:2;padding:14px;background:#34c759;color:#fff;border-radius:10px;border:0;font-weight:600">Подтвердить получение</button>'+
+          '<button onclick="P2P._tAction(\'dispute\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#ff453a20;color:#ff453a;border-radius:10px;border:0">Спор</button>';
+      } else if ((t.status==='PAYMENT_MARKED'||t.status==='PAYMENT_CONFIRMATION') && iAmBuyer) {
+        actions = '<button onclick="P2P._tAction(\'dispute\','+JSON.stringify(tradeId)+')" style="flex:1;padding:14px;background:#ff453a20;color:#ff453a;border-radius:10px;border:0">Открыть спор (продавец не подтверждает)</button>';
+      }
+      var actBar = actions ? '<div style="position:fixed;left:0;right:0;bottom:60px;padding:10px 14px;background:#0e0e0e;border-top:1px solid #1a1a1a;display:flex;gap:6px;z-index:2">'+actions+'</div>' : '';
+
+      // payment snapshot
+      var pm = (STATE.paymentMethods||[]).filter(function(p){return p.id===t.payment_method_id;})[0];
+      var pmCard = pm ? '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:10px">'+
+        '<div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">Реквизиты для оплаты</div>'+
+        '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>'+esc(pm.bank_name)+'</b><button onclick="P2P.utils.copy('+JSON.stringify(pm.card_number_masked||pm.phone||'')+')" style="background:#3390EC;color:#fff;border:0;padding:4px 10px;border-radius:6px;font-size:11px">Копировать</button></div>'+
+        '<div style="font-family:monospace">'+esc(pm.card_number_masked||pm.phone||'')+'</div>'+
+        '<div style="font-size:13px;color:#bfbfbf;margin-top:4px">'+esc(pm.account_holder)+'</div>'+
+      '</div>' : '';
+
+      // chat
+      var chatHtml = '<div style="background:#1a1a1a;border-radius:12px;padding:8px;margin-bottom:80px">'+
+        '<div id="p2p2-chat-body" style="max-height:240px;overflow-y:auto;padding:6px">'+
+          (msgs.items||[]).map(function(m){
+            var mine = m.sender_id === me;
+            var sys = m.is_system;
+            if (sys) return '<div style="text-align:center;font-size:11px;color:#7a7a7a;margin:6px 0">'+esc(m.body_text||'')+'</div>';
+            var bg = mine ? '#3390EC' : '#0e0e0e';
+            return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin:4px 0"><div style="max-width:78%;background:'+bg+';padding:8px 12px;border-radius:14px;font-size:13px">'+esc(m.body_text||'')+'</div></div>';
+          }).join('')+
+        '</div>'+
+        '<div style="display:flex;gap:6px;margin-top:6px;padding:4px">'+
+          '<input id="p2p2-chat-input" placeholder="Сообщение…" style="flex:1;padding:10px;background:#0e0e0e;color:#fff;border:1px solid #2a2a2a;border-radius:8px">'+
+          '<button onclick="P2P._sendMsg()" style="padding:10px 16px;background:#3390EC;color:#fff;border-radius:8px;border:0">→</button>'+
+        '</div>'+
+      '</div>';
+
+      var body = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        UTILS.statusBadge(t.status)+
+        (deadline?'<div style="font-family:monospace;font-size:16px;color:#ffcc00" id="p2p2-cd">--:--</div>':'')+
+      '</div>'+
+      '<div style="background:#1a1a1a;border-radius:12px;padding:14px;margin-bottom:10px;text-align:center">'+
+        '<div style="font-size:22px;font-weight:700">'+amountCrypto+'</div>'+
+        '<div style="color:#7a7a7a;font-size:14px;margin-top:2px">за '+amountFiat+'</div>'+
+        '<div style="font-size:11px;color:#7a7a7a;margin-top:4px">курс '+UTILS.fmtMoney(t.price, t.fiat)+'/'+esc(t.crypto)+'</div>'+
+      '</div>'+
+      pmCard +
+      chatHtml;
+
+      document.getElementById('p2p2-trade-body').innerHTML = body;
+      // re-inject action bar (sits above bottom tabs)
+      var old = document.getElementById('p2p2-trade-actions'); if(old) old.remove();
+      if (actions) {
+        var ab = document.createElement('div'); ab.id='p2p2-trade-actions';
+        ab.style.cssText = 'position:fixed;left:0;right:0;bottom:60px;padding:10px 14px;background:#0e0e0e;border-top:1px solid #1a1a1a;display:flex;gap:6px;z-index:2';
+        ab.innerHTML = actions;
+        root().appendChild(ab);
+      }
+      if (deadline) UTILS.countdown('p2p2-cd', deadline, function(){ P2P._renderTrade(tradeId); });
+      // autoscroll chat
+      var cb = document.getElementById('p2p2-chat-body'); if (cb) cb.scrollTop = cb.scrollHeight;
+    } catch(e){
+      var c3 = document.getElementById('p2p2-trade-body');
+      if (c3) c3.innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>';
+    }
+  },
+
+  async _tAction(act, tradeId){
+    try {
+      if (act==='mark_paid') { if (!(await tgConfirm('Подтвердить, что оплата отправлена?'))) return; await API.trades.markPaid(tradeId); }
+      else if (act==='confirm') { if (!(await tgConfirm('Подтверждаете получение средств?'))) return; await API.trades.confirm(tradeId); }
+      else if (act==='cancel') { if (!(await tgConfirm('Отменить сделку?'))) return; await API.trades.cancel(tradeId); }
+      else if (act==='extend') { await API.trades.extend(tradeId, 15); }
+      else if (act==='dispute') {
+        var desc = prompt('Опишите причину спора:', '');
+        if (desc===null) return;
+        await API.trades.openDispute(tradeId, 'not_paid', desc);
+      }
+      tgHaptic('success');
+      P2P._renderTrade(tradeId);
+    } catch(e){}
+  },
+
+  async _sendMsg(){
+    var inp = document.getElementById('p2p2-chat-input');
+    if (!inp || !inp.value.trim()) return;
+    var txt = inp.value.trim(); inp.value = '';
+    try { await API.chat.send(STATE.currentTradeId, txt); P2P._renderTrade(STATE.currentTradeId); } catch(e){}
+  },
+
+  // ── wallet ──
+  async _loadWallet(){
+    try {
+      var w = await API.wallet.get('USDT');
+      STATE.wallet = w;
+      var rows = [
+        ['Доступно', w.available, '#34c759'],
+        ['В объявлениях', w.advertisement_hold, '#ffcc00'],
+        ['В сделках (эскроу)', w.trade_escrow, '#3390EC'],
+        ['Заморожено', w.frozen, '#ff453a'],
+        ['Pending', w.pending, '#7a7a7a'],
+      ];
+      var html = '<div style="background:#1a1a1a;border-radius:12px;padding:16px;text-align:center;margin-bottom:10px">'+
+        '<div style="color:#7a7a7a;font-size:12px">Всего '+esc(w.currency)+'</div>'+
+        '<div style="font-size:28px;font-weight:700;margin-top:4px">'+UTILS.fmt(w.total, w.currency, 4)+'</div>'+
+      '</div>'+
+      rows.map(function(r){
+        return '<div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">'+
+          '<span style="color:'+r[2]+'">'+r[0]+'</span><b>'+UTILS.fmt(r[1], w.currency, 4)+'</b></div>';
+      }).join('');
+      document.getElementById('p2p2-wallet').innerHTML = html;
+    } catch(e){ document.getElementById('p2p2-wallet').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>'; }
+  },
+
+  // ── payment methods ──
+  _showPmForm(){
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:flex-end;justify-content:center';
+    var types = ['SBP','SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON','CASH','OTHER'];
+    overlay.innerHTML = '<div style="width:100%;max-width:480px;background:#0e0e0e;border-radius:18px 18px 0 0;padding:18px;color:#fff">'+
+      '<div style="font-weight:700;font-size:16px;margin-bottom:12px">Новый реквизит</div>'+
+      '<select id="pmf-type" style="width:100%;padding:10px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:8px">'+
+        types.map(function(t){return '<option value="'+t+'">'+t+'</option>';}).join('')+'</select>'+
+      '<input id="pmf-bank" placeholder="Название банка" style="width:100%;padding:10px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:8px">'+
+      '<input id="pmf-holder" placeholder="ФИО получателя" style="width:100%;padding:10px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:8px">'+
+      '<input id="pmf-card" placeholder="Номер карты" style="width:100%;padding:10px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:8px">'+
+      '<input id="pmf-phone" placeholder="Телефон (для СБП)" style="width:100%;padding:10px;background:#1a1a1a;color:#fff;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:12px">'+
+      '<div style="display:flex;gap:8px">'+
+        '<button id="pmf-cancel" style="flex:1;padding:12px;background:#1a1a1a;color:#fff;border-radius:10px;border:0">Отмена</button>'+
+        '<button id="pmf-save" style="flex:2;padding:12px;background:#3390EC;color:#fff;border-radius:10px;border:0;font-weight:600">Сохранить</button>'+
+      '</div></div>';
+    document.body.appendChild(overlay);
+    document.getElementById('pmf-cancel').onclick = function(){ overlay.remove(); };
+    document.getElementById('pmf-save').onclick = async function(){
+      var payload = {
+        type: document.getElementById('pmf-type').value,
+        bank_name: document.getElementById('pmf-bank').value.trim(),
+        account_holder: document.getElementById('pmf-holder').value.trim(),
+        card_number: document.getElementById('pmf-card').value.trim() || undefined,
+        phone: document.getElementById('pmf-phone').value.trim() || undefined,
+      };
+      if (!payload.bank_name || !payload.account_holder) { tgAlert('Заполните банк и ФИО'); return; }
+      try { await API.paymentMethods.create(payload); overlay.remove(); SCREENS.payment_methods(); } catch(e){}
+    };
+  },
+  async _pmDel(id){
+    if (!(await tgConfirm('Удалить реквизит?'))) return;
+    try { await API.paymentMethods.del(id); SCREENS.payment_methods(); } catch(e){}
+  },
+
+  // ── notifications ──
+  async _readNotif(id){
+    try { await API.notifications.read(id); STATE.notifications.unread = Math.max(0, STATE.notifications.unread-1); SCREENS.notifications(); } catch(e){}
+  },
+  async _readAll(){
+    try { await API.notifications.readAll(); STATE.notifications.unread = 0; SCREENS.notifications(); } catch(e){}
+  },
+
+  // ── dispute ──
+  async _reopen(id){
+    var r = prompt('Причина переоткрытия:', '');
+    if (r===null) return;
+    try { await API.disputes.reopen(id, r); SCREENS.dispute(id); } catch(e){}
+  },
+
+  // ── admin ──
+  async _adminFilter(s){
+    STATE._admFilter = s;
+    ['OPENED','ARBITRATION','RESOLVED'].forEach(function(x){
+      var el = document.getElementById('p2p2-adm-f-'+x);
+      if (el) { el.style.background = x===s ? '#3390EC':'#1a1a1a'; }
+    });
+    await P2P._loadAdminDisputes();
+  },
+  async _loadAdminDisputes(){
+    try {
+      var r = await API.admin.disputes(STATE._admFilter);
+      var items = (r && r.items) || [];
+      var c = document.getElementById('p2p2-adm-list');
+      if (!items.length) { c.innerHTML = '<div style="padding:30px;text-align:center;color:#7a7a7a">Нет</div>'; return; }
+      c.innerHTML = items.map(function(d){
+        var canResolve = d.status==='OPENED' || d.status==='ARBITRATION';
+        return '<div style="background:#1a1a1a;border-radius:12px;padding:12px;margin-bottom:8px">'+
+          '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>#'+esc(d.id.slice(0,8))+'</b>'+UTILS.statusBadge(d.status)+'</div>'+
+          '<div style="font-size:12px;color:#7a7a7a;margin-bottom:6px">trade: '+esc(d.trade_id.slice(0,8))+' · '+UTILS.timeAgo(d.created_at)+'</div>'+
+          '<div style="font-size:13px;margin-bottom:8px">'+esc(d.reason||'')+'</div>'+
+          (canResolve
+            ? '<div style="display:flex;gap:6px"><button onclick="P2P._resolve('+JSON.stringify(d.id)+',\'BUYER\')" style="flex:1;padding:8px;background:#34c759;color:#fff;border:0;border-radius:6px;font-size:12px">→ Покупателю</button>'+
+              '<button onclick="P2P._resolve('+JSON.stringify(d.id)+',\'SELLER\')" style="flex:1;padding:8px;background:#ff453a;color:#fff;border:0;border-radius:6px;font-size:12px">→ Продавцу</button>'+
+              '<button onclick="P2P._resolve('+JSON.stringify(d.id)+',\'SPLIT\')" style="flex:1;padding:8px;background:#7a7a7a;color:#fff;border:0;border-radius:6px;font-size:12px">SPLIT</button></div>'
+            : (d.resolution?'<div style="font-size:12px;color:#7a7a7a">Решение: '+esc(d.resolution)+'</div>':'')
+          )+
+        '</div>';
+      }).join('');
+    } catch(e){
+      document.getElementById('p2p2-adm-list').innerHTML = '<div style="color:#ff453a;padding:20px">'+esc(e.message)+'</div>';
+    }
+  },
+  async _resolve(id, resolution){
+    var note = prompt('Комментарий арбитра (опц.):', '');
+    if (note===null) return;
+    if (!(await tgConfirm('Применить решение '+resolution+'?'))) return;
+    try {
+      await API.admin.resolveDispute(id, resolution, note);
+      tgHaptic('success'); P2P._loadAdminDisputes();
+    } catch(e){}
+  },
+};
+
+// WebSocket → live updates
+WS.on('TradePaymentMarked', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('TradePaymentConfirmed', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('TradeCompleted', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('TradeCancelled', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('TradeDisputed', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('ChatMessageSent', function(m){ if(STATE.activeScreen==='trade_room' && STATE.currentTradeId) P2P._renderTrade(STATE.currentTradeId); });
+WS.on('NotificationCreated', function(m){ STATE.notifications.unread++; if (STATE.activeScreen==='notifications') SCREENS.notifications(); });
+
+console.log('[P2P v2] namespace ready — call P2P.init() to start');
+})();
+</script>
+
 </body>
 </html>

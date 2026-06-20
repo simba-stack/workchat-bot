@@ -45,6 +45,19 @@ from p2p.api import (
 from p2p.ws import router as p2p_ws_router
 from p2p.ws.manager import publish_to_channels as p2p_ws_publish
 
+# === P2P Observability ===
+from p2p.observability import (
+    metrics as p2p_metrics,
+    worker as p2p_obs_worker,
+    logging_config as p2p_logging_config,
+)
+
+# Структурированное JSON-логирование (root logger) — конфигурируем до создания app
+try:
+    p2p_logging_config.setup_structured_logging()
+except Exception as _logcfg_e:
+    logging.getLogger(__name__).warning("structured logging setup failed: %s", _logcfg_e)
+
 logger = logging.getLogger(__name__)
 
 
@@ -240,7 +253,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(p2p_recon_worker.run())
         asyncio.create_task(p2p_inbox_worker.run())
         asyncio.create_task(p2p_fraud_worker.run())
-        logger.info("[lifespan] p2p workers scheduled (outbox/scheduler/recon/inbox/fraud)")
+        asyncio.create_task(p2p_obs_worker.run())
+        logger.info("[lifespan] p2p workers scheduled (outbox/scheduler/recon/inbox/fraud/observability)")
     except Exception as e:
         logger.warning("[lifespan] p2p workers failed to start: %s", e)
     yield
@@ -280,6 +294,16 @@ async def health():
 @app.get("/_status")
 async def status_root():
     return {"ok": True}
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus scrape endpoint (text format)."""
+    from fastapi.responses import Response
+    return Response(
+        content=p2p_metrics.render_latest(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/myip")
