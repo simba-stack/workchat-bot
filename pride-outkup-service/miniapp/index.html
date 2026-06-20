@@ -1709,6 +1709,18 @@ function go(view) {
   // ВАЖНО: перед вызовом loader'а — синхронно очищаем контейнер,
   // чтобы legacy DOM из Telegram-snapshot не "проскакивал" при возврате на вкладку.
   else if (view === 'p2p') {
+    // P2P v2 (новый дизайн через window.P2P). Старый код деактивирован.
+    if (window.P2P && window.P2P.__v2) {
+      try {
+        window.P2P.init()
+          .then(() => window.P2P.show())
+          .catch(e => { console.error('[P2P v2 init]', e); try{ tgAlert('P2P v2: '+(_errMsg(e)||'init failed')); }catch(_){} });
+      } catch(e) {
+        console.error('[P2P v2 launch]', e);
+      }
+      return;  // не падаем в legacy P2P
+    }
+    // Fallback на старый код если v2 не загрузился
     const list = document.getElementById('p2p-list');
     if (list) list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
     try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){}
