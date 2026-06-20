@@ -5054,15 +5054,15 @@ var UI = {
     var role = String((P2P.state.user && P2P.state.user.role) || P2P.state.role || 'USER').toUpperCase();
     var isAdmin = (role === 'ADMIN' || role === 'ARBITRATOR' || role === 'SUPPORT' || role === 'SUPER_ADMIN');
     var isMerch = (role === 'MERCHANT' || role === 'ADMIN' || role === 'SUPER_ADMIN');
+    // P2P-only nav. Кошелёк/Профиль/Настройки — в основной миниапе, не дублируем.
     var tabs = [
-      {id:'home',    icon:'⌂', label:'Главная',  screen:'home'},
+      {id:'home',    icon:'⌂', label:'Маркет',   screen:'home'},
       {id:'my_ads',  icon:'≡', label:'Объявл.',  screen:'myAds'},
       {id:'trades',  icon:'⇄', label:'Сделки',   screen:'trades', badge: P2P.state.activeTrades.length},
-      {id:'wallet',  icon:'$', label:'Кошелёк',  screen:'wallet'}
+      {id:'notif',   icon:'🔔', label:'Уведомл.', screen:'notifications', badge: P2P.state.notificationsUnread}
     ];
     if (isMerch) tabs.push({id:'merchant', icon:'⌬', label:'Merchant', screen:'merchantDashboard'});
     if (isAdmin) tabs.push({id:'admin', icon:'⚖', label:'Admin', screen:'arbitration'});
-    tabs.push({id:'profile', icon:'☺', label:'Профиль', screen:'profile', badge: P2P.state.notificationsUnread});
     return '<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(14,14,14,0.92);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-around;padding:6px 0 calc(env(safe-area-inset-bottom,0px) + 6px);z-index:50">'+
       tabs.map(function(t){
         var active = activeTab === t.id;
@@ -5091,7 +5091,7 @@ var UI = {
       rightWidgets =
         '<div style="display:flex;gap:10px;align-items:center;font-size:12px;color:var(--p2p-text-dim)">'+
           (active>0 ? '<span onclick="P2P.nav.replace(\'trades\')" style="cursor:pointer">⇄ '+active+'</span>' : '')+
-          (notif>0 ? '<span onclick="P2P.nav.replace(\'profile\')" style="cursor:pointer;color:#ff453a">● '+notif+'</span>' : '')+
+          (notif>0 ? '<span onclick="P2P.nav.replace(\'notifications\')" style="cursor:pointer;color:#ff453a">● '+notif+'</span>' : '')+
         '</div>';
     }
     return '<div class="p2p-glass" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin:10px 0;border-radius:14px">'+
@@ -5415,16 +5415,23 @@ var SCREENS = {
     var balance = w.available || w.total || 0;
     var balUsdt = UI.fmt(balance, 'USDT', 2);
 
-    // Wallet summary card
+    // P2P-only wallet summary: только то что нужно для трейдинга (свободно к продаже + в холде объявлений + в эскроу сделок).
+    // Не дублируем основной кошелёк — там main miniapp.
     var walletCard =
-      '<div class="p2p-glass" style="padding:14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="P2P.nav.replace(\'wallet\')">'+
-        '<div>'+
-          '<div style="font-size:11px;color:var(--p2p-text-dim);text-transform:uppercase;letter-spacing:0.4px">Доступно</div>'+
-          '<div style="font-size:22px;font-weight:700;margin-top:4px">'+balUsdt+'</div>'+
-        '</div>'+
-        '<div style="text-align:right">'+
-          '<div style="font-size:11px;color:var(--p2p-text-dim)">В эскроу</div>'+
-          '<div style="font-size:14px;color:var(--p2p-warn);margin-top:4px">'+UI.fmt(w.trade_escrow||0, 'USDT', 2)+'</div>'+
+      '<div class="p2p-glass" style="padding:12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">'+
+        '<div style="display:flex;gap:14px;flex:1">'+
+          '<div>'+
+            '<div style="font-size:10px;color:var(--p2p-text-dim);text-transform:uppercase;letter-spacing:0.4px">Доступно для P2P</div>'+
+            '<div style="font-size:16px;font-weight:700;margin-top:2px">'+balUsdt+'</div>'+
+          '</div>'+
+          '<div>'+
+            '<div style="font-size:10px;color:var(--p2p-text-dim);text-transform:uppercase;letter-spacing:0.4px">В объявлениях</div>'+
+            '<div style="font-size:14px;color:var(--p2p-accent);margin-top:2px">'+UI.fmt(w.advertisement_hold||0, '', 2)+'</div>'+
+          '</div>'+
+          '<div>'+
+            '<div style="font-size:10px;color:var(--p2p-text-dim);text-transform:uppercase;letter-spacing:0.4px">В эскроу</div>'+
+            '<div style="font-size:14px;color:var(--p2p-warn);margin-top:2px">'+UI.fmt(w.trade_escrow||0, '', 2)+'</div>'+
+          '</div>'+
         '</div>'+
       '</div>';
 
@@ -8189,14 +8196,14 @@ var SCREENS = {
       tabsHtml + statsBody
     );
 
-    // Quick actions
+    // Quick actions — только P2P. Кошелёк/Настройки/Профиль в основной миниапе.
     var actions = [
       ['➕','Создать','createAd'],
       ['📋','Объявления','myAds'],
       ['🔄','Сделки','trades'],
-      ['💰','Кошелёк','wallet'],
       ['💳','Реквизиты','paymentMethods'],
-      ['⚙','Настройки','profile'],
+      ['🔔','Уведомл.','notifications'],
+      ['⭐','Отзывы','myReviews'],
     ];
     var actionsHtml = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">'+
       actions.map(function(a){
