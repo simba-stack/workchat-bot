@@ -167,6 +167,7 @@ class EventType(str, Enum):
     TRADE_DISPUTED = "TradeDisputed"
     TRADE_RESOLVED = "TradeResolved"
     TRADE_EXPIRED = "TradeExpired"
+    TRADE_DEADLINE_EXTENDED = "TradeDeadlineExtended"
     WALLET_RESERVED = "WalletReserved"
     WALLET_RELEASED = "WalletReleased"
     WALLET_TRANSFERRED = "WalletTransferred"

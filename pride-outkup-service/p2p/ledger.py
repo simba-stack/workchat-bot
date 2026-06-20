@@ -345,6 +345,38 @@ async def refund_escrow_to_available(
     )
 
 
+async def freeze_balance(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    currency: str = "USDT",
+    amount: Decimal,
+    reason: str | None = None,
+    workflow_id: str | None = None,
+    correlation_id: str | None = None,
+) -> str:
+    """User Available → User Frozen (принудительная заморозка Risk/Fraud Engine).
+
+    Если amount=0 — no-op (возвращает пустую строку без записи проводки).
+    """
+    if not isinstance(amount, Decimal):
+        amount = Decimal(str(amount))
+    if amount <= 0:
+        return ""
+    return await post_transaction(
+        db,
+        [
+            LedgerLeg(LedgerAccountType.USER_AVAILABLE.value, user_id,
+                      debit=amount, note=f"freeze: {reason or 'no-reason'}"),
+            LedgerLeg(LedgerAccountType.USER_FROZEN.value, user_id,
+                      credit=amount, note=f"freeze: {reason or 'no-reason'}"),
+        ],
+        currency=currency,
+        reference_type="freeze", reference_id=reason,
+        workflow_id=workflow_id, correlation_id=correlation_id,
+    )
+
+
 async def release_ad_hold_to_available(
     db: AsyncSession,
     user_id: int,

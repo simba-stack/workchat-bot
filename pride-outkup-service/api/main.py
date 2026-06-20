@@ -24,8 +24,26 @@ from core.services import (
 )
 
 from p2p import models as p2p_models
-from p2p.workers import outbox_publisher as p2p_outbox_worker, scheduler as p2p_scheduler_worker, reconciliation as p2p_recon_worker
-from p2p.api import commands as p2p_commands_router, queries as p2p_queries_router, admin as p2p_admin_router  # noqa: E501  # noqa: F401 — регистрирует таблицы в Base.metadata
+from p2p.errors import P2PError
+from p2p.workers import (
+    outbox_publisher as p2p_outbox_worker,
+    scheduler as p2p_scheduler_worker,
+    reconciliation as p2p_recon_worker,
+    inbox_consumer as p2p_inbox_worker,
+    fraud_scanner as p2p_fraud_worker,
+)
+from p2p.api import (
+    commands as p2p_commands_router,
+    queries as p2p_queries_router,
+    admin as p2p_admin_router,
+    payment_methods as p2p_pm_router,
+    reviews as p2p_reviews_router,
+    notifications as p2p_notif_router,
+    chat as p2p_chat_router,
+    disputes as p2p_disputes_router,
+)  # noqa: F401 — регистрирует таблицы в Base.metadata
+from p2p.ws import router as p2p_ws_router
+from p2p.ws.manager import publish_to_channels as p2p_ws_publish
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +64,16 @@ COIN_FEES_UPDATE = [
 ]
 
 P2P_INDUSTRIAL_ALTERS = [
+    # P2P Inbox: расширяем колонки чтобы поддержать exactly-once + retry
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS event_type VARCHAR(64)",
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS source VARCHAR(64)",
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE p2p_inbox ADD COLUMN IF NOT EXISTS last_error TEXT",
+    "ALTER TABLE p2p_inbox ALTER COLUMN processed_at DROP NOT NULL",
+    "ALTER TABLE p2p_inbox ALTER COLUMN status SET DEFAULT 'PENDING'",
+    "CREATE INDEX IF NOT EXISTS ix_p2p_inbox_status_next ON p2p_inbox(status, next_retry_at)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier VARCHAR(16) NOT NULL DEFAULT 'none'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS maker_tier_updated_at TIMESTAMP WITH TIME ZONE",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS cancel_cooldown_until TIMESTAMP WITH TIME ZONE",
@@ -202,10 +230,17 @@ async def lifespan(app: FastAPI):
     logger.info("FastAPI ready: %d background tasks scheduled", len(bg_tasks))
     # === P2P workers ===
     try:
+        p2p_outbox_worker.register_ws_publisher(p2p_ws_publish)
+        logger.info("[lifespan] p2p ws publisher registered")
+    except Exception as e:
+        logger.warning("[lifespan] p2p ws publisher registration failed: %s", e)
+    try:
         asyncio.create_task(p2p_outbox_worker.run())
         asyncio.create_task(p2p_scheduler_worker.run())
         asyncio.create_task(p2p_recon_worker.run())
-        logger.info("[lifespan] p2p workers scheduled")
+        asyncio.create_task(p2p_inbox_worker.run())
+        asyncio.create_task(p2p_fraud_worker.run())
+        logger.info("[lifespan] p2p workers scheduled (outbox/scheduler/recon/inbox/fraud)")
     except Exception as e:
         logger.warning("[lifespan] p2p workers failed to start: %s", e)
     yield
@@ -225,6 +260,14 @@ app.add_middleware(
     allow_origins=["https://web.telegram.org", "https://t.me", settings.miniapp_url],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+
+
+# === P2P Error handler (ТЗ Том 20) ===
+@app.exception_handler(P2PError)
+async def _p2p_err_handler(request, exc: P2PError):
+    """Структурированный JSON ответ для всех P2PError."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=exc.http_status, content=exc.to_dict())
 
 
 @app.get("/health")
@@ -273,6 +316,12 @@ app.include_router(payment_methods.router, prefix="/api/v1/users/me/payment_meth
 app.include_router(p2p_commands_router.router)
 app.include_router(p2p_queries_router.router)
 app.include_router(p2p_admin_router.router)
+app.include_router(p2p_pm_router.router)
+app.include_router(p2p_reviews_router.router)
+app.include_router(p2p_notif_router.router)
+app.include_router(p2p_chat_router.router)
+app.include_router(p2p_disputes_router.router)
+app.include_router(p2p_ws_router.router)
 
 
 MINIAPP_DIR = Path(__file__).parent.parent / "miniapp"
@@ -476,14 +525,9 @@ async def debug_me(tg_id: int):
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
-
-
 @app.get("/debug/nuke_demo_offers")
 async def debug_nuke_demo_offers():
-    """Публичный nuke: удаляет ВСЕ active offers с username Alex_Pro/CryptoPro/NataKZ/P2P_Master.
-
-    Открой эту URL один раз в браузере → возвращает JSON с количеством удалённых.
-    """
+    """Публичный nuke: удаляет ВСЕ active offers с username Alex_Pro/CryptoPro/NataKZ/P2P_Master."""
     from sqlalchemy import text as _t
     from core.db import engine
     deleted = 0

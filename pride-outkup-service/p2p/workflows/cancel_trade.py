@@ -52,7 +52,7 @@ async def handle(ctx: WorkflowContext) -> dict:
     prev = trade.status
 
     # ---------- Refund escrow ----------
-    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto)
+    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto_currency)
     await locks.lock_advertisement(db, trade.advertisement_id)
     ad_r = await db.execute(select(P2PAdvertisement).where(P2PAdvertisement.id == trade.advertisement_id))
     ad = ad_r.scalar_one_or_none()
@@ -62,36 +62,36 @@ async def handle(ctx: WorkflowContext) -> dict:
         await ledger.refund_escrow_to_ad_hold(
             db,
             user_id=trade.seller_id,
-            currency=trade.crypto,
-            amount=trade.amount_crypto,
+            currency=trade.crypto_currency,
+            amount=trade.crypto_amount,
             advertisement_id=trade.advertisement_id,
             trade_id=trade_id,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
         if ad:
-            ad.amount_available = (ad.amount_available + trade.amount_crypto)
-            ad.amount_reserved = max(Decimal("0"), (ad.amount_reserved - trade.amount_crypto))
+            ad.available_amount = (ad.available_amount + trade.crypto_amount)
+            ad.reserved_amount = max(Decimal("0"), (ad.reserved_amount - trade.crypto_amount))
             ad.version += 1
     else:
         # BUY-ad: возврат seller'у в available
         await ledger.refund_escrow_to_available(
             db,
             user_id=trade.seller_id,
-            currency=trade.crypto,
-            amount=trade.amount_crypto,
+            currency=trade.crypto_currency,
+            amount=trade.crypto_amount,
             trade_id=trade_id,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
 
-    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto)
+    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto_currency)
 
     # ---------- State ----------
     state.assert_trade_transition(trade.status, TradeStatus.CANCELLED.value)
     trade.status = TradeStatus.CANCELLED.value
     trade.cancelled_at = datetime.now(timezone.utc)
-    trade.cancel_reason = reason
+    trade.cancelled_reason = reason
     trade.version += 1
     await db.flush()
 

@@ -46,8 +46,9 @@ async def handle(ctx: WorkflowContext) -> dict:
 
     dispute = P2PDispute(
         trade_id=trade_id,
-        opener_id=ctx.user_id,
-        reason=reason,
+        opened_by_id=ctx.user_id,
+        reason=reason[:64],
+        description=reason,
         status=DisputeStatus.OPENED.value,
         version=1,
     )
@@ -56,7 +57,6 @@ async def handle(ctx: WorkflowContext) -> dict:
 
     state.assert_trade_transition(trade.status, TradeStatus.DISPUTE_OPENED.value)
     trade.status = TradeStatus.DISPUTE_OPENED.value
-    trade.dispute_opened_at = datetime.now(timezone.utc)
     trade.version += 1
     await db.flush()
 

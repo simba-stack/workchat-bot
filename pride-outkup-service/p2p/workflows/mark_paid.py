@@ -39,7 +39,7 @@ async def handle(ctx: WorkflowContext) -> dict:
     state.assert_trade_transition(trade.status, TradeStatus.PAYMENT_MARKED.value)
     prev = trade.status
     trade.status = TradeStatus.PAYMENT_MARKED.value
-    trade.paid_marked_at = datetime.now(timezone.utc)
+    trade.payment_marked_at = datetime.now(timezone.utc)
     trade.version += 1
     await db.flush()
 
@@ -50,7 +50,7 @@ async def handle(ctx: WorkflowContext) -> dict:
         entity_id=trade_id,
         actor_id=ctx.user_id,
         previous_state={"status": prev},
-        new_state={"status": trade.status, "paid_marked_at": trade.paid_marked_at.isoformat()},
+        new_state={"status": trade.status, "payment_marked_at": trade.payment_marked_at.isoformat()},
         correlation_id=ctx.correlation_id,
         workflow_id=ctx.workflow_id,
         source=ctx.source,

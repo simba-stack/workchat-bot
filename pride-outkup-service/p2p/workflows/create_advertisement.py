@@ -11,10 +11,10 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from p2p import audit, ledger, locks, outbox, policies, state, wallet
+from p2p import audit, ledger, locks, outbox, policies, risk, state, wallet
 from p2p.enums import (
     AdvertisementType, AdvertisementStatus, PricingMode,
-    EventType, AdvertisementStatus as AS,
+    EventType, AdvertisementStatus as AS, RiskDecision,
 )
 from p2p.models import P2PAdvertisement, P2PWallet
 from p2p.orchestrator import WorkflowContext
@@ -51,14 +51,14 @@ async def handle(ctx: WorkflowContext) -> dict:
     if pricing_mode not in (PricingMode.FIXED.value, PricingMode.FLOATING.value):
         raise HTTPException(422, "pricing_mode invalid")
 
-    price_fixed = None
+    price_value: Decimal | None = None
     price_margin = None
     if pricing_mode == PricingMode.FIXED.value:
         try:
-            price_fixed = Decimal(str(p.get("price_fixed", "0")))
+            price_value = Decimal(str(p.get("price_fixed", "0")))
         except Exception:
             raise HTTPException(422, "price_fixed required")
-        if price_fixed <= 0:
+        if price_value <= 0:
             raise HTTPException(422, "price_fixed must be > 0")
     else:
         if not await policies.get_bool(db, "ALLOW_FLOATING_PRICE"):
@@ -67,6 +67,11 @@ async def handle(ctx: WorkflowContext) -> dict:
             price_margin = Decimal(str(p.get("price_margin_pct", "0")))
         except Exception:
             raise HTTPException(422, "price_margin_pct invalid")
+        # Для FLOATING — снапшот текущей цены; если не передан, 0 (обновится позже триггером цен)
+        try:
+            price_value = Decimal(str(p.get("price_fixed", "0")))
+        except Exception:
+            price_value = Decimal("0")
 
     # ---------- Лимиты ----------
     ctx.step("limits.check")
@@ -81,28 +86,59 @@ async def handle(ctx: WorkflowContext) -> dict:
     if active_count >= max_active:
         raise HTTPException(409, f"max active advertisements reached: {max_active}")
 
+    # ---------- Risk Engine pre-check (ТЗ Том 10) ----------
+    ctx.step("risk.assess")
+    try:
+        r_assess = await risk.assess_create_advertisement(
+            db,
+            user_id=ctx.user_id,
+            amount_total=amount_total,
+            price=price_value if price_value is not None else Decimal("0"),
+            type=ad_type,
+            currency_pair=(crypto, fiat),
+        )
+    except Exception as _risk_e:
+        logger.warning("[risk] assess_create_advertisement raised, defaulting to ALLOW: %s", _risk_e)
+        r_assess = None
+    if r_assess is not None:
+        if r_assess.decision == RiskDecision.DENY.value:
+            if r_assess.should_freeze:
+                try:
+                    await risk.freeze_user(
+                        db, user_id=ctx.user_id,
+                        reason=",".join(r_assess.reasons)[:200] or "risk:deny",
+                        by_user_id=None,
+                    )
+                except Exception as _fz_e:
+                    logger.warning("[risk] freeze_user failed: %s", _fz_e)
+            raise HTTPException(403, f"Risk DENY: {','.join(r_assess.reasons)}")
+        if r_assess.decision == RiskDecision.REVIEW.value:
+            logger.warning(
+                "[risk] REVIEW advertisement for user=%s score=%s reasons=%s",
+                ctx.user_id, r_assess.score, r_assess.reasons,
+            )
+
     # ---------- Создаём advertisement (DRAFT) ----------
     ctx.step("advertisement.create")
     ad = P2PAdvertisement(
         owner_id=ctx.user_id,
         type=ad_type,
-        crypto=crypto,
-        fiat=fiat,
-        amount_total=amount_total,
-        amount_available=amount_total,
-        amount_reserved=Decimal("0"),
-        min_order_fiat=min_order,
-        max_order_fiat=max_order,
+        crypto_currency=crypto,
+        fiat_currency=fiat,
+        total_amount=amount_total,
+        available_amount=amount_total,
+        reserved_amount=Decimal("0"),
+        min_amount_fiat=min_order,
+        max_amount_fiat=max_order,
         pricing_mode=pricing_mode,
-        price_fixed=price_fixed,
+        price=price_value if price_value is not None else Decimal("0"),
         price_margin_pct=price_margin,
-        payment_methods=p.get("payment_methods") or [],
-        time_limit_minutes=int(p.get("time_limit_minutes", 15)),
-        require_kyc=bool(p.get("require_kyc", False)),
-        min_completed_trades=int(p.get("min_completed_trades", 0)),
-        country_filter=p.get("country_filter"),
-        terms_text=p.get("terms_text"),
-        auto_reply_text=p.get("auto_reply_text"),
+        payment_method_ids=p.get("payment_methods") or [],
+        pay_window_min=int(p.get("time_limit_minutes", 15)),
+        require_verified_taker=bool(p.get("require_kyc", False)),
+        min_taker_completed=int(p.get("min_completed_trades", 0)),
+        description=p.get("terms_text"),
+        merchant_note=p.get("auto_reply_text"),
         status=AS.DRAFT.value,
         version=1,
     )
@@ -114,7 +150,7 @@ async def handle(ctx: WorkflowContext) -> dict:
         ctx.step("ledger.reserve")
         await locks.lock_user_wallet(db, ctx.user_id, crypto)
         # Чек available баланса
-        breakdown = await wallet.get_balance_breakdown(db, ctx.user_id, crypto)
+        breakdown = await wallet.get_breakdown(db, ctx.user_id, crypto)
         if breakdown.available < amount_total:
             raise HTTPException(
                 400,
@@ -135,7 +171,6 @@ async def handle(ctx: WorkflowContext) -> dict:
     ctx.step("state.activate")
     state.assert_advertisement_transition(ad.status, AS.ACTIVE.value)
     ad.status = AS.ACTIVE.value
-    ad.published_at = datetime.now(timezone.utc)
     await db.flush()
 
     # ---------- Audit ----------
@@ -168,6 +203,6 @@ async def handle(ctx: WorkflowContext) -> dict:
         "ok": True,
         "advertisement_id": ad.id,
         "status": ad.status,
-        "amount_total": str(ad.amount_total),
-        "amount_available": str(ad.amount_available),
+        "amount_total": str(ad.total_amount),
+        "amount_available": str(ad.available_amount),
     }

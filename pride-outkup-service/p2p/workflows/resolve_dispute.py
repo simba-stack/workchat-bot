@@ -1,9 +1,9 @@
 """Workflow: resolve_dispute — арбитр принимает решение.
 
 Решения:
-- RELEASE_TO_BUYER: trade → COMPLETED, escrow buyer'у
-- REFUND_TO_SELLER: trade → CANCELLED, escrow обратно seller'у
-- PARTIAL_REFUND: split (требует amount_to_buyer)
+- BUYER: trade → COMPLETED, escrow buyer'у
+- SELLER: trade → CANCELLED, escrow обратно seller'у
+- SPLIT: split (требует amount_to_buyer)
 """
 from __future__ import annotations
 import logging
@@ -38,9 +38,9 @@ async def handle(ctx: WorkflowContext) -> dict:
     if not dispute_id or not resolution:
         raise HTTPException(422, "dispute_id, resolution required")
 
-    if resolution not in (DisputeResolution.RELEASE_TO_BUYER.value,
-                          DisputeResolution.REFUND_TO_SELLER.value,
-                          DisputeResolution.PARTIAL_REFUND.value):
+    if resolution not in (DisputeResolution.BUYER.value,
+                          DisputeResolution.SELLER.value,
+                          DisputeResolution.SPLIT.value):
         raise HTTPException(422, "invalid resolution")
 
     await locks.lock_dispute(db, dispute_id)
@@ -65,50 +65,50 @@ async def handle(ctx: WorkflowContext) -> dict:
             state.assert_trade_transition(trade.status, TradeStatus.ARBITRATION.value)
             trade.status = TradeStatus.ARBITRATION.value
 
-    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto)
-    await locks.lock_user_wallet(db, trade.buyer_id, trade.crypto)
+    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto_currency)
+    await locks.lock_user_wallet(db, trade.buyer_id, trade.crypto_currency)
 
     # Применяем resolution
-    if resolution == DisputeResolution.RELEASE_TO_BUYER.value:
+    if resolution == DisputeResolution.BUYER.value:
         await ledger.release_to_buyer(
             db,
             seller_id=trade.seller_id,
             buyer_id=trade.buyer_id,
-            currency=trade.crypto,
-            amount=trade.amount_crypto,
-            platform_fee=trade.platform_fee_crypto or Decimal("0"),
+            currency=trade.crypto_currency,
+            amount=trade.crypto_amount,
+            platform_fee=trade.fee_crypto or Decimal("0"),
             trade_id=trade.id,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
         new_trade_status = TradeStatus.COMPLETED.value
         trade.completed_at = datetime.now(timezone.utc)
-    elif resolution == DisputeResolution.REFUND_TO_SELLER.value:
+    elif resolution == DisputeResolution.SELLER.value:
         await ledger.refund_escrow_to_available(
             db,
             user_id=trade.seller_id,
-            currency=trade.crypto,
-            amount=trade.amount_crypto,
+            currency=trade.crypto_currency,
+            amount=trade.crypto_amount,
             trade_id=trade.id,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
         new_trade_status = TradeStatus.CANCELLED.value
         trade.cancelled_at = datetime.now(timezone.utc)
-        trade.cancel_reason = "dispute:refund_to_seller"
-    else:  # PARTIAL_REFUND
+        trade.cancelled_reason = "dispute:refund_to_seller"
+    else:  # SPLIT
         try:
             to_buyer = Decimal(str(amount_to_buyer))
         except Exception:
             raise HTTPException(422, "amount_to_buyer required (decimal)")
-        if to_buyer <= 0 or to_buyer >= trade.amount_crypto:
-            raise HTTPException(422, "amount_to_buyer must be 0 < x < trade.amount_crypto")
-        to_seller = trade.amount_crypto - to_buyer
+        if to_buyer <= 0 or to_buyer >= trade.crypto_amount:
+            raise HTTPException(422, "amount_to_buyer must be 0 < x < trade.crypto_amount")
+        to_seller = trade.crypto_amount - to_buyer
         # 1) часть buyer'у
         await ledger.release_to_buyer(
             db,
             seller_id=trade.seller_id, buyer_id=trade.buyer_id,
-            currency=trade.crypto, amount=to_buyer,
+            currency=trade.crypto_currency, amount=to_buyer,
             platform_fee=Decimal("0"),
             trade_id=trade.id, workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
@@ -116,22 +116,22 @@ async def handle(ctx: WorkflowContext) -> dict:
         # 2) остаток обратно seller'у
         await ledger.refund_escrow_to_available(
             db,
-            user_id=trade.seller_id, currency=trade.crypto, amount=to_seller,
+            user_id=trade.seller_id, currency=trade.crypto_currency, amount=to_seller,
             trade_id=trade.id, workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
         new_trade_status = TradeStatus.COMPLETED.value
         trade.completed_at = datetime.now(timezone.utc)
 
-    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto)
-    await wallet.update_wallet_from_ledger(db, trade.buyer_id, trade.crypto)
+    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto_currency)
+    await wallet.update_wallet_from_ledger(db, trade.buyer_id, trade.crypto_currency)
 
     # State: ARBITRATION → RESOLVED, потом RESOLVED → COMPLETED/CANCELLED
     state.assert_dispute_transition(dispute.status, DisputeStatus.RESOLVED.value)
     dispute.status = DisputeStatus.RESOLVED.value
     dispute.resolution = resolution
     dispute.arbitrator_id = ctx.user_id
-    dispute.arbitrator_note = arbitrator_note
+    dispute.resolution_note = arbitrator_note
     dispute.resolved_at = datetime.now(timezone.utc)
 
     if trade.status == TradeStatus.ARBITRATION.value:

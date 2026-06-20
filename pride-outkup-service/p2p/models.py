@@ -207,6 +207,7 @@ class P2PAdvertisement(Base):
 
     total_amount: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)  # Общий объём в крипте
     available_amount: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)  # Остаток
+    reserved_amount: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False, default=0)  # Зарезервировано под активные сделки
     min_amount_fiat: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     max_amount_fiat: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
 

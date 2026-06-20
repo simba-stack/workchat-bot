@@ -87,9 +87,44 @@ async def _process_one(event: P2POutbox) -> tuple[bool, str | None]:
             await _bot_notify(event.event_type, event.payload or {})
         except Exception as e:
             logger.warning("[outbox] bot notify failed: %s", e)
+        # 3) Persistent notifications в p2p_notifications
+        try:
+            await _persist_notifications(event)
+        except Exception as e:
+            logger.warning("[outbox] persist notifications failed: %s", e)
         return True, None
     except Exception as e:
         return False, str(e)
+
+
+async def _persist_notifications(event) -> None:
+    """Создать P2PNotification записи для участников события."""
+    from p2p.api.notifications import create_notification
+    from core.db import AsyncSessionLocal
+    text = _format_notification(event.event_type, event.payload or {})
+    if not text:
+        return
+    targets: set[int] = set()
+    p = event.payload or {}
+    for k in ("buyer_id", "seller_id", "owner_id", "opened_by_id"):
+        if k in p and p[k]:
+            try:
+                targets.add(int(p[k]))
+            except Exception:
+                pass
+    if not targets:
+        return
+    async with AsyncSessionLocal() as db:
+        for uid in targets:
+            try:
+                await create_notification(
+                    db, user_id=uid, type_=event.event_type,
+                    title=text, body=None, payload=p,
+                    correlation_id=event.correlation_id,
+                )
+            except Exception:
+                pass
+        await db.commit()
 
 
 async def run() -> None:

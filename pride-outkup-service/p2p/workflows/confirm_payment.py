@@ -43,32 +43,32 @@ async def handle(ctx: WorkflowContext) -> dict:
     prev = trade.status
 
     # ---------- Ledger: trade_escrow → buyer.available, fee → platform_fee ----------
-    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto)
-    await locks.lock_user_wallet(db, trade.buyer_id, trade.crypto)
+    await locks.lock_user_wallet(db, trade.seller_id, trade.crypto_currency)
+    await locks.lock_user_wallet(db, trade.buyer_id, trade.crypto_currency)
     await ledger.release_to_buyer(
         db,
         seller_id=trade.seller_id,
         buyer_id=trade.buyer_id,
-        currency=trade.crypto,
-        amount=trade.amount_crypto,
-        platform_fee=trade.platform_fee_crypto or Decimal("0"),
+        currency=trade.crypto_currency,
+        amount=trade.crypto_amount,
+        platform_fee=trade.fee_crypto or Decimal("0"),
         trade_id=trade_id,
         workflow_id=ctx.workflow_id,
         correlation_id=ctx.correlation_id,
     )
-    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto)
-    await wallet.update_wallet_from_ledger(db, trade.buyer_id, trade.crypto)
+    await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto_currency)
+    await wallet.update_wallet_from_ledger(db, trade.buyer_id, trade.crypto_currency)
 
-    # ---------- Advertisement: amount_reserved → amount_total decrement ----------
+    # ---------- Advertisement: reserved_amount → total_amount decrement ----------
     await locks.lock_advertisement(db, trade.advertisement_id)
     ad_r = await db.execute(select(P2PAdvertisement).where(P2PAdvertisement.id == trade.advertisement_id))
     ad = ad_r.scalar_one_or_none()
     if ad:
-        ad.amount_reserved = max(Decimal("0"), (ad.amount_reserved or Decimal("0")) - trade.amount_crypto)
-        ad.amount_total = max(Decimal("0"), (ad.amount_total or Decimal("0")) - trade.amount_crypto)
+        ad.reserved_amount = max(Decimal("0"), (ad.reserved_amount or Decimal("0")) - trade.crypto_amount)
+        ad.total_amount = max(Decimal("0"), (ad.total_amount or Decimal("0")) - trade.crypto_amount)
         ad.version += 1
         # Auto-archive если полностью продано
-        if ad.amount_available <= Decimal("0") and ad.amount_reserved <= Decimal("0"):
+        if ad.available_amount <= Decimal("0") and ad.reserved_amount <= Decimal("0"):
             ad.status = "ARCHIVED"
 
     # ---------- State ----------
@@ -95,7 +95,7 @@ async def handle(ctx: WorkflowContext) -> dict:
         event_type=EventType.TRADE_COMPLETED.value,
         payload={
             "trade_id": trade_id, "buyer_id": trade.buyer_id, "seller_id": trade.seller_id,
-            "crypto": trade.crypto, "amount": str(trade.amount_crypto),
+            "crypto": trade.crypto_currency_currency, "amount": str(trade.crypto_amount),
         },
         aggregate_type="trade",
         aggregate_id=trade_id,
