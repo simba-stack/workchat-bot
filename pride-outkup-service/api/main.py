@@ -8,7 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -65,6 +65,18 @@ except Exception as _logcfg_e:
 logger = logging.getLogger(__name__)
 
 
+
+
+# === Debug auth gate ===
+def _require_debug_token(req: Request):
+    """Защита mutate debug endpoints. Требует X-Debug-Token == settings.debug_token (env DEBUG_TOKEN)."""
+    expected = getattr(settings, "debug_token", None) or ""
+    token = (req.headers.get("X-Debug-Token") or req.query_params.get("debug_token") or "")
+    if not expected or token != expected:
+        from fastapi import HTTPException
+        raise HTTPException(403, "debug action requires X-Debug-Token header (set DEBUG_TOKEN env)")
+
+
 # SIMBA: $4.5-эквивалент withdraw fee для всех coin
 COIN_FEES_UPDATE = [
     "UPDATE coins SET withdraw_fee=3        WHERE code='USDT'",
@@ -112,6 +124,7 @@ P2P_INDUSTRIAL_ALTERS = [
     "ALTER TABLE escrow_locks ADD COLUMN IF NOT EXISTS offer_id BIGINT REFERENCES offers(id) ON DELETE SET NULL",
     "ALTER TABLE escrow_locks ADD COLUMN IF NOT EXISTS reason VARCHAR(128)",
     "CREATE INDEX IF NOT EXISTS idx_escrow_offer ON escrow_locks(offer_id)",
+    "ALTER TABLE p2p_advertisements ADD COLUMN IF NOT EXISTS reserved_amount NUMERIC(30,8) NOT NULL DEFAULT 0",
 ]
 
 
@@ -482,7 +495,7 @@ async def debug_offers_full():
 
 
 @app.get("/debug/cleanup_broken_offers")
-async def debug_cleanup_broken_offers():
+async def debug_cleanup_broken_offers(_=Depends(_require_debug_token)):
     """Удаляет офферы с битыми лимитами/суммой. Эскроу возвращает."""
     from sqlalchemy import select as _select
     from decimal import Decimal as _D
@@ -558,7 +571,7 @@ async def debug_me(tg_id: int):
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()[-500:]}
 @app.get("/debug/nuke_demo_offers")
-async def debug_nuke_demo_offers():
+async def debug_nuke_demo_offers(_=Depends(_require_debug_token)):
     """Публичный nuke: удаляет ВСЕ active offers с username Alex_Pro/CryptoPro/NataKZ/P2P_Master."""
     from sqlalchemy import text as _t
     from core.db import engine

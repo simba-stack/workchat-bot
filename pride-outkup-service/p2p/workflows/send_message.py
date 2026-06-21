@@ -20,7 +20,16 @@ from core.config import settings
 logger = logging.getLogger("p2p.wf.send_message")
 
 
-_ALLOWED_TYPES = {MessageType.TEXT.value, MessageType.IMAGE.value, MessageType.SYSTEM.value}
+_ALLOWED_TYPES = {
+    MessageType.TEXT.value,
+    MessageType.IMAGE.value,
+    MessageType.VIDEO.value,
+    MessageType.VOICE.value,
+    MessageType.DOCUMENT.value,
+    MessageType.PAYMENT_PROOF.value,
+    MessageType.ARBITRATION.value,
+    MessageType.SYSTEM.value,
+}
 _DISPUTE_STATES = {TradeStatus.DISPUTE_OPENED.value, TradeStatus.ARBITRATION.value}
 
 

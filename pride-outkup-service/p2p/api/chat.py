@@ -79,7 +79,8 @@ async def list_messages(
         if not (is_admin and trade.status in _DISPUTE_STATES):
             raise HTTPException(403, "not a trade participant")
 
-    # Сообщения + sender username (LEFT JOIN на случай sender_id IS NULL)
+    # Сообщения + sender username + attachment metadata (LEFT JOIN на случай отсутствия)
+    from p2p.models import P2PAttachment
     q = (
         select(
             P2PMessage.id,
@@ -92,15 +93,32 @@ async def list_messages(
             P2PMessage.status,
             P2PMessage.created_at,
             P2PMessage.sequence_number,
+            P2PAttachment.mime_type,
+            P2PAttachment.file_size,
+            P2PAttachment.file_name,
+            P2PAttachment.storage_key,
+            P2PAttachment.preview_key,
+            P2PAttachment.sha256,
+            P2PAttachment.virus_scan_status,
         )
         .select_from(P2PMessage)
         .join(User, User.id == P2PMessage.sender_id, isouter=True)
+        .join(P2PAttachment, P2PAttachment.id == P2PMessage.attachment_id, isouter=True)
         .where(P2PMessage.trade_id == trade_id)
         .where(P2PMessage.sequence_number > after_seq)
         .order_by(P2PMessage.sequence_number.asc())
         .limit(limit)
     )
     rows = (await db.execute(q)).all()
+
+    def _att_url(storage_key):
+        if not storage_key:
+            return None
+        # Если storage_key уже URL (http/https) — возвращаем как есть.
+        # Иначе предполагаем что это S3-ключ, нужен presigned URL (TODO когда будет S3).
+        if storage_key.startswith("http"):
+            return storage_key
+        return f"/api/v2/p2p/attachments/{storage_key}"  # placeholder route
 
     items = [
         {
@@ -114,6 +132,14 @@ async def list_messages(
             "status": row[7],
             "created_at": row[8].isoformat() if row[8] else None,
             "sequence_number": row[9],
+            # attachment metadata (null если нет вложения)
+            "attachment_mime": row[10],
+            "attachment_size": row[11],
+            "attachment_name": row[12],
+            "attachment_url": _att_url(row[13]),
+            "attachment_preview_url": _att_url(row[14]),
+            "attachment_sha256": row[15],
+            "attachment_virus_status": row[16],
         }
         for row in rows
     ]
