@@ -1699,28 +1699,32 @@ let myP2pSide = 'buy', myP2pCoin = 'USDT', myP2pPm = '';
 let activeDeal = null, chatPollTimer = null;
 
 function go(view) {
+  // P2P v2 — перехватываем РАНЬШЕ старой логики, чтобы legacy view-p2p НЕ становился active
+  if (view === 'p2p' && window.P2P && window.P2P.__v2) {
+    // Деактивируем все legacy views (включая view-p2p) — иначе они светятся за overlay
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('#bottom-nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    try {
+      window.P2P.init()
+        .then(() => window.P2P.show())
+        .catch(e => { console.error('[P2P v2 init]', e); try{ tgAlert('P2P v2: '+(_errMsg(e)||'init failed')); }catch(_){} });
+    } catch(e) {
+      console.error('[P2P v2 launch]', e);
+    }
+    return;
+  }
+  // Если уходим из P2P v2 → принудительно скрыть overlay
+  if (view !== 'p2p' && window.P2P && window.P2P.hide) {
+    try { window.P2P.hide(); } catch(_){}
+  }
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
   document.querySelectorAll('#bottom-nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'main') loadMain();
   else if (view === 'swap') initSwap();
   else if (view === 'history') loadOperations();
   else if (view === 'settings') loadSettings();
-  // P2P v2 хуки (loadP2POffers/loadMyAds/loadPaymentMethods объявлены ниже)
-  // ВАЖНО: перед вызовом loader'а — синхронно очищаем контейнер,
-  // чтобы legacy DOM из Telegram-snapshot не "проскакивал" при возврате на вкладку.
   else if (view === 'p2p') {
-    // P2P v2 (новый дизайн через window.P2P). Старый код деактивирован.
-    if (window.P2P && window.P2P.__v2) {
-      try {
-        window.P2P.init()
-          .then(() => window.P2P.show())
-          .catch(e => { console.error('[P2P v2 init]', e); try{ tgAlert('P2P v2: '+(_errMsg(e)||'init failed')); }catch(_){} });
-      } catch(e) {
-        console.error('[P2P v2 launch]', e);
-      }
-      return;  // не падаем в legacy P2P
-    }
-    // Fallback на старый код если v2 не загрузился
+    // Fallback на старый код если P2P v2 не загрузился (редкий случай)
     const list = document.getElementById('p2p-list');
     if (list) list.innerHTML = '<div class="empty-state" style="color:rgba(255,255,255,0.55);padding:30px 20px;text-align:center">Загрузка…</div>';
     try { if (typeof loadP2POffers === 'function') loadP2POffers(); } catch(_){}
@@ -4719,13 +4723,14 @@ var API = {
     opts = opts || {};
     var initData = (TG && TG.initData) || '';
     var headers = { 'Content-Type':'application/json' };
-    if (initData) headers['Authorization'] = 'tg ' + initData;
+    // Backend (api/auth.py) ожидает X-Telegram-InitData header И ?init_data= query (snake_case)
+    if (initData) headers['X-Telegram-InitData'] = initData;
     if (opts.idem) headers['Idempotency-Key'] = opts.idem;
     var url = (path.indexOf('http')===0 || path.indexOf('/api')===0 || path.indexOf('/ws')===0)
       ? path : (this.base + path);
     if (initData) {
       var sep = url.indexOf('?')>=0 ? '&' : '?';
-      url = url + sep + 'initData=' + encodeURIComponent(initData);
+      url = url + sep + 'init_data=' + encodeURIComponent(initData);
     }
     var init = { method: method, headers: headers };
     if (body !== undefined && body !== null) init.body = JSON.stringify(body);
@@ -5357,7 +5362,7 @@ function root(){
   if (!r) {
     r = document.createElement('div');
     r.id = 'p2p-v2-root';
-    r.style.cssText = 'position:fixed;inset:0;background:var(--p2p-bg);color:#fff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;z-index:9000;display:none;flex-direction:column;overflow:hidden;font-size:14px';
+    r.style.cssText = 'position:fixed;inset:0;background:#0e0e0e;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;z-index:10000;display:none;flex-direction:column;overflow:hidden;font-size:14px;isolation:isolate';
     document.body.appendChild(r);
   }
   return r;
