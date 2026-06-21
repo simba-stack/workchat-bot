@@ -5683,7 +5683,7 @@ var SCREENS = {
 
   _adCard(ad){
     var price = ad.price_fixed || ad.price || 0;
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+String(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -5877,7 +5877,7 @@ var SCREENS = {
   },
 
   _merchantCard(ad){
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+String(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -5984,7 +5984,7 @@ var SCREENS = {
   },
 
   _renderTradePreview(ad, pms){
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+String(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -7286,8 +7286,8 @@ var SCREENS = {
       else if (mt === 'DOCUMENT') preview = '📄 Документ';
       else if (mt === 'PAYMENT_PROOF') preview = '💳 Доказательство оплаты';
       else if (mt === 'ARBITRATION') preview = '⚖ Сообщение арбитра';
-      else if (mt === 'SYSTEM') preview = StringString(last.text||'').slice(0,80) || 'Системное сообщение';
-      else preview = StringString(last.text||'').slice(0,80) || '—';
+      else if (mt === 'SYSTEM') preview = String(last.text||'').slice(0,80) || 'Системное сообщение';
+      else preview = String(last.text||'').slice(0,80) || '—';
     }
     var unreadBadge = unread ? '<span style="background:#ff453a;color:#fff;border-radius:10px;font-size:10px;padding:2px 7px;font-weight:600;margin-left:auto">'+unread+'</span>' : '';
     return '<div class="p2p-glass" style="padding:12px 14px;margin-bottom:10px;cursor:pointer" onclick="P2P.nav.push(\'tradeChat\',{trade_id:\''+esc(t.id)+'\'})">'+
@@ -10026,7 +10026,7 @@ var SCREENS = {
     var t = s.trade || {};
     var myId = (STATE.user && STATE.user.id) || null;
     var partnerId = (myId === t.buyer_id) ? t.seller_id : t.buyer_id;
-    var num = t.trade_number ? ('#'+String(t.trade_number).slice(0,12)) : ('#'+StringString(t.id||'').slice(0,8));
+    var num = t.trade_number ? ('#'+String(t.trade_number).slice(0,12)) : ('#'+String(t.id||'').slice(0,8));
     var stars = '';
     for (var i=1; i<=5; i++){
       var on = (i <= s.rating);
