@@ -3447,7 +3447,7 @@ $('wd-submit').addEventListener('click', async () => {
   try {
     const r = await api('/api/v1/wallet/withdraw', { method:'POST', body: JSON.stringify({coin:activeCoin, network:(c.networks||['TRC20'])[0], amount:amt, address:addr}) });
     playSuccessSound();
-    if (r.status==='sent') toast(`Отправлено. TX: ${(r.tx_id||'').slice(0,12)}…`);
+    if (r.status==='sent') toast(`Отправлено. TX: ${String(r.tx_id||'').slice(0,12)}…`);
     else if (r.status==='pending_2fa') toast('Заявка на подтверждении');
     else toast('Заявка принята');
     setTimeout(() => { loadMain(); go('main'); }, 1500);
@@ -3531,7 +3531,7 @@ function renderCheque(c) {
   const link = `${location.origin}/c/${c.code}`;
   return `<div class="cheque-card" onclick="window.shareCheque('${c.code}')">
     <div class="ci" style="background:${(coins.find(x=>x.code===c.coin)||{}).icon_color||'#444'}">${coinIcon(c.coin)}</div>
-    <div class="meta"><div class="t">${fmt(c.amount, 6)} ${c.coin}</div><div class="d">${(c.created_at||'').slice(0,16).replace('T',' ')}</div></div>
+    <div class="meta"><div class="t">${fmt(c.amount, 6)} ${c.coin}</div><div class="d">${String(c.created_at||'').slice(0,16).replace('T',' ')}</div></div>
     <div class="right">${badge}</div>
   </div>`;
 }
@@ -3690,7 +3690,7 @@ async function loadChatMessages() {
     const me = tg?.initDataUnsafe?.user?.id;
     $('chat-msgs').innerHTML = (j.items||[]).map(m => {
       const cls = m.from_user_tg == me ? 'mine' : m.system ? 'system' : '';
-      return `<div class="msg ${cls}"><div><div class="bubble">${escapeHtml(m.text)}</div><div class="ts">${(m.created_at||'').slice(11,16)}</div></div></div>`;
+      return `<div class="msg ${cls}"><div><div class="bubble">${escapeHtml(m.text)}</div><div class="ts">${String(m.created_at||'').slice(11,16)}</div></div></div>`;
     }).join('');
     $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight;
   } catch (e) {}
@@ -4028,7 +4028,7 @@ loadMain().then(routeFromStart);
         ? '<div style="text-align:center;padding:10px;background:rgba(51,144,236,0.12);border-radius:10px;color:#3390ec;font-size:14px;font-weight:600;margin-bottom:10px">Покупатель ждёт. Примите сделку и выдайте реквизит.</div>'
         : '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.10);border-radius:10px;color:#ffd60a;font-size:14px;font-weight:600;margin-bottom:10px">Ждём принятия продавцом…</div>';
     } else if (status === 'awaiting_payment') {
-      header = '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">⏱ На оплату · до ' + ((d.pay_deadline_at||'').slice(11,16) || '—') + '</div>';
+      header = '<div style="text-align:center;padding:10px;background:rgba(255,214,10,0.08);border-radius:10px;color:#ffd60a;font-size:20px;font-weight:600;margin-bottom:10px">⏱ На оплату · до ' + (String(d.pay_deadline_at||'').slice(11,16) || '—') + '</div>';
     } else if (status === 'paid') {
       header = '<div style="text-align:center;padding:10px;background:rgba(52,199,89,0.10);border-radius:10px;color:#34c759;font-size:14px;font-weight:600;margin-bottom:10px">Покупатель отметил оплату. Продавец проверяет…</div>';
     } else if (status === 'released') {
@@ -5683,7 +5683,7 @@ var SCREENS = {
 
   _adCard(ad){
     var price = ad.price_fixed || ad.price || 0;
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -5877,7 +5877,7 @@ var SCREENS = {
   },
 
   _merchantCard(ad){
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -5984,7 +5984,7 @@ var SCREENS = {
   },
 
   _renderTradePreview(ad, pms){
-    var ownerName = ad.owner_username || ad.maker_username || ('user'+(ad.owner_id||'').slice(0,6));
+    var ownerName = ad.owner_username || ad.maker_username || ('user'+StringString(ad.owner_id||'').slice(0,6));
     var rating = ad.owner_rating || ad.maker_rating || 0;
     var completed = ad.owner_completed_trades || ad.maker_completed || 0;
     var online = !!(ad.owner_online || ad.maker_online);
@@ -7286,8 +7286,8 @@ var SCREENS = {
       else if (mt === 'DOCUMENT') preview = '📄 Документ';
       else if (mt === 'PAYMENT_PROOF') preview = '💳 Доказательство оплаты';
       else if (mt === 'ARBITRATION') preview = '⚖ Сообщение арбитра';
-      else if (mt === 'SYSTEM') preview = String(last.text||'').slice(0,80) || 'Системное сообщение';
-      else preview = String(last.text||'').slice(0,80) || '—';
+      else if (mt === 'SYSTEM') preview = StringString(last.text||'').slice(0,80) || 'Системное сообщение';
+      else preview = StringString(last.text||'').slice(0,80) || '—';
     }
     var unreadBadge = unread ? '<span style="background:#ff453a;color:#fff;border-radius:10px;font-size:10px;padding:2px 7px;font-weight:600;margin-left:auto">'+unread+'</span>' : '';
     return '<div class="p2p-glass" style="padding:12px 14px;margin-bottom:10px;cursor:pointer" onclick="P2P.nav.push(\'tradeChat\',{trade_id:\''+esc(t.id)+'\'})">'+
@@ -7702,7 +7702,7 @@ var SCREENS = {
       '<div>UTC</div><div>Action</div><div>Actor</div><div>CorrID</div></div>';
     return head + items.map(function(a){
       return '<div style="display:grid;grid-template-columns:90px 1fr 50px 70px;gap:6px;padding:6px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.04)">'+
-        '<div style="color:var(--p2p-text-dim);font-family:ui-monospace,Menlo,monospace">'+esc((a.ts||'').slice(5,16))+'</div>'+
+        '<div style="color:var(--p2p-text-dim);font-family:ui-monospace,Menlo,monospace">'+esc(String(a.ts||'').slice(5,16))+'</div>'+
         '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(a.action||'')+'</div>'+
         '<div style="color:var(--p2p-text-dim)">'+esc(String(a.actor_id||'—').slice(-4))+'</div>'+
         '<div style="color:var(--p2p-text-dim);font-family:ui-monospace,Menlo,monospace">'+esc(UI.shortHash(a.correlation_id||'',4))+'</div>'+
@@ -9316,7 +9316,7 @@ var SCREENS = {
                      ('user'+(String(tr.buyer_id||tr.seller_id||'').slice(0,5)));
         var deadline = '';
         if (tr.payment_deadline_at) {
-          var did = 'mdash-cd-'+(tr.id||'').slice(0,8);
+          var did = 'mdash-cd-'+String(tr.id||'').slice(0,8);
           deadline = '<span style="font-family:monospace;color:#ffcc00" id="'+did+'">…</span>';
           setTimeout(function(){ try { UI.countdown(did, tr.payment_deadline_at); } catch(_){} }, 20);
         }
@@ -9961,7 +9961,7 @@ var SCREENS = {
       pricing_mode: w.pricing_mode,
       payment_method_ids: (w.payment_method_ids||[]).slice(),
       pay_window_min: parseInt(w.pay_window_min,10) || 15,
-      description: (w.description||'').slice(0, 500) || null,
+      description: String(w.description||'').slice(0, 500) || null,
       require_verified_taker: !!w.require_verified_taker,
       min_taker_completed: parseInt(w.min_taker_completed,10) || 0,
     };
@@ -10026,7 +10026,7 @@ var SCREENS = {
     var t = s.trade || {};
     var myId = (STATE.user && STATE.user.id) || null;
     var partnerId = (myId === t.buyer_id) ? t.seller_id : t.buyer_id;
-    var num = t.trade_number ? ('#'+String(t.trade_number).slice(0,12)) : ('#'+String(t.id||'').slice(0,8));
+    var num = t.trade_number ? ('#'+String(t.trade_number).slice(0,12)) : ('#'+StringString(t.id||'').slice(0,8));
     var stars = '';
     for (var i=1; i<=5; i++){
       var on = (i <= s.rating);
@@ -10079,7 +10079,7 @@ var SCREENS = {
     s.submitting = true;
     SCREENS._reviewRender();
     try {
-      await API.reviews.create(s.trade_id, { rating: s.rating, comment: (s.comment||'').slice(0,500) });
+      await API.reviews.create(s.trade_id, { rating: s.rating, comment: String(s.comment||'').slice(0,500) });
       UI.haptic('success');
       UI.toast('Спасибо за отзыв!');
       STATE._review = null;
