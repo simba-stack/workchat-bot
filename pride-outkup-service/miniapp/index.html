@@ -4780,8 +4780,12 @@ var API = {
       if (e.name === 'AbortError') { var ae = new Error('aborted'); ae.code = 'ABORTED'; throw ae; }
       if (e.code) throw e;
       P2P.state.offline = true;
-      if (!opts.silent) UI.toast('Сеть: '+e.message);
-      throw e;
+      var em = (e && e.message) ? e.message : 'fetch failed';
+      console.error('[API.call] NETWORK fail:', method, path, em, e);
+      var ne = new Error(em);
+      ne.code = 'NETWORK';
+      if (!opts.silent) UI.toast('Сеть: '+em);
+      throw ne;
     }
   },
   ads: {
@@ -4789,7 +4793,12 @@ var API = {
       q = q || {};
       var qs = [];
       ['cursor','type','crypto','fiat','status','limit','sort','payment_method','online','merchant','verified','search']
-        .forEach(function(k){ if(q[k]!=null && q[k]!=='') qs.push(k+'='+encodeURIComponent(q[k])); });
+        .forEach(function(k){
+          var v = q[k];
+          if (v==null || v==='' || v===false) return;
+          // Backend ждёт type=BUY|SELL, crypto=USDT, fiat=RUB и т.д. — string only
+          qs.push(k+'='+encodeURIComponent(String(v)));
+        });
       return API.call('GET','/advertisements'+(qs.length?'?'+qs.join('&'):''), null, {abortKey:'ads-list'});
     },
     get(id){ return API.call('GET','/advertisements/'+id); },
@@ -5546,22 +5555,32 @@ var SCREENS = {
     // BUY / SELL buttons
     var buySellRow =
       '<div style="display:flex;gap:10px;margin-bottom:14px">'+
-        '<button class="p2p-btn-primary" onclick="P2P.nav.push(\'buyMarket\')" style="background:linear-gradient(135deg,#34c759,#1ea249);box-shadow:0 8px 24px rgba(52,199,89,0.32)">BUY USDT</button>'+
-        '<button class="p2p-btn-primary" onclick="P2P._sellClick()" style="background:linear-gradient(135deg,#ff453a,#c1342d);box-shadow:0 8px 24px rgba(255,69,58,0.32)">SELL USDT</button>'+
+        '<button class="p2p-btn-primary" onclick="P2P.nav.push(\'buyMarket\')" style="background:linear-gradient(135deg,#34c759,#1ea249);box-shadow:0 8px 24px rgba(52,199,89,0.32)">Купить USDT</button>'+
+        '<button class="p2p-btn-primary" onclick="P2P._sellClick()" style="background:linear-gradient(135deg,#ff453a,#c1342d);box-shadow:0 8px 24px rgba(255,69,58,0.32)">Продать USDT</button>'+
       '</div>';
 
     // Search
     var search =
       '<input id="p2p-home-search" class="p2p-input" placeholder="Поиск по объявлениям / мерчантам…" style="margin-bottom:10px" value="'+esc(STATE.search)+'">';
 
-    // Quick filters
-    var cryptos = ['USDT','BTC','ETH','TON'];
-    var fiats = ['PLN','EUR','USD','RUB','UAH','TRY','KZT'];
-    var payments = ['SBP','BLIK','SEPA','Bank','Card'];
+    // Quick filters — только USDT + RUB + русские банки
+    var cryptos = ['USDT'];
+    var fiats = ['RUB'];
+    var payments = [
+      {key:'SBP',     label:'СБП'},
+      {key:'SBER',    label:'Сбербанк'},
+      {key:'TINKOFF', label:'Тинькофф'},
+      {key:'ALPHA',   label:'Альфа'},
+      {key:'VTB',     label:'ВТБ'},
+      {key:'RAIF',    label:'Райффайзен'},
+      {key:'GAZPROM', label:'Газпромбанк'},
+      {key:'OZON',    label:'OZON Банк'},
+      {key:'CASH',    label:'Наличные'},
+    ];
     var flags = [
-      {key:'online', label:'Online'},
-      {key:'merchant', label:'Merchant'},
-      {key:'verified', label:'Verified'},
+      {key:'online',   label:'Онлайн'},
+      {key:'merchant', label:'Мерчант'},
+      {key:'verified', label:'Проверенный'},
     ];
 
     var chipRow = function(items, getActive, onclick){
@@ -5642,7 +5661,9 @@ var SCREENS = {
       SCREENS._renderAdsList('p2p-ads-list', STATE.ads, STATE.adsHasMore);
     } catch(e){
       if (e.code === 'ABORTED') return;
-      list.innerHTML = UI.errorState('NETWORK','Не удалось загрузить', {label:'Повторить', onclick:'P2P.screens._homeLoadAds(true)'});
+      console.error('[homeLoadAds] fail', e);
+      var msg = (e && e.message) ? e.message : 'Не удалось загрузить';
+      list.innerHTML = UI.errorState(e.code||'NETWORK', msg, {label:'Повторить', onclick:'P2P.screens._homeLoadAds(true)'});
     } finally {
       STATE.adsLoading = false;
     }
