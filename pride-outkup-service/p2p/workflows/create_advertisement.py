@@ -33,13 +33,13 @@ async def handle(ctx: WorkflowContext) -> dict:
     if ad_type not in (AdvertisementType.BUY.value, AdvertisementType.SELL.value):
         raise HTTPException(422, "type must be 'BUY' or 'SELL'")
 
-    crypto = (p.get("crypto") or "USDT").upper()
-    fiat = (p.get("fiat") or "RUB").upper()
+    crypto = (p.get("crypto_currency") or p.get("crypto") or "USDT").upper()
+    fiat = (p.get("fiat_currency") or p.get("fiat") or "RUB").upper()
 
     try:
-        amount_total = Decimal(str(p.get("amount_total", "0")))
-        min_order = Decimal(str(p.get("min_order_fiat", "0")))
-        max_order = Decimal(str(p.get("max_order_fiat", "0")))
+        amount_total = Decimal(str(p.get("total_amount", p.get("amount_total", "0"))))
+        min_order = Decimal(str(p.get("min_amount_fiat", p.get("min_order_fiat", "0"))))
+        max_order = Decimal(str(p.get("max_amount_fiat", p.get("max_order_fiat", "0"))))
     except Exception:
         raise HTTPException(422, "amounts must be decimals")
 
@@ -56,7 +56,7 @@ async def handle(ctx: WorkflowContext) -> dict:
     price_margin = None
     if pricing_mode == PricingMode.FIXED.value:
         try:
-            price_value = Decimal(str(p.get("price_fixed", "0")))
+            price_value = Decimal(str(p.get("price", p.get("price_fixed", "0"))))
         except Exception:
             raise HTTPException(422, "price_fixed required")
         if price_value <= 0:
@@ -70,7 +70,7 @@ async def handle(ctx: WorkflowContext) -> dict:
             raise HTTPException(422, "price_margin_pct invalid")
         # Для FLOATING — снапшот текущей цены; если не передан, 0 (обновится позже триггером цен)
         try:
-            price_value = Decimal(str(p.get("price_fixed", "0")))
+            price_value = Decimal(str(p.get("price", p.get("price_fixed", "0"))))
         except Exception:
             price_value = Decimal("0")
 
@@ -134,12 +134,12 @@ async def handle(ctx: WorkflowContext) -> dict:
         pricing_mode=pricing_mode,
         price=price_value if price_value is not None else Decimal("0"),
         price_margin_pct=price_margin,
-        payment_method_ids=p.get("payment_methods") or [],
-        pay_window_min=int(p.get("time_limit_minutes", 15)),
-        require_verified_taker=bool(p.get("require_kyc", False)),
-        min_taker_completed=int(p.get("min_completed_trades", 0)),
-        description=p.get("terms_text"),
-        merchant_note=p.get("auto_reply_text"),
+        payment_method_ids=p.get("payment_method_ids") or p.get("payment_methods") or [],
+        pay_window_min=int(p.get("pay_window_min", p.get("time_limit_minutes", 15))),
+        require_verified_taker=bool(p.get("require_verified_taker", p.get("require_kyc", False))),
+        min_taker_completed=int(p.get("min_taker_completed", p.get("min_completed_trades", 0))),
+        description=p.get("description", p.get("terms_text")),
+        merchant_note=p.get("merchant_note", p.get("auto_reply_text")),
         status=AS.DRAFT.value,
         version=1,
     )
