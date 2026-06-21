@@ -6227,16 +6227,26 @@ var SCREENS = {
   async _myAdsLoad(){
     var c = document.getElementById('p2p-myads-list');
     if (!c) return;
-    if (STATE._myAds.loading) return;
     STATE._myAds.loading = true;
     c.innerHTML = UI.skeleton(3, 130);
+    var timeoutId = setTimeout(function(){
+      if (STATE._myAds.loading && c) {
+        c.innerHTML = UI.errorState('TIMEOUT','Сервер не отвечает',
+          {label:'Повторить', onclick:'P2P.screens._myAdsLoad()'});
+        STATE._myAds.loading = false;
+      }
+    }, 15000);
     try {
       var r = await API.ads.mine();
+      clearTimeout(timeoutId);
+      console.log('[myAds] response', r);
       var items = (r && (r.items || r)) || [];
       if (!Array.isArray(items)) items = [];
       STATE._myAds.items = items;
       var f = STATE._myAds.filter;
-      var filtered = (f === 'ALL') ? items : items.filter(function(a){ return String(a.status||'').toUpperCase() === f; });
+      var filtered = (f === 'ALL') ? items : items.filter(function(a){
+        return String(a.status||'').toUpperCase() === f;
+      });
       if (!filtered.length) {
         c.innerHTML = UI.emptyState(
           f === 'ALL' ? 'У вас пока нет объявлений' : 'Нет объявлений в этом разделе',
@@ -6244,11 +6254,25 @@ var SCREENS = {
         );
         return;
       }
-      c.innerHTML = filtered.map(function(a){ return SCREENS._myAdCard(a); }).join('');
+      var html = '';
+      for (var i = 0; i < filtered.length; i++) {
+        try { html += SCREENS._myAdCard(filtered[i]); }
+        catch(cardErr) {
+          console.error('[myAds] _myAdCard fail:', cardErr, filtered[i]);
+          html += '<div class="p2p-glass" style="padding:14px;margin-bottom:10px;color:#ff8c33">' +
+            '\u26a0 Ошибка отображения объявления ' + esc(String((filtered[i]&&filtered[i].id)||'')).slice(0,40) +
+          '</div>';
+        }
+      }
+      c.innerHTML = html || UI.emptyState('У вас пока нет объявлений','');
     } catch(e){
-      if (e.code === 'ABORTED') return;
-      c.innerHTML = UI.errorState(e.code||'NETWORK','Не удалось загрузить', {label:'Повторить', onclick:'P2P.screens._myAdsLoad()'});
+      clearTimeout(timeoutId);
+      console.error('[myAds] fetch failed', e);
+      c.innerHTML = UI.errorState(e.code||'NETWORK',
+        'Не удалось загрузить: '+(e.message||e.code||'unknown'),
+        {label:'Повторить', onclick:'P2P.screens._myAdsLoad()'});
     } finally {
+      clearTimeout(timeoutId);
       STATE._myAds.loading = false;
     }
   },
