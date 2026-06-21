@@ -5,7 +5,7 @@ from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 
 from p2p import audit, ledger, locks, outbox, policies, risk, state, wallet
 from p2p.enums import (
@@ -19,10 +19,38 @@ logger = logging.getLogger("p2p.wf.create_trade")
 
 
 async def _gen_trade_number(db) -> str:
-    """T-YYYY-NNNNN — последовательный номер на основе COUNT(*)+1 за все годы."""
-    r = await db.execute(select(func.count(P2PTrade.id)))
-    n = (r.scalar() or 0) + 1
-    return f"T-{datetime.now(timezone.utc).year}-{n:05d}"
+    """T-YYYY-NNNNN — atomic seq.
+
+    Стратегия (TODO #4 fix race-condition):
+    1) Пробуем nextval('p2p_trade_number_seq') — PG sequence (создан в ALTER block).
+    2) Fallback: advisory_lock на год + SELECT MAX(trade_number) WHERE LIKE 'T-YYYY-%'.
+
+    Старая COUNT(*)+1 имела race: два одновременных создания получали один номер.
+    """
+    year = datetime.now(timezone.utc).year
+    # Path 1 — PG sequence
+    try:
+        r = await db.execute(text("SELECT nextval('p2p_trade_number_seq')"))
+        n = int(r.scalar() or 0)
+        if n > 0:
+            return f"T-{year}-{n:05d}"
+    except Exception as e:
+        logger.warning("[create_trade] nextval seq failed, fallback to advisory: %s", e)
+
+    # Path 2 — advisory lock на год + MAX парсинг
+    await locks.advisory_lock(db, f"trade_number_gen:{year}")
+    prefix = f"T-{year}-"
+    r = await db.execute(
+        select(func.max(P2PTrade.trade_number)).where(P2PTrade.trade_number.like(prefix + "%"))
+    )
+    last = r.scalar() or ""
+    next_n = 1
+    if last:
+        try:
+            next_n = int(str(last).split("-")[-1]) + 1
+        except Exception:
+            next_n = 1
+    return f"{prefix}{next_n:05d}"
 
 
 async def handle(ctx: WorkflowContext) -> dict:
@@ -192,10 +220,12 @@ async def handle(ctx: WorkflowContext) -> dict:
     db.add(trade)
     await db.flush()
 
-    # ---------- Уменьшить available на advertisement ----------
+    # ---------- Уменьшить available на advertisement + stat ----------
     ctx.step("ad.reserve")
     ad.available_amount = (ad.available_amount - amount_crypto).quantize(Decimal("0.000001"))
     ad.reserved_amount = (ad.reserved_amount + amount_crypto).quantize(Decimal("0.000001"))
+    # Общий счётчик попыток (TODO #5)
+    ad.trades_count = int(ad.trades_count or 0) + 1
     ad.version += 1
     await db.flush()
 

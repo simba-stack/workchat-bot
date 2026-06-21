@@ -213,3 +213,41 @@ async def request_evidence(
         "sequence_number": next_seq,
         "deadline_at": deadline_at.isoformat(),
     }
+
+
+@router.post("/policies/reload")
+async def reload_policies(
+    user: User = Depends(rbac.require_role(
+        P2PUserRole.ADMIN.value,
+        P2PUserRole.SUPER_ADMIN.value,
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    """TODO #8: Форсированная перезагрузка PolicyEngine кеша.
+
+    После изменения p2p_policies в БД admin зовёт этот endpoint,
+    чтобы все live-инстансы тут же увидели новые значения.
+    """
+    from p2p import policies as _pol
+    _pol.reload_cache()
+    try:
+        await _pol._reload_cache(db)
+        keys_count = len(_pol._cache.data)
+    except Exception as e:
+        logger.warning("[admin] policies reload failed: %s", e)
+        keys_count = 0
+    await audit.log(
+        db,
+        action="admin.policies_reload",
+        entity_type="policies",
+        entity_id=None,
+        actor_id=user.id,
+        actor_role=rbac.resolve_role(user),
+        new_state={"keys_loaded": keys_count},
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "keys_loaded": keys_count,
+        "reloaded_at": datetime.now(timezone.utc).isoformat(),
+    }

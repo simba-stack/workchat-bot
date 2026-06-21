@@ -15,10 +15,10 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 
 from core.db import AsyncSessionLocal
-from p2p import idempotency, policies
-from p2p.enums import DisputeStatus, TradeStatus
-from p2p.models import P2PDispute, P2PTrade
-from p2p.workflows import cancel_trade, confirm_payment
+from p2p import idempotency, policies, wallet
+from p2p.enums import AdvertisementStatus, AdvertisementType, DisputeStatus, TradeStatus
+from p2p.models import P2PAdvertisement, P2PDispute, P2PTrade, P2PWallet
+from p2p.workflows import cancel_trade, confirm_payment, pause_advertisement, resume_advertisement
 from p2p.orchestrator import run_workflow
 
 logger = logging.getLogger("p2p.worker.scheduler")
@@ -144,6 +144,110 @@ async def _cleanup_idempotency(db) -> int:
     return n
 
 
+async def _check_auto_pause_resume(db) -> tuple[int, int]:
+    """TODO #10: Auto-pause/resume SELL объявлений по advertisement_hold balance.
+
+    Логика:
+    - SELL ad ACTIVE + AUTO_PAUSE_EMPTY_BALANCE + wallet.advertisement_hold < ad.available_amount
+      → pause (reason='auto:empty_balance')
+    - SELL ad PAUSED + AUTO_RESUME_ON_BALANCE + wallet.advertisement_hold >= ad.available_amount
+      → resume
+
+    Возвращает (paused_count, resumed_count).
+    """
+    try:
+        auto_pause = await policies.get_bool(db, "AUTO_PAUSE_EMPTY_BALANCE")
+        auto_resume = await policies.get_bool(db, "AUTO_RESUME_ON_BALANCE")
+    except Exception:
+        auto_pause = True
+        auto_resume = True
+
+    paused = 0
+    resumed = 0
+
+    if not (auto_pause or auto_resume):
+        return (0, 0)
+
+    # Берём активные/паузнутые SELL объявления (батч)
+    r = await db.execute(
+        select(P2PAdvertisement).where(
+            P2PAdvertisement.type == AdvertisementType.SELL.value,
+            P2PAdvertisement.status.in_((
+                AdvertisementStatus.ACTIVE.value,
+                AdvertisementStatus.PAUSED.value,
+            )),
+        ).limit(500)
+    )
+    ads = list(r.scalars().all())
+    if not ads:
+        return (0, 0)
+
+    for ad in ads:
+        try:
+            wb = await wallet.get_breakdown(db, ad.owner_id, ad.crypto_currency)
+            avail_needed = ad.available_amount or 0
+            hold = wb.advertisement_hold or 0
+
+            if (
+                auto_pause
+                and ad.status == AdvertisementStatus.ACTIVE.value
+                and avail_needed > 0
+                and hold < avail_needed
+            ):
+                # Эскроу меньше чем должно быть — pause
+                try:
+                    await run_workflow(
+                        db,
+                        workflow_type="pause_advertisement",
+                        user_id=ad.owner_id,
+                        input_payload={
+                            "advertisement_id": ad.id,
+                            "reason": "auto:empty_balance",
+                        },
+                        handler=pause_advertisement.handle,
+                        actor_role="SYSTEM",
+                        source="scheduler:auto_pause",
+                    )
+                    await db.commit()
+                    paused += 1
+                except Exception as e:
+                    await db.rollback()
+                    logger.warning(
+                        "[scheduler] auto-pause ad=%s failed: %s", ad.id, e,
+                    )
+                continue
+
+            if (
+                auto_resume
+                and ad.status == AdvertisementStatus.PAUSED.value
+                and (ad.paused_reason or "").startswith("auto:")
+                and hold >= avail_needed
+                and avail_needed > 0
+            ):
+                # Эскроу восстановилось — resume (только то что paused-было автоматом)
+                try:
+                    await run_workflow(
+                        db,
+                        workflow_type="resume_advertisement",
+                        user_id=ad.owner_id,
+                        input_payload={"advertisement_id": ad.id},
+                        handler=resume_advertisement.handle,
+                        actor_role="SYSTEM",
+                        source="scheduler:auto_resume",
+                    )
+                    await db.commit()
+                    resumed += 1
+                except Exception as e:
+                    await db.rollback()
+                    logger.warning(
+                        "[scheduler] auto-resume ad=%s failed: %s", ad.id, e,
+                    )
+        except Exception as e:
+            logger.warning("[scheduler] auto-pause/resume iter ad=%s failed: %s", ad.id, e)
+
+    return (paused, resumed)
+
+
 async def run() -> None:
     logger.info("[scheduler] started")
     last_idemp_cleanup = datetime.now(timezone.utc)
@@ -159,6 +263,17 @@ async def run() -> None:
                 cnt2 = await _check_confirm_timeouts(db)
                 if cnt2:
                     logger.info("[scheduler] auto-released %d trades", cnt2)
+
+                # TODO #10: auto-pause/resume ad'ы по advertisement_hold
+                try:
+                    p_cnt, r_cnt = await _check_auto_pause_resume(db)
+                    if p_cnt or r_cnt:
+                        logger.info(
+                            "[scheduler] auto-pause=%d auto-resume=%d",
+                            p_cnt, r_cnt,
+                        )
+                except Exception as _ap_e:
+                    logger.warning("[scheduler] auto-pause/resume failed: %s", _ap_e)
 
                 # idempotency cleanup — раз в час
                 now = datetime.now(timezone.utc)

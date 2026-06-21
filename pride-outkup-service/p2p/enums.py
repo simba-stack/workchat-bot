@@ -185,6 +185,13 @@ class EventType(str, Enum):
     DISPUTE_CLOSED = "DisputeClosed"
     RECON_FAILED = "ReconciliationFailed"
     SYSTEM_ALERT = "SystemAlert"
+    # Chat realtime events (TODO #1: WS typing/read)
+    TYPING_STARTED = "TypingStarted"
+    TYPING_STOPPED = "TypingStopped"
+    MESSAGE_DELIVERED = "MessageDelivered"
+    MESSAGE_READ = "MessageRead"
+    # Auto-archive/pause events
+    ADVERTISEMENT_ARCHIVED = "AdvertisementArchived"
 
 
 class RiskDecision(str, Enum):

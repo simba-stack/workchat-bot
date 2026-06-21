@@ -80,6 +80,17 @@ async def _can_subscribe(user: User, channel: str) -> tuple[bool, str | None]:
             return False, "not your user channel"
         return True, None
 
+    if kind == "merchant":
+        # TODO #7: merchant:{user_id} — для подписки на свои события мерчанта
+        # (новые сделки, изменения объявлений). Только владелец.
+        try:
+            uid = int(ident)
+        except ValueError:
+            return False, "invalid merchant id"
+        if uid != user.id:
+            return False, "not your merchant channel"
+        return True, None
+
     if kind == "trade":
         async with AsyncSessionLocal() as db:
             r = await db.execute(select(P2PTrade).where(P2PTrade.id == ident))

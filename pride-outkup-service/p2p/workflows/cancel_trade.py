@@ -72,6 +72,8 @@ async def handle(ctx: WorkflowContext) -> dict:
         if ad:
             ad.available_amount = (ad.available_amount + trade.crypto_amount)
             ad.reserved_amount = max(Decimal("0"), (ad.reserved_amount - trade.crypto_amount))
+            # Stats: cancelled_count (TODO #5)
+            ad.cancelled_count = int(ad.cancelled_count or 0) + 1
             ad.version += 1
     else:
         # BUY-ad: возврат seller'у в available
@@ -84,6 +86,9 @@ async def handle(ctx: WorkflowContext) -> dict:
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
+        if ad:
+            ad.cancelled_count = int(ad.cancelled_count or 0) + 1
+            ad.version += 1
 
     await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto_currency)
 

@@ -79,7 +79,6 @@ async def list_messages(
         if not (is_admin and trade.status in _DISPUTE_STATES):
             raise HTTPException(403, "not a trade participant")
 
-    # Сообщения + sender username + attachment metadata (LEFT JOIN на случай отсутствия)
     from p2p.models import P2PAttachment
     q = (
         select(
@@ -111,14 +110,11 @@ async def list_messages(
     )
     rows = (await db.execute(q)).all()
 
-    def _att_url(storage_key):
-        if not storage_key:
+    def _att_url(attachment_id):
+        """URL для скачивания через RBAC-защищённый endpoint."""
+        if not attachment_id:
             return None
-        # Если storage_key уже URL (http/https) — возвращаем как есть.
-        # Иначе предполагаем что это S3-ключ, нужен presigned URL (TODO когда будет S3).
-        if storage_key.startswith("http"):
-            return storage_key
-        return f"/api/v2/p2p/attachments/{storage_key}"  # placeholder route
+        return f"/api/v2/p2p/attachments/{attachment_id}"
 
     items = [
         {
@@ -132,12 +128,11 @@ async def list_messages(
             "status": row[7],
             "created_at": row[8].isoformat() if row[8] else None,
             "sequence_number": row[9],
-            # attachment metadata (null если нет вложения)
             "attachment_mime": row[10],
             "attachment_size": row[11],
             "attachment_name": row[12],
-            "attachment_url": _att_url(row[13]),
-            "attachment_preview_url": _att_url(row[14]),
+            "attachment_url": _att_url(row[5]) if row[13] else None,
+            "attachment_preview_url": _att_url(row[5]) if row[14] else None,
             "attachment_sha256": row[15],
             "attachment_virus_status": row[16],
         }
@@ -151,3 +146,162 @@ async def list_messages(
         "count": len(items),
         "next_after_seq": items[-1]["sequence_number"] if items else after_seq,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TODO #1: WS typing/read events
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _ensure_trade_participant(
+    db: AsyncSession, trade_id: str, user_id: int,
+) -> P2PTrade:
+    r = await db.execute(select(P2PTrade).where(P2PTrade.id == trade_id))
+    trade = r.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(404, "trade not found")
+    if user_id not in (trade.buyer_id, trade.seller_id):
+        raise HTTPException(403, "not a trade participant")
+    return trade
+
+
+@router.post("/trades/{trade_id}/typing")
+async def cmd_typing(
+    trade_id: str,
+    payload: dict[str, Any] | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Emit TypingStarted/TypingStopped через outbox (только в WS, не в БД).
+
+    body: {"state": "start" | "stop"}
+    """
+    from p2p import outbox as _outbox
+    from p2p.enums import EventType as _ET
+
+    p = payload or {}
+    state_v = (p.get("state") or "").strip().lower()
+    if state_v not in ("start", "stop"):
+        raise HTTPException(422, "state must be 'start' or 'stop'")
+
+    trade = await _ensure_trade_participant(db, trade_id, user.id)
+    role = "buyer" if trade.buyer_id == user.id else "seller"
+    event_type = (_ET.TYPING_STARTED.value if state_v == "start" else _ET.TYPING_STOPPED.value)
+
+    await _outbox.emit(
+        db,
+        event_type=event_type,
+        payload={
+            "trade_id": trade_id,
+            "user_id": user.id,
+            "role": role,
+            "buyer_id": trade.buyer_id,
+            "seller_id": trade.seller_id,
+        },
+        aggregate_type="trade",
+        aggregate_id=trade_id,
+    )
+    await db.commit()
+    return {"ok": True, "trade_id": trade_id, "state": state_v, "role": role}
+
+
+async def _update_message_status_and_emit(
+    db: AsyncSession,
+    trade_id: str,
+    message_id: str,
+    new_status: str,
+    event_type: str,
+    user: User,
+) -> dict:
+    """Общая логика для delivered/read endpoints."""
+    from p2p import outbox as _outbox
+    from p2p.enums import MessageStatus as _MS
+
+    if new_status not in (_MS.DELIVERED.value, _MS.READ.value):
+        raise HTTPException(500, "invalid target status")
+
+    trade = await _ensure_trade_participant(db, trade_id, user.id)
+
+    r = await db.execute(
+        select(P2PMessage).where(
+            P2PMessage.id == message_id,
+            P2PMessage.trade_id == trade_id,
+        )
+    )
+    msg = r.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(404, "message not found")
+
+    # Свои сообщения не можем отметить как delivered/read (это делает получатель)
+    if msg.sender_id == user.id:
+        raise HTTPException(409, "cannot mark own message")
+
+    # Status ordering: WAITING < UPLOADING < SENT < DELIVERED < READ
+    _order = {
+        _MS.WAITING.value: 0,
+        _MS.UPLOADING.value: 1,
+        _MS.SENT.value: 2,
+        _MS.DELIVERED.value: 3,
+        _MS.READ.value: 4,
+        _MS.FAILED.value: -1,
+    }
+    cur = _order.get(msg.status, 0)
+    nxt = _order.get(new_status, 0)
+    if nxt > cur:
+        msg.status = new_status
+        await db.flush()
+
+    await _outbox.emit(
+        db,
+        event_type=event_type,
+        payload={
+            "trade_id": trade_id,
+            "message_id": message_id,
+            "by_user_id": user.id,
+            "sender_id": msg.sender_id,
+            "buyer_id": trade.buyer_id,
+            "seller_id": trade.seller_id,
+            "sequence_number": msg.sequence_number,
+            "status": msg.status,
+        },
+        aggregate_type="trade",
+        aggregate_id=trade_id,
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "trade_id": trade_id,
+        "message_id": message_id,
+        "status": msg.status,
+    }
+
+
+@router.post("/trades/{trade_id}/messages/{message_id}/delivered")
+async def cmd_mark_delivered(
+    trade_id: str,
+    message_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from p2p.enums import EventType as _ET, MessageStatus as _MS
+    return await _update_message_status_and_emit(
+        db, trade_id, message_id,
+        new_status=_MS.DELIVERED.value,
+        event_type=_ET.MESSAGE_DELIVERED.value,
+        user=user,
+    )
+
+
+@router.post("/trades/{trade_id}/messages/{message_id}/read")
+async def cmd_mark_read(
+    trade_id: str,
+    message_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from p2p.enums import EventType as _ET, MessageStatus as _MS
+    return await _update_message_status_and_emit(
+        db, trade_id, message_id,
+        new_status=_MS.READ.value,
+        event_type=_ET.MESSAGE_READ.value,
+        user=user,
+    )

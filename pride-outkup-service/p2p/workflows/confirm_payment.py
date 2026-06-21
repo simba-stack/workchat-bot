@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from p2p import audit, ledger, locks, outbox, state, wallet
-from p2p.enums import TradeStatus, EventType
+from p2p.enums import TradeStatus, EventType, AdvertisementStatus
 from p2p.models import P2PTrade, P2PAdvertisement
 from p2p.orchestrator import WorkflowContext
 
@@ -59,17 +59,47 @@ async def handle(ctx: WorkflowContext) -> dict:
     await wallet.update_wallet_from_ledger(db, trade.seller_id, trade.crypto_currency)
     await wallet.update_wallet_from_ledger(db, trade.buyer_id, trade.crypto_currency)
 
-    # ---------- Advertisement: reserved_amount → total_amount decrement ----------
+    # ---------- Advertisement: stats + auto-archive (TODO #5/#6) ----------
     await locks.lock_advertisement(db, trade.advertisement_id)
     ad_r = await db.execute(select(P2PAdvertisement).where(P2PAdvertisement.id == trade.advertisement_id))
     ad = ad_r.scalar_one_or_none()
     if ad:
+        # NOTE: total_amount — это исходный план объявления, его НЕЛЬЗЯ декрементить.
+        # "Sold" вычисляется как (total_amount - available_amount - reserved_amount).
+        # Освобождаем reserved (трейд уже не активен).
         ad.reserved_amount = max(Decimal("0"), (ad.reserved_amount or Decimal("0")) - trade.crypto_amount)
-        ad.total_amount = max(Decimal("0"), (ad.total_amount or Decimal("0")) - trade.crypto_amount)
+        # Stats: completed_count + total_volume
+        ad.completed_count = int(ad.completed_count or 0) + 1
+        ad.total_volume = (ad.total_volume or Decimal("0")) + (trade.crypto_amount or Decimal("0"))
         ad.version += 1
-        # Auto-archive если полностью продано
+        # Auto-archive если полностью продано — через state.assert, чтобы не обходить матрицу
         if ad.available_amount <= Decimal("0") and ad.reserved_amount <= Decimal("0"):
-            ad.status = "ARCHIVED"
+            try:
+                state.assert_advertisement_transition(ad.status, AdvertisementStatus.ARCHIVED.value)
+                ad.status = AdvertisementStatus.ARCHIVED.value
+                ad.archived_at = datetime.now(timezone.utc)
+                try:
+                    await outbox.emit(
+                        db,
+                        event_type=EventType.ADVERTISEMENT_ARCHIVED.value,
+                        payload={
+                            "advertisement_id": ad.id,
+                            "owner_id": ad.owner_id,
+                            "reason": "auto:sold_out",
+                        },
+                        aggregate_type="advertisement",
+                        aggregate_id=ad.id,
+                        correlation_id=ctx.correlation_id,
+                        workflow_id=ctx.workflow_id,
+                    )
+                except Exception as _emit_e:
+                    logger.warning("[confirm_payment] emit ARCHIVED failed: %s", _emit_e)
+            except HTTPException as _state_e:
+                # Ad может быть в DRAFT/PAUSED — auto-archive только из ACTIVE.
+                logger.warning(
+                    "[confirm_payment] skip auto-archive ad=%s (status=%s): %s",
+                    ad.id, ad.status, _state_e.detail,
+                )
 
     # ---------- State ----------
     state.assert_trade_transition(trade.status, TradeStatus.COMPLETED.value)

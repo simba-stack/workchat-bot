@@ -4686,7 +4686,7 @@ loadMain().then(routeFromStart);
 <script>
 (function(){
 "use strict";
-if (window.P2P && window.P2P.__v2 && window.P2P.__build === 'v3-tom28-30-stubs-filled') {
+if (window.P2P && window.P2P.__v2 && window.P2P.__build === 'v4-final') {
   console.warn('[P2P v2] already loaded build', window.P2P.__build); return;
 }
 
@@ -4835,9 +4835,56 @@ var API = {
     send(trade_id, body){
       return API.call('POST','/trades/'+trade_id+'/messages', body, {idem:'msg-'+uuid()});
     },
+    typing(trade_id, state){
+      return API.call('POST','/trades/'+trade_id+'/typing', {state: state||'start'}, {silent:true});
+    },
+    markDelivered(trade_id, message_id){
+      return API.call('POST','/trades/'+trade_id+'/messages/'+message_id+'/delivered', {}, {silent:true});
+    },
+    markRead(trade_id, message_id){
+      return API.call('POST','/trades/'+trade_id+'/messages/'+message_id+'/read', {}, {silent:true});
+    },
+  },
+  // ── Том 27.4 multipart attachment upload ──
+  attachments: {
+    // Native fetch (без JSON, с FormData). Браузер сам выставит multipart Content-Type.
+    upload(trade_id, file, opts){
+      opts = opts || {};
+      var initData = (TG && TG.initData) || '';
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('caption', opts.caption || '');
+      fd.append('message_type', opts.message_type || 'IMAGE');
+      var url = '/api/v2/p2p/trades/'+trade_id+'/attachments';
+      if (initData) url += '?init_data=' + encodeURIComponent(initData);
+      var headers = {};
+      if (initData) headers['X-Telegram-InitData'] = initData;
+      headers['Idempotency-Key'] = opts.idem || ('att-'+uuid());
+      return fetch(url, { method:'POST', headers: headers, body: fd })
+        .then(function(r){
+          return r.json().catch(function(){ return null; }).then(function(data){
+            if (!r.ok) {
+              var code = (data && (data.code || (data.detail && data.detail.code))) || ('HTTP_'+r.status);
+              var msg = (data && (data.message || (data.detail && (data.detail.message||data.detail)) || data.error)) || ('Ошибка '+r.status);
+              var err = new Error(typeof msg==='string'?msg:JSON.stringify(msg));
+              err.code = code; err.status = r.status; throw err;
+            }
+            return data;
+          });
+        });
+    },
   },
   evidence: {
     get(trade_id){ return API.call('GET','/trades/'+trade_id+'/evidence-center', null, {abortKey:'ev-'+trade_id}); },
+    // Прямые URL для скачивания (auth через init_data в query)
+    exportUrl(trade_id, kind){
+      var initData = (TG && TG.initData) || '';
+      var path = (kind === 'zip')
+        ? '/api/v2/p2p/trades/'+trade_id+'/evidence/export/zip'
+        : '/api/v2/p2p/trades/'+trade_id+'/evidence/export/pdf';
+      if (initData) path += '?init_data=' + encodeURIComponent(initData);
+      return path;
+    },
   },
   users: {
     stats(user_id){ return API.call('GET','/users/'+user_id+'/stats', null, {silent:true}); },
@@ -4868,6 +4915,7 @@ var API = {
     },
     resolveDispute(id, body){ return API.call('POST','/admin/disputes/'+id+'/resolve', body||{}, {idem:'ar-'+uuid()}); },
     requestEvidence(id, body){ return API.call('POST','/admin/disputes/'+id+'/request-evidence', body||{}, {idem:'are-'+uuid()}); },
+    policiesReload(){ return API.call('POST','/admin/policies/reload', {}, {idem:'pol-'+uuid()}); },
   },
   // ── Том 30 merchant dashboard API ──
   merchant: {
@@ -6207,12 +6255,12 @@ var SCREENS = {
     if (status === 'ACTIVE') {
       actions =
         '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px" onclick="P2P.screens._myAdAction(\''+esc(a.id)+'\',\'pause\')">⏸ Пауза</button>'+
-        '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px" onclick="P2P.nav.push(\'editAd\',{id:\''+esc(a.id)+'\'})">✎ Изм.</button>'+
+        '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px" onclick="P2P.nav.push(\'editAd\',{ad_id:\''+esc(a.id)+'\'})">✎ Изм.</button>'+
         '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px;color:#ff8c33" onclick="P2P.screens._myAdAction(\''+esc(a.id)+'\',\'archive\')">📦 Архив</button>';
     } else if (status === 'PAUSED') {
       actions =
         '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px;color:#34c759" onclick="P2P.screens._myAdAction(\''+esc(a.id)+'\',\'resume\')">▶ Активировать</button>'+
-        '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px" onclick="P2P.nav.push(\'editAd\',{id:\''+esc(a.id)+'\'})">✎ Изм.</button>'+
+        '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px" onclick="P2P.nav.push(\'editAd\',{ad_id:\''+esc(a.id)+'\'})">✎ Изм.</button>'+
         '<button class="p2p-btn-secondary" style="flex:1;padding:6px;font-size:12px;height:38px;color:#ff8c33" onclick="P2P.screens._myAdAction(\''+esc(a.id)+'\',\'archive\')">📦 Архив</button>';
     } else if (status === 'ARCHIVED') {
       actions =
@@ -6262,13 +6310,281 @@ var SCREENS = {
     }
   },
 
-  // editAd — пока минимальная заглушка с переходом на createAd с предзаполнением.
-  // Полная PATCH-форма — отдельный экран; для MVP даём toast + редирект.
+  // ═════════════ EDIT AD (PATCH form) ═════════════
   async editAd(params){
     params = params || {};
-    if (!params.id) { NAV.pop(); return; }
-    UI.toast('Редактирование скоро — пока используйте паузу + создание нового');
-    NAV.replace('myAds');
+    var adId = params.ad_id || params.id;
+    if (!adId) { UI.toast('ad_id required'); NAV.pop(); return; }
+    STATE.currentScreen = 'editAd';
+    STATE.currentParams = { ad_id: adId };
+    STATE._editAd = {
+      ad_id: adId,
+      ad: null,                    // оригинал с бэка
+      original: null,              // снимок исходных значений (для diff)
+      form: null,                  // текущие значения формы
+      pms: [],
+      loading: true,
+      submitting: false,
+    };
+    setHtml(shellHtml(
+      UI.glassHeader({ back:true, showCounters:false, title:'Редактировать объявление' })+
+      UI.skeleton(4, 90),
+      'my_ads'
+    ));
+    try {
+      var ad = await API.ads.get(adId);
+      STATE._editAd.ad = ad;
+      var pmRes = await API.paymentMethods.list().catch(function(){return null;});
+      STATE._editAd.pms = (pmRes && (pmRes.items||pmRes)) || [];
+      // снимок исходных значений (API-имена полей — совпадают с GET)
+      var snap = {
+        price_fixed:        ad.price_fixed != null ? String(ad.price_fixed) : '',
+        price_margin_pct:   ad.price_margin_pct != null ? String(ad.price_margin_pct) : '',
+        pricing_mode:       ad.pricing_mode || 'FIXED',
+        min_order_fiat:     ad.min_order_fiat != null ? String(ad.min_order_fiat) : '',
+        max_order_fiat:     ad.max_order_fiat != null ? String(ad.max_order_fiat) : '',
+        payment_methods:    Array.isArray(ad.payment_methods) ? ad.payment_methods.slice() : [],
+        time_limit_minutes: ad.time_limit_minutes != null ? parseInt(ad.time_limit_minutes,10) : 15,
+        require_kyc:        !!ad.require_kyc,
+        min_completed_trades: ad.min_completed_trades != null ? parseInt(ad.min_completed_trades,10) : 0,
+        terms_text:         ad.terms_text || '',
+      };
+      STATE._editAd.original = snap;
+      STATE._editAd.form = JSON.parse(JSON.stringify(snap));
+      STATE._editAd.loading = false;
+      SCREENS._editAdRender();
+    } catch(e){
+      if (e && e.code === 'ABORTED') return;
+      setHtml(shellHtml(
+        UI.glassHeader({ back:true, showCounters:false, title:'Редактировать объявление' })+
+        UI.errorState(e.code||'NETWORK', e.message||'Не удалось загрузить', {label:'Назад', onclick:'P2P.nav.pop()'}),
+        'my_ads'
+      ));
+    }
+  },
+
+  _editAdRender(){
+    var st = STATE._editAd; if (!st || !st.ad) return;
+    var ad = st.ad, f = st.form, pms = st.pms || [];
+    var isFloating = (f.pricing_mode === 'FLOATING');
+    var ro = function(label, value){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:13px">'+
+        '<span style="color:var(--p2p-text-dim)">'+esc(label)+'</span>'+
+        '<span style="font-weight:500">'+esc(value)+'</span>'+
+      '</div>';
+    };
+    var typeBadge = (String(ad.type||'').toUpperCase()==='SELL')
+      ? '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">SELL</span>'
+      : '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">BUY</span>';
+    var roCard = UI.glassCard(
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<div style="display:flex;gap:8px;align-items:center">'+typeBadge+
+          '<span style="font-size:14px;font-weight:600">'+esc((ad.crypto||'USDT')+'/'+(ad.fiat||'RUB'))+'</span>'+
+        '</div>'+
+        UI.statusBadge(ad.status)+
+      '</div>'+
+      ro('Объём', UI.fmt(ad.amount_total, ad.crypto, 8))+
+      ro('Доступно', UI.fmt(ad.amount_available, ad.crypto, 8))+
+      ro('В резерве', UI.fmt(ad.amount_reserved, ad.crypto, 8))+
+      '<div style="font-size:11px;color:var(--p2p-text-mute);margin-top:6px;line-height:1.4">Тип, валюты и объём не меняются. Чтобы изменить объём — архивируйте и создайте новое.</div>'
+    );
+
+    // Pricing card
+    var priceCard = UI.glassCard(
+      '<div style="font-weight:600;font-size:13px;margin-bottom:8px">Цена</div>'+
+      '<div style="display:flex;gap:8px;margin-bottom:12px">'+
+        '<button class="p2p-chip'+(!isFloating?' active':'')+'" style="flex:1;justify-content:center;height:38px" onclick="P2P.screens._editAdSet(\'pricing_mode\',\'FIXED\')">Фиксированная</button>'+
+        '<button class="p2p-chip'+(isFloating?' active':'')+'" style="flex:1;justify-content:center;height:38px" onclick="P2P.screens._editAdSet(\'pricing_mode\',\'FLOATING\')">Плавающая</button>'+
+      '</div>'+
+      (isFloating
+        ? '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Маржа % (от -10 до +10)</div>'+
+          '<input class="p2p-input" type="number" step="0.1" min="-10" max="10" inputmode="decimal" value="'+esc(f.price_margin_pct)+'" oninput="P2P.screens._editAdSet(\'price_margin_pct\',this.value)">'
+        : '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Цена за 1 '+esc(ad.crypto||'USDT')+' в '+esc(ad.fiat||'RUB')+'</div>'+
+          '<input class="p2p-input" type="number" step="0.01" min="0" inputmode="decimal" value="'+esc(f.price_fixed)+'" oninput="P2P.screens._editAdSet(\'price_fixed\',this.value)">'
+      )
+    );
+
+    // Limits card
+    var limitsCard = UI.glassCard(
+      '<div style="font-weight:600;font-size:13px;margin-bottom:8px">Лимиты сделки ('+esc(ad.fiat||'RUB')+')</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
+        '<div><div style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Мин</div>'+
+          '<input class="p2p-input" type="number" min="0" inputmode="decimal" value="'+esc(f.min_order_fiat)+'" oninput="P2P.screens._editAdSet(\'min_order_fiat\',this.value)"></div>'+
+        '<div><div style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Макс</div>'+
+          '<input class="p2p-input" type="number" min="0" inputmode="decimal" value="'+esc(f.max_order_fiat)+'" oninput="P2P.screens._editAdSet(\'max_order_fiat\',this.value)"></div>'+
+      '</div>'+
+      '<div style="font-size:12px;color:var(--p2p-text-dim);margin:14px 0 4px">Окно оплаты, мин (5–120)</div>'+
+      '<input class="p2p-input" type="number" min="5" max="120" inputmode="numeric" value="'+esc(f.time_limit_minutes)+'" oninput="P2P.screens._editAdSet(\'time_limit_minutes\',this.value)">'
+    );
+
+    // PMs card
+    var pmsHtml;
+    if (!pms.length) {
+      pmsHtml = '<div class="p2p-glass" style="padding:12px;color:var(--p2p-text-dim);font-size:12px;border-color:rgba(255,204,0,0.4)">Нет добавленных реквизитов. <a onclick="P2P.nav.push(\'paymentMethods\')" style="color:var(--p2p-accent);cursor:pointer">Добавить</a></div>';
+    } else {
+      pmsHtml = pms.map(function(pm){
+        var sel = (f.payment_methods||[]).indexOf(pm.id) >= 0;
+        var bg = sel ? 'background:rgba(51,144,236,0.12);border-color:rgba(51,144,236,0.5);' : '';
+        return '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:6px;cursor:pointer;'+bg+'" onclick="P2P.screens._editAdTogglePm(\''+esc(pm.id)+'\')">'+
+          '<div style="display:flex;align-items:center;gap:10px">'+
+            '<div style="width:22px;height:22px;border-radius:6px;border:1.5px solid '+(sel?'var(--p2p-accent)':'rgba(255,255,255,0.2)')+';background:'+(sel?'var(--p2p-accent)':'transparent')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-shrink:0">'+(sel?'✓':'')+'</div>'+
+            '<div style="flex:1;min-width:0">'+
+              '<div style="font-size:13px;font-weight:600">'+esc(pm.bank_name||pm.type)+' · '+esc(pm.type||'')+'</div>'+
+              '<div style="font-size:11px;color:var(--p2p-text-dim)">'+esc(pm.account_holder||'')+(pm.card_number_masked?(' · '+esc(pm.card_number_masked)):'')+(pm.phone?(' · '+esc(pm.phone)):'')+'</div>'+
+            '</div>'+
+          '</div>'+
+        '</div>';
+      }).join('');
+    }
+    var pmCard = UI.glassCard(
+      '<div style="font-weight:600;font-size:13px;margin-bottom:8px">Способы оплаты *</div>'+
+      pmsHtml
+    );
+
+    // Description card
+    var descLen = (f.terms_text||'').length;
+    var descCard = UI.glassCard(
+      '<div style="font-weight:600;font-size:13px;margin-bottom:8px">Описание / условия</div>'+
+      '<textarea class="p2p-input" maxlength="500" rows="4" oninput="P2P.screens._editAdSet(\'terms_text\',this.value)" placeholder="Условия, требования, контакты…" style="resize:vertical;min-height:80px;font-family:inherit">'+esc(f.terms_text||'')+'</textarea>'+
+      '<div style="text-align:right;font-size:11px;color:var(--p2p-text-dim);margin-top:4px">'+descLen+' / 500</div>'
+    );
+
+    // Verification card
+    var verCard = UI.glassCard(
+      '<div style="font-weight:600;font-size:13px;margin-bottom:8px">Требования к тейкеру</div>'+
+      '<label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 0">'+
+        '<div>'+
+          '<div style="font-size:13px;font-weight:500">Только KYC-верифицированные</div>'+
+          '<div style="font-size:11px;color:var(--p2p-text-dim);margin-top:2px">Требовать прохождение верификации</div>'+
+        '</div>'+
+        '<input type="checkbox" '+(f.require_kyc?'checked':'')+' onchange="P2P.screens._editAdSet(\'require_kyc\',this.checked)" style="width:20px;height:20px">'+
+      '</label>'+
+      '<div style="font-size:12px;color:var(--p2p-text-dim);margin:10px 0 4px">Мин. completed_trades</div>'+
+      '<input class="p2p-input" type="number" min="0" inputmode="numeric" value="'+esc(f.min_completed_trades)+'" oninput="P2P.screens._editAdSet(\'min_completed_trades\',this.value)">'
+    );
+
+    var changed = SCREENS._editAdDiff();
+    var hasChanges = Object.keys(changed).length > 0;
+    var changesPreview = hasChanges
+      ? '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:10px;border-color:rgba(51,144,236,0.4);background:rgba(51,144,236,0.06)">'+
+          '<div style="font-size:11px;color:var(--p2p-accent);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">Изменения ('+Object.keys(changed).length+')</div>'+
+          '<div style="font-size:12px;color:var(--p2p-text-dim);line-height:1.5">'+esc(Object.keys(changed).join(', '))+'</div>'+
+        '</div>'
+      : '<div style="font-size:12px;color:var(--p2p-text-mute);text-align:center;margin:10px 0">Изменений нет</div>';
+
+    var submitDisabled = (!hasChanges) || st.submitting;
+    var saveBtn =
+      '<button class="p2p-btn-primary" id="p2p-edit-ad-save" onclick="P2P.screens._editAdSubmit()"'+(submitDisabled?' disabled':'')+'>'+
+        (st.submitting ? 'Сохранение…' : '✓ Сохранить')+
+      '</button>'+
+      '<button class="p2p-btn-secondary" style="margin-top:8px" onclick="P2P.nav.pop()">Отмена</button>';
+
+    setHtml(shellHtml(
+      UI.glassHeader({ back:true, showCounters:false, title:'Редактировать объявление' })+
+      roCard + priceCard + limitsCard + pmCard + descCard + verCard +
+      changesPreview +
+      '<div style="margin:14px 0 24px">'+saveBtn+'</div>'+
+      '<div id="p2p-edit-ad-error"></div>',
+      'my_ads'
+    ));
+  },
+
+  _editAdSet(k, v){
+    var st = STATE._editAd; if (!st || !st.form) return;
+    if (k === 'time_limit_minutes' || k === 'min_completed_trades') {
+      v = parseInt(v||0, 10);
+      if (isNaN(v)) v = 0;
+    }
+    if (k === 'require_kyc') v = !!v;
+    st.form[k] = v;
+    // лёгкий апдейт превью изменений — full re-render теряет фокус
+    // Делаем full re-render только при смене pricing_mode (меняет поля цены).
+    if (k === 'pricing_mode') {
+      UI.haptic('select');
+      SCREENS._editAdRender();
+      return;
+    }
+    // обновим только превью + disabled у Save
+    var changed = SCREENS._editAdDiff();
+    var save = document.getElementById('p2p-edit-ad-save');
+    if (save) save.disabled = (Object.keys(changed).length === 0) || st.submitting;
+  },
+
+  _editAdTogglePm(id){
+    var st = STATE._editAd; if (!st || !st.form) return;
+    var arr = st.form.payment_methods || [];
+    var idx = arr.indexOf(id);
+    if (idx >= 0) arr.splice(idx,1); else arr.push(id);
+    st.form.payment_methods = arr;
+    UI.haptic('select');
+    SCREENS._editAdRender();
+  },
+
+  // Diff формы vs оригинала. Возвращает {key: newValue} (API имена полей).
+  _editAdDiff(){
+    var st = STATE._editAd; if (!st || !st.form || !st.original) return {};
+    var changed = {};
+    var f = st.form, o = st.original;
+    var keys = ['pricing_mode','price_fixed','price_margin_pct','min_order_fiat','max_order_fiat',
+                'time_limit_minutes','require_kyc','min_completed_trades','terms_text'];
+    keys.forEach(function(k){
+      var a = f[k], b = o[k];
+      // Strings vs numbers: normalize numeric strings
+      if (typeof a === 'number') a = String(a);
+      if (typeof b === 'number') b = String(b);
+      if (a == null) a = '';
+      if (b == null) b = '';
+      if (String(a) !== String(b)) changed[k] = f[k];
+    });
+    // payment_methods: compare sets
+    var aPm = (f.payment_methods||[]).slice().sort().join('|');
+    var bPm = (o.payment_methods||[]).slice().sort().join('|');
+    if (aPm !== bPm) changed.payment_methods = (f.payment_methods||[]).slice();
+    // Если режим FIXED — не шлём price_margin_pct и наоборот (но diff может зацепить из-за пустых строк — фильтруем)
+    if (changed.pricing_mode === 'FIXED' || (!changed.pricing_mode && f.pricing_mode === 'FIXED')) {
+      delete changed.price_margin_pct;
+    }
+    if (changed.pricing_mode === 'FLOATING' || (!changed.pricing_mode && f.pricing_mode === 'FLOATING')) {
+      delete changed.price_fixed;
+    }
+    return changed;
+  },
+
+  async _editAdSubmit(){
+    var st = STATE._editAd; if (!st || !st.form) return;
+    var changed = SCREENS._editAdDiff();
+    if (!Object.keys(changed).length) { UI.toast('Изменений нет'); return; }
+    var f = st.form;
+    // Валидация
+    var minF = parseFloat(f.min_order_fiat||0);
+    var maxF = parseFloat(f.max_order_fiat||0);
+    if (!(minF > 0) || !(maxF > 0) || minF > maxF) { UI.toast('Некорректные лимиты'); return; }
+    var pw = parseInt(f.time_limit_minutes||0,10);
+    if (!(pw >= 5 && pw <= 120)) { UI.toast('Окно оплаты 5–120 мин'); return; }
+    if (!f.payment_methods || !f.payment_methods.length) { UI.toast('Выберите хотя бы один способ оплаты'); return; }
+    if (f.pricing_mode === 'FIXED' && !(parseFloat(f.price_fixed||0) > 0)) { UI.toast('Укажите цену'); return; }
+    if (f.pricing_mode === 'FLOATING') {
+      var m = parseFloat(f.price_margin_pct);
+      if (isNaN(m) || m < -10 || m > 10) { UI.toast('Маржа: -10..+10'); return; }
+    }
+    st.submitting = true;
+    SCREENS._editAdRender();
+    try {
+      await API.advertisements.update(st.ad_id, { changes: changed });
+      UI.haptic('success');
+      UI.toast('Изменения сохранены');
+      STATE._editAd = null;
+      NAV.pop();
+      // обновим список объявлений если он в истории
+      try { if (STATE._myAds) SCREENS._myAdsLoad(); } catch(_){}
+    } catch(e){
+      st.submitting = false;
+      SCREENS._editAdRender();
+      var errBox = document.getElementById('p2p-edit-ad-error');
+      if (errBox) {
+        errBox.innerHTML = '<div class="p2p-glass" style="padding:12px;border-color:rgba(255,69,58,0.4);color:#ff453a;font-size:13px;margin-bottom:10px">['+esc(e.code||'ERR')+'] '+esc(e.message||'Ошибка')+'</div>';
+      }
+    }
   },
 
   // ═════════════════════════════════════════════════
@@ -7330,7 +7646,32 @@ var SCREENS = {
   },
 
   _evidenceExport(kind){
-    UI.toast('TODO: backend export '+kind.toUpperCase());
+    var tid = STATE._evidence && STATE._evidence.tradeId;
+    if (!tid) { UI.toast('trade_id не найден'); return; }
+    var url = API.evidence.exportUrl(tid, kind === 'zip' ? 'zip' : 'pdf');
+    UI.toast(kind === 'zip' ? 'Скачивание ZIP…' : 'Скачивание PDF…');
+    try {
+      // Открываем в новой вкладке — Telegram WebApp откроет ссылку во внешнем браузере
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openLink) {
+        window.Telegram.WebApp.openLink(location.origin + url, { try_instant_view: false });
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+    } catch(_){
+      // fallback: simple anchor click
+      try {
+        var a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ try{ document.body.removeChild(a); } catch(_){} }, 1000);
+      } catch(__){
+        UI.toast('Не удалось открыть ссылку');
+      }
+    }
   },
 
   // ═════════════ TRADE CHAT (Том 27.4) ═════════════
@@ -7419,6 +7760,8 @@ var SCREENS = {
     }
     SCREENS._tradeChatRender(scrollBottom);
     SCREENS._tradeChatBindInput();
+    // Массово отметим непрочитанные входящие как READ
+    setTimeout(function(){ SCREENS._tradeChatMarkAllRead(); }, 200);
   },
 
   _tradeChatRender(scrollBottom){
@@ -7490,10 +7833,17 @@ var SCREENS = {
     var ts = UI.fmtTime(m.created_at);
     var status = isMine ? UI.msgStatusIcon(m.status) : '';
     var senderName = m.sender_username ? '<div style="font-size:10px;color:var(--p2p-text-mute);margin-bottom:3px;font-weight:600">'+esc(m.sender_username)+'</div>' : '';
+    // retry для FAILED upload (только своё, optimistic с _file)
+    var retryBtn = '';
+    if (isMine && String(m.status||'').toUpperCase() === 'FAILED' && m._file) {
+      retryBtn = '<button onclick="P2P.screens._tradeChatRetryUpload(\''+esc(m.id)+'\')" style="background:rgba(255,255,255,0.18);border:0;color:#fff;font-size:11px;padding:4px 10px;border-radius:10px;cursor:pointer;margin-top:6px;font-weight:600">↻ Повторить</button>';
+    }
+    var failedStyle = (isMine && String(m.status||'').toUpperCase() === 'FAILED') ? 'border:1px solid rgba(255,69,58,0.6);' : '';
     return '<div style="display:flex;justify-content:'+align+';margin:5px 0">'+
-      '<div style="max-width:78%;background:'+bg+';color:'+col+';border-radius:'+radius+';padding:8px 12px;box-shadow:0 1px 2px rgba(0,0,0,0.2)">'+
+      '<div style="max-width:78%;background:'+bg+';color:'+col+';border-radius:'+radius+';padding:8px 12px;box-shadow:0 1px 2px rgba(0,0,0,0.2);'+failedStyle+'">'+
         (isMine ? '' : senderName)+
         content+
+        retryBtn+
         '<div style="display:flex;justify-content:flex-end;gap:4px;align-items:center;margin-top:3px;font-size:10px;opacity:0.7">'+
           '<span>'+esc(ts)+'</span>'+
           (status ? '<span>'+status+'</span>' : '')+
@@ -7508,12 +7858,68 @@ var SCREENS = {
     ta.addEventListener('input', function(){
       ta.style.height = 'auto';
       ta.style.height = Math.min(120, ta.scrollHeight)+'px';
+      SCREENS._tradeChatTypingEmit();
+    });
+    ta.addEventListener('blur', function(){
+      SCREENS._tradeChatTypingStop();
     });
     ta.addEventListener('keydown', function(e){
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
         e.preventDefault();
         SCREENS._tradeChatSend();
       }
+    });
+  },
+
+  // Throttled typing 'start' (раз в ~2с), + автоматический stop через 5с тишины
+  _tradeChatTypingEmit(){
+    var st = STATE._tradeChat; if (!st || !st.tradeId) return;
+    var now = Date.now();
+    var lastSent = st._typingLastSent || 0;
+    // отправляем 'start' не чаще раза в 2с
+    if (now - lastSent > 2000) {
+      st._typingLastSent = now;
+      try { API.chat.typing(st.tradeId, 'start').catch(function(){}); } catch(_){}
+    }
+    // авто-stop через 5с
+    if (st._typingStopTimer) clearTimeout(st._typingStopTimer);
+    st._typingStopTimer = setTimeout(function(){
+      SCREENS._tradeChatTypingStop();
+    }, 5000);
+  },
+
+  _tradeChatTypingStop(){
+    var st = STATE._tradeChat; if (!st || !st.tradeId) return;
+    if (st._typingStopTimer) { clearTimeout(st._typingStopTimer); st._typingStopTimer = null; }
+    if (st._typingLastSent) {
+      st._typingLastSent = 0;
+      try { API.chat.typing(st.tradeId, 'stop').catch(function(){}); } catch(_){}
+    }
+  },
+
+  // Пометить все непрочитанные входящие сообщения как READ (массово при открытии чата
+  // или скролле вниз). DELIVERED ставим сразу при получении через WS.
+  _tradeChatMarkAllRead(){
+    var st = STATE._tradeChat; if (!st || !st.tradeId) return;
+    var myId = STATE.user && STATE.user.id;
+    if (!myId) return;
+    var msgs = st.messages || [];
+    var seen = st._markedRead = st._markedRead || {};
+    var toMark = [];
+    for (var i=0; i<msgs.length; i++) {
+      var m = msgs[i];
+      if (m.is_system) continue;
+      if (!m.id || String(m.id).indexOf('tmp-') === 0 || String(m.id).indexOf('ws-') === 0) continue;
+      if (m.sender_id === myId) continue;
+      if (String(m.status||'').toUpperCase() === 'READ') continue;
+      if (seen[m.id]) continue;
+      toMark.push(m.id);
+      seen[m.id] = 1;
+    }
+    if (!toMark.length) return;
+    // шлём паралельно (best-effort)
+    toMark.forEach(function(mid){
+      try { API.chat.markRead(st.tradeId, mid).catch(function(){}); } catch(_){}
     });
   },
 
@@ -7538,6 +7944,8 @@ var SCREENS = {
     if (!txt) return;
     if (txt.length > 4000) { UI.toast('Слишком длинное сообщение'); return; }
     if (!SCREENS._tradeChatRateCheck()) return;
+    // Останавливаем typing-индикатор у партнёра
+    SCREENS._tradeChatTypingStop();
     var tmpId = 'tmp-'+uuid();
     var optimistic = {
       id: tmpId,
@@ -7587,17 +7995,19 @@ var SCREENS = {
   },
 
   _tradeChatAttachClick(){
+    var row = function(kind, icon, label, hint){
+      return '<div onclick="P2P.screens._tradeChatPickFile(\''+kind+'\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">'+
+        '<span style="font-size:20px">'+icon+'</span>'+
+        '<div style="flex:1"><div style="font-size:14px">'+esc(label)+'</div>'+
+        '<div style="font-size:11px;color:var(--p2p-text-dim);margin-top:1px">'+esc(hint)+'</div></div>'+
+      '</div>';
+    };
     var html =
-      '<div onclick="P2P.screens._tradeChatPickFile(\'image\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">'+
-        '<span style="font-size:20px">🖼</span><span style="font-size:14px">Фото</span></div>'+
-      '<div onclick="P2P.screens._tradeChatPickFile(\'video\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">'+
-        '<span style="font-size:20px">🎬</span><span style="font-size:14px">Видео</span></div>'+
-      '<div onclick="P2P.screens._tradeChatPickFile(\'document\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">'+
-        '<span style="font-size:20px">📄</span><span style="font-size:14px">Документ</span></div>'+
-      '<div onclick="P2P.screens._tradeChatPickFile(\'voice\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04)">'+
-        '<span style="font-size:20px">🎙</span><span style="font-size:14px">Голосовое</span></div>'+
-      '<div onclick="P2P.screens._tradeChatPickFile(\'payment_proof\')" style="padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer">'+
-        '<span style="font-size:20px">💳</span><span style="font-size:14px">Доказательство оплаты</span></div>';
+      row('image',         '🖼', 'Фото',                 'до 20 MB') +
+      row('video',         '🎬', 'Видео',                'до 100 MB') +
+      row('document',      '📄', 'Документ',             'PDF/ZIP/др, до 50 MB') +
+      row('voice',         '🎙', 'Голосовое',            'до 25 MB') +
+      row('payment_proof', '💳', 'Доказательство оплаты','до 20 MB');
     UI.bottomSheet(html, {title:'Прикрепить'});
   },
 
@@ -7607,7 +8017,7 @@ var SCREENS = {
     if (kind === 'image' || kind === 'payment_proof') accept = 'image/*';
     else if (kind === 'video') accept = 'video/*';
     else if (kind === 'voice') accept = 'audio/*';
-    else accept = '*/*';
+    else accept = 'image/*,video/*,audio/*,application/pdf,application/zip,application/*';
     var input = document.createElement('input');
     input.type = 'file';
     input.accept = accept;
@@ -7622,67 +8032,139 @@ var SCREENS = {
     input.click();
   },
 
-  async _tradeChatUploadFile(file, kind){
+  // Backend size limits (см. p2p/api/attachments.py SIZE_LIMITS)
+  _attachLimits: {
+    IMAGE:         20 * 1024 * 1024,
+    PAYMENT_PROOF: 20 * 1024 * 1024,
+    VIDEO:        100 * 1024 * 1024,
+    VOICE:         25 * 1024 * 1024,
+    DOCUMENT:      50 * 1024 * 1024,
+  },
+
+  // MIME → message_type
+  _attachMessageType(file, kind){
+    var hint = String(kind||'').toLowerCase();
+    if (hint === 'payment_proof') return 'PAYMENT_PROOF';
+    var mime = String((file && file.type) || '').toLowerCase();
+    if (mime.indexOf('image/') === 0) return 'IMAGE';
+    if (mime.indexOf('video/') === 0) return 'VIDEO';
+    if (mime.indexOf('audio/') === 0) return 'VOICE';
+    if (hint === 'image') return 'IMAGE';
+    if (hint === 'video') return 'VIDEO';
+    if (hint === 'voice') return 'VOICE';
+    return 'DOCUMENT';
+  },
+
+  async _tradeChatUploadFile(file, kind, retryFromTmpId){
     var tid = STATE._tradeChat.tradeId;
     if (!file) return;
-    if (file.size > 25 * 1024 * 1024) { UI.toast('Файл слишком большой (макс 25 MB)'); return; }
     if (!SCREENS._tradeChatRateCheck()) return;
-    var mtMap = {image:'IMAGE', video:'VIDEO', voice:'VOICE', document:'DOCUMENT', payment_proof:'PAYMENT_PROOF'};
-    var mt = mtMap[kind] || 'DOCUMENT';
-    var tmpId = 'tmp-'+uuid();
-    var optimistic = {
-      id: tmpId,
-      sender_id: STATE.user && STATE.user.id,
-      sender_username: STATE.user && (STATE.user.username || STATE.user.first_name),
-      message_type: mt,
-      body_text: '[Загрузка файла…] '+file.name,
-      file_name: file.name,
-      file_size: file.size,
-      mime_type: file.type,
-      created_at: new Date().toISOString(),
-      status: 'UPLOADING',
-      sequence_number: 999999999,
-      _optimistic: true,
-    };
-    STATE._tradeChat.messages.push(optimistic);
-    SCREENS._tradeChatRender(true);
-    try {
-      // Without dedicated upload endpoint, send metadata-only message.
-      var body = {
+    var mt = SCREENS._attachMessageType(file, kind);
+    var limit = SCREENS._attachLimits[mt] || 25*1024*1024;
+    if (file.size > limit) {
+      UI.toast('Файл слишком большой для '+mt+' (макс '+Math.round(limit/(1024*1024))+' MB)');
+      return;
+    }
+    if (file.size === 0) { UI.toast('Пустой файл'); return; }
+
+    var tmpId = retryFromTmpId || ('tmp-'+uuid());
+    if (retryFromTmpId) {
+      // обновим существующий optimistic bubble
+      var arrR = STATE._tradeChat.messages;
+      for (var ix=0; ix<arrR.length; ix++) {
+        if (arrR[ix].id === tmpId) {
+          arrR[ix].status = 'UPLOADING';
+          arrR[ix].body_text = '[Загрузка…] '+file.name;
+          arrR[ix]._error = null;
+          break;
+        }
+      }
+    } else {
+      var optimistic = {
+        id: tmpId,
+        sender_id: STATE.user && STATE.user.id,
+        sender_username: STATE.user && (STATE.user.username || STATE.user.first_name),
         message_type: mt,
-        text: '[file] '+file.name+' · '+UI.fileSize(file.size)+' · '+(file.type||'unknown'),
+        body_text: '[Загрузка…] '+file.name,
+        file_name: file.name,
+        file_size: file.size,
+        mime_type: file.type,
+        created_at: new Date().toISOString(),
+        status: 'UPLOADING',
+        sequence_number: 999999999,
+        _optimistic: true,
+        _file: file,
+        _kind: kind,
       };
-      var r = await API.chat.send(tid, body);
+      STATE._tradeChat.messages.push(optimistic);
+    }
+    SCREENS._tradeChatRender(true);
+
+    try {
+      var r = await API.attachments.upload(tid, file, {
+        message_type: mt,
+        caption: '',
+        idem: 'att-'+tmpId,
+      });
+      // r: {attachment_id, message_id, sequence_number, sha256, url, mime, size, file_name, message_type}
       var arr = STATE._tradeChat.messages;
       for (var i=0; i<arr.length; i++) {
         if (arr[i].id === tmpId) {
           arr[i] = {
-            id: (r && (r.id || r.message_id)) || tmpId,
-            sender_id: optimistic.sender_id,
-            sender_username: optimistic.sender_username,
-            message_type: mt,
-            body_text: body.text,
-            file_name: file.name,
-            file_size: file.size,
-            mime_type: file.type,
-            created_at: (r && r.created_at) || optimistic.created_at,
-            status: (r && r.status) || 'SENT',
-            sequence_number: (r && r.sequence_number) || optimistic.sequence_number,
+            id: r.message_id || tmpId,
+            sender_id: STATE.user && STATE.user.id,
+            sender_username: STATE.user && (STATE.user.username || STATE.user.first_name),
+            message_type: r.message_type || mt,
+            body_text: '',
+            file_name: r.file_name || file.name,
+            file_size: r.size || file.size,
+            mime_type: r.mime || file.type,
+            attachment_id: r.attachment_id,
+            attachment_url: r.url,
+            attachment_mime: r.mime || file.type,
+            attachment_size: r.size || file.size,
+            attachment_name: r.file_name || file.name,
+            attachment_sha256: r.sha256,
+            attachment_virus_status: 'PENDING',
+            created_at: new Date().toISOString(),
+            status: 'SENT',
+            sequence_number: r.sequence_number || 999999999,
           };
           break;
         }
       }
       SCREENS._tradeChatRender(true);
       UI.haptic('success');
-      UI.toast('Файл прикреплён (метаданные). Полный upload ожидает endpoint.');
     } catch(e){
+      var msg = (e && e.message) || 'Ошибка загрузки';
+      if (e && e.status === 413) msg = 'Файл слишком большой';
+      else if (e && e.status === 451) msg = 'Файл заражён (квартин)';
+      else if (e && e.status === 422) msg = msg || 'Невалидный файл';
       var arr2 = STATE._tradeChat.messages;
       for (var j=0; j<arr2.length; j++) {
-        if (arr2[j].id === tmpId) { arr2[j].status = 'FAILED'; break; }
+        if (arr2[j].id === tmpId) {
+          arr2[j].status = 'FAILED';
+          arr2[j].body_text = '⚠ '+msg;
+          arr2[j]._error = msg;
+          break;
+        }
       }
       SCREENS._tradeChatRender(false);
       UI.haptic('error');
+      UI.toast('['+(e.code||'ERR')+'] '+msg);
     }
+  },
+
+  // Повторить загрузку для FAILED-сообщения
+  _tradeChatRetryUpload(tmpId){
+    var arr = STATE._tradeChat && STATE._tradeChat.messages || [];
+    for (var i=0; i<arr.length; i++) {
+      if (arr[i].id === tmpId && arr[i]._file) {
+        SCREENS._tradeChatUploadFile(arr[i]._file, arr[i]._kind, tmpId);
+        return;
+      }
+    }
+    UI.toast('Файл не сохранён, выберите заново');
   },
 
   _tradeChatOnMessage(m){
@@ -7696,18 +8178,32 @@ var SCREENS = {
     for (var i=0; i<arr.length; i++) {
       if (arr[i].id && arr[i].id === data.id) return;
     }
+    var msgId = data.id || data.message_id;
     arr.push({
-      id: data.id || ('ws-'+uuid()),
+      id: msgId || ('ws-'+uuid()),
       sender_id: data.sender_id,
       sender_username: data.sender_username,
       message_type: data.message_type || 'TEXT',
       body_text: data.body_text || data.text || '',
+      attachment_id: data.attachment_id,
+      attachment_url: data.attachment_id ? ('/api/v2/p2p/attachments/'+data.attachment_id) : null,
+      attachment_mime: data.attachment_mime,
+      attachment_size: data.attachment_size,
       is_system: !!data.is_system,
       status: data.status || 'SENT',
       created_at: data.created_at || new Date().toISOString(),
       sequence_number: data.sequence_number || (arr.length+1),
     });
     SCREENS._tradeChatRender(true);
+    // Если входящее (не моё) — сразу шлём DELIVERED, и READ (т.к. чат открыт)
+    var myId = STATE.user && STATE.user.id;
+    if (msgId && String(msgId).indexOf('tmp-') !== 0 && data.sender_id && myId && data.sender_id !== myId) {
+      try { API.chat.markDelivered(STATE._tradeChat.tradeId, msgId).catch(function(){}); } catch(_){}
+      // Если чат на экране и скроллится в конец — отмечаем READ
+      setTimeout(function(){
+        try { API.chat.markRead(STATE._tradeChat.tradeId, msgId).catch(function(){}); } catch(_){}
+      }, 300);
+    }
   },
 
   _tradeChatOnTyping(m){
@@ -8250,11 +8746,32 @@ var SCREENS = {
       }).join('');
     }
 
+    // Admin toolbar: reload policies (Том 47 / admin polish)
+    var adminTools =
+      '<div style="display:flex;gap:8px;margin:8px 0 12px">'+
+        '<button class="p2p-btn-secondary" style="flex:1" onclick="P2P.screens._arbReloadPolicies()" id="p2p-arb-pol-reload">🔄 Перезагрузить политики</button>'+
+      '</div>';
+
     setHtml(shellHtml(
       SCREENS._arbHeaderHtml('Очередь споров', false)+
-      chips + summary + list,
+      chips + summary + adminTools + list,
       'admin'
     ));
+  },
+
+  async _arbReloadPolicies(){
+    var btn = document.getElementById('p2p-arb-pol-reload');
+    if (btn) { btn.disabled = true; btn.textContent = 'Перезагрузка…'; }
+    try {
+      await API.admin.policiesReload();
+      UI.haptic('success');
+      UI.toast('Политики обновлены');
+    } catch(e){
+      UI.haptic('error');
+      // toast уже показан API.call
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Перезагрузить политики'; }
+    }
   },
 
   _arbSetFilter(f){
@@ -8804,12 +9321,12 @@ var SCREENS = {
   },
 
   _merchAction(key){
-    if (key === 'createAd') { UI.toast('Создание объявления скоро'); return; }
+    if (key === 'createAd') { NAV.push('createAd'); return; }
     if (key === 'myAds') { NAV.push('myAds'); return; }
     if (key === 'trades') { NAV.push('trades'); return; }
-    if (key === 'wallet') { NAV.push('wallet'); return; }
+    if (key === 'wallet') { try { if (window.go) window.go('home'); P2P.hide(); } catch(_){} return; }
     if (key === 'paymentMethods') { NAV.push('paymentMethods'); return; }
-    if (key === 'profile') { NAV.push('profile'); return; }
+    if (key === 'profile') { try { if (window.go) window.go('profile'); P2P.hide(); } catch(_){} return; }
     if (key === 'notifications') { NAV.push('notifications'); return; }
   },
 
@@ -9529,7 +10046,7 @@ var SCREENS = {
 // ═══════════════════════════════════════════════════════
 var P2P = window.P2P = {
   __v2: true,
-  __build: 'v3-tom28-30-stubs-filled',
+  __build: 'v4-final',
   cfg: { apiBase: '/api/v2/p2p', wsBase: '/ws/p2p' },
   state: STATE,
   api: API,
@@ -9720,11 +10237,13 @@ WS.on('TradeCreated', function(m){
   if (STATE.currentScreen==='home' || STATE.currentScreen==='trades') NAV._render();
 });
 WS.on('NotificationCreated', function(){
-  STATE.notificationsUnread++;
-  if (STATE.currentScreen==='home') {
-    var hdr = document.querySelector('#p2p-v2-root .p2p-glass');
-    // re-render lightweight: just refresh nav badge
-    var navEl = document.querySelector('#p2p-v2-root > div:last-child');
+  STATE.notificationsUnread = (STATE.notificationsUnread||0) + 1;
+  // Если открыт список — освежить
+  if (STATE.currentScreen === 'notifications') {
+    try { SCREENS._notifLoad(); } catch(_){}
+  } else {
+    // Перерисуем bottom-nav, чтобы обновился badge
+    try { NAV._render(); } catch(_){}
   }
 });
 

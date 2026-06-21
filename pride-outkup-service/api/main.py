@@ -31,6 +31,7 @@ from p2p.workers import (
     reconciliation as p2p_recon_worker,
     inbox_consumer as p2p_inbox_worker,
     fraud_scanner as p2p_fraud_worker,
+    virus_scanner as p2p_virus_worker,
 )
 from p2p.api import (
     commands as p2p_commands_router,
@@ -45,6 +46,7 @@ from p2p.api import (
     favorites as p2p_favorites_router,
     merchant_dashboard as p2p_merchant_router,
     evidence as p2p_evidence_router,
+    attachments as p2p_attachments_router,
 )  # noqa: F401 — регистрирует таблицы в Base.metadata
 from p2p.ws import router as p2p_ws_router
 from p2p.ws.manager import publish_to_channels as p2p_ws_publish
@@ -125,6 +127,10 @@ P2P_INDUSTRIAL_ALTERS = [
     "ALTER TABLE escrow_locks ADD COLUMN IF NOT EXISTS reason VARCHAR(128)",
     "CREATE INDEX IF NOT EXISTS idx_escrow_offer ON escrow_locks(offer_id)",
     "ALTER TABLE p2p_advertisements ADD COLUMN IF NOT EXISTS reserved_amount NUMERIC(30,8) NOT NULL DEFAULT 0",
+    # P2P Trade extras: MAX_EXTEND_COUNT enforcement
+    "ALTER TABLE p2p_trades ADD COLUMN IF NOT EXISTS extend_count INTEGER NOT NULL DEFAULT 0",
+    # P2P Trade number sequence — atomic generation (см. create_trade._gen_trade_number)
+    "CREATE SEQUENCE IF NOT EXISTS p2p_trade_number_seq START 1 INCREMENT 1",
 ]
 
 
@@ -271,7 +277,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(p2p_inbox_worker.run())
         asyncio.create_task(p2p_fraud_worker.run())
         asyncio.create_task(p2p_obs_worker.run())
-        logger.info("[lifespan] p2p workers scheduled (outbox/scheduler/recon/inbox/fraud/observability)")
+        asyncio.create_task(p2p_virus_worker.run())
+        logger.info("[lifespan] p2p workers scheduled (outbox/scheduler/recon/inbox/fraud/observability/virus)")
     except Exception as e:
         logger.warning("[lifespan] p2p workers failed to start: %s", e)
     yield
@@ -366,6 +373,7 @@ app.include_router(p2p_sync_router.router)
 app.include_router(p2p_favorites_router.router)
 app.include_router(p2p_merchant_router.router)
 app.include_router(p2p_evidence_router.router)
+app.include_router(p2p_attachments_router.router)
 app.include_router(p2p_ws_router.router)
 
 

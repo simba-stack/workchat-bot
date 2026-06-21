@@ -121,6 +121,10 @@ async def publish_to_channels(
             uid = payload.get(k)
             if uid:
                 channels.append(f"user:{int(uid)}")
+        # TODO #7: merchant:{seller_id} — для подписки на свои события мерчанта
+        seller_id = payload.get("seller_id")
+        if seller_id:
+            channels.append(f"merchant:{int(seller_id)}")
         # fallback: вытащить participants из БД если их нет в payload
         if not any(payload.get(k) for k in ("buyer_id", "seller_id")):
             try:
@@ -130,6 +134,7 @@ async def publish_to_channels(
                     if t:
                         channels.append(f"user:{t.buyer_id}")
                         channels.append(f"user:{t.seller_id}")
+                        channels.append(f"merchant:{t.seller_id}")
             except Exception as e:
                 logger.debug("[ws] fallback participant lookup failed: %s", e)
     elif aggregate_type == "advertisement":
@@ -137,6 +142,8 @@ async def publish_to_channels(
         owner = payload.get("owner_id") or payload.get("user_id")
         if owner:
             channels.append(f"user:{int(owner)}")
+            # TODO #7: merchant channel
+            channels.append(f"merchant:{int(owner)}")
     elif aggregate_type == "user":
         channels.append(f"user:{aggregate_id}")
     elif aggregate_type == "dispute":

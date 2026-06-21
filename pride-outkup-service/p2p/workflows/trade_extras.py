@@ -63,6 +63,14 @@ async def extend_deadline(ctx: WorkflowContext) -> dict:
             f"can extend deadline only in WAITING_FOR_PAYMENT (current: {trade.status})",
         )
 
+    # MAX_EXTEND_COUNT enforcement (TODO #3)
+    current_extend = int(getattr(trade, "extend_count", 0) or 0)
+    if current_extend >= MAX_EXTEND_COUNT:
+        raise HTTPException(
+            409,
+            f"limit of deadline extensions reached ({current_extend}/{MAX_EXTEND_COUNT})",
+        )
+
     now = datetime.now(timezone.utc)
     old_deadline = trade.pay_deadline_at
     if old_deadline and old_deadline.tzinfo is None:
@@ -72,6 +80,7 @@ async def extend_deadline(ctx: WorkflowContext) -> dict:
 
     prev_deadline_iso = old_deadline.isoformat() if old_deadline else None
     trade.pay_deadline_at = new_deadline
+    trade.extend_count = current_extend + 1
     trade.version = (trade.version or 0) + 1
     await db.flush()
 
@@ -86,6 +95,7 @@ async def extend_deadline(ctx: WorkflowContext) -> dict:
         new_state={
             "pay_deadline_at": new_deadline.isoformat(),
             "extended_minutes": minutes,
+            "extend_count": trade.extend_count,
         },
         correlation_id=ctx.correlation_id,
         workflow_id=ctx.workflow_id,
@@ -101,6 +111,7 @@ async def extend_deadline(ctx: WorkflowContext) -> dict:
             "pay_deadline_at": new_deadline.isoformat(),
             "extended_minutes": minutes,
             "previous_deadline_at": prev_deadline_iso,
+            "extend_count": trade.extend_count,
         },
         aggregate_type="trade",
         aggregate_id=trade.id,
@@ -113,5 +124,7 @@ async def extend_deadline(ctx: WorkflowContext) -> dict:
         "trade_id": trade.id,
         "pay_deadline_at": new_deadline.isoformat(),
         "extended_minutes": minutes,
+        "extend_count": trade.extend_count,
+        "extend_count_max": MAX_EXTEND_COUNT,
         "version": trade.version,
     }

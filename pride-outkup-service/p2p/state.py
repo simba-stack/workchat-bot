@@ -42,7 +42,14 @@ _TRADE_ALLOWED: dict[str, set[str]] = {
     },
     TradeStatus.DISPUTE_OPENED.value: {TradeStatus.ARBITRATION.value},
     TradeStatus.ARBITRATION.value: {TradeStatus.RESOLVED.value},
-    TradeStatus.RESOLVED.value: {TradeStatus.COMPLETED.value, TradeStatus.CANCELLED.value},
+    # RESOLVED → COMPLETED/CANCELLED — стандартный путь после resolve.
+    # RESOLVED → DISPUTE_OPENED разрешён только для reopen_dispute (24h окно,
+    # см. p2p/workflows/dispute_extras.py). Это административный путь.
+    TradeStatus.RESOLVED.value: {
+        TradeStatus.COMPLETED.value,
+        TradeStatus.CANCELLED.value,
+        TradeStatus.DISPUTE_OPENED.value,
+    },
     TradeStatus.COMPLETED.value: set(),
     TradeStatus.CANCELLED.value: set(),
 }
@@ -52,7 +59,9 @@ _TRADE_ALLOWED: dict[str, set[str]] = {
 _DISPUTE_ALLOWED: dict[str, set[str]] = {
     DisputeStatus.OPENED.value: {DisputeStatus.ARBITRATION.value},
     DisputeStatus.ARBITRATION.value: {DisputeStatus.RESOLVED.value},
-    DisputeStatus.RESOLVED.value: {DisputeStatus.CLOSED.value},
+    # RESOLVED → CLOSED — стандартный путь.
+    # RESOLVED → OPENED — путь reopen_dispute (24h окно, см. dispute_extras.py).
+    DisputeStatus.RESOLVED.value: {DisputeStatus.CLOSED.value, DisputeStatus.OPENED.value},
     DisputeStatus.CLOSED.value: set(),
 }
 

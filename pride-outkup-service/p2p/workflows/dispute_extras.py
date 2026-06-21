@@ -251,7 +251,8 @@ async def reopen_dispute(ctx: WorkflowContext) -> dict:
     prev_arbitrator = dispute.arbitrator_id
     prev_trade_status = trade.status
 
-    # Reset dispute
+    # Reset dispute через state matrix (TODO #9: RESOLVED → OPENED разрешён в _DISPUTE_ALLOWED)
+    state.assert_dispute_transition(dispute.status, DisputeStatus.OPENED.value)
     dispute.status = DisputeStatus.OPENED.value
     dispute.arbitrator_id = None
     dispute.resolution = None
@@ -262,10 +263,10 @@ async def reopen_dispute(ctx: WorkflowContext) -> dict:
     dispute.version = (dispute.version or 0) + 1
 
     # Если trade был COMPLETED/CANCELLED — оставляем как есть (ledger трогать опасно).
-    # Если trade ещё в RESOLVED — переводим в DISPUTE_OPENED.
+    # Если trade ещё в RESOLVED — переводим в DISPUTE_OPENED через state matrix.
     if trade.status == TradeStatus.RESOLVED.value:
-        # Прямой переход RESOLVED → DISPUTE_OPENED не разрешён матрицей.
-        # Делаем переход напрямую, без assert (это административная операция).
+        # TODO #9: матрица расширена — RESOLVED → DISPUTE_OPENED это путь reopen.
+        state.assert_trade_transition(trade.status, TradeStatus.DISPUTE_OPENED.value)
         trade.status = TradeStatus.DISPUTE_OPENED.value
         trade.version = (trade.version or 0) + 1
 

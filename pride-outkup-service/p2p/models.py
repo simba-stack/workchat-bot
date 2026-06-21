@@ -305,6 +305,9 @@ class P2PTrade(Base):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
+    # Сколько раз seller продлевал pay_deadline_at (см. trade_extras.MAX_EXTEND_COUNT)
+    extend_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_utc, onupdate=_now_utc, nullable=False)
