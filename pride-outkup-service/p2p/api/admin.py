@@ -79,7 +79,7 @@ async def resolve_dispute_cmd(
         handler=resolve_dispute.handle,
         idempotency_key=idempotency_key,
         actor_role=rbac.resolve_role(user),
-        source=f"admin:{req.headers.get('user-agent','')[:50]}",
+        source="admin",
         endpoint=f"POST /p2p/admin/disputes/{dispute_id}/resolve",
     )
 
@@ -182,7 +182,7 @@ async def request_evidence(
             "deadline_at": deadline_at.isoformat(),
             "trade_id": trade.id,
         },
-        source=f"admin:{req.headers.get('user-agent','')[:50]}",
+        source="admin",
     )
 
     try:

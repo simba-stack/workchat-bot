@@ -45,7 +45,7 @@ async def cmd_create_review(
         db, workflow_type="create_review", user_id=user.id,
         input_payload=inp, handler=create_review.handle,
         idempotency_key=idempotency_key, actor_role=get_actor_role(user),
-        source=f"miniapp:{req.headers.get('user-agent','')[:50]}",
+        source="miniapp",
         endpoint=f"POST /p2p/trades/{trade_id}/review",
     )
 

@@ -402,8 +402,19 @@ async def q_wallet(
     db: AsyncSession = Depends(get_db),
 ):
     b = await wallet.get_breakdown(db, user.id, crypto.upper())
+    # Resolve P2P role для фронта (без отдельного /me endpoint)
+    try:
+        from p2p import rbac
+        role = rbac.resolve_role(user)
+    except Exception:
+        role = "USER"
     return {
         "user_id": user.id,
+        "tg_id": getattr(user, "tg_id", None),
+        "username": getattr(user, "username", None),
+        "first_name": getattr(user, "first_name", None),
+        "kyc_level": getattr(user, "kyc_level", None) or getattr(user, "kyc_status", None),
+        "role": role,
         "currency": crypto.upper(),
         "available": str(b.available),
         "advertisement_hold": str(b.advertisement_hold),

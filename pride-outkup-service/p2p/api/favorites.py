@@ -47,11 +47,8 @@ def _user_summary(u: User) -> dict:
     }
 
 
-def _source(req: Optional[Request]) -> Optional[str]:
-    if not req:
-        return None
-    ua = req.headers.get("user-agent", "")[:50]
-    return f"miniapp:{ua}"
+def _source(req=None):
+    return "miniapp"
 
 
 @router.get("")

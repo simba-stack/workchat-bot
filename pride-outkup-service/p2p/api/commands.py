@@ -26,11 +26,9 @@ logger = logging.getLogger("p2p.api.commands")
 router = APIRouter(prefix="/api/v2/p2p", tags=["p2p-commands"])
 
 
-def _source(req: Request | None) -> str | None:
-    if not req:
-        return None
-    ua = req.headers.get("user-agent", "")[:50]
-    return f"miniapp:{ua}"
+def _source(req=None) -> str | None:
+    # Источник записи в audit. Хранится в short VARCHAR(32). UA пишется в user_agent колонку отдельно.
+    return "miniapp"
 
 
 # ============= ADVERTISEMENTS =============

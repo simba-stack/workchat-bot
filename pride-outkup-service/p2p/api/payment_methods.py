@@ -144,7 +144,7 @@ async def create_payment_method(
         db, action="payment_method.created", entity_type="payment_method", entity_id=pm.id,
         actor_id=user.id,
         new_state={"type": pm_type, "bank": bank_name, "masked": masked},
-        source=f"miniapp:{req.headers.get('user-agent','')[:50]}",
+        source="miniapp",
     )
     await db.commit()
     return _pm_to_dict(pm)
@@ -200,7 +200,7 @@ async def update_payment_method(
     await audit.log(
         db, action="payment_method.updated", entity_type="payment_method", entity_id=pm.id,
         actor_id=user.id, new_state=changes,
-        source=f"miniapp:{req.headers.get('user-agent','')[:50]}",
+        source="miniapp",
     )
     await db.commit()
     return _pm_to_dict(pm)
@@ -229,7 +229,7 @@ async def delete_payment_method(
     await audit.log(
         db, action="payment_method.deleted", entity_type="payment_method", entity_id=pm.id,
         actor_id=user.id,
-        source=f"miniapp:{req.headers.get('user-agent','')[:50]}",
+        source="miniapp",
     )
     await db.commit()
     return {"ok": True, "id": pm.id}
