@@ -28,9 +28,10 @@ async def handle(ctx: WorkflowContext) -> dict:
     db = ctx.db
 
     # ---------- Валидация полей ----------
-    ad_type = p.get("type", "").lower()
+    # Нормализуем регистр (enum хранит BUY/SELL uppercase; фронт может слать любой регистр)
+    ad_type = str(p.get("type") or "").strip().upper()
     if ad_type not in (AdvertisementType.BUY.value, AdvertisementType.SELL.value):
-        raise HTTPException(422, "type must be 'buy' or 'sell'")
+        raise HTTPException(422, "type must be 'BUY' or 'SELL'")
 
     crypto = (p.get("crypto") or "USDT").upper()
     fiat = (p.get("fiat") or "RUB").upper()
