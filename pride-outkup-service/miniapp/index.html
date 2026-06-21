@@ -6216,16 +6216,40 @@ var SCREENS = {
     setHtml(shellHtml(
       UI.glassHeader({ showCounters:true })+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px">'+
-        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.1</span></div>'+
+        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.2</span></div>'+
         '<button class="p2p-btn-primary" style="width:auto;height:42px;font-size:13px;padding:0 14px" onclick="P2P.nav.push(\'createAd\')">+ Создать</button>'+
       '</div>'+
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
         SCREENS._myAdsTabsHtml()+
       '</div>'+
-      '<div id="p2p-myads-list">'+UI.skeleton(3, 130)+'</div>',
+      '<div id="p2p-myads-list"><div style="text-align:center;color:#7a7a7a;padding:20px;font-size:12px">Загружаю объявления…</div>'+UI.skeleton(2, 100)+'</div>',
       'my_ads'
     ));
-    await SCREENS._myAdsLoad();
+    console.log('[myAds] screen opened, calling _myAdsLoad');
+    // Watchdog: если через 10 сек скелетон ещё, заменяем на error
+    var __watchdog = setTimeout(function(){
+      var c = document.getElementById('p2p-myads-list');
+      if (c && c.querySelector('.p2p-skeleton')) {
+        console.warn('[myAds] watchdog fired — _myAdsLoad не отработал за 10 сек');
+        c.innerHTML = '<div class="p2p-glass" style="padding:20px;text-align:center;color:#ff8c33">'+
+          '⚠ Загрузка не завершилась за 10 сек.<br>'+
+          '<span style="font-size:11px;color:#7a7a7a;display:block;margin-top:4px">Проверь DevTools → Console</span>'+
+          '<button class="p2p-btn-secondary" style="margin-top:10px" onclick="P2P.screens._myAdsLoad()">Повторить</button>'+
+        '</div>';
+      }
+    }, 10000);
+    try {
+      await SCREENS._myAdsLoad();
+      clearTimeout(__watchdog);
+    } catch(e) {
+      clearTimeout(__watchdog);
+      console.error('[myAds] screen-level crash:', e);
+      var c = document.getElementById('p2p-myads-list');
+      if (c) c.innerHTML = '<div class="p2p-glass" style="padding:20px;text-align:center;color:#ff453a">'+
+        '⚠ Ошибка экрана: '+(e&&e.message||'unknown')+
+        '<button class="p2p-btn-secondary" style="margin-top:10px" onclick="P2P.screens.myAds()">Перезагрузить</button>'+
+      '</div>';
+    }
   },
 
   _myAdsTabsHtml(){
