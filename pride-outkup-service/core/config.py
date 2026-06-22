@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     bot_username: str = "PrideP2P_bot"
 
     miniapp_url: str = "https://pride-p2p-production.up.railway.app"
-    miniapp_path: str = "/m8"
+    miniapp_path: str = "/m9"
 
     database_url: str
     redis_url: Optional[str] = None

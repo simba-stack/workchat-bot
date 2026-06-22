@@ -393,8 +393,9 @@ if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
     app.mount("/app2", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v2")
     app.mount("/v7", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v7")
-    # /m8 НЕ mount — явный handler с no-cache headers (mount не ставит их)
+    # /m8 + /m9 — оба отдают тот же файл (/m9 = cache-bust URL для Telegram)
     @app.get("/m8", response_class=HTMLResponse)
+    @app.get("/m9", response_class=HTMLResponse)
     async def miniapp_m8_strict():
         idx = MINIAPP_DIST / "index.html"
         if idx.exists():
@@ -429,8 +430,9 @@ else:
             return FileResponse(INDEX_HTML, headers=_NO_CACHE_HEADERS)
         return HTMLResponse("<h1>PRIDE P2P</h1><p>Mini-App not built yet.</p>")
 
-    # /m8 — со строгими no-cache headers, чтобы браузер не закешировал
+    # /m8 + /m9 — оба со строгими no-cache headers (cache-bust)
     @app.get("/m8", response_class=HTMLResponse)
+    @app.get("/m9", response_class=HTMLResponse)
     async def miniapp_m8():
         if INDEX_HTML.exists():
             return FileResponse(INDEX_HTML, headers={
