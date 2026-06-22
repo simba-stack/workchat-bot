@@ -6228,7 +6228,7 @@ var SCREENS = {
     setHtml(shellHtml(
       UI.glassHeader({ showCounters:true })+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px">'+
-        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.4</span></div>'+
+        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.5</span></div>'+
         '<button class="p2p-btn-primary" style="width:auto;height:42px;font-size:13px;padding:0 14px" onclick="P2P.nav.push(\'createAd\')">+ Создать</button>'+
       '</div>'+
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
@@ -6238,7 +6238,12 @@ var SCREENS = {
       'my_ads'
     ));
     console.log('[myAds] screen opened, calling _myAdsLoad');
-    // Watchdog: если через 10 сек скелетон ещё, заменяем на error
+    // СРАЗУ заменим скелетон на видимый маркер чтобы знать что код дошёл сюда
+    try {
+      var c0 = document.getElementById('p2p-myads-list');
+      if (c0) c0.innerHTML = '<div style="padding:14px;text-align:center;color:#7a7a7a;font-size:12px;font-family:monospace">▶ Запускаю _myAdsLoad...</div>';
+    } catch(_){}
+    // Watchdog: если через 3 сек скелетон ещё, заменяем на error
     var __watchdog = setTimeout(function(){
       var c = document.getElementById('p2p-myads-list');
       if (c && c.querySelector('.p2p-skeleton')) {
@@ -6249,7 +6254,7 @@ var SCREENS = {
           '<button class="p2p-btn-secondary" style="margin-top:10px" onclick="P2P.screens._myAdsLoad()">Повторить</button>'+
         '</div>';
       }
-    }, 10000);
+    }, 3000);  // быстрый watchdog для дебага
     try {
       await SCREENS._myAdsLoad();
       clearTimeout(__watchdog);
@@ -6295,7 +6300,7 @@ var SCREENS = {
         progress('⏱ TIMEOUT 10s — сервер не ответил<br><button class="p2p-btn-secondary" style="margin-top:10px" onclick="P2P.screens._myAdsLoad()">Повторить</button>', '#ff8c33');
         STATE._myAds.loading = false;
       }
-    }, 10000);
+    }, 3000);  // быстрый watchdog для дебага
     try {
       progress('② Отправляю GET /my/advertisements …');
       var r = await API.ads.mine();
@@ -7005,7 +7010,7 @@ var SCREENS = {
       if (STATE.currentScreen === 'tradeRoom' && STATE._tradeRoom.tradeId) {
         SCREENS._tradeRoomFetch(true);
       }
-    }, 10000);
+    }, 3000);  // быстрый watchdog для дебага
 
     await SCREENS._tradeRoomFetch(false);
   },
