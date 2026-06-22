@@ -4764,7 +4764,19 @@ var API = {
       init.signal = ctrl.signal;
     }
     try {
-      var r = await fetch(url, init);
+      // Race timeout 12s — гарантирует что fetch не висит навсегда
+      var __fetchTimeout = setTimeout(function(){
+        try { if (init.signal && !init.signal.aborted) ctrl && ctrl.abort(); } catch(_){}
+      }, 12000);
+      var r;
+      try {
+        r = await Promise.race([
+          fetch(url, init),
+          new Promise(function(_, rej){
+            setTimeout(function(){ rej(Object.assign(new Error('Request timeout 12s: '+path), {code:'TIMEOUT'})); }, 12000);
+          })
+        ]);
+      } finally { clearTimeout(__fetchTimeout); }
       var ct = r.headers.get('content-type')||'';
       var data = ct.indexOf('json')>=0 ? await r.json().catch(function(){return null;}) : null;
       if (!r.ok) {
@@ -6216,7 +6228,7 @@ var SCREENS = {
     setHtml(shellHtml(
       UI.glassHeader({ showCounters:true })+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px">'+
-        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.3</span></div>'+
+        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v4.4</span></div>'+
         '<button class="p2p-btn-primary" style="width:auto;height:42px;font-size:13px;padding:0 14px" onclick="P2P.nav.push(\'createAd\')">+ Создать</button>'+
       '</div>'+
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
@@ -10365,5 +10377,43 @@ try {
 console.log('[P2P v2] namespace ready · build', P2P.__build);
 })();
 </script>
+
+<!-- ═══ GLOBAL JS ERROR OVERLAY для дебага P2P v2 ═══ -->
+<script>
+(function(){
+  if (window.__p2pErrInit) return;
+  window.__p2pErrInit = true;
+  function showErr(label, detail){
+    var box = document.getElementById('__p2p_err_overlay');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = '__p2p_err_overlay';
+      box.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:#400;color:#fff;font:11px/1.4 monospace;padding:10px;border-radius:8px;max-height:40vh;overflow:auto;z-index:999999;border:1px solid #f44;white-space:pre-wrap;word-break:break-word;';
+      document.body.appendChild(box);
+      var close = document.createElement('button');
+      close.textContent = '× закрыть';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:transparent;color:#fff;border:0;font:11px monospace;cursor:pointer;';
+      close.onclick = function(){ box.style.display='none'; };
+      box.appendChild(close);
+    }
+    var line = document.createElement('div');
+    line.style.cssText = 'border-bottom:1px dashed #800;padding:3px 0;';
+    line.textContent = '[' + new Date().toISOString().slice(11,19) + '] ' + label + ': ' + (detail || '?');
+    box.appendChild(line);
+    box.style.display = 'block';
+    box.scrollTop = box.scrollHeight;
+  }
+  window.addEventListener('error', function(e){
+    showErr('JS', (e.message||'?') + ' @ ' + ((e.filename||'?').split('/').pop()) + ':' + (e.lineno||'?'));
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    var r = e.reason || {};
+    showErr('PROMISE', (r.message || r.code || r.toString && r.toString()) || JSON.stringify(r).slice(0,200));
+  });
+  window.__p2pShowErr = showErr;
+  console.log('[err-overlay] installed');
+})();
+</script>
+
 </body>
 </html>
