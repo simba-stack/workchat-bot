@@ -6222,7 +6222,7 @@ var SCREENS = {
     setHtml(shellHtml(
       UI.glassHeader({ showCounters:true })+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px">'+
-        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v5.3</span></div>'+
+        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v5.4</span></div>'+
         '<button class="p2p-btn-primary" style="width:auto;height:42px;font-size:13px;padding:0 14px" onclick="P2P.nav.push(\'createAd\')">+ Создать</button>'+
       '</div>'+
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
@@ -6233,13 +6233,15 @@ var SCREENS = {
     ));
     // АРХИ-ПРОСТОЙ direct fetch — синхронно, без setTimeout
     try {
-      // ALERT #1 — доказывает что код реально доходит сюда
-      try { alert('DBG: myAds try entered, TG='+(typeof TG)+', container='+!!document.getElementById('p2p-myads-list')); } catch(_){}
-      var c = document.getElementById('p2p-myads-list');
-      if (!c) { alert('NO container'); return; }
+      // dbg() каждый раз re-query — screens.myAds может вызываться дважды
+      // и старая ссылка на c будет указывать на отсоединённый node.
       var dbg = function(t,col){
-        c.innerHTML = '<div style="padding:14px;text-align:center;color:'+(col||'#3DA3F0')+';font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all">'+t+'</div>';
+        var cur = document.getElementById('p2p-myads-list');
+        if (!cur) return;
+        cur.innerHTML = '<div style="padding:14px;text-align:center;color:'+(col||'#3DA3F0')+';font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all">'+t+'</div>';
       };
+      var c = document.getElementById('p2p-myads-list');
+      if (!c) return;
       var initData = (TG && TG.initData) || '';
       var tgUser = (TG && TG.initDataUnsafe && TG.initDataUnsafe.user) || null;
       dbg('① initData length: '+initData.length+', user='+(tgUser?tgUser.username||tgUser.id:'null'));
@@ -6273,17 +6275,19 @@ var SCREENS = {
         var items = (data && data.items) || [];
         dbg('④ items='+items.length+(items.length?(', первый: '+JSON.stringify(items[0]).slice(0,200)):''), '#34c759');
         if (!items.length) {
-          c.innerHTML = UI.emptyState('У вас пока нет объявлений','Создайте первое объявление');
+          var emptyC = document.getElementById('p2p-myads-list'); if (emptyC) emptyC.innerHTML = UI.emptyState('У вас пока нет объявлений','Создайте первое объявление');
           return;
         }
-        // Render
+        // Render — re-query актуальный node
         setTimeout(function(){
+          var cur = document.getElementById('p2p-myads-list');
+          if (!cur) return;
           var html = '';
           for (var i=0; i<items.length; i++) {
             try { html += SCREENS._myAdCard(items[i]); }
             catch(e3){ html += '<div style="padding:10px;color:#ff8c33;background:rgba(255,140,51,0.1);border-radius:8px;margin-bottom:8px">⚠ Card #'+i+': '+e3.message+'</div>'; }
           }
-          c.innerHTML = html;
+          cur.innerHTML = html;
         }, 800);
       }).catch(function(err){
         clearTimeout(timer);
