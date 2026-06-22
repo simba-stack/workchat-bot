@@ -120,7 +120,7 @@ def _ad_to_dict(a: P2PAdvertisement) -> dict:
         "fiat": a.fiat_currency,
         "amount_total": str(a.total_amount),
         "amount_available": str(a.available_amount),
-        "amount_reserved": str(a.reserved_amount),
+        "amount_reserved": str(getattr(a, "reserved_amount", 0) or 0),
         "min_order_fiat": str(a.min_amount_fiat),
         "max_order_fiat": str(a.max_amount_fiat),
         "pricing_mode": a.pricing_mode,
