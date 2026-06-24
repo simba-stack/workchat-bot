@@ -652,7 +652,7 @@ async def main():
                 report = migrate(storage.state, dump, dry_run=False)
                 storage.state["crm_migration_done"] = True
                 storage.state["crm_migration_report"] = report
-                await storage._save_unlocked()
+                await storage.save()
                 logger.info(
                     "✅ CRM migration: +%d owners / +%d chats / +%d drops / +%d lks",
                     report["owners_added"], report["chats_added"],
@@ -748,6 +748,8 @@ async def main():
             outsource_task.cancel()
         if tron_monitor_task and not tron_monitor_task.done():
             tron_monitor_task.cancel()
+        if guard_bot_task and not guard_bot_task.done():
+            guard_bot_task.cancel()
         try:
             await userbot.stop()
         except Exception as e:
@@ -911,13 +913,40 @@ async def _safe_tron_monitor_task():
 
     Ждём пока outsource_bot инициализируется и регистрирует свой Bot instance,
     потом передаём его в монитор для отправки уведомлений юзерам.
+
+    Cold-start retry loop с exponential backoff — заменяет хрупкий hardcoded
+    sleep(8). На медленных Railway-старте может ждать до ~60 сек суммарно.
     """
     try:
-        # Даём боту время инициализироваться (получить инстанс)
-        await asyncio.sleep(8)
         from outsource_bot import get_outsource_bot
         from tron_monitor import run_tron_monitor
-        bot = get_outsource_bot()
+
+        # Retry-loop: ждём пока outsource_bot инициализируется + TronGrid ответит.
+        bot = None
+        for attempt in range(10):
+            try:
+                bot = get_outsource_bot()
+                if bot is None:
+                    raise RuntimeError("outsource_bot not initialised yet")
+                # Лёгкая health-проверка TronGrid (без storage / без mainnet RPC).
+                import httpx
+                trongrid_url = "https://api.trongrid.io/wallet/getnowblock"
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    r = await client.get(trongrid_url)
+                    if r.status_code != 200:
+                        raise RuntimeError("TronGrid HTTP " + str(r.status_code))
+                break
+            except Exception as e:
+                delay = min(2 ** attempt, 30)
+                logger.warning(
+                    "[tron] warmup attempt %d/10 failed: %s — sleep %ds",
+                    attempt + 1, e, delay,
+                )
+                await asyncio.sleep(delay)
+        else:
+            logger.error("[tron] warmup failed after 10 attempts — monitor disabled")
+            return
+
         await run_tron_monitor(bot=bot)
     except Exception as e:
         logger.error("Tron monitor crashed: %s — main bot continues", e)
@@ -936,7 +965,7 @@ async def _start_dashboard_api():
         server = uvicorn.Server(config_)
         await server.serve()
     except Exception as e:
-        logger.warning("Dashboard API crashed: %s", e)
+        logger.error("Dashboard API failed: %s", e)
 
 
 if __name__ == "__main__":

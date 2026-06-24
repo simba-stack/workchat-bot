@@ -179,7 +179,7 @@ def _get_session_secret() -> str:
         try:
             storage.state["session_secret"] = s
             # сохранение асинхронное — пометим что нужно сохранить
-            asyncio.get_event_loop().create_task(storage._save_unlocked())
+            asyncio.get_event_loop().create_task(storage.save())
         except Exception:
             pass
     return s
@@ -6774,7 +6774,7 @@ async def api_crm_owner_ban(
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["banned_until"] = until_ts
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id, "banned_until": until_ts}
 
 
@@ -6790,7 +6790,7 @@ async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth), _perm: bo
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["banned_until"] = 0
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id}
 
 
@@ -6810,7 +6810,7 @@ async def api_crm_owner_warn(owner_id: str, _: None = Depends(_auth), _perm: boo
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["warnings"] = warns
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id, "warnings": warns}
 
 
