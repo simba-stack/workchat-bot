@@ -6228,7 +6228,7 @@ var SCREENS = {
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
         SCREENS._myAdsTabsHtml()+
       '</div>'+
-      '<div id="p2p-myads-list"><div style="padding:14px;text-align:center;color:#7a7a7a;font-family:monospace;font-size:11px">▶ init...</div></div>',
+      '<div id="p2p-v2-myads-list"><div style="padding:14px;text-align:center;color:#7a7a7a;font-family:monospace;font-size:11px">▶ init...</div></div>',
       'my_ads'
     ));
     // АРХИ-ПРОСТОЙ direct fetch — синхронно, без setTimeout
@@ -6236,11 +6236,11 @@ var SCREENS = {
       // dbg() каждый раз re-query — screens.myAds может вызываться дважды
       // и старая ссылка на c будет указывать на отсоединённый node.
       var dbg = function(t,col){
-        var cur = document.getElementById('p2p-myads-list');
+        var cur = document.getElementById('p2p-v2-myads-list');
         if (!cur) return;
         cur.innerHTML = '<div style="padding:14px;text-align:center;color:'+(col||'#3DA3F0')+';font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all">'+t+'</div>';
       };
-      var c = document.getElementById('p2p-myads-list');
+      var c = document.getElementById('p2p-v2-myads-list');
       if (!c) return;
       var initData = (TG && TG.initData) || '';
       var tgUser = (TG && TG.initDataUnsafe && TG.initDataUnsafe.user) || null;
@@ -6275,12 +6275,12 @@ var SCREENS = {
         var items = (data && data.items) || [];
         dbg('④ items='+items.length+(items.length?(', первый: '+JSON.stringify(items[0]).slice(0,200)):''), '#34c759');
         if (!items.length) {
-          var emptyC = document.getElementById('p2p-myads-list'); if (emptyC) emptyC.innerHTML = UI.emptyState('У вас пока нет объявлений','Создайте первое объявление');
+          var emptyC = document.getElementById('p2p-v2-myads-list'); if (emptyC) emptyC.innerHTML = UI.emptyState('У вас пока нет объявлений','Создайте первое объявление');
           return;
         }
         // Render — re-query актуальный node
         setTimeout(function(){
-          var cur = document.getElementById('p2p-myads-list');
+          var cur = document.getElementById('p2p-v2-myads-list');
           if (!cur) return;
           var html = '';
           for (var i=0; i<items.length; i++) {
@@ -6317,7 +6317,7 @@ var SCREENS = {
   },
 
   async _myAdsLoad(){
-    var c = document.getElementById('p2p-myads-list');
+    var c = document.getElementById('p2p-v2-myads-list');
     if (!c) { alert('[myAds] container НЕ найден'); return; }
     STATE._myAds.loading = true;
     // ВИДИМЫЙ прогресс — будет видно где висит
