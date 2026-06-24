@@ -1,0 +1,26 @@
+# ClamAV-демон для скана вложений P2P-чата.
+#   docker compose -f docker-compose.clamav.yml up -d
+# Затем в .env приложения:
+#   CLAMAV_ENABLED=true
+#   CLAMAV_HOST=127.0.0.1
+#   CLAMAV_PORT=3310
+# Первый старт качает базы сигнатур (~3-5 мин) — healthcheck ждёт готовности.
+version: "3.8"
+services:
+  clamav:
+    image: clamav/clamav:1.3
+    ports:
+      - "3310:3310"
+    environment:
+      # freshclam обновляет базы по расписанию внутри контейнера
+      CLAMAV_NO_FRESHCLAMD: "false"
+    volumes:
+      - clamav_db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 5 localhost 3310 | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+volumes:
+  clamav_db:

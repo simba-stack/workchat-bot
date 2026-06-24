@@ -24,3 +24,5 @@ python-json-logger>=2.0
 # === Evidence Export (PDF / ZIP) ===
 reportlab>=4.0
 
+# === Antivirus (ClamAV) ===
+clamd>=1.0.2
