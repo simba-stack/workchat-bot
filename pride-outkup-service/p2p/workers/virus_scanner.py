@@ -1,23 +1,31 @@
-"""Virus Scanner Worker (TODO #2, stub MVP).
+"""Virus Scanner Worker (TODO #2 — реальный ClamAV).
 
 Каждые 30 сек:
   1. SELECT ... FOR UPDATE SKIP LOCKED → берёт P2PAttachment с virus_scan_status='PENDING'
   2. Помечает 'SCANNING'
-  3. Имитирует скан (sleep 0.5s) — 99% CLEAN, 1% INFECTED
-  4. Если INFECTED — emit SYSTEM_ALERT через outbox + статус остаётся 'INFECTED' (frontend
-     не отдаёт ссылку на такой файл).
+  3. Читает файл с диска (storage_key) и отдаёт его демону ClamAV (INSTREAM)
+  4. CLEAN/INFECTED → пишет статус. Если INFECTED — emit SYSTEM_ALERT через outbox,
+     а download-эндпоинт отдаёт 451 (карантин).
 
-Это stub до реальной интеграции (ClamAV / VirusTotal API).
+Fail-closed: если ClamAV выключен/недоступен — файл НЕ помечается CLEAN, остаётся
+PENDING до следующей попытки (даунлоад по-прежнему доступен пока файл не доказан
+INFECTED — таков существующий gating в attachments.py).
+
+Скан реализован в core/services/clamav_service.py. Демон поднимается отдельно
+(контейнер clamav/clamav), адрес — в ENV CLAMAV_HOST/PORT или CLAMAV_SOCKET.
 """
 from __future__ import annotations
 import asyncio
 import logging
-import random
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 
+from core.config import settings
 from core.db import AsyncSessionLocal
+from core.services import clamav_service
+from core.services.clamav_service import ClamAVUnavailable
 from p2p import outbox
 from p2p.enums import EventType
 from p2p.models import P2PAttachment
@@ -26,15 +34,59 @@ logger = logging.getLogger("p2p.worker.virus_scanner")
 
 SCAN_INTERVAL_SECONDS = 30
 BATCH_LIMIT = 20
-INFECTED_PROBABILITY = 0.01  # 1% chance to flag INFECTED (stub)
+# Максимальный размер файла для INSTREAM-скана (защита от OOM). Больше — пропускаем
+# скан и оставляем PENDING (крупное видео можно сканировать отдельным пайплайном).
+MAX_SCAN_BYTES = 100 * 1024 * 1024  # 100 MB
+
+_STORAGE_BASE = os.environ.get("STORAGE_PATH") or os.path.join(
+    os.getcwd(), "storage", "p2p",
+)
 
 
-async def _scan_one(db, att: P2PAttachment) -> str:
-    """Имитация скана. Возвращает финальный статус: CLEAN | INFECTED."""
-    await asyncio.sleep(0.5)
-    if random.random() < INFECTED_PROBABILITY:
-        return "INFECTED"
-    return "CLEAN"
+def _resolve_path(storage_key: str) -> str | None:
+    """Безопасно (anti path-traversal) получить абсолютный путь файла."""
+    if not storage_key:
+        return None
+    key = storage_key.replace("\\", "/")
+    if ".." in key.split("/") or key.startswith("/"):
+        return None
+    return os.path.abspath(os.path.join(_STORAGE_BASE, key))
+
+
+async def _scan_one(db, att: P2PAttachment) -> str | None:
+    """Реальный ClamAV-скан. Возвращает 'CLEAN'|'INFECTED', либо None — оставить PENDING.
+
+    None означает «не удалось проверить» (AV выключен/недоступен/файла нет/слишком
+    большой) — статус не меняем, попробуем в следующей итерации.
+    """
+    abs_path = _resolve_path(att.storage_key)
+    if not abs_path or not os.path.isfile(abs_path):
+        logger.warning("[virus_scanner] file missing on disk id=%s key=%s",
+                       att.id, att.storage_key)
+        return None
+
+    size = os.path.getsize(abs_path)
+    if size > MAX_SCAN_BYTES:
+        logger.warning("[virus_scanner] file too large to scan id=%s size=%d — skip",
+                       att.id, size)
+        return None
+
+    try:
+        data = await asyncio.to_thread(_read_file, abs_path)
+        result = await clamav_service.scan_bytes(data)
+    except ClamAVUnavailable as e:
+        # Демон недоступен — fail-closed: оставляем PENDING (retry)
+        logger.warning("[virus_scanner] ClamAV unavailable for id=%s: %s", att.id, e)
+        return None
+
+    if result.infected:
+        logger.warning("[virus_scanner] INFECTED id=%s signature=%s", att.id, result.signature)
+    return result.status
+
+
+def _read_file(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
 
 
 async def _process_batch() -> int:
@@ -78,6 +130,13 @@ async def _process_batch() -> int:
                 if not att:
                     continue
                 result = await _scan_one(db, att)
+                if result is None:
+                    # Не удалось проверить (AV off/недоступен/файла нет) —
+                    # вернуть SCANNING -> PENDING для повторной попытки (rollback тут НЕ
+                    # помогает: SCANNING закоммичен в сессии клейма батча).
+                    att.virus_scan_status = "PENDING"
+                    await db.commit()
+                    continue
                 att.virus_scan_status = result
                 if result == "INFECTED":
                     logger.warning(
@@ -126,13 +185,17 @@ async def _process_batch() -> int:
 
 async def run() -> None:
     """Worker entry point. Запускается в lifespan через asyncio.create_task."""
-    logger.info("[virus_scanner] started (interval=%ds, batch=%d, infect_p=%.4f)",
-                SCAN_INTERVAL_SECONDS, BATCH_LIMIT, INFECTED_PROBABILITY)
+    logger.info("[virus_scanner] started (interval=%ds, batch=%d, clamav_enabled=%s)",
+                SCAN_INTERVAL_SECONDS, BATCH_LIMIT, settings.clamav_enabled)
+    if not settings.clamav_enabled:
+        logger.warning("[virus_scanner] CLAMAV_ENABLED=false — скан вложений отключён, "
+                       "файлы остаются PENDING (fail-closed). Воркер простаивает.")
     while True:
         try:
-            n = await _process_batch()
-            if n:
-                logger.info("[virus_scanner] processed %d attachments", n)
+            if settings.clamav_enabled:
+                n = await _process_batch()
+                if n:
+                    logger.info("[virus_scanner] processed %d attachments", n)
         except Exception as e:
             logger.exception("[virus_scanner] iteration failed: %s", e)
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)

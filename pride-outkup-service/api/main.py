@@ -389,6 +389,15 @@ _NO_CACHE_HEADERS = {
 }
 
 
+@app.get("/pride-security.js")
+async def pride_security_js():
+    """Отдаёт модуль безопасности фронта (PIN/biometric/re-auth). Сосед index.html."""
+    f = MINIAPP_DIR / "pride-security.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript", headers=_NO_CACHE_HEADERS)
+    return HTMLResponse("// pride-security.js not found", status_code=404)
+
+
 if MINIAPP_DIST.exists():
     app.mount("/app", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp")
     app.mount("/app2", StaticFiles(directory=MINIAPP_DIST, html=True), name="miniapp_v2")

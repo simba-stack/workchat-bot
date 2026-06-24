@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     feature_v2_p2p_enabled: bool = False
     feature_referral_enabled: bool = True
 
+    # ── ClamAV antivirus (вложения P2P-чата) ──
+    clamav_enabled: bool = False          # выкл по умолчанию (нет демона → fail-closed)
+    clamav_host: str = "127.0.0.1"
+    clamav_port: int = 3310
+    clamav_socket: str = ""               # unix-socket путь; если задан — приоритетнее TCP
+    clamav_timeout: float = 30.0          # сек на скан одного файла
+
     @property
     def admin_ids(self) -> list[int]:
         return [int(x) for x in self.admin_tg_ids.split(",") if x.strip().isdigit()]

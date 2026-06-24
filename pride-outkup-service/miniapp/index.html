@@ -66,6 +66,7 @@
 })();
 </script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="pride-security.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <link rel="icon" href="data:,">
 <style>
@@ -7867,8 +7868,8 @@ var SCREENS = {
         '</div>'
       : '<div style="position:relative;padding:8px 10px calc(env(safe-area-inset-bottom,0px) + 8px);border-top:1px solid rgba(255,255,255,0.05);background:#15161a;display:flex;gap:6px;align-items:flex-end">'+
           '<button onclick="P2P.screens._tradeChatAttachClick()" style="background:rgba(255,255,255,0.06);border:0;border-radius:50%;width:38px;height:38px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0">📎</button>'+
-          '<textarea id="p2p-chat-input" placeholder="Сообщение…" maxlength="4000" rows="1" style="flex:1;resize:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:18px;color:#fff;padding:9px 12px;font-size:14px;outline:none;line-height:1.4;max-height:120px;min-height:38px"></textarea>'+
-          '<button id="p2p-chat-send" onclick="P2P.screens._tradeChatSend()" style="background:var(--p2p-accent);border:0;border-radius:50%;width:38px;height:38px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0">➤</button>'+
+          '<textarea id="p2p-v2-chat-input" placeholder="Сообщение…" maxlength="4000" rows="1" style="flex:1;resize:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:18px;color:#fff;padding:9px 12px;font-size:14px;outline:none;line-height:1.4;max-height:120px;min-height:38px"></textarea>'+
+          '<button id="p2p-v2-chat-send" onclick="P2P.screens._tradeChatSend()" style="background:var(--p2p-accent);border:0;border-radius:50%;width:38px;height:38px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0">➤</button>'+
         '</div>';
 
     var typingHtml = '<div id="p2p-chat-typing" style="padding:0 14px;height:18px;font-size:11px;color:var(--p2p-text-dim);font-style:italic"></div>';
@@ -7994,7 +7995,7 @@ var SCREENS = {
   },
 
   _tradeChatBindInput(){
-    var ta = document.getElementById('p2p-chat-input');
+    var ta = document.getElementById('p2p-v2-chat-input');
     if (!ta) return;
     ta.addEventListener('input', function(){
       ta.style.height = 'auto';
@@ -8079,7 +8080,7 @@ var SCREENS = {
 
   async _tradeChatSend(){
     var tid = STATE._tradeChat.tradeId;
-    var ta = document.getElementById('p2p-chat-input');
+    var ta = document.getElementById('p2p-v2-chat-input');
     if (!ta) return;
     var txt = (ta.value||'').trim();
     if (!txt) return;
@@ -9628,14 +9629,14 @@ var SCREENS = {
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'+typeChips+'</div>'+
 
         '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Название банка / системы</div>'+
-        '<input class="p2p-input" id="p2p-pm-bank" maxlength="64" value="'+esc(f.bank_name)+'" oninput="P2P.screens._pmSet(\'bank_name\',this.value)" style="margin-bottom:10px">'+
+        '<input class="p2p-input" id="p2p-v2-pm-bank" maxlength="64" value="'+esc(f.bank_name)+'" oninput="P2P.screens._pmSet(\'bank_name\',this.value)" style="margin-bottom:10px">'+
 
         '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Имя владельца *</div>'+
         '<input class="p2p-input" id="p2p-pm-holder" maxlength="128" value="'+esc(f.account_holder)+'" oninput="P2P.screens._pmSet(\'account_holder\',this.value)" placeholder="Иван Иванов" style="margin-bottom:10px">'+
 
         (needCard
           ? '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Номер карты *</div>'+
-            '<input class="p2p-input" id="p2p-pm-card" maxlength="32" value="'+esc(f.card_number)+'" oninput="P2P.screens._pmSet(\'card_number\',this.value)" placeholder="4111 2222 3333 4444" inputmode="numeric" style="margin-bottom:10px">'
+            '<input class="p2p-input" id="p2p-v2-pm-card" maxlength="32" value="'+esc(f.card_number)+'" oninput="P2P.screens._pmSet(\'card_number\',this.value)" placeholder="4111 2222 3333 4444" inputmode="numeric" style="margin-bottom:10px">'
           : '')+
 
         '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Телефон '+(needPhone?'*':'(опц.)')+'</div>'+
@@ -9649,7 +9650,7 @@ var SCREENS = {
         '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:6px">Страна (2 буквы)</div>'+
         '<input class="p2p-input" id="p2p-pm-country" maxlength="2" value="'+esc(f.country)+'" oninput="P2P.screens._pmSet(\'country\',this.value.toUpperCase())" placeholder="RU" style="margin-bottom:20px;text-transform:uppercase">'+
 
-        '<button class="p2p-btn-primary" id="p2p-pm-save" onclick="P2P.screens._pmSave()">'+(editing?'Сохранить изменения':'Сохранить реквизит')+'</button>'+
+        '<button class="p2p-btn-primary" id="p2p-v2-pm-save" onclick="P2P.screens._pmSave()">'+(editing?'Сохранить изменения':'Сохранить реквизит')+'</button>'+
         '<div style="height:20px"></div>'+
       '</div>',
       'my_ads'
@@ -9686,7 +9687,7 @@ var SCREENS = {
       iban: (f.iban||'').trim() || null,
       country: (f.country||'').trim().toUpperCase() || null,
     };
-    var btn = document.getElementById('p2p-pm-save');
+    var btn = document.getElementById('p2p-v2-pm-save');
     if (btn) { btn.disabled = true; btn.textContent = 'Сохранение…'; }
     try {
       if (f.edit_id) await API.paymentMethods.update(f.edit_id, body);
