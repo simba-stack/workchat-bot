@@ -16,6 +16,40 @@ _lock = asyncio.Lock()
 _CHAT_TTL_SEC = 30 * 24 * 3600  # 30 дней
 
 
+# === LK_CARD_STATUSES: documentation-in-code (см. ТЗ Bug #10) ===
+# Реально сейчас используются только статусы из accounting2.LK_STATUSES:
+#   В_РАБОТЕ, ОТРАБОТАН, ПОПОЛНИТЬ_И_ОТПУСТИТЬ, БРАК, БЛОК, ЗАВЕРШЁН
+#
+# ТЗ предполагает более детальный workflow (создание -> передача -> отработка
+# -> выплата). Ниже — полный enum актуальных + ПЛАНОВЫХ статусов с описанием
+# (на будущий рефакторинг userbot.py + dashboard UI).
+#
+# ВАЖНО: ЭТО ДОКУМЕНТАЦИЯ, НЕ ЛОГИКА. Не меняй существующее поведение карточек,
+# опираясь на эту константу — реальный enum сейчас в accounting2.LK_STATUSES.
+LK_CARD_STATUSES = {
+    # Планируемые (НЕ реализованы):
+    "НА_ОФОРМЛЕНИИ": "Карточка создана, ожидает оформления оператором (план).",
+    "ПЕРЕДАН": "Передана работнику (план; сейчас старт = В_РАБОТЕ).",
+    "СБРОС": "Карточка сброшена (отказ работника) (план; сейчас аналог = БРАК).",
+    # Реально используемые сегодня:
+    "В_РАБОТЕ": "ЛК передан, ждём отработки счёта.",
+    "ОТРАБОТАН": "Работа выполнена, ждёт выплаты/отпуска.",
+    "ПОПОЛНИТЬ_И_ОТПУСТИТЬ": (
+        "GUARANTOR_AFTER_WORK: клиент должен пополнить сделку Continental, "
+        "после чего отпускаем ЛК."
+    ),
+    "БРАК": "ЛК неисправен / невалиден — возврат поставщику без оплаты.",
+    "БЛОК": "Заморозка/арест на счёте — частичная/полная компенсация.",
+    "ЗАВЕРШЁН": "Деньги выплачены, карточка закрыта.",
+    # Планируемая финальная отметка:
+    "DONE": "Закрыта (alias ЗАВЕРШЁН в плановом workflow).",
+}
+# TODO (следующая фаза): внедрить полный workflow статусов
+# (НА_ОФОРМЛЕНИИ -> ПЕРЕДАН -> СБРОС -> ОТРАБОТАН ->
+#  ПОПОЛНИТЬ_И_ОТПУСТИТЬ -> DONE)
+# в userbot.py + dashboard UI (Группа 1 ЛК).
+
+
 def _gen_secret_command() -> str:
     alphabet = string.ascii_letters + string.digits
     suffix = ''.join(secrets.choice(alphabet) for _ in range(12))
@@ -2163,7 +2197,32 @@ class Storage:
             await self._save_unlocked()
             return True
 
-    async def update_deal_status(self, deal_id: str, new_status: str) -> bool:
+    # Phase 2 Bug #9: state machine для статусов сделок (WARN-only по умолчанию)
+    # Реальные статусы из storage:
+    #   ПОПОЛНИТЬ (начальный) → ПОПОЛНЕНО → В_РАБОТЕ → ГОТОВО_К_ОТПУСКУ → ЗАВЕРШЕНА
+    #   ПОПОЛНИТЬ_И_ОТПУСТИТЬ — шорткат на ОТРАБОТАН+GUARANTOR_AFTER_WORK
+    #   Из любого нетерминального можно в ЗАБЛОКИРОВАН / ОТМЕНА_СДЕЛКИ
+    DEAL_STATE_TRANSITIONS = {
+        "ПОПОЛНИТЬ":           {"ПОПОЛНЕНО", "В_РАБОТЕ", "ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"},
+        "ПОПОЛНЕНО":           {"В_РАБОТЕ", "ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"},
+        "В_РАБОТЕ":            {"ГОТОВО_К_ОТПУСКУ", "ПОПОЛНИТЬ_И_ОТПУСТИТЬ", "ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"},
+        "ГОТОВО_К_ОТПУСКУ":    {"ЗАВЕРШЕНА", "ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"},
+        "ПОПОЛНИТЬ_И_ОТПУСТИТЬ": {"ЗАВЕРШЕНА", "ЗАБЛОКИРОВАН", "ОТМЕНА_СДЕЛКИ"},
+        "ЗАБЛОКИРОВАН":        {"В_РАБОТЕ", "ОТМЕНА_СДЕЛКИ"},     # можно разблокировать
+        "ЗАВЕРШЕНА":           set(),  # terminal
+        "ОТМЕНА_СДЕЛКИ":       set(),  # terminal
+    }
+
+    async def update_deal_status(
+        self, deal_id: str, new_status: str, *, strict: bool = False
+    ) -> bool:
+        """Изменить статус сделки.
+
+        Phase 2 Bug #9: добавлена валидация через DEAL_STATE_TRANSITIONS.
+        По умолчанию (strict=False) — WARN-лог при invalid переходе, но переход всё равно
+        применяется (backward-compat для прода). При strict=True — возвращает False и
+        НЕ применяет переход.
+        """
         deal_id = _norm_deal_id(deal_id)
         new_status = (new_status or "").strip()
         if not deal_id or not new_status:
@@ -2174,6 +2233,29 @@ class Storage:
             if not d:
                 return False
             old_status = d.get("status", "")
+            # Validate transition
+            if old_status and old_status in self.DEAL_STATE_TRANSITIONS:
+                allowed = self.DEAL_STATE_TRANSITIONS[old_status]
+                if new_status not in allowed and new_status != old_status:
+                    if strict:
+                        try:
+                            import logging
+                            logging.getLogger("storage").warning(
+                                "[deal] STRICT BLOCK invalid transition deal=%s %s -> %s (allowed: %s)",
+                                deal_id, old_status, new_status, sorted(allowed),
+                            )
+                        except Exception:
+                            pass
+                        return False
+                    else:
+                        try:
+                            import logging
+                            logging.getLogger("storage").warning(
+                                "[deal] invalid transition deal=%s %s -> %s (allowed: %s) — accepting in WARN-only mode",
+                                deal_id, old_status, new_status, sorted(allowed),
+                            )
+                        except Exception:
+                            pass
             d["status"] = new_status
             d.setdefault("history", []).append(
                 {"ts": time.time(), "status": new_status}
