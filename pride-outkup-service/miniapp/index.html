@@ -6091,6 +6091,40 @@ var SCREENS = {
         (pmOptions || '<div style="color:var(--p2p-text-dim);font-size:13px">Нет доступных методов</div>')+
       '</div>';
 
+    // BUY ad => taker (мы) продаём крипту и получаем фиат => нужно указать реквизит inline
+    var inlineReqCard = '';
+    if (ad.type !== 'SELL') {
+      var RU_METHODS = [
+        ['SBP','СБП'],['SBER','Сбербанк'],['TINKOFF','Тинькофф'],['ALPHA','Альфа'],
+        ['VTB','ВТБ'],['RAIF','Райффайзен'],['GAZPROM','Газпромбанк'],['OZON','OZON Банк'],
+        ['CASH','Наличные'],['OTHER','Другое']
+      ];
+      var methodOpts = RU_METHODS.map(function(m){
+        return '<option value="'+m[0]+'">'+esc(m[1])+'</option>';
+      }).join('');
+      inlineReqCard =
+        '<div class="p2p-glass" style="padding:14px;margin-bottom:10px">'+
+          '<div style="font-size:13px;font-weight:600;margin-bottom:4px">Реквизит для получения оплаты</div>'+
+          '<div style="font-size:12px;color:var(--p2p-text-dim);margin-bottom:10px">Продавец переведёт вам рубли по этим данным</div>'+
+          '<div style="margin-bottom:10px">'+
+            '<div style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Тип</div>'+
+            '<select id="p2p-prev-req-type" class="p2p-input" onchange="P2P._onInlineReqType()">'+methodOpts+'</select>'+
+          '</div>'+
+          '<div id="p2p-prev-req-bank-wrap" style="margin-bottom:10px">'+
+            '<div style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Банк</div>'+
+            '<input id="p2p-prev-req-bank" class="p2p-input" placeholder="Название банка">'+
+          '</div>'+
+          '<div style="margin-bottom:10px">'+
+            '<div id="p2p-prev-req-card-label" style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Карта или телефон</div>'+
+            '<input id="p2p-prev-req-card" class="p2p-input" inputmode="text" placeholder="Номер карты или телефона">'+
+          '</div>'+
+          '<div>'+
+            '<div style="font-size:11px;color:var(--p2p-text-dim);margin-bottom:4px">Имя получателя</div>'+
+            '<input id="p2p-prev-req-name" class="p2p-input" placeholder="Иван И.">'+
+          '</div>'+
+        '</div>';
+    }
+
     var calcCard =
       '<div class="p2p-glass" style="padding:14px;margin-bottom:10px">'+
         '<div style="font-size:13px;font-weight:600;margin-bottom:10px">Сколько хотите '+(ad.type==='SELL'?'купить':'продать')+'?</div>'+
@@ -6133,12 +6167,14 @@ var SCREENS = {
         '<div style="font-weight:700;font-size:16px;flex:1">'+(ad.type==='SELL'?'Покупка':'Продажа')+' '+esc(ad.crypto)+'</div>'+
         UI.statusBadge(ad.status)+
       '</div>'+
-      merchantCard + priceCard + infoCard + pmCard + calcCard +
+      merchantCard + priceCard + infoCard + pmCard + inlineReqCard + calcCard +
       '<div id="p2p-prev-error"></div>'+
       warning + agree + createBtn,
       'home'
     ));
     SCREENS._bindCalc(ad);
+    // init inline-реквизит (скрыть банк для СБП/Наличных, подписи)
+    try { if (ad.type !== 'SELL') P2P._onInlineReqType(); } catch(_){}
   },
 
   _bindCalc(ad){
@@ -10349,6 +10385,25 @@ var P2P = window.P2P = {
 
   // ── trade preview callbacks ──
   _setPreviewPm(id){ STATE._previewPm = id; SCREENS._validatePreview(STATE._previewAd||{}); },
+  _onInlineReqType(){
+    var sel = document.getElementById('p2p-prev-req-type');
+    var t = sel ? sel.value : '';
+    var bankWrap = document.getElementById('p2p-prev-req-bank-wrap');
+    var cardLabel = document.getElementById('p2p-prev-req-card-label');
+    var cardInput = document.getElementById('p2p-prev-req-card');
+    // банк не нужен для СБП и Наличных
+    if (bankWrap) bankWrap.style.display = (t==='SBP'||t==='CASH') ? 'none' : '';
+    if (t==='SBP') {
+      if (cardLabel) cardLabel.textContent = 'Телефон';
+      if (cardInput) cardInput.setAttribute('placeholder','Номер телефона (+7…)');
+    } else if (t==='CASH') {
+      if (cardLabel) cardLabel.textContent = 'Контакт для связи';
+      if (cardInput) cardInput.setAttribute('placeholder','Телефон / город');
+    } else {
+      if (cardLabel) cardLabel.textContent = 'Карта или телефон';
+      if (cardInput) cardInput.setAttribute('placeholder','Номер карты или телефона');
+    }
+  },
   _setAgreed(v){ STATE._previewAgreed = !!v; SCREENS._validatePreview(STATE._previewAd||{}); },
   async _createTrade(){
     var ad = STATE._previewAd; if (!ad) return;
@@ -10360,6 +10415,26 @@ var P2P = window.P2P = {
         amount_crypto: parseFloat(STATE._previewAmountCrypto||0),
         payment_method_id: STATE._previewPm,
       };
+      // BUY-объявление => инициатор продаёт крипту и получает фиат => реквизит указывается inline
+      if (ad.type !== 'SELL') {
+        var rType = (document.getElementById('p2p-prev-req-type')||{}).value || '';
+        var rBank = ((document.getElementById('p2p-prev-req-bank')||{}).value || '').trim();
+        var rCard = ((document.getElementById('p2p-prev-req-card')||{}).value || '').trim();
+        var rName = ((document.getElementById('p2p-prev-req-name')||{}).value || '').trim();
+        if (!rCard) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Создать сделку'; }
+          var eb0 = document.getElementById('p2p-prev-error');
+          if (eb0) eb0.innerHTML = '<div class="p2p-glass" style="padding:12px;border-color:rgba(255,69,58,0.4);color:#ff453a;font-size:13px;margin-bottom:10px">Укажите реквизит для получения оплаты</div>';
+          UI.haptic('error');
+          return;
+        }
+        payload.payment_method_inline = {
+          type: rType,
+          bank_name: rBank,
+          card_or_phone: rCard,
+          receiver_name: rName
+        };
+      }
       var r = await API.trades.create(payload);
       UI.haptic('success');
       UI.toast('Сделка создана');

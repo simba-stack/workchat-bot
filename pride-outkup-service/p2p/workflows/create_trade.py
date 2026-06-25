@@ -193,6 +193,36 @@ async def handle(ctx: WorkflowContext) -> dict:
                 payment_method_id,
             )
 
+    # ---------- Inline-реквизит (введён прямо в сделке, без сохранения) ----------
+    # Кейс по ТЗ: инициатор-продавец крипты (отклик на BUY-объяву) указывает реквизит
+    # на месте. Принимаем payment_method_inline = {type, bank_name, card_or_phone,
+    # receiver_name}. Используем только если снапшот ещё пуст (сохранённый метод приоритетнее).
+    if not payment_snapshot:
+        pm_inline = p.get("payment_method_inline") or p.get("payment_inline")
+        if isinstance(pm_inline, dict):
+            cop = str(
+                pm_inline.get("card_or_phone")
+                or pm_inline.get("card_number")
+                or pm_inline.get("phone")
+                or ""
+            ).strip()
+            ptype = str(pm_inline.get("type") or "OTHER").upper()
+            if cop or pm_inline.get("bank_name") or pm_inline.get("receiver_name"):
+                payment_snapshot = {
+                    "payment_method_id": None,
+                    "type": ptype,
+                    "bank_name": str(pm_inline.get("bank_name") or pm_inline.get("bank") or "").strip(),
+                    "account_holder": str(
+                        pm_inline.get("receiver_name") or pm_inline.get("account_holder") or ""
+                    ).strip(),
+                    "card_number_masked": cop,
+                    "phone": cop if ptype == "SBP" else str(pm_inline.get("phone") or "").strip(),
+                    "iban": "",
+                    "country": "RU",
+                    "inline": True,
+                    "snapshot_at": datetime.now(timezone.utc).isoformat(),
+                }
+
     # ---------- Создать trade ----------
     ctx.step("trade.create")
     pay_timeout_min = await policies.get_int(db, "TRADE_PAYMENT_TIMEOUT_MIN")
