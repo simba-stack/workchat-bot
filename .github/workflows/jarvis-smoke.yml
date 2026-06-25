@@ -1,0 +1,49 @@
+name: JARVIS Smoke
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - '!desktop/**'
+      - '!pride-outkup-service/**'
+      - '!miniapp/**'
+      - '!tests/**'
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: py_compile all root .py
+        run: |
+          set -e
+          for f in *.py; do
+            if [ -f "$f" ]; then
+              python -m py_compile "$f" || { echo "FAIL: $f"; exit 1; }
+            fi
+          done
+          echo "All root .py files compile"
+      - name: Null-byte check
+        run: |
+          set -e
+          for f in *.py; do
+            if [ -f "$f" ]; then
+              n=$(python -c "import sys; print(open('$f','rb').read().count(b'\x00'))")
+              if [ "$n" != "0" ]; then
+                echo "FAIL: $f has $n null bytes"
+                exit 1
+              fi
+            fi
+          done
+          echo "No null bytes anywhere"
+      - name: AST parse (catches truncation)
+        run: |
+          python -c "import ast,glob; [ast.parse(open(f).read(), f) for f in glob.glob('*.py')]"
+          echo "All files AST-parse"
