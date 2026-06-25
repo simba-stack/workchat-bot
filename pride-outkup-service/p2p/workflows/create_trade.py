@@ -320,9 +320,12 @@ async def handle(ctx: WorkflowContext) -> dict:
         event_type=EventType.TRADE_CREATED.value,
         payload={
             "trade_id": trade.id, "advertisement_id": ad_id,
+            "trade_number": trade.trade_number,
             "buyer_id": buyer_id, "seller_id": seller_id,
             "crypto": ad.crypto_currency, "fiat": ad.fiat_currency,
             "crypto_amount": str(amount_crypto), "fiat_amount": str(amount_fiat),
+            "price": str(price),
+            "payment_snapshot": payment_snapshot,
         },
         aggregate_type="trade",
         aggregate_id=trade.id,

@@ -53,6 +53,33 @@ async def _resolve_tg_id(user_id: int) -> int | None:
         return None
 
 
+_PM_LABELS = {
+    "SBP": "СБП", "SBER": "Сбербанк", "TINKOFF": "Тинькофф", "ALPHA": "Альфа-Банк",
+    "VTB": "ВТБ", "RAIF": "Райффайзен", "GAZPROM": "Газпромбанк", "OZON": "OZON Банк",
+    "CASH": "Наличные", "OTHER": "Другое",
+}
+
+
+def _fmt_requisites(snap: dict) -> str:
+    """Человекочитаемые реквизиты из payment_snapshot — для карточки покупателю."""
+    if not snap:
+        return ""
+    ptype = str(snap.get("type") or "").upper()
+    label = _PM_LABELS.get(ptype, ptype or "—")
+    bank = str(snap.get("bank_name") or "").strip()
+    cop = str(snap.get("card_number_masked") or snap.get("phone") or "").strip()
+    holder = str(snap.get("account_holder") or "").strip()
+    parts = [label]
+    if bank and bank.upper() != ptype:
+        parts.append(bank)
+    out = " · ".join(parts)
+    if cop:
+        out += f"\nРеквизит: {cop}"
+    if holder:
+        out += f"\nПолучатель: {holder}"
+    return out
+
+
 def _trade_card(event_type: str, p: dict, role: str) -> tuple[str, str | None, list[tuple[str, str]] | None]:
     """Возвращает (title, body, deeplinks).
 
@@ -66,15 +93,37 @@ def _trade_card(event_type: str, p: dict, role: str) -> tuple[str, str | None, l
     if event_type == EventType.TRADE_CREATED.value:
         amt = p.get("amount_crypto") or p.get("crypto_amount")
         amt_fiat = p.get("amount_fiat") or p.get("fiat_amount")
-        title = f"🆕 Новая сделка #{short}"
-        body = f"Сумма: {amt} {crypto} / {amt_fiat} {fiat}"
+        price = p.get("price")
+        snap = p.get("payment_snapshot") or {}
+        num = p.get("trade_number") or short
+        title = f"🆕 Новая сделка #{num}"
+        rate_line = f"\nКурс: {price} {fiat} за 1 {crypto}" if price else ""
         if role == "buyer":
-            return title, body + "\n\nНужно оплатить продавцу.", [
+            body = (
+                f"Покупаю {amt} {crypto}{rate_line}\n"
+                f"К оплате: {amt_fiat} {fiat}\n"
+                f"Статус: ожидает оплаты"
+            )
+            req = _fmt_requisites(snap)
+            if req:
+                body += (
+                    f"\n\n💳 Оплатите по реквизитам продавца:\n{req}"
+                    f"\n\n⚠️ Переведите точную сумму, затем нажмите «Я оплатил»."
+                )
+            else:
+                body += "\n\n⏳ Ожидаем реквизиты продавца."
+            return title, body, [
                 ("💳 Открыть сделку", f"trade_{trade_id}"),
+                ("✅ Я оплатил", f"trade_{trade_id}"),
                 ("❌ Отменить", f"trade_{trade_id}"),
             ]
         else:  # seller
-            return title, body + "\n\nЭскроу заблокирован, ждём оплату.", [
+            body = (
+                f"Продаю {amt} {crypto}{rate_line}\n"
+                f"Получу: {amt_fiat} {fiat}\n"
+                f"Статус: эскроу заблокирован, ждём оплату покупателя"
+            )
+            return title, body, [
                 ("💬 Открыть сделку", f"trade_{trade_id}"),
             ]
 
