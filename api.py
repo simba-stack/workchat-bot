@@ -27,6 +27,7 @@ import logging
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
@@ -45,15 +46,13 @@ from storage import storage
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PRIDE Dashboard", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Startup hook: бэкфилл карточек в очереди выплат.
 
-
-@app.on_event("startup")
-async def _backfill_payouts_on_startup():
-    """Бэкфилл: карточки со статусом ПОПОЛНИТЬ_И_ОТПУСТИТЬ или ОТРАБОТАН,
-    которые по какой-то причине не попали в очереди выплат, добавляем
-    в правильную очередь по payment_method.
-    Идемпотентно — пропускаем если карточка уже в какой-то очереди."""
+    Бывшее @app.on_event("startup") — мигрировано на lifespan (FastAPI 0.110+).
+    Логика идемпотентна: пропускаем если карточка уже в очереди.
+    """
     try:
         storage.reload_sync()
         # Шаг 0: чистка дублей в очередях (если из-за прошлых багов их там накопилось)
@@ -117,6 +116,16 @@ async def _backfill_payouts_on_startup():
             logger.info("[startup-backfill] added %d cards to payout queues", added)
     except Exception as e:
         logger.warning("startup backfill error: %s", e)
+    yield
+    # Shutdown hook — пока ничего (можно добавить graceful close если потребуется)
+
+
+app = FastAPI(
+    title="PRIDE Dashboard",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=_lifespan,
+)
 security = HTTPBasic(auto_error=False)
 
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
@@ -170,7 +179,7 @@ def _get_session_secret() -> str:
         try:
             storage.state["session_secret"] = s
             # сохранение асинхронное — пометим что нужно сохранить
-            asyncio.get_event_loop().create_task(storage._save_unlocked())
+            asyncio.get_event_loop().create_task(storage.save())
         except Exception:
             pass
     return s
@@ -6765,7 +6774,7 @@ async def api_crm_owner_ban(
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["banned_until"] = until_ts
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id, "banned_until": until_ts}
 
 
@@ -6781,7 +6790,7 @@ async def api_crm_owner_unban(owner_id: str, _: None = Depends(_auth), _perm: bo
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["banned_until"] = 0
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id}
 
 
@@ -6801,7 +6810,7 @@ async def api_crm_owner_warn(owner_id: str, _: None = Depends(_auth), _perm: boo
         storage.state.setdefault("crm_owners", {})
         if owner_id in storage.state["crm_owners"]:
             storage.state["crm_owners"][owner_id]["warnings"] = warns
-            await storage._save_unlocked()
+            await storage.save()
     return {"ok": True, "owner_id": owner_id, "warnings": warns}
 
 

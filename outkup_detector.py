@@ -863,7 +863,7 @@ async def _archive_and_clear_day(storage, day_iso: str) -> dict:
             "paid_usdt": paid_usdt_total, "paid_count": paid_count,
             "cancelled_pending": cancelled_cnt, "margin_usdt": margin_today,
         }
-        await storage._save_unlocked()
+        await storage.save()
         return day_archive["totals"]
 
 
@@ -909,7 +909,7 @@ async def _clear_client_balance(storage, chat_id: int, day_iso: str) -> dict:
                 p["cancelled_at"] = _t.time()
                 p["cancelled_by"] = f"admin:clear_balance:{chat_id}"
                 cancelled_cnt += 1
-        await storage._save_unlocked()
+        await storage.save()
         return {
             "orders": orders_cnt, "rub": rub_total,
             "paid_usdt": paid_usdt_total, "paid_count": paid_count,

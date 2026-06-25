@@ -5233,7 +5233,7 @@ async def cb_admincrm(call: CallbackQuery, state: FSMContext):
     if action == "reg_backup":
         # Просто триггерим save (state.json уже на диске)
         try:
-            await crm_storage._save_unlocked()
+            await crm_storage.save()
             await call.answer("💾 state.json сохранён")
         except Exception as e:
             await call.answer(f"Err: {e}", show_alert=True)

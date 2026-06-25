@@ -9,6 +9,7 @@ Used by userbot.py when client writes in a managed chat.
 """
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -16,12 +17,29 @@ from anthropic import AsyncAnthropic, APIError
 
 import config
 from storage import storage
+import accounting2  # single source of truth для PAYMENT_METHODS
 
 logger = logging.getLogger(__name__)
 
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 # Skip memories/ subdirectory and any file starting with _ or .
 _SKIP_NAMES = {"memories", ".obsidian"}
+
+# === Knowledge cache (TTL) ===
+# In-memory TTL cache для knowledge: .md файлы статичны между правками,
+# а _load_knowledge вызывался на КАЖДОМ ответе клиенту (disk I/O спам).
+# 5 минут = разумный compromise между свежестью (admin правки знаний)
+# и нагрузкой. Для force-reload — clear_knowledge_cache().
+_KNOWLEDGE_CACHE: dict[str, tuple[float, str]] = {}
+# Cache агрегированного результата _load_knowledge.
+_KNOWLEDGE_AGG_CACHE: dict[str, tuple[float, str]] = {}
+_KNOWLEDGE_TTL = 300  # 5 минут
+
+# Единый enum для payment_method (см. Bug #1).
+# Source of truth — accounting2.PAYMENT_METHODS. Алиас "GUARANTOR"
+# оставлен для backward-compat: AI иногда присылает короткое значение,
+# _tool_set_payment_method в userbot.py расширяет его до GUARANTOR_AFTER_WORK.
+PAYMENT_METHOD_ENUM = list(accounting2.PAYMENT_METHODS) + ["GUARANTOR"]
 
 # === Tools для AI (Claude tool_use) ===
 # Каждый tool описывает одно атомарное действие, которое AI может вызвать
@@ -233,12 +251,7 @@ CREATE_LK_CARD_TOOL = {
             },
             "payment_method": {
                 "type": "string",
-                "enum": [
-                    "USDT_TRC20",
-                    "GUARANTOR_BEFORE",
-                    "GUARANTOR_AFTER",
-                    "GUARANTOR_AFTER_WORK",
-                ],
+                "enum": list(accounting2.PAYMENT_METHODS),
                 "description": (
                     "Метод оплаты: USDT_TRC20 — выплата в USDT после отработки. "
                     "GUARANTOR_BEFORE — сделка в конте ДО перевязки. "
@@ -263,9 +276,12 @@ CREATE_LK_CARD_TOOL = {
 SET_PAYMENT_METHOD_TOOL = {
     "name": "set_payment_method",
     "description": (
-        "Сохраняет метод оплаты (USDT_TRC20 или GUARANTOR) для текущего "
-        "клиента в его рабочей беседе. Если USDT_TRC20 — обязательно "
-        "передай адрес кошелька (usdt_address), который дал клиент.\n\n"
+        "Сохраняет метод оплаты для текущего клиента в его рабочей беседе. "
+        "Допустимые значения те же что в create_lk_card: USDT_TRC20, "
+        "GUARANTOR_BEFORE, GUARANTOR_AFTER, GUARANTOR_AFTER_WORK "
+        "(плюс legacy alias 'GUARANTOR' = GUARANTOR_AFTER_WORK). "
+        "Если USDT_TRC20 — обязательно передай адрес кошелька (usdt_address), "
+        "который дал клиент.\n\n"
         "Вызывай этот инструмент СРАЗУ как только клиент выбрал способ "
         "оплаты — это нужно чтобы при перевязке ЛК юзербот написал в "
         "чат «Отработка аккаунтов» правильный шаблон с адресом "
@@ -276,8 +292,13 @@ SET_PAYMENT_METHOD_TOOL = {
         "properties": {
             "method": {
                 "type": "string",
-                "enum": ["USDT_TRC20", "GUARANTOR"],
-                "description": "Метод выплаты выбранный клиентом",
+                "enum": PAYMENT_METHOD_ENUM,
+                "description": (
+                    "Метод выплаты выбранный клиентом. "
+                    "USDT_TRC20 (нужен usdt_address), "
+                    "GUARANTOR_BEFORE / GUARANTOR_AFTER / GUARANTOR_AFTER_WORK, "
+                    "или legacy 'GUARANTOR' (= GUARANTOR_AFTER_WORK)."
+                ),
             },
             "usdt_address": {
                 "type": "string",
@@ -319,29 +340,63 @@ def _get_client() -> Optional[AsyncAnthropic]:
     return _client
 
 
+def _read_file_cached(path: Path) -> str:
+    """Читает файл с TTL-кешем. На ошибке возвращает прошлое значение если есть."""
+    key = str(path)
+    now = time.time()
+    cached = _KNOWLEDGE_CACHE.get(key)
+    if cached and (now - cached[0]) < _KNOWLEDGE_TTL:
+        return cached[1]
+    try:
+        content = path.read_text(encoding="utf-8")
+        _KNOWLEDGE_CACHE[key] = (now, content)
+        return content
+    except Exception as e:
+        logger.warning("knowledge read failed for %s: %s", path, e)
+        return cached[1] if cached else ""
+
+
+def clear_knowledge_cache() -> int:
+    """Сбрасывает TTL-кеш knowledge (per-file + aggregated).
+
+    Используется админом для force-reload после правки knowledge/*.md
+    без ожидания TTL (5 минут).
+    """
+    n = len(_KNOWLEDGE_CACHE) + len(_KNOWLEDGE_AGG_CACHE)
+    _KNOWLEDGE_CACHE.clear()
+    _KNOWLEDGE_AGG_CACHE.clear()
+    logger.info("knowledge cache cleared (%d entries)", n)
+    return n
+
+
 def _load_knowledge() -> str:
-    """Read all .md files from knowledge/ root (recursive 1 level, skipping _SKIP_NAMES).
+    """Read all .md files from knowledge/ root (recursive, skipping _SKIP_NAMES).
 
     Returns concatenated text with '# === filename ===' markers.
-    Loaded fresh on every call (cheap) so admin edits to knowledge/ apply
-    immediately without restart.
+    Кеширует результат на _KNOWLEDGE_TTL (5 минут) — админские правки
+    knowledge/ применятся после истечения TTL или вызова
+    clear_knowledge_cache().
     """
     if not KNOWLEDGE_DIR.exists():
         return ""
+    now = time.time()
+    cached = _KNOWLEDGE_AGG_CACHE.get("__all__")
+    if cached and (now - cached[0]) < _KNOWLEDGE_TTL:
+        return cached[1]
     parts = []
     for p in sorted(KNOWLEDGE_DIR.rglob("*.md")):
         rel = p.relative_to(KNOWLEDGE_DIR)
         if rel.parts and rel.parts[0] in _SKIP_NAMES:
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning("knowledge read failed for %s: %s", p, e)
+        content = _read_file_cached(p)
+        if not content:
             continue
         # Cleanup obsidian wiki links
-        text = _WIKI_LINK_RE.sub(r"\1", text)
-        parts.append(f"# === {rel.as_posix()} ===\n{text.strip()}")
-    return "\n\n".join(parts)
+        content = _WIKI_LINK_RE.sub(r"\1", content)
+        parts.append(f"# === {rel.as_posix()} ===\n{content.strip()}")
+    result = "\n\n".join(parts)
+    _KNOWLEDGE_AGG_CACHE["__all__"] = (now, result)
+    return result
 
 
 def _build_system_prompt(brain_notes: str = "", client_context: Optional[dict] = None) -> str:

@@ -107,128 +107,14 @@ def _is_silence_announcement(text: str) -> bool:
     return False
 
 
-# Запрещённые темы в ответах клиенту (блок / отказ / самообвинение / спекуляции
-# про команду). Если хоть один паттерн матчится — ответ не отправляется,
-# AI принудительно молчит. См. knowledge/policy.md секция «ЗАПРЕЩЁННЫЕ ТЕМЫ».
-_FORBIDDEN_CLIENT_PATTERNS = [
-    # Самообвинение / брак на нашей стороне
-    r"\bбрак\s+на\s+нашей\s+сторон\w*",
-    r"\bнаша\s+ошибк\w*",
-    r"\bнаш\s+косяк\b",
-    r"\bмы\s+виноват\w*",
-    r"\bу\s+нас\s+(?:произош\w+|сбой|проблем\w*)",
-    r"\bпроизошёл\s+(?:критическ\w+\s+)?сбой\s+в\s+систем\w*",
-    r"\bошибк\w*\s+при\s+обработк\w*",
-    # Невозможные обещания (пересдача отклонённых счетов и т.п.)
-    r"\bпересда(?:ть|ча|чу|чи|дим|дите|м|йте)\b",
-    r"\bпересда\w*\s+счет\w*",
-    r"\bповторит\w*\s+перевязк\w*",
-    r"\bвзять\s+(?:их\s+)?снова\b",
-    # Технические спекуляции про команду
-    r"\bоперационист\w+\s+(?:не\s+)?(?:взял\w*|должн\w*|смог\w*)",
-    r"\bтехническ\w+\s+перевязан\w*\s+но\s+платеж\w*",
-    r"\b(?:тимон|@?timon\w*)\s+(?:точно\s+)?в\s+курсе\??",
-    r"\b(?:тимон|@?timon\w*)\s+должен\s+был",
-    r"\bчто\s+говорит\s+(?:тимон|@?timon\w*)",
-    r"\bпочему\s+(?:тимон|@?timon\w*)\s+не\s+(?:заметил|написал|сообщил)",
-    # Обещания компенсаций
-    r"\b(?:возврат|компенсаци\w+|переоценк\w*\s+потер\w+)\s+(?:если|и\s+|или)",
-    # Извинения за выдуманные сбои
-    r"\bвозможно\s+операционист\w+",
-    r"\bможет\s+быть\s+(?:блокировк\w*|сбой|баг)",
-    # 🔴 Запрет: говорить партнёру пригласить дропа в чат / дать ссылку.
-    # Партнёр ведёт ВСЕХ дропов сам через /clients — дропу в наш чат не надо.
-    r"\bдобавьте\s+(?:его|её|их|дропа)?\s*в\s+(?:этот\s+)?чат",
-    r"\bпригласите\s+(?:его|её|их|дропа)\s*(?:сюда|в\s+чат)?",
-    r"\bдайте\s+(?:ему|ей|им|дропу)\s+ссылку\s+на\s+(?:этот\s+)?чат",
-    r"\bпригласите\s+(?:его|её|их|дропа)?\s*в\s+(?:этот\s+)?чат",
-    r"\bпопросите\s+(?:его|её|их|дропа)\s+(?:написать|зайти)\s+в\s+(?:этот\s+)?чат",
-    r"\bон\s+пропиш(?:ет|и)\s+/clients\s+(?:прямо\s+)?здесь",
-    r"\bпусть\s+он(?:а)?\s+(?:напишет|пропишет)",
-    # 🔴 Запрет: говорить КЛИЕНТУ что ОН пополняет сделку. Сделку пополняем МЫ.
-    # Клиент только СОЗДАЁТ сделку и присылает номер. Деньги вносим мы.
-    # ⚠️ Фразы narrow — матчим только когда они адресованы клиенту прямо
-    # («вам нужно пополнить», «как вы пополните»). Слова про «пополнение»
-    # сами по себе допустимы (например «мы пополним», «после пополнения отпустим»).
-    r"\bпополните\s+(?:обе\s+)?сделк(?:у|и)\b",
-    r"\bвнесите\s+(?:средства|деньг\w+|сумм\w+)\s+(?:в\s+)?гарант",
-    r"\bвам\s+нужно\s+пополнить\s+сделк",
-    r"\bпосле\s+(?:вашего\s+)?пополнения\s+вами\b",
-    r"\bкак\s+(?:только\s+)?вы\s+пополните\s+сделк",
-    r"\bкогда\s+вы\s+пополните\s+сделк",
-    r"\bждём\s+(?:вашего\s+)?подтверждения\s+пополнения\s+(?:от\s+вас|с\s+вашей)",
-    r"\bждём\s+пополнения\s+(?:от\s+вас|с\s+вашей\s+стороны)",
-    # 🔴 Отказ клиенту требующему гарант ДО отработки — недопустим.
-    # Если клиент сказал «хочу гарант сейчас / до отработки» — соглашаемся,
-    # а не отговариваем «1-3 дня после отработки».
-    r"\b(?:обычно\s+)?(?:это\s+)?занима(?:ет|ёт)\s+1\W{1,3}3\s+дн",
-    r"\bожидайте\s+(?:результата\s+)?отработк",
-    r"\bпополнение\s+(?:происходит|идёт|идет|будет)\s+только\s+после",
-    r"\bкогда\s+отработаем\W{1,3}пополним",
-    r"\bсч[её]т\s+(?:ещ[её]\s+)?в\s+работе\s+у\s+операционист",
-    # 🔴🔴🔴 КРИТИЧНЫЙ ЗАПРЕТ: AI принимает вину PRIDE / соглашается что клиент прав
-    # в споре / меняет решение под давлением / просит прощения от лица команды.
-    # Это уничтожает доверие к компании и провоцирует ещё больший скандал.
-    r"\b(?:это|такое)\s+пиздец\w*",  # ругательства в ответах клиенту
-    r"\bмы\s+(?:тебя\s+)?(?:просрали|подставили|кинули|обма?ну\w*)",
-    r"\bты\s+(?:абсолютно|совершенно|полностью|просто)\s+прав\w*",
-    r"\b(?:ты|вы)\s+(?:прав|правы)\W{0,4}он\s+(?:честно|прав)",
-    r"\b(?:это|такое)\s+недопустимо",
-    r"\bклиентск\w+\s+сервис\s+по\s+пол",
-    r"\bмы\s+в\s+этом\s+виноват\w*",
-    r"\b(?:это|тут)\s+уже\s+не\s+ошибк[ау]",
-    r"\bизвин(?:и|ите)\s+что\s+(?:допустили|такое\s+случилось)",
-    r"\bон\s+больше\s+ждать\s+не\s+(?:может|должен)",
-    r"\bвытя(?:гивают|нем)\s+(?:прямо\s+)?сейчас",
-    r"\bнаш\s+косяк\b",
-    # AI не должен ТЕГАТЬ менеджеров в ответе клиенту (escalate_to_team — да,
-    # но в самом сообщении клиенту тегов быть не должно).
-    r"@TimonSkupCL\b", r"@SIMBA_PRIDE_ADM\b", r"@pride_sys0\d+\b",
-    # Обещания выплаты при БЛОК-статусе ЛК — недопустимо.
-    r"\b(?:сейчас|сегодня|немедленно)\s+(?:выплатим|переведём|перечислим)",
-    # Принятие обвинений в спам-режиме
-    r"\bты\s+(?:абсолютно|совершенно)\s+прав\W{0,5}мы",
-    # 🔴 Запрет: предлагать клиенту цену ВЫШЕ чем он назвал.
-    # AI не должен «исправлять» клиента типа «вы наверное имели в виду 400»,
-    # «по нашему прайсу X», «а может за Y», «с учётом долга у вас выйдет Z».
-    # Если клиент назвал 170 — AI соглашается на 170. Точка.
-    r"\bпо\s+(?:нашему\s+)?прайсу\s+\d+\W{0,4}\$",
-    r"\bвы\s+наверн(?:о|ое)\s+имели\s+в\s+виду",
-    r"\bвы\s+(?:точно|правда)\s+имели\s+в\s+виду\s+\d+",
-    r"\bу\s+нас\s+прайс\s+вы(?:ше|сше)",
-    r"\bнаша\s+цена\s+\d+\W{0,4}\$",
-    r"\bу\s+нас\s+цена\s+вы(?:ше|сше)",
-    r"\bа\s+может\s+за\s+\d+",
-    r"\bс\s+учёт(?:ом|ом)\s+долг\w*\s+(?:у\s+)?вас\s+выйдет\s+\d+",
-    r"\bвыплата\s+составит\s+\d+\W{0,4}\$",
-    # 🔴 Запрет: AI НЕ СПРАШИВАЕТ цену у клиента — мы её НАЗЫВАЕМ из storage.lk_prices.
-    # Цена назначаем МЫ, не клиент решает «сколько вы хотите».
-    r"\bкакая\s+(?:сумма|цена)\s+выплат\w*",
-    r"\bна\s+какую\s+сумму\s+(?:рассчитыв|надеетес|претенду)",
-    r"\bкакую\s+сумму\s+(?:хотите|ждёте|ожидаете|расс?читыва|вы\s+хотите)",
-    r"\bкакую\s+сумму\s+вы\s+",
-    r"\bкакая\s+(?:у\s+(?:вас|тебя)\s+)?цена\b",
-    r"\bкакая\s+цена\s+у\s+(?:вас|тебя)",
-    r"\bсколько\s+(?:хотите|ждёте|ожидаете)\s+(?:за|получить)",
-    r"\bкакая\s+у\s+(?:вас|тебя)\s+цена",
-    r"\bкакую\s+(?:цену|сумму)\s+(?:хотите|ждёте|вы\s+ждёте)",
-    r"\bсколько\s+вы\s+(?:хотите|ждёте)\s+за\b",
-    # 🔴 ЗАПРЕТ: внутренние термины НЕ употребляем при общении с клиентом.
-    # «дроп», «дроп-счёт», «дропа» — это наш сленг, клиент не должен слышать.
-    # Только: «ваш счёт», «личный счёт», «ваш ЛК».
-    r"\bдроп\b",
-    r"\bдроп[- ]?счёт\w*",
-    r"\bдроп[- ]?счет\w*",
-    r"\bдроп\w*\s+(?:счёт|счет|акк|аккаунт)",
-    r"\bваш\s+дроп\b",
-    r"\bличный\s+дроп\b",
-    # 🔴 Не спрашиваем у клиента «это твой личный X» — мы не выясняем, мы продаём.
-    r"\bэто\s+(?:тво[йя]|ваш(?:а|е)?)\s+личн\w+\s+(?:втб|альфа|сбер|точк|озон|псб)",
-]
-_FORBIDDEN_RX = [
-    re.compile(p, re.IGNORECASE | re.MULTILINE)
-    for p in _FORBIDDEN_CLIENT_PATTERNS
-]
+# Forbidden patterns (AI safety) extracted to userbot_forbidden_patterns.py
+# (Phase 2 JARVIS refactor — first step of userbot.py split)
+from userbot_forbidden_patterns import (
+    _FORBIDDEN_CLIENT_PATTERNS,
+    _FORBIDDEN_RX,
+    is_forbidden as _is_forbidden,
+    find_all_matches as _find_forbidden_matches,
+)
 
 
 # Прямые триггеры — если в сообщении есть, AI отвечает СРАЗУ
@@ -1898,7 +1784,7 @@ class UserbotService:
                                 })
                                 if len(arr_n) > 200:
                                     del arr_n[: len(arr_n) - 200]
-                                await storage._save_unlocked()
+                                await storage.save()
                                 _e("support-message", {
                                     "chat_id": str(_nrm(chat_id)),
                                     "raw_chat_id": chat_id,
@@ -2258,7 +2144,7 @@ class UserbotService:
                             arr_c.append(mc)
                             if len(arr_c) > 200:
                                 del arr_c[: len(arr_c) - 200]
-                            await storage._save_unlocked()
+                            await storage.save()
                             _e("support-message", {
                                 "chat_id": str(_nrm(chat_id)),
                                 "raw_chat_id": chat_id,
@@ -9022,7 +8908,7 @@ class UserbotService:
             # Чистим ТОЛЬКО заявки V2 — маржа считается из них и обнулится сама.
             # deals_stats, AI stats, ЛК, чаты, прайс — НЕ трогаем.
             storage.state["applications_v2"] = {}
-            await storage._save_unlocked()
+            await storage.save()
             return (
                 f"🧹 Бухгалтерия очищена: удалено заявок V2 = {apps_count}, "
                 "маржа сброшена на 0. Карточки ЛК, сделки, чаты, прайс — не тронуты."
@@ -9035,7 +8921,7 @@ class UserbotService:
             old = dict(storage.state.get("ai_stats") or {})
             storage.state["ai_stats"] = {}
             storage.state["escalate_stats"] = {}
-            await storage._save_unlocked()
+            await storage.save()
             return (
                 f"🧹 AI стата сброшена. Было: replies={old.get('replies_total', 0)}, "
                 f"errors={old.get('errors_total', 0)}"
@@ -9050,7 +8936,7 @@ class UserbotService:
             storage.state["escalate_stats"] = {}
             storage.state["writeback_stats"] = {}
             storage.state["funnel_stats"] = {}
-            await storage._save_unlocked()
+            await storage.save()
             return "🧹 Все счётчики сброшены: маржа, AI, эскалации, writeback, воронка."
 
         # ===== PAUSE/RESUME AI =====
@@ -9260,7 +9146,7 @@ class UserbotService:
                     arr.append(msg_entry)
                     if len(arr) > 200:
                         del arr[: len(arr) - 200]
-                    await storage._save_unlocked()
+                    await storage.save()
                     _e("support-message", {
                         "chat_id": str(_nrm(chat_id)),
                         "raw_chat_id": chat_id,
@@ -9302,7 +9188,7 @@ class UserbotService:
                     arr.append(msg_entry)
                     if len(arr) > 200:
                         del arr[: len(arr) - 200]
-                    await storage._save_unlocked()
+                    await storage.save()
                     _e("support-message", {
                         "chat_id": str(_nrm(chat_id)) if hasattr(__import__('storage'), '_norm_chat_id') else chat_id,
                         "raw_chat_id": chat_id,
@@ -9441,7 +9327,7 @@ class UserbotService:
                 from storage import _norm_chat_id as _nrm
                 cache = storage.state.setdefault("support_msg_cache", {})
                 cache[str(_nrm(cid))] = msgs_out
-                await storage._save_unlocked()
+                await storage.save()
                 _e("support-msgs-loaded", {
                     "chat_id": cid, "count": len(msgs_out),
                 }, character="chat", severity="info")
@@ -9478,7 +9364,7 @@ class UserbotService:
                     arr_n.append(msg_n)
                     if len(arr_n) > 200:
                         del arr_n[: len(arr_n) - 200]
-                    await storage._save_unlocked()
+                    await storage.save()
                     _e("support-message", {
                         "chat_id": str(_nrm(cid)),
                         "raw_chat_id": cid,
@@ -9520,7 +9406,7 @@ class UserbotService:
                 arr_t.append(msg_t)
                 if len(arr_t) > 200:
                     del arr_t[: len(arr_t) - 200]
-                await storage._save_unlocked()
+                await storage.save()
                 _e("support-message", {
                     "chat_id": str(_nrm(cid)),
                     "raw_chat_id": cid,
@@ -9580,7 +9466,7 @@ class UserbotService:
                         arr_f.append(msg_f)
                         if len(arr_f) > 200:
                             del arr_f[: len(arr_f) - 200]
-                        await storage._save_unlocked()
+                        await storage.save()
                         _e("support-message", {
                             "chat_id": str(_nrm(cid)),
                             "raw_chat_id": cid,
@@ -9780,7 +9666,7 @@ class UserbotService:
                     for k in list(osm.keys()):
                         if k.lstrip("@").lower() == uname:
                             del osm[k]
-                    await storage._save_unlocked()
+                    await storage.save()
                 # 2) Kick из всех managed_chats где userbot админ
                 managed = (storage.state.get("managed_chats") or {})
                 for chat_id_str, info in list(managed.items()):
