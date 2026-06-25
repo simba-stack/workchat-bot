@@ -40,8 +40,10 @@ async def handle(ctx: WorkflowContext) -> dict:
     # Cancellation policy: только до payment_marked буером свободно;
     # после payment_marked — только seller или admin
     if trade.status == TradeStatus.PAYMENT_MARKED.value:
-        if ctx.user_id == trade.buyer_id:
-            raise HTTPException(409, "buyer cannot cancel after marking paid; open dispute instead")
+        # Анти-скам: после отметки об оплате НИКТО не отменяет в одностороннем порядке
+        # (иначе продавец-получатель фиата отменит сделку и заберёт эскроу себе).
+        # Спорные ситуации решаются только через спор/арбитраж.
+        raise HTTPException(409, "нельзя отменить сделку после отметки об оплате — откройте спор")
     if trade.status in (TradeStatus.PAYMENT_CONFIRMATION.value,
                         TradeStatus.DISPUTE_OPENED.value,
                         TradeStatus.ARBITRATION.value,
@@ -62,10 +64,9 @@ async def handle(ctx: WorkflowContext) -> dict:
         await ledger.refund_escrow_to_ad_hold(
             db,
             user_id=trade.seller_id,
-            currency=trade.crypto_currency,
             amount=trade.crypto_amount,
-            advertisement_id=trade.advertisement_id,
             trade_id=trade_id,
+            currency=trade.crypto_currency,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )

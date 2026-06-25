@@ -236,10 +236,9 @@ async def handle(ctx: WorkflowContext) -> dict:
         await ledger.move_ad_hold_to_escrow(
             db,
             user_id=seller_id,
-            currency=ad.crypto_currency,
             amount=amount_crypto,
-            advertisement_id=ad_id,
             trade_id=trade.id,
+            currency=ad.crypto_currency,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )
@@ -249,10 +248,10 @@ async def handle(ctx: WorkflowContext) -> dict:
             raise HTTPException(400, f"seller insufficient available: {breakdown.available}")
         await ledger.reserve_seller_escrow(
             db,
-            user_id=seller_id,
-            currency=ad.crypto_currency,
+            seller_id=seller_id,
             amount=amount_crypto,
             trade_id=trade.id,
+            currency=ad.crypto_currency,
             workflow_id=ctx.workflow_id,
             correlation_id=ctx.correlation_id,
         )

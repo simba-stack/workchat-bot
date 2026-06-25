@@ -1180,7 +1180,7 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
   <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 16px 4px">
     <div style="font-size:20px;font-weight:700;letter-spacing:0.3px">PRIDE P2P</div>
     <div style="display:flex;gap:14px;align-items:center">
-      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div><span style="position:absolute;top:6px;left:50%;transform:translateX(-50%);color:#444;font-size:9px">v1.6.0</span>
+      <div style="color:var(--muted);font-size:20px;cursor:pointer" id="settings-btn" title="Настройки">⚙</div>
     </div>
   </div>
   <div class="pcard pskin-sunset" id="pcard">
@@ -1473,7 +1473,7 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 <div class="view" id="view-p2p">
   <div class="nav-header">
     <div class="nav-back" style="visibility:hidden">←</div>
-    <div class="nav-title">P2P маркет <span style="background:#34c759;color:#000;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-left:4px">M8</span></div>
+    <div class="nav-title">P2P маркет </div>
     <button id="p2p-filter-btn" class="nav-right" style="font-size:18px;color:#fff;cursor:pointer;background:transparent;border:0">⚙</button>
   </div>
   <div class="p2p-tabs">
@@ -1570,7 +1570,7 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 <div class="view" id="view-p2p-mydeals">
   <div class="p2p-top-bar">
     <button class="p2p-back" onclick="go('p2p')">←</button>
-    <div class="p2p-title">Мои сделки <span class="m8-badge">M8</span></div>
+    <div class="p2p-title">Мои сделки </div>
     <button onclick="loadMyDealsList()" style="font-size:18px;background:transparent;border:0;color:var(--th-1);cursor:pointer">↻</button>
   </div>
   <div id="p2p-mydeals-list" style="padding:10px 12px"><div class="empty-state">Загрузка…</div></div>
@@ -1579,7 +1579,7 @@ body.theme-crown .lg-particle:nth-child(8) { display:none; }
 <div class="view" id="view-p2p-myads">
   <div class="nav-header">
     <button class="nav-back" data-back="p2p">←</button>
-    <div class="nav-title">Мои объявления <span style="background:#34c759;color:#000;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">M8</span></div>
+    <div class="nav-title">Мои объявления </div>
     <button id="p2p-myads-add" style="font-size:22px;color:var(--th-1);background:transparent;border:0;cursor:pointer">+</button>
   </div>
   <div id="p2p-myads-list" style="padding:10px 12px"><div class="empty-state" style="padding:30px 20px;text-align:center;color:rgba(255,255,255,0.55)">Загрузка…</div></div>
@@ -4606,13 +4606,13 @@ loadMain().then(routeFromStart);
 <!-- ═══════════════ window.P2P v2 (CQRS API) ═══════════════ -->
 <style id="p2p-v2-style">
 :root {
-  --p2p-bg: #0e0e0e;
-  --p2p-bg-card: #15161a;
+  --p2p-bg: #17150f;
+  --p2p-bg-card: #1e1a16;
   --p2p-text: #fff;
   --p2p-text-dim: rgba(255,255,255,0.55);
   --p2p-text-mute: rgba(255,255,255,0.35);
-  --p2p-accent: #3390EC;
-  --p2p-accent-hover: #2782E0;
+  --p2p-accent: #ff6b35;
+  --p2p-accent-hover: #ff8c42;
   --p2p-success: #34c759;
   --p2p-warn: #ffcc00;
   --p2p-danger: #ff453a;
@@ -4634,10 +4634,10 @@ loadMain().then(routeFromStart);
 .p2p-btn-primary {
   height: var(--p2p-primary-h);
   border-radius: 18px;
-  background: linear-gradient(135deg,#3390EC,#1A6BC4);
+  background: linear-gradient(135deg,#ff8c42,#ff6b35);
   color: #fff; border: 0; font-weight: 600; font-size: 15px;
   width: 100%; cursor: pointer;
-  box-shadow: 0 8px 24px rgba(51,144,236,0.32);
+  box-shadow: 0 8px 24px rgba(255,107,53,0.32);
   transition: transform 0.1s, box-shadow 0.2s;
 }
 .p2p-btn-primary:active { transform: scale(0.98); }
@@ -4658,8 +4658,8 @@ loadMain().then(routeFromStart);
   transition: all 0.15s;
 }
 .p2p-chip.active {
-  background: rgba(51,144,236,0.18);
-  border-color: rgba(51,144,236,0.5);
+  background: rgba(255,107,53,0.18);
+  border-color: rgba(255,107,53,0.5);
   color: var(--p2p-accent);
 }
 .p2p-input {
@@ -5109,7 +5109,7 @@ var UI = {
       WAITING_FOR_PAYMENT:'Ждёт оплаты', PAYMENT_MARKED:'Оплачена',
       PAYMENT_CONFIRMATION:'Проверка', COMPLETED:'Завершена', CANCELLED:'Отменена',
       DISPUTE_OPENED:'Спор', ARBITRATION:'Арбитраж', RESOLVED:'Решено',
-      ONLINE:'Online', OFFLINE:'Offline'
+      ONLINE:'В сети', OFFLINE:'Не в сети'
     };
     return L[String(s||'').toUpperCase()] || s || '';
   },
@@ -5170,7 +5170,7 @@ var UI = {
       Math.round(size*0.4)+'px;flex-shrink:0">'+esc(ini)+'</div>';
   },
   badge(text, color){
-    color = color || '#3390EC';
+    color = color || '#ff6b35';
     return '<span style="display:inline-block;padding:2px 7px;border-radius:6px;background:'+color+'25;color:'+color+
       ';font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px">'+esc(text)+'</span>';
   },
@@ -5185,8 +5185,8 @@ var UI = {
       {id:'trades',  icon:'⇄', label:'Сделки',   screen:'trades', badge: P2P.state.activeTrades.length},
       {id:'notif',   icon:'🔔', label:'Уведомл.', screen:'notifications', badge: P2P.state.notificationsUnread}
     ];
-    if (isMerch) tabs.push({id:'merchant', icon:'⌬', label:'Merchant', screen:'merchantDashboard'});
-    if (isAdmin) tabs.push({id:'admin', icon:'⚖', label:'Admin', screen:'arbitration'});
+    if (isMerch) tabs.push({id:'merchant', icon:'⌬', label:'Мерчант', screen:'merchantDashboard'});
+    if (isAdmin) tabs.push({id:'admin', icon:'⚖', label:'Админ', screen:'arbitration'});
     return '<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(14,14,14,0.92);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-around;padding:6px 0 calc(env(safe-area-inset-bottom,0px) + 6px);z-index:50">'+
       tabs.map(function(t){
         var active = activeTab === t.id;
@@ -5205,7 +5205,7 @@ var UI = {
     var user = P2P.state.user || {};
     var name = opts.title || user.username || user.first_name || 'Гость';
     var kyc = user.kyc_level ? UI.badge('KYC '+user.kyc_level, '#34c759') : '';
-    var merch = (user.role === 'MERCHANT' || user.is_merchant) ? UI.badge('Merchant', '#ffcc00') : '';
+    var merch = (user.role === 'MERCHANT' || user.is_merchant) ? UI.badge('Мерчант', '#ffcc00') : '';
     var notif = P2P.state.notificationsUnread;
     var active = P2P.state.activeTrades.length;
     var back = opts.back ? '<button onclick="P2P.nav.pop()" style="background:transparent;color:var(--p2p-accent);border:0;font-size:22px;padding:0 6px 0 0;cursor:pointer;line-height:1">‹</button>' : '';
@@ -5377,7 +5377,7 @@ var UI = {
   msgStatusIcon(status){
     if (!status) return '';
     var s = String(status).toUpperCase();
-    if (s === 'READ') return '<span style="color:#3390EC">✓✓</span>';
+    if (s === 'READ') return '<span style="color:#ff6b35">✓✓</span>';
     if (s === 'DELIVERED') return '<span style="color:rgba(255,255,255,0.5)">✓✓</span>';
     if (s === 'SENT') return '<span style="color:rgba(255,255,255,0.45)">✓</span>';
     if (s === 'UPLOADING' || s === 'WAITING') return '<span style="color:rgba(255,255,255,0.35)">…</span>';
@@ -5717,7 +5717,7 @@ var SCREENS = {
             (badge ? UI.badge(badge, '#ffcc00') : '')+
           '</div>'+
           '<div style="font-size:11px;color:var(--p2p-text-dim);margin-top:3px">'+
-            dot+(online?'Online':'Offline')+' · '+completed+' сделок'+
+            dot+(online?'В сети':'Не в сети')+' · '+completed+' сделок'+
             (rating ? ' · ★ '+Number(rating).toFixed(1) : '')+
             (responseTime ? ' · ⏱ '+UI.responseTime(responseTime) : '')+
           '</div>'+
@@ -5787,15 +5787,16 @@ var SCREENS = {
       price_asc:'Цена ↑', price_desc:'Цена ↓',
       rating_desc:'Рейтинг', trades_desc:'Сделки',
       response_asc:'Скорость', volume_desc:'Объём',
-      online_first:'Online'
+      online_first:'Сначала в сети'
     };
     var sortLabel = sortLabels[STATE.sort] || 'Сортировка';
     var flags = [
-      {key:'merchant', label:'Merchant'},
-      {key:'verified', label:'Verified'},
-      {key:'online', label:'Online'},
+      {key:'merchant', label:'Мерчант'},
+      {key:'verified', label:'Проверенные'},
+      {key:'online', label:'В сети'},
     ];
-    var payments = ['SBP','BLIK','SEPA','Bank','Card','Cash'];
+    var payments = ['SBP','Bank','Card','Cash'];
+    var paymentLabels = { SBP:'СБП', Bank:'Банк', Card:'Карта', Cash:'Наличные' };
 
     return '<div style="display:flex;gap:8px;margin-bottom:10px">'+
         '<button class="p2p-btn-secondary" onclick="P2P._cryptoSheet()" style="flex:1;height:40px">'+esc(f.crypto)+' ▾</button>'+
@@ -5808,7 +5809,7 @@ var SCREENS = {
           return '<span class="p2p-chip'+(STATE.filters[fl.key]?' active':'')+'" onclick="P2P._toggleFilter(\''+fl.key+'\')">'+esc(fl.label)+'</span>';
         }).join('') +
         payments.map(function(p){
-          return '<span class="p2p-chip'+(STATE.filters.payment_method===p?' active':'')+'" onclick="P2P._setFilter(\'payment_method\',\''+p+'\')">'+esc(p)+'</span>';
+          return '<span class="p2p-chip'+(STATE.filters.payment_method===p?' active':'')+'" onclick="P2P._setFilter(\'payment_method\',\''+p+'\')">'+esc(paymentLabels[p]||p)+'</span>';
         }).join('')+
       '</div>'+
       '<div id="p2p-market-meta" style="font-size:11px;color:var(--p2p-text-dim);margin:8px 0">Загрузка…</div>'+
@@ -6223,7 +6224,7 @@ var SCREENS = {
     setHtml(shellHtml(
       UI.glassHeader({ showCounters:true })+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px">'+
-        '<div style="font-size:17px;font-weight:700">Мои объявления <span style="font-size:10px;color:#3DA3F0;background:rgba(61,163,240,0.15);padding:2px 6px;border-radius:4px;margin-left:6px">v5.5</span></div>'+
+        '<div style="font-size:17px;font-weight:700">Мои объявления </div>'+
         '<button class="p2p-btn-primary" style="width:auto;height:42px;font-size:13px;padding:0 14px" onclick="P2P.nav.push(\'createAd\')">+ Создать</button>'+
       '</div>'+
       '<div id="p2p-myads-tabs" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px">'+
@@ -6239,7 +6240,7 @@ var SCREENS = {
       var dbg = function(t,col){
         var cur = document.getElementById('p2p-v2-myads-list');
         if (!cur) return;
-        cur.innerHTML = '<div style="padding:14px;text-align:center;color:'+(col||'#3DA3F0')+';font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all">'+t+'</div>';
+        cur.innerHTML = '<div style="padding:14px;text-align:center;color:'+(col||'#ff8c42')+';font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all">'+t+'</div>';
       };
       var c = document.getElementById('p2p-v2-myads-list');
       if (!c) return;
@@ -6250,7 +6251,7 @@ var SCREENS = {
         dbg('❌ initData ПУСТОЕ — открой через Telegram бота', '#ff453a');
         return;
       }
-      dbg('② Fetch /api/v2/p2p/my/advertisements ...', '#3DA3F0');
+      dbg('② Fetch /api/v2/p2p/my/advertisements ...', '#ff8c42');
       var url = '/api/v2/p2p/my/advertisements?init_data='+encodeURIComponent(initData);
       var ctrl = new AbortController();
       var timer = setTimeout(function(){ try{ctrl.abort();}catch(_){} }, 10000);
@@ -6323,7 +6324,7 @@ var SCREENS = {
     STATE._myAds.loading = true;
     // ВИДИМЫЙ прогресс — будет видно где висит
     var progress = function(txt, col){
-      try { c.innerHTML = '<div style="padding:20px;text-align:center;color:'+(col||'#3DA3F0')+';font-size:13px;font-family:monospace">'+txt+'</div>'; } catch(_){}
+      try { c.innerHTML = '<div style="padding:20px;text-align:center;color:'+(col||'#ff8c42')+';font-size:13px;font-family:monospace">'+txt+'</div>'; } catch(_){}
     };
     progress('① Старт _myAdsLoad', '#7a7a7a');
     var timeoutId = setTimeout(function(){
@@ -6379,8 +6380,8 @@ var SCREENS = {
     var t = String(a.type||'').toUpperCase();
     var isSell = (t === 'SELL');
     var typeBadge = isSell
-      ? '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">SELL</span>'
-      : '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">BUY</span>';
+      ? '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">Продажа</span>'
+      : '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">Покупка</span>';
     var price = a.price_fixed || a.price || '';
     var priceLabel = (a.pricing_mode === 'FLOATING')
       ? ('Плавающая · '+(a.price_margin_pct!=null?(a.price_margin_pct+'%'):'—'))
@@ -6391,7 +6392,7 @@ var SCREENS = {
     var status = String(a.status||'').toUpperCase();
     var pms = a.payment_methods||[];
     var pmHtml = (Array.isArray(pms)&&pms.length)
-      ? pms.slice(0,4).map(function(p){ return UI.badge(String(p).slice(0,16), '#3390EC'); }).join(' ')
+      ? pms.slice(0,4).map(function(p){ return UI.badge(String(p).slice(0,16), '#ff6b35'); }).join(' ')
       : '<span style="color:var(--p2p-text-mute);font-size:11px">нет реквизитов</span>';
     var actions = '';
     if (status === 'ACTIVE') {
@@ -6516,8 +6517,8 @@ var SCREENS = {
       '</div>';
     };
     var typeBadge = (String(ad.type||'').toUpperCase()==='SELL')
-      ? '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">SELL</span>'
-      : '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">BUY</span>';
+      ? '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">Продажа</span>'
+      : '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600">Покупка</span>';
     var roCard = UI.glassCard(
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
         '<div style="display:flex;gap:8px;align-items:center">'+typeBadge+
@@ -6566,7 +6567,7 @@ var SCREENS = {
     } else {
       pmsHtml = pms.map(function(pm){
         var sel = (f.payment_methods||[]).indexOf(pm.id) >= 0;
-        var bg = sel ? 'background:rgba(51,144,236,0.12);border-color:rgba(51,144,236,0.5);' : '';
+        var bg = sel ? 'background:rgba(255,107,53,0.12);border-color:rgba(255,107,53,0.5);' : '';
         return '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:6px;cursor:pointer;'+bg+'" onclick="P2P.screens._editAdTogglePm(\''+esc(pm.id)+'\')">'+
           '<div style="display:flex;align-items:center;gap:10px">'+
             '<div style="width:22px;height:22px;border-radius:6px;border:1.5px solid '+(sel?'var(--p2p-accent)':'rgba(255,255,255,0.2)')+';background:'+(sel?'var(--p2p-accent)':'transparent')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-shrink:0">'+(sel?'✓':'')+'</div>'+
@@ -6608,7 +6609,7 @@ var SCREENS = {
     var changed = SCREENS._editAdDiff();
     var hasChanges = Object.keys(changed).length > 0;
     var changesPreview = hasChanges
-      ? '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:10px;border-color:rgba(51,144,236,0.4);background:rgba(51,144,236,0.06)">'+
+      ? '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:10px;border-color:rgba(255,107,53,0.4);background:rgba(255,107,53,0.06)">'+
           '<div style="font-size:11px;color:var(--p2p-accent);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">Изменения ('+Object.keys(changed).length+')</div>'+
           '<div style="font-size:12px;color:var(--p2p-text-dim);line-height:1.5">'+esc(Object.keys(changed).join(', '))+'</div>'+
         '</div>'
@@ -6841,8 +6842,8 @@ var SCREENS = {
     var myId = (STATE.user && STATE.user.id) || null;
     var isBuyer = myId && (myId === t.buyer_id);
     var roleBadge = isBuyer
-      ? '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:600">BUY</span>'
-      : '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:600">SELL</span>';
+      ? '<span style="background:rgba(52,199,89,0.15);color:#34c759;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:600">Покупаю</span>'
+      : '<span style="background:rgba(255,69,58,0.15);color:#ff453a;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:600">Продаю</span>';
     var num = t.trade_number ? ('#'+String(t.trade_number).slice(0,10)) : (t.id ? ('#'+String(t.id).slice(0,8)) : '');
     var amtCrypto = UI.fmt(t.amount_crypto||0, t.crypto||'USDT', 4);
     var amtFiat = UI.fmtMoney(t.amount_fiat||0, t.fiat||'RUB', 2);
@@ -6957,7 +6958,7 @@ var SCREENS = {
     var unread = !n.is_read;
     var icon = SCREENS._notifIcon(n.type);
     var ago = n.created_at ? UI.timeAgo(n.created_at) : '';
-    var bg = unread ? 'background:rgba(51,144,236,0.06);' : '';
+    var bg = unread ? 'background:rgba(255,107,53,0.06);' : '';
     return '<div class="p2p-glass" style="padding:12px;margin-bottom:8px;cursor:pointer;display:flex;gap:10px;'+bg+'" onclick="P2P.screens._notifClick(\''+esc(n.id)+'\')">'+
       '<div style="font-size:22px;flex-shrink:0;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(255,255,255,0.04)">'+icon+'</div>'+
       '<div style="flex:1;min-width:0">'+
@@ -7518,7 +7519,7 @@ var SCREENS = {
     var isPriv = (viewerRole === 'ADMIN' || viewerRole === 'ARBITRATOR' || viewerRole === 'SUPPORT');
 
     var tabs = [
-      {id:'timeline', label:'Timeline', count:(d.timeline||[]).length},
+      {id:'timeline', label:'Хронология', count:(d.timeline||[]).length},
       {id:'photos', label:'Фото', count:imgAtts.length},
       {id:'videos', label:'Видео', count:vidAtts.length},
       {id:'docs', label:'Документы', count:docAtts.length},
@@ -7526,7 +7527,7 @@ var SCREENS = {
       {id:'messages', label:'Сообщ.', count:msgs.length},
       {id:'system', label:'Сист.', count:sysEvents.length},
     ];
-    if (isPriv) tabs.push({id:'audit', label:'Audit', count:auditEvents.length});
+    if (isPriv) tabs.push({id:'audit', label:'Аудит', count:auditEvents.length});
 
     var tabsHtml = '<div style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch">'+
       tabs.map(function(t){
@@ -7655,7 +7656,7 @@ var SCREENS = {
     return '<div style="position:relative;padding-left:18px;border-left:2px solid rgba(255,255,255,0.06);margin:10px 0">'+
       items.map(function(it){
         var icon = it.source === 'audit' ? '◆' : '●';
-        var col = it.source === 'audit' ? '#ffcc00' : '#3390EC';
+        var col = it.source === 'audit' ? '#ffcc00' : '#ff6b35';
         return '<div style="position:relative;padding:6px 0 12px 8px">'+
           '<span style="position:absolute;left:-22px;top:6px;color:'+col+';font-size:14px">'+icon+'</span>'+
           '<div style="font-size:13px;font-weight:500">'+esc(it.event||it.description||'event')+'</div>'+
@@ -7745,7 +7746,7 @@ var SCREENS = {
           return UI.systemBubble(m.text||m.body_text||'', m.created_at);
         var isMine = m.sender_id && myId && (m.sender_id === myId);
         var align = isMine ? 'flex-end' : 'flex-start';
-        var bg = isMine ? 'rgba(51,144,236,0.18)' : 'rgba(255,255,255,0.05)';
+        var bg = isMine ? 'rgba(255,107,53,0.18)' : 'rgba(255,255,255,0.05)';
         var who = 'id:'+(m.sender_id||'?');
         return '<div style="display:flex;justify-content:'+align+';margin:4px 0">'+
           '<div style="max-width:84%;background:'+bg+';border-radius:12px;padding:7px 10px">'+
@@ -7944,7 +7945,7 @@ var SCREENS = {
     }
     var isMine = m.sender_id && myId && (m.sender_id === myId);
     var align = isMine ? 'flex-end' : 'flex-start';
-    var bg = isMine ? 'linear-gradient(135deg,#3390EC,#1A6BC4)' : 'rgba(255,255,255,0.06)';
+    var bg = isMine ? 'linear-gradient(135deg,#ff6b35,#ff6b35)' : 'rgba(255,255,255,0.06)';
     var col = isMine ? '#fff' : '#fff';
     var radius = isMine ? '16px 16px 4px 16px' : '16px 16px 16px 4px';
     var content = '';
@@ -8861,7 +8862,7 @@ var SCREENS = {
       '<div style="display:flex;justify-content:space-around;text-align:center;font-size:12px">'+
         '<div><div style="font-size:18px;font-weight:700">'+items.length+'</div><div style="color:var(--p2p-text-dim)">Всего</div></div>'+
         '<div><div style="font-size:18px;font-weight:700;color:#ffcc00">'+totalOpen+'</div><div style="color:var(--p2p-text-dim)">В ожидании</div></div>'+
-        '<div><div style="font-size:18px;font-weight:700;color:#3390EC">'+totalArb+'</div><div style="color:var(--p2p-text-dim)">В работе</div></div>'+
+        '<div><div style="font-size:18px;font-weight:700;color:#ff6b35">'+totalArb+'</div><div style="color:var(--p2p-text-dim)">В работе</div></div>'+
       '</div>'
     );
 
@@ -9014,7 +9015,7 @@ var SCREENS = {
         noteErr+
         '<div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">'+
           '<button onclick="P2P.screens._arbDecide(\'BUYER\')" class="p2p-btn-primary" style="background:linear-gradient(135deg,#34c759,#1ea249);box-shadow:0 6px 20px rgba(52,199,89,0.32);'+(resHighlight==='BUYER'?'outline:2px solid #fff;outline-offset:-2px':'')+'"'+(noteOk?'':' disabled')+'>✅ ВЫПУСТИТЬ USDT ПОКУПАТЕЛЮ</button>'+
-          '<button onclick="P2P.screens._arbDecide(\'SELLER\')" class="p2p-btn-primary" style="background:linear-gradient(135deg,#3390EC,#1f6cc4);box-shadow:0 6px 20px rgba(51,144,236,0.32);'+(resHighlight==='SELLER'?'outline:2px solid #fff;outline-offset:-2px':'')+'"'+(noteOk?'':' disabled')+'>↩ ВЕРНУТЬ USDT ПРОДАВЦУ</button>'+
+          '<button onclick="P2P.screens._arbDecide(\'SELLER\')" class="p2p-btn-primary" style="background:linear-gradient(135deg,#ff6b35,#ff6b35);box-shadow:0 6px 20px rgba(255,107,53,0.32);'+(resHighlight==='SELLER'?'outline:2px solid #fff;outline-offset:-2px':'')+'"'+(noteOk?'':' disabled')+'>↩ ВЕРНУТЬ USDT ПРОДАВЦУ</button>'+
           '<button onclick="P2P.screens._arbDecide(\'SPLIT\')" class="p2p-btn-primary" style="background:linear-gradient(135deg,#af52de,#7a3cb0);box-shadow:0 6px 20px rgba(175,82,222,0.32);'+(resHighlight==='SPLIT'?'outline:2px solid #fff;outline-offset:-2px':'')+'"'+(noteOk?'':' disabled')+'>⚖ ЧАСТИЧНЫЙ ВОЗВРАТ (SPLIT)</button>'+
         '</div>'+
         splitPanel+
@@ -9247,7 +9248,7 @@ var SCREENS = {
           '<div style="font-weight:700;font-size:15px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
             esc(STATE.user&&(STATE.user.first_name||STATE.user.username)||'Merchant')+
             UI.badge(lvl, lvl==='ADMIN'?'#ff453a':(lvl==='ARBITRATOR'?'#af52de':'#ffcc00'))+
-            (m.verified ? UI.badge('Verified','#34c759') : '')+
+            (m.verified ? UI.badge('Проверен','#34c759') : '')+
           '</div>'+
           '<div style="font-size:11px;color:var(--p2p-text-dim);margin-top:2px">'+
             (m.trading_enabled?'Торговля активна':'<span style="color:#ff453a">Торговля заблокирована</span>')+
@@ -9266,7 +9267,7 @@ var SCREENS = {
     var total = parseFloat(w.total||0) || 0;
     var bars = [
       ['Available', w.available, '#34c759'],
-      ['Объявления', w.advertisement_hold, '#3390EC'],
+      ['Объявления', w.advertisement_hold, '#ff6b35'],
       ['Escrow', w.trade_escrow, '#ff9500'],
       ['Frozen', w.frozen, '#ff453a'],
       ['Pending', w.pending, '#7a7a7a'],
@@ -9350,7 +9351,7 @@ var SCREENS = {
     } else {
       adsList = ads.slice(0,5).map(function(a){
         var type = String(a.type||'').toUpperCase();
-        var tcol = type === 'BUY' ? '#34c759' : '#3390EC';
+        var tcol = type === 'BUY' ? '#34c759' : '#ff6b35';
         var paused = String(a.status||'').toUpperCase() === 'PAUSED';
         return '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:6px">'+
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">'+
@@ -9527,7 +9528,7 @@ var SCREENS = {
 
   _pmCard(pm){
     var type = String(pm.type||'').toUpperCase();
-    var typeBadge = UI.badge(type, '#3390EC');
+    var typeBadge = UI.badge(type, '#ff6b35');
     var bank = pm.bank_name || '';
     var holder = pm.account_holder || '';
     var card = pm.card_number_masked || '';
@@ -9607,19 +9608,18 @@ var SCREENS = {
   _pmFormRender(){
     var f = STATE._pmForm || {};
     var editing = !!f.edit_id;
-    var types = ['SBP','SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON','CASH','IBAN','SEPA','REVOLUT','PAYPAL','BLIK','PIX','UPI','OTHER'];
+    var types = ['SBP','SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON','CASH','OTHER'];
     var typeChips = types.map(function(t){
       var act = (f.type === t);
       return '<span class="p2p-chip'+(act?' active':'')+'" onclick="P2P.screens._pmSetType(\''+t+'\')">'+esc(t)+'</span>';
     }).join('');
-    var needCard = ['SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON','REVOLUT'].indexOf(f.type)>=0;
-    var needPhone = (f.type === 'SBP' || f.type === 'BLIK' || f.type === 'PIX' || f.type === 'UPI');
-    var needIban = (f.type === 'IBAN' || f.type === 'SEPA');
+    var needCard = ['SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON'].indexOf(f.type)>=0;
+    var needPhone = (f.type === 'SBP');
+    var needIban = false;
     var presetBanks = {
       SBP:'СБП', SBER:'Сбербанк', TINKOFF:'Тинькофф', ALPHA:'Альфа-Банк',
       VTB:'ВТБ', RAIF:'Райффайзен', GAZPROM:'Газпромбанк', OZON:'OZON Банк',
-      CASH:'Наличные', IBAN:'IBAN', SEPA:'SEPA', REVOLUT:'Revolut',
-      PAYPAL:'PayPal', BLIK:'BLIK', PIX:'PIX', UPI:'UPI', OTHER:'Другое'
+      CASH:'Наличные', OTHER:'Другое'
     };
     if (!f.bank_name) f.bank_name = presetBanks[f.type] || '';
     setHtml(shellHtml(
@@ -9662,7 +9662,7 @@ var SCREENS = {
   _pmSetType(t){
     STATE._pmForm.type = t;
     // подменим bank_name только если он совпадал с preset предыдущего типа (или пустой)
-    var presets = ['СБП','Сбербанк','Тинькофф','Альфа-Банк','ВТБ','Райффайзен','Газпромбанк','OZON Банк','Наличные','IBAN','SEPA','Revolut','PayPal','BLIK','PIX','UPI','Другое',''];
+    var presets = ['СБП','Сбербанк','Тинькофф','Альфа-Банк','ВТБ','Райффайзен','Газпромбанк','OZON Банк','Наличные','Другое',''];
     if (presets.indexOf(STATE._pmForm.bank_name)>=0) STATE._pmForm.bank_name = '';
     UI.haptic('select');
     SCREENS._pmFormRender();
@@ -9672,9 +9672,9 @@ var SCREENS = {
     var f = STATE._pmForm;
     var holder = (f.account_holder||'').trim();
     if (!holder) { UI.toast('Укажите имя владельца'); return; }
-    var needCard = ['SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON','REVOLUT'].indexOf(f.type)>=0;
-    var needPhone = (f.type === 'SBP' || f.type === 'BLIK' || f.type === 'PIX' || f.type === 'UPI');
-    var needIban = (f.type === 'IBAN' || f.type === 'SEPA');
+    var needCard = ['SBER','TINKOFF','ALPHA','VTB','RAIF','GAZPROM','OZON'].indexOf(f.type)>=0;
+    var needPhone = (f.type === 'SBP');
+    var needIban = false;
     if (needCard && !(f.card_number||'').trim()) { UI.toast('Укажите номер карты'); return; }
     if (needPhone && !(f.phone||'').trim()) { UI.toast('Укажите телефон'); return; }
     if (needIban && !(f.iban||'').trim()) { UI.toast('Укажите IBAN'); return; }
@@ -9800,13 +9800,13 @@ var SCREENS = {
       '</div>';
     };
     return card('SELL','#34c759','Я ПРОДАЮ USDT','Резервируется ваш USDT на бирже. Юзеры будут покупать у вас.')+
-           card('BUY', '#3390EC','Я ПОКУПАЮ USDT','Юзеры будут продавать вам USDT. Ваш фиат на руках.');
+           card('BUY', '#ff6b35','Я ПОКУПАЮ USDT','Юзеры будут продавать вам USDT. Ваш фиат на руках.');
   },
 
   _adWizStep2(){
     var w = STATE._adWiz;
     var cryptos = ['USDT','BTC','ETH','TON'];
-    var fiats = ['RUB','PLN','EUR','USD','UAH','TRY','KZT'];
+    var fiats = ['RUB'];
     var balance = 0;
     if (w._wallet) balance = parseFloat(w._wallet.available || w._wallet.total || 0);
     var amt = parseFloat(w.total_amount||0);
@@ -9865,7 +9865,7 @@ var SCREENS = {
     } else {
       pmHtml = pms.map(function(pm){
         var sel = (w.payment_method_ids||[]).indexOf(pm.id) >= 0;
-        var bg = sel ? 'background:rgba(51,144,236,0.12);border-color:rgba(51,144,236,0.5);' : '';
+        var bg = sel ? 'background:rgba(255,107,53,0.12);border-color:rgba(255,107,53,0.5);' : '';
         return '<div class="p2p-glass" style="padding:10px 12px;margin-bottom:6px;cursor:pointer;'+bg+'" onclick="P2P.screens._adWizTogglePm(\''+esc(pm.id)+'\')">'+
           '<div style="display:flex;align-items:center;gap:10px">'+
             '<div style="width:22px;height:22px;border-radius:6px;border:1.5px solid '+(sel?'var(--p2p-accent)':'rgba(255,255,255,0.2)')+';background:'+(sel?'var(--p2p-accent)':'transparent')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-shrink:0">'+(sel?'✓':'')+'</div>'+
@@ -9909,7 +9909,7 @@ var SCREENS = {
   _adWizStep5(){
     var w = STATE._adWiz;
     var pms = (w._pms||[]).filter(function(p){ return (w.payment_method_ids||[]).indexOf(p.id)>=0; });
-    var pmList = pms.length ? pms.map(function(p){ return UI.badge(p.bank_name||p.type, '#3390EC'); }).join(' ') : '<span style="color:#ff453a">не выбраны</span>';
+    var pmList = pms.length ? pms.map(function(p){ return UI.badge(p.bank_name||p.type, '#ff6b35'); }).join(' ') : '<span style="color:#ff453a">не выбраны</span>';
     var priceLine = (w.pricing_mode === 'FIXED')
       ? (UI.fmtMoney(w.price, w.fiat, 2)+' / 1 '+esc(w.crypto))
       : ('Плавающая · '+esc(w.price_margin_pct)+'% к рынку');
@@ -10321,7 +10321,7 @@ var P2P = window.P2P = {
   },
   _fiatSheet(){
     var cur = STATE.filters.fiat;
-    var html = ['RUB','PLN','EUR','USD','UAH','TRY','KZT'].map(function(c){
+    var html = ['RUB'].map(function(c){
       return '<div onclick="P2P._pickFiat(\''+c+'\')" style="padding:14px 12px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:15px;cursor:pointer;display:flex;justify-content:space-between">'+
         '<span>'+c+'</span>'+(c===cur?'<span style="color:var(--p2p-accent)">✓</span>':'')+'</div>';
     }).join('');
