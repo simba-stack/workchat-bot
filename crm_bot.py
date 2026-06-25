@@ -4016,6 +4016,14 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             pass
         await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
         await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
+    elif stage == "done":
+        # Re-click после завершения перевязки (двойной тап оператора /
+        # cached keyboard из старого сообщения). Просто отвечаем что готово
+        # и обновляем tracker — без побочных действий, иначе создаём дубль
+        # карточки ЛК или второй handoff в work_chat.
+        await call.answer("✅ Перевязка уже завершена", show_alert=True)
+        await _post_or_update_sms_tracker(bot, droplk_id)
+        return
     else:
         await call.answer("Ждём ответа клиента...")
     await _post_or_update_sms_tracker(bot, droplk_id)
