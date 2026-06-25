@@ -643,6 +643,37 @@ class UserbotService:
 
         @self.client.on(events.NewMessage(incoming=True))
         async def _on_new_message(event):
+            # === Дедуп по (chat_id, message_id) против повторной доставки Telethon ===
+            # Telethon может re-deliver один и тот же update при reconnect/getUpdates retry.
+            # Без дедупа welcome-handler выстреливает 2-5 раз подряд → юзер видит
+            # одинаковое "Не понял выбор" 5 раз. См. Phase 2.5 fix #1.
+            #
+            # Используем TIMESTAMP-based expiry (1 час) вместо FIFO-eviction —
+            # иначе при Telethon reconnect через 5+ часов replay старого сообщения
+            # будет propagate'нут (старый id уже вытеснен из set).
+            try:
+                _msg_id = getattr(event.message, "id", None)
+                # message.id может быть None (service) или 0 (системные) — не дедупим
+                if _msg_id is not None and _msg_id != 0:
+                    _msg_key = (event.chat_id, _msg_id)
+                    if not hasattr(self, "_seen_msg_ids"):
+                        self._seen_msg_ids = {}  # key -> ts
+                    now = time.time()
+                    # Trim: каждые 500 сообщений чистим старые (>1ч)
+                    if len(self._seen_msg_ids) > 500 and len(self._seen_msg_ids) % 500 == 0:
+                        cutoff = now - 3600
+                        self._seen_msg_ids = {
+                            k: ts for k, ts in self._seen_msg_ids.items() if ts > cutoff
+                        }
+                    # Жёсткий потолок на случай если trim не сработал
+                    if len(self._seen_msg_ids) > 50000:
+                        # Просто очищаем — в худшем случае один дубль пропустим
+                        self._seen_msg_ids.clear()
+                    if _msg_key in self._seen_msg_ids:
+                        return  # уже обработали
+                    self._seen_msg_ids[_msg_key] = now
+            except Exception as _dedup_err:
+                logger.warning("dedup check failed: %s", _dedup_err)
             try:
                 # Самая первая строка — лог любого incoming сообщения для дебага
                 try:
@@ -741,7 +772,27 @@ class UserbotService:
             tracks.add("debet")
 
         if not tracks:
-            # Не распознали — переспросим
+            # Не распознали — переспросим, НО не чаще 1 раза в 30 сек на чат.
+            # Защита от спама "Не понял" если клиент пишет ерунду подряд
+            # или Telethon шлёт дубль (хоть дедуп выше и должен ловить).
+            import time as _time  # локально на случай если time не импортирован в scope
+            now = _time.time()
+            if not hasattr(self, "_last_track_prompt_ts"):
+                self._last_track_prompt_ts = {}
+            # Trim: чистим записи старше часа каждые 100 throttle-вызовов
+            if len(self._last_track_prompt_ts) > 100:
+                cutoff = now - 3600
+                self._last_track_prompt_ts = {
+                    cid: ts for cid, ts in self._last_track_prompt_ts.items() if ts > cutoff
+                }
+            last_ts = self._last_track_prompt_ts.get(chat_id, 0)
+            if now - last_ts < 30:
+                logger.info(
+                    "Welcome v2: throttled 'Не понял' for chat=%s (last %ds ago)",
+                    chat_id, int(now - last_ts),
+                )
+                return True  # тихо — недавно уже переспросили
+            self._last_track_prompt_ts[chat_id] = now
             try:
                 await self.client.send_message(
                     chat_id,
