@@ -20,7 +20,7 @@ from core.models import User
 logger = logging.getLogger(__name__)
 
 
-def verify_init_data(init_data: str, bot_token: str, max_age_sec: int = 604800) -> dict:
+def verify_init_data(init_data: str, bot_token: str, max_age_sec: int = 86400) -> dict:
     """Проверяет подпись Telegram WebApp initData.
 
     Возвращает распарсенный user dict если валидно. Поднимает HTTPException 401 иначе.
