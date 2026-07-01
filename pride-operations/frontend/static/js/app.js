@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════════
 // PRIDE OPERATIONS · Frontend app (Sprint 1)
-// Alpine.js data() + Login Widget integration + theme toggle
+// Alpine.data() register + TG Login Widget + theme toggle
 // ═══════════════════════════════════════════════════════════
 
-// ─── Theme toggle ──────────────────────────────────────────
+// ─── Theme toggle (загружается сразу, до Alpine) ─────────
 function initTheme() {
     const stored = localStorage.getItem('pride-theme');
     const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -11,7 +11,6 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', theme);
     updateThemeIcon(theme);
 }
-
 function toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme');
     const next = current === 'dark' ? 'light' : 'dark';
@@ -19,30 +18,27 @@ function toggleTheme() {
     localStorage.setItem('pride-theme', next);
     updateThemeIcon(next);
 }
-
 function updateThemeIcon(theme) {
     const icon = document.getElementById('theme-icon');
     if (icon) icon.textContent = theme === 'dark' ? '🌙' : '☀️';
 }
-
 initTheme();
+window.toggleTheme = toggleTheme;
 
-
-// ─── App state (Alpine) ────────────────────────────────────
-function app() {
-    return {
+// ─── Alpine.data register — ГАРАНТИРОВАННЫЙ способ v3.x ──
+document.addEventListener('alpine:init', () => {
+    Alpine.data('app', () => ({
         user: null,
-        status: 'Готов к авторизации',
-        botUsername: null,  // из /api/config
+        status: 'Инициализация…',
+        botUsername: null,
 
         async init() {
-            // 1. Пробуем восстановить сессию из cookie
+            this.status = 'Проверка сессии…';
             await this.checkAuth();
-
-            // 2. Загружаем bot username и инициализируем TG Login Widget
             if (!this.user) {
                 await this.loadConfig();
                 this.setupTelegramWidget();
+                this.status = 'Готов к авторизации';
             }
         },
 
@@ -54,7 +50,6 @@ function app() {
                     this.user = data.user;
                     this.status = 'Сессия активна';
                 } else if (r.status === 401) {
-                    // Попробуем refresh
                     const refreshed = await this.tryRefresh();
                     if (refreshed) return this.checkAuth();
                 }
@@ -66,14 +61,9 @@ function app() {
 
         async tryRefresh() {
             try {
-                const r = await fetch('/api/auth/refresh', {
-                    method: 'POST',
-                    credentials: 'include',
-                });
+                const r = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
                 return r.ok;
-            } catch {
-                return false;
-            }
+            } catch { return false; }
         },
 
         async loadConfig() {
@@ -85,17 +75,13 @@ function app() {
                 }
             } catch (e) {
                 console.warn('Config load failed:', e);
-                this.botUsername = 'PrideInviteWork_bot';  // fallback
+                this.botUsername = 'PrideInviteWork_bot';
             }
         },
 
         setupTelegramWidget() {
-            // Загружаем официальный TG Login Widget
-            // https://core.telegram.org/widgets/login
             const container = document.getElementById('tg-login-widget');
             if (!container || !this.botUsername) return;
-
-            // Callback function что Widget вызовет после auth
             window.onTelegramAuth = async (tgUser) => {
                 this.status = 'Авторизация…';
                 try {
@@ -117,8 +103,6 @@ function app() {
                     this.status = `Сетевая ошибка: ${e.message}`;
                 }
             };
-
-            // Скрипт Widget
             const script = document.createElement('script');
             script.async = true;
             script.src = 'https://telegram.org/js/telegram-widget.js?22';
@@ -133,20 +117,12 @@ function app() {
 
         async logout() {
             try {
-                await fetch('/api/auth/logout', {
-                    method: 'POST',
-                    credentials: 'include',
-                });
+                await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
             } finally {
                 this.user = null;
                 this.status = 'Вы вышли';
-                // Перезагружаем widget
                 setTimeout(() => this.setupTelegramWidget(), 100);
             }
         },
-    };
-}
-
-// Экспорт в window для onclick handlers
-window.toggleTheme = toggleTheme;
-window.app = app;
+    }));
+});
