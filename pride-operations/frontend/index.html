@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="theme-color" content="#0B0F1A">
+    <title>PRIDE OPERATIONS · Cabinet</title>
+
+    <!-- Tailwind CDN (Sprint 1 — быстрый старт; в Sprint 2 переедем на build step) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Alpine.js для реактивности (Sprint 2 → Svelte) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/[email protected]/dist/cdn.min.js"></script>
+
+    <!-- Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="min-h-screen font-sans antialiased overflow-x-hidden">
+    <!-- Animated background layer -->
+    <div class="bg-aurora fixed inset-0 -z-10"></div>
+
+    <!-- Theme toggle (top-right, always visible) -->
+    <button
+        id="theme-toggle"
+        onclick="toggleTheme()"
+        class="fixed top-4 right-4 z-50 w-10 h-10 rounded-full glass flex items-center justify-center hover:scale-105 transition-transform"
+        aria-label="Toggle theme"
+    >
+        <span id="theme-icon">🌙</span>
+    </button>
+
+    <!-- Main app -->
+    <main x-data="app()" x-init="init()" class="min-h-screen flex flex-col">
+
+        <!-- LOGIN SCREEN -->
+        <template x-if="!user">
+            <section class="flex-1 flex items-center justify-center px-4">
+                <div class="w-full max-w-md">
+                    <div class="glass-card p-8 sm:p-12">
+                        <!-- Logo -->
+                        <div class="text-center mb-8">
+                            <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-blue to-brand-purple mb-4 shadow-glow">
+                                <span class="text-3xl">🦁</span>
+                            </div>
+                            <h1 class="text-3xl font-bold mb-2 text-gradient">PRIDE OPERATIONS</h1>
+                            <p class="text-text-dim text-sm">Cabinet · твой личный кабинет</p>
+                        </div>
+
+                        <!-- Login button -->
+                        <div class="space-y-4">
+                            <p class="text-center text-text-dim text-sm mb-4">
+                                Войди через Telegram чтобы увидеть<br>
+                                свою рабочую беседу, канал и сделки
+                            </p>
+
+                            <div class="flex justify-center">
+                                <!-- Telegram Login Widget (загружается async, см. app.js) -->
+                                <div id="tg-login-widget"></div>
+                            </div>
+
+                            <p class="text-xs text-text-dim text-center pt-4 border-t border-white/5">
+                                Нажимая войти, ты соглашаешься с обработкой данных согласно правилам сервиса.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Status text -->
+                    <p class="text-center text-text-dim text-xs mt-6">
+                        <span x-text="status" class="text-brand-cyan"></span>
+                    </p>
+                </div>
+            </section>
+        </template>
+
+        <!-- MAIN CABINET (после логина) -->
+        <template x-if="user">
+            <section class="flex-1 flex flex-col">
+                <!-- Top bar -->
+                <header class="glass sticky top-0 z-40 px-6 py-4 flex items-center justify-between border-b border-white/5">
+                    <div class="flex items-center gap-3">
+                        <span class="text-2xl">🦁</span>
+                        <div>
+                            <div class="font-semibold text-sm">PRIDE Operations</div>
+                            <div class="text-xs text-text-dim">Cabinet · Sprint 1 MVP</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="text-right">
+                            <div class="text-sm font-medium" x-text="user.first_name"></div>
+                            <div class="text-xs text-text-dim">
+                                <span x-text="user.username ? '@' + user.username : 'no username'"></span>
+                                · <span class="badge" x-text="user.role"></span>
+                            </div>
+                        </div>
+                        <button
+                            @click="logout()"
+                            class="btn-ghost text-sm"
+                            title="Выйти"
+                        >
+                            🚪
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Content -->
+                <div class="flex-1 p-6 max-w-6xl mx-auto w-full space-y-6">
+                    <!-- Welcome card -->
+                    <div class="glass-card p-6">
+                        <h2 class="text-xl font-semibold mb-2">
+                            Привет, <span class="text-gradient" x-text="user.first_name"></span> 👋
+                        </h2>
+                        <p class="text-text-dim">
+                            Ты успешно вошёл в PRIDE Operations. Sprint 1 (Auth) — <span class="text-brand-green">✅ работает</span>.
+                        </p>
+                        <p class="text-text-dim text-sm mt-2">
+                            В следующих спринтах здесь появятся: твоя рабочая беседа, канал PRIDE, общий чат, статус ЛК, сделки, платежи.
+                        </p>
+                    </div>
+
+                    <!-- Roadmap preview -->
+                    <div class="glass-card p-6">
+                        <h3 class="text-lg font-semibold mb-4">🛠 Roadmap (первые 3 спринта)</h3>
+                        <ul class="space-y-3">
+                            <li class="flex items-start gap-3">
+                                <span class="mt-0.5">✅</span>
+                                <div>
+                                    <div class="font-medium">Sprint 1 — Backend + Auth (сейчас)</div>
+                                    <div class="text-sm text-text-dim">TG Login Widget, JWT, HttpOnly cookies, glass UI</div>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="mt-0.5">⏳</span>
+                                <div>
+                                    <div class="font-medium">Sprint 2 — Chat list + read-only</div>
+                                    <div class="text-sm text-text-dim">Список чатов (workchat + канал + общий), пагинация истории, WebSocket realtime</div>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="mt-0.5">⏳</span>
+                                <div>
+                                    <div class="font-medium">Sprint 3 — Send messages + Callback buttons</div>
+                                    <div class="text-sm text-text-dim">Отправка, реакции, файлы, TG callback кнопки SMS-flow</div>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Debug info -->
+                    <div class="glass-card p-6">
+                        <h3 class="text-sm font-mono text-text-dim mb-2">DEBUG · session data</h3>
+                        <pre class="text-xs bg-black/30 rounded p-3 overflow-x-auto"><code x-text="JSON.stringify(user, null, 2)"></code></pre>
+                    </div>
+                </div>
+            </section>
+        </template>
+
+    </main>
+
+    <!-- App script -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
