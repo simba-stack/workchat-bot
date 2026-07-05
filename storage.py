@@ -500,6 +500,12 @@ def _default_state() -> dict:
         #               status: pending|verified|expired|locked}}
         "pending_2fa_requests": {},
         "pending_2fa_seq": 0,
+        # scripted_texts — заскриптованные ответы welcome-flow (welcome, reply_ip,
+        # reply_debet, fallback_not_understood). Каждое значение — dict
+        # {text, entities (JSON dump Telethon entities), updated_at, updated_by}.
+        # Дефолты в config.SCRIPTED_TEXTS_DEFAULTS. Пустой dict = используются
+        # дефолты пока админ ничего не переопределил через /admin.
+        "scripted_texts": {},
     }
 
 
@@ -7603,6 +7609,90 @@ def decrypt_session(encoded: str) -> str:
         return encoded
     except Exception:
         return ""
+
+
+    # ─────────── SCRIPTED TEXTS (welcome flow, экономия Claude API) ───────────
+    # Админ редактирует тексты через /admin в @PrideInviteWork_bot.
+    # Юзербот отправляет их через Telethon с premium emoji entities.
+
+    def get_scripted_text(self, key: str) -> dict:
+        """Возвращает dict {text, entities, updated_at, updated_by} для key.
+        Если админ не переопределил — возвращает дефолт из config."""
+        stored = (self.state.get("scripted_texts") or {}).get(key)
+        if stored:
+            return stored
+        defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
+        default = defaults.get(key)
+        if not default:
+            return {}
+        # Отдаём дефолт в том же формате что и кастомный
+        return {
+            "text": default.get("text", ""),
+            "entities": default.get("entities", []) or [],
+            "title": default.get("title", key),
+            "is_default": True,
+        }
+
+    def list_scripted_texts(self) -> list:
+        """Возвращает список [{key, title, is_custom, updated_at, updated_by}].
+        Объединяет дефолты (SCRIPTED_TEXTS_DEFAULTS) и кастомные из state."""
+        defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
+        custom = self.state.get("scripted_texts") or {}
+        result = []
+        # Сначала дефолтные ключи в порядке SCRIPTED_TEXTS_DEFAULTS
+        for key, d in defaults.items():
+            cst = custom.get(key)
+            result.append({
+                "key": key,
+                "title": (cst or d).get("title") or d.get("title") or key,
+                "is_custom": bool(cst),
+                "updated_at": (cst or {}).get("updated_at"),
+                "updated_by": (cst or {}).get("updated_by"),
+                "text_preview": ((cst or d).get("text") or "")[:60],
+                "entities_count": len((cst or d).get("entities") or []),
+            })
+        # Кастомные ключи которых нет в дефолтах (пользовательские шаблоны)
+        for key, d in custom.items():
+            if key in defaults:
+                continue
+            result.append({
+                "key": key,
+                "title": d.get("title") or key,
+                "is_custom": True,
+                "updated_at": d.get("updated_at"),
+                "updated_by": d.get("updated_by"),
+                "text_preview": (d.get("text") or "")[:60],
+                "entities_count": len(d.get("entities") or []),
+            })
+        return result
+
+    async def set_scripted_text(self, key: str, text: str, entities: list,
+                                 updated_by: str = "", title: str = "") -> int:
+        """Сохраняет кастомный текст в state["scripted_texts"][key].
+        entities — JSON-dump список dict, готовый для Telethon restore.
+        Возвращает количество сохранённых entities (для лога/preview)."""
+        import time
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            table[key] = {
+                "text": text or "",
+                "entities": entities or [],
+                "title": title or key,
+                "updated_at": int(time.time()),
+                "updated_by": (updated_by or "").lstrip("@"),
+            }
+            await self._save_unlocked()
+        return len(entities or [])
+
+    async def reset_scripted_text(self, key: str) -> bool:
+        """Удаляет кастомный текст → get_scripted_text вернёт дефолт."""
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            existed = key in table
+            table.pop(key, None)
+            if existed:
+                await self._save_unlocked()
+        return existed
 
 
 storage = Storage(config.STORAGE_PATH)
