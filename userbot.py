@@ -719,10 +719,50 @@ class UserbotService:
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
 
+    async def _send_scripted(self, chat_id, key: str, default_text: str = "") -> bool:
+        """Отправляет заскриптованный текст (welcome/reply_ip/reply_debet/...) с
+        сохранёнными в storage entities. Экономит Claude API — 0 вызовов.
+
+        Работает так:
+        1) Берём {text, entities} из storage.get_scripted_text(key)
+        2) Если админ переопределил через /admin — используем его текст+entities
+        3) Иначе — берём дефолт из config.SCRIPTED_TEXTS_DEFAULTS
+        4) Если и там нет — используем default_text (fallback внутри кода)
+        5) Отправляем через Telethon с formatting_entities (premium emoji 1:1)
+
+        Возвращает True если отправлено успешно."""
+        try:
+            data = storage.get_scripted_text(key) or {}
+            text = data.get("text") or default_text
+            if not text:
+                logger.warning("[scripted] empty text for key=%s chat=%s", key, chat_id)
+                return False
+            entities_raw = data.get("entities") or []
+            if entities_raw:
+                try:
+                    ents = _entities_to_telethon(entities_raw)
+                    await self.client.send_message(chat_id, text, formatting_entities=ents)
+                except Exception as _ee:
+                    logger.warning("[scripted] entities restore failed for %s: %s — plain fallback", key, _ee)
+                    await self.client.send_message(chat_id, text)
+            else:
+                await self.client.send_message(chat_id, text)
+            logger.info("[scripted] sent key=%s chat=%s entities=%d len=%d",
+                        key, chat_id, len(entities_raw), len(text))
+            return True
+        except Exception as e:
+            logger.warning("[scripted] send failed key=%s chat=%s: %s", key, chat_id, e)
+            return False
+
     async def _handle_track_choice(self, event) -> bool:
-        """Парсит выбор направления клиента (1/2/3 или текст). Поддерживает
-        мульти-выбор: клиент может написать «1 и 2», «ИП и VoIP», «дебет+ип»
-        и т.д. — обработаем ВСЕ упомянутые направления.
+        """Парсит выбор направления клиента (1 или 3, или текст «ИП»/«Дебет»).
+        Мульти-выбор поддерживается — например «1 и 3».
+
+        Правила:
+          • ИП — НЕ мьютим AI, AI продолжает штатно по банку/цене
+          • Дебет — приглашаем оператора Дебет (если задан в /admin)
+          • Если ИП НЕТ и Дебет ЕСТЬ — мьютим AI, ведёт оператор
+          • Возвращает True если выбор обработан (сообщение не идёт в AI-handler).
 
         Правила:
           • Если есть ИП — НЕ мьютим AI, AI продолжает обычный flow по ИП.
@@ -762,12 +802,11 @@ class UserbotService:
             )
             return False  # пускаем сообщение в обычный AI-handler
 
-        # Собираем МНОЖЕСТВО треков из одного сообщения (поддержка «1 и 2», «ИП и Дебет»)
+        # Собираем треки из сообщения. VoIP УБРАН (июль 2026, SIMBA):
+        # оставили только ИП/ООО (продолжает AI) и Дебет (приглашает оператора).
         tracks = set()
         if re.search(r"\b1\b|\bип\b|\booo\b|\bооо\b|\bip\b", text):
             tracks.add("ip")
-        if re.search(r"\b2\b|voip|\bтелефон\w*\b|телефония", text):
-            tracks.add("voip")
         if re.search(r"\b3\b|\bдебет\w*\b|\bdebet\b", text):
             tracks.add("debet")
 
@@ -793,66 +832,62 @@ class UserbotService:
                 )
                 return True  # тихо — недавно уже переспросили
             self._last_track_prompt_ts[chat_id] = now
-            try:
-                await self.client.send_message(
-                    chat_id,
-                    "Не понял выбор. Напишите цифру 1 (ИП/ООО), 2 (VoIP) или 3 (Дебет). "
-                    "Можно сразу несколько — например «1 и 2».",
-                )
-            except Exception:
-                pass
+            # Заскриптованный fallback (без Claude API). Админ редактирует через
+            # /admin → «📝 Скрипты сообщений». Дефолт в config.SCRIPTED_TEXTS_DEFAULTS.
+            await self._send_scripted(
+                chat_id, "fallback_not_understood",
+                default_text="Не понял выбор. Напишите цифру 1 (ИП/ООО) или 3 (Дебет).",
+            )
             return True  # обработано (не AI)
 
-        # Главный track для storage: ip приоритетнее (т.к. AI продолжает работать).
-        # Если ИП нет — берём первый из voip/debet.
-        primary = "ip" if "ip" in tracks else ("voip" if "voip" in tracks else "debet")
+        # Главный track для storage: ip приоритетнее (AI продолжает работать).
+        # Если ИП нет — берём debet (VoIP убран).
+        primary = "ip" if "ip" in tracks else "debet"
         try:
             await storage.set_chat_track(chat_id, primary)
         except Exception as e:
             logger.warning("set_chat_track failed: %s", e)
         logger.info("Welcome v2: tracks=%s primary=%s in chat=%s", sorted(tracks), primary, chat_id)
 
-        # Приглашаем операторов для voip/debet (по одному на каждый track)
+        # Приглашаем оператора Дебет (VoIP убран, ИП обслуживает AI).
         operator_msgs = []
-        for t in ("voip", "debet"):
-            if t not in tracks:
-                continue
-            username = (
-                storage.get_voip_operator_username() if t == "voip"
-                else storage.get_debet_operator_username()
-            )
-            if not username:
-                continue
-            # Приглашаем в чат
-            try:
-                ok = await self._invite_operator_to_chat(chat_id, username)
-                if ok:
-                    logger.info("Welcome v2: invited @%s for track=%s in chat=%s", username, t, chat_id)
-                else:
-                    logger.warning("Welcome v2: invite @%s failed (track=%s, chat=%s)", username, t, chat_id)
-            except Exception as e:
-                logger.exception("invite_operator failed: %s", e)
-            label = "VoIP-телефонии" if t == "voip" else "Дебету"
-            operator_msgs.append(f"По {label} вам поможет @{username} — добавил его в чат.")
+        if "debet" in tracks:
+            username = storage.get_debet_operator_username()
+            if username:
+                try:
+                    ok = await self._invite_operator_to_chat(chat_id, username)
+                    if ok:
+                        logger.info("Welcome v2: invited @%s for debet in chat=%s", username, chat_id)
+                    else:
+                        logger.warning("Welcome v2: invite @%s failed (chat=%s)", username, chat_id)
+                except Exception as e:
+                    logger.exception("invite_operator failed: %s", e)
+                operator_msgs.append(f"По Дебету вам поможет @{username} — добавил его в чат.")
 
-        # Решаем mute AI:
-        #   • Если ИП в выборе — НЕ мьютим (AI должен продолжить штатно объяснять про ИП)
-        #   • Если ИП НЕТ — мьютим (только оператор)
+        # Решаем mute AI: если ИП НЕ в выборе — только Дебет-оператор ведёт.
         if "ip" not in tracks:
             try:
                 await storage.mute_chat_ai(chat_id, True)
             except Exception as e:
                 logger.warning("mute_chat_ai failed: %s", e)
 
-        # Отправляем сообщения про операторов + (если ИП есть) приглашение AI продолжить
-        msgs = list(operator_msgs)
-        if "ip" in tracks and operator_msgs:
-            # Hybrid: оператор по voip/debet добавлен + AI продолжит по ИП
-            msgs.append("По ИП я (Ассистент PRIDE) продолжу с вами здесь — расскажите, какой банк интересует.")
+        # Отправляем ЗАСКРИПТОВАННЫЕ ответы (0 Claude API calls — экономия).
+        # Порядок: сначала операторы invite-message, потом scripted reply.
         try:
-            for m in msgs:
+            for m in operator_msgs:
                 await self.client.send_message(chat_id, m)
                 await asyncio.sleep(0.4)
+            # Scripted reply для основного трека
+            if "ip" in tracks:
+                await self._send_scripted(
+                    chat_id, "reply_ip",
+                    default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
+                )
+            elif "debet" in tracks:
+                await self._send_scripted(
+                    chat_id, "reply_debet",
+                    default_text="Понял, направление Дебет. Оператор скоро подключится.",
+                )
         except Exception as e:
             logger.warning("Welcome v2 track msg send failed: %s", e)
 
