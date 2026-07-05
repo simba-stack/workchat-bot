@@ -32,6 +32,8 @@ class AdminFSM(StatesGroup):
     set_invite_emoji = State()    # формат "EMOJI document_id" или "EMOJI -"
     set_invite_jobs = State()     # текст раздела «Вакансии»
     broadcast_text = State()      # ввод текста рассылки (audience в state.data)
+    scripted_edit = State()       # ожидаем пересылку нового текста скрипта
+                                  # (state.data.scripted_key = ключ шаблона)
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -42,6 +44,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⏱ Кулдаун", callback_data="adm:cooldown")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
+        [InlineKeyboardButton(text="📝 Скрипты сообщений", callback_data="adm:scr:menu")],
         [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
         [InlineKeyboardButton(text="📨 Invite-бот (welcome)", callback_data="adm:invite")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
@@ -260,6 +263,259 @@ async def cmd_healthcheck(message: Message):
             parse_mode="HTML",
         )
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# SCRIPTED TEXTS (welcome-flow редактор — экономия Claude API)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _scripted_menu_kb() -> InlineKeyboardMarkup:
+    """Клавиатура списка редактируемых текстов welcome-flow."""
+    rows = []
+    for item in storage.list_scripted_texts():
+        mark = "✏️" if item["is_custom"] else "🔹"
+        emo = "🎨" if item["entities_count"] else ""
+        title = item["title"]
+        rows.append([InlineKeyboardButton(
+            text=f"{mark} {title} {emo}".strip(),
+            callback_data=f"adm:scr:view:{item['key']}",
+        )])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _scripted_view_kb(key: str, is_custom: bool) -> InlineKeyboardMarkup:
+    """Клавиатура одного шаблона: редактировать + (если кастом) сбросить на дефолт."""
+    rows = [[InlineKeyboardButton(text="✏️ Изменить (переслать сообщение)",
+                                    callback_data=f"adm:scr:edit:{key}")]]
+    if is_custom:
+        rows.append([InlineKeyboardButton(text="↩️ Сбросить на дефолт",
+                                            callback_data=f"adm:scr:reset:{key}")])
+    rows.append([InlineKeyboardButton(text="◀️ К списку скриптов",
+                                        callback_data="adm:scr:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _serialize_aiogram_entities(entities) -> list:
+    """Aiogram MessageEntity → JSON dump совместимый с Telethon restore
+    (_entities_to_telethon() в userbot.py). Особая обработка custom emoji."""
+    if not entities:
+        return []
+    # Aiogram → Telethon class name
+    mapping = {
+        "custom_emoji": "MessageEntityCustomEmoji",
+        "bold": "MessageEntityBold",
+        "italic": "MessageEntityItalic",
+        "code": "MessageEntityCode",
+        "pre": "MessageEntityPre",
+        "strikethrough": "MessageEntityStrike",
+        "underline": "MessageEntityUnderline",
+        "spoiler": "MessageEntitySpoiler",
+        "url": "MessageEntityUrl",
+        "text_link": "MessageEntityTextUrl",
+        "mention": "MessageEntityMention",
+        "text_mention": "MessageEntityMentionName",
+        "hashtag": "MessageEntityHashtag",
+        "cashtag": "MessageEntityCashtag",
+        "email": "MessageEntityEmail",
+        "phone_number": "MessageEntityPhone",
+    }
+    out = []
+    for e in entities:
+        et = getattr(e.type, "value", None) or str(e.type)
+        item = {"_": mapping.get(et, f"MessageEntity_{et}"),
+                "offset": e.offset, "length": e.length}
+        if et == "custom_emoji":
+            # Premium emoji document_id
+            item["document_id"] = str(getattr(e, "custom_emoji_id", "") or "")
+        elif et == "text_link":
+            item["url"] = getattr(e, "url", "") or ""
+        elif et == "text_mention":
+            u = getattr(e, "user", None)
+            item["user_id"] = getattr(u, "id", 0) if u else 0
+        elif et == "pre":
+            item["language"] = getattr(e, "language", None)
+        out.append(item)
+    return out
+
+
+async def _render_scripted_view(call: CallbackQuery, key: str):
+    """Preview одного шаблона: текст + метаданные + кнопки."""
+    data = storage.get_scripted_text(key) or {}
+    if not data:
+        await call.message.edit_text(
+            f"❌ Скрипт «{html.escape(key)}» не найден.",
+            reply_markup=_scripted_menu_kb(),
+        )
+        return
+    is_custom = not data.get("is_default", False)
+    title = data.get("title") or key
+    text = data.get("text") or ""
+    ents_count = len(data.get("entities") or [])
+    updated_at = data.get("updated_at")
+    updated_by = data.get("updated_by") or ""
+
+    lines = [f"<b>{html.escape(title)}</b>",
+             f"<code>key: {html.escape(key)}</code>", ""]
+    if is_custom:
+        import time as _t
+        when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(updated_at)) if updated_at else "—"
+        who = f"@{html.escape(updated_by)}" if updated_by else "—"
+        lines.append(f"✏️ Кастомный · {when} · {who}")
+    else:
+        lines.append("🔹 Дефолтный (из config.SCRIPTED_TEXTS_DEFAULTS)")
+    if ents_count:
+        lines.append(f"🎨 Entities: {ents_count} (включая premium emoji)")
+    lines.append("")
+    lines.append("<b>Текущий текст:</b>")
+    # Telegram лимит одного сообщения — 4096. Ограничим preview.
+    preview = text[:3000] + ("…" if len(text) > 3000 else "")
+    lines.append(f"<pre>{html.escape(preview)}</pre>")
+    await call.message.edit_text(
+        "\n".join(lines),
+        reply_markup=_scripted_view_kb(key, is_custom),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "adm:scr:menu")
+async def cb_scripted_menu(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.clear()
+    lines = ["<b>📝 Скрипты сообщений</b>", ""]
+    lines.append("Заскриптованные ответы welcome-flow — <b>0 вызовов Claude API</b>.")
+    lines.append("Юзербот отправляет их с сохранёнными премиум эмодзи.")
+    lines.append("")
+    lines.append("🔹 = дефолт из кода · ✏️ = переопределён админом · 🎨 = есть premium emoji")
+    await call.message.edit_text(
+        "\n".join(lines),
+        reply_markup=_scripted_menu_kb(),
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm:scr:view:"))
+async def cb_scripted_view(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    await state.clear()
+    key = call.data.split(":", 3)[3]
+    await _render_scripted_view(call, key)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm:scr:edit:"))
+async def cb_scripted_edit_start(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    key = call.data.split(":", 3)[3]
+    await state.set_state(AdminFSM.scripted_edit)
+    await state.update_data(scripted_key=key)
+    await call.message.edit_text(
+        f"✏️ <b>Редактирование скрипта</b>\n"
+        f"<code>{html.escape(key)}</code>\n\n"
+        f"Пришли сюда сообщение с готовым текстом. Можно с "
+        f"<b>премиум эмодзи</b> — они сохранятся 1:1 и юзербот "
+        f"отправит их клиенту.\n\n"
+        f"Способы:\n"
+        f"• Написать новый текст прямо здесь\n"
+        f"• Переслать своё сообщение из другого чата\n\n"
+        f"Для отмены — /cancel",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"adm:scr:view:{key}")],
+        ]),
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm:scr:reset:"))
+async def cb_scripted_reset(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        await call.answer("Только для админов", show_alert=True)
+        return
+    key = call.data.split(":", 3)[3]
+    existed = await storage.reset_scripted_text(key)
+    logger.info("[scripted] reset key=%s by admin=%s existed=%s",
+                key, call.from_user.username or call.from_user.id, existed)
+    await call.answer("✅ Сброшено на дефолт" if existed else "Уже был дефолт")
+    await _render_scripted_view(call, key)
+
+
+@router.message(AdminFSM.scripted_edit)
+async def on_scripted_new_text(message: Message, state: FSMContext):
+    """Получение нового текста скрипта. Сохраняем text + entities с premium emoji."""
+    if not storage.is_admin(message.from_user.id):
+        return
+    if message.text and message.text.strip() in ("/cancel", "cancel"):
+        await state.clear()
+        await message.answer("Отмена.")
+        return
+
+    data = await state.get_data()
+    key = data.get("scripted_key")
+    if not key:
+        await state.clear()
+        await message.answer("❌ Ключ скрипта потерян — начни заново через /admin.")
+        return
+
+    # aiogram Message: text может быть в .text (обычный текст) или
+    # .caption (медиа с подписью). Entities — .entities или .caption_entities.
+    text = message.text or message.caption or ""
+    entities = message.entities or message.caption_entities or []
+
+    if not text.strip():
+        await message.answer(
+            "❌ Сообщение пустое (нужен текст). Пришли ещё раз или /cancel."
+        )
+        return
+
+    ents_json = _serialize_aiogram_entities(entities)
+    updated_by = message.from_user.username or str(message.from_user.id)
+
+    # Сохраняем title из дефолта (админ его не меняет — только текст+entities)
+    default_title = ""
+    from config import SCRIPTED_TEXTS_DEFAULTS as _defs
+    if key in _defs:
+        default_title = _defs[key].get("title", key)
+
+    saved = await storage.set_scripted_text(
+        key=key, text=text, entities=ents_json,
+        updated_by=updated_by, title=default_title,
+    )
+    await state.clear()
+
+    logger.info("[scripted] saved key=%s by=@%s entities=%d text_len=%d",
+                key, updated_by, saved, len(text))
+
+    # Preview новой версии
+    lines = [
+        f"✅ <b>Сохранено:</b> <code>{html.escape(key)}</code>",
+        f"Entities: <b>{saved}</b> (premium emoji включаются в счёт)",
+        f"Длина текста: <b>{len(text)}</b> символов",
+        "",
+        "Так это будет выглядеть у клиента:",
+        f"<pre>{html.escape(text[:3000])}</pre>",
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 К списку скриптов",
+                                    callback_data="adm:scr:menu")],
+            [InlineKeyboardButton(text="👀 Просмотр этого шаблона",
+                                    callback_data=f"adm:scr:view:{key}")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CATCHALL — должен быть ПОСЛЕДНИМ (иначе перехватит специфичные adm:scr:*)
+# ═══════════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("adm:"))
 async def on_cb(call: CallbackQuery, state: FSMContext):
