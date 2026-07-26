@@ -346,7 +346,8 @@ async def ask(user_text: str) -> dict:
         resp = await cli.messages.create(
             model=LEO_MODEL,
             max_tokens=LEO_MAX_TOKENS,
-            system=system,
+            system=[{"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}],
             tools=LEO_TOOLS,
             messages=[{"role": "user", "content": user_text}],
         )
