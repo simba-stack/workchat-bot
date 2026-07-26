@@ -7553,64 +7553,6 @@ class Storage:
             "period": {"from": date_from, "to": date_to},
         }
 
-
-# ============================================================
-# AES-256-CBC шифрование StringSession для worker_sessions.
-# Module-level helpers (используются из api.py и userbot.py).
-# ============================================================
-
-def _session_crypto_key() -> bytes:
-    """32-байтный ключ AES из env SESSION_SECRET."""
-    import hashlib, os
-    secret = os.getenv("SESSION_SECRET", "") or "pride-default-fallback-please-change"
-    return hashlib.sha256(secret.encode()).digest()
-
-
-def encrypt_session(plaintext: str) -> str:
-    """Шифрует StringSession через AES-256-CBC + base64. Префикс v1: / v0: fallback."""
-    if not plaintext:
-        return ""
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives import padding
-        import os as _os, base64 as _b64
-        key = _session_crypto_key()
-        iv = _os.urandom(16)
-        padder = padding.PKCS7(128).padder()
-        padded = padder.update(plaintext.encode("utf-8")) + padder.finalize()
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-        enc = cipher.encryptor()
-        ct = enc.update(padded) + enc.finalize()
-        return "v1:" + _b64.b64encode(iv + ct).decode("ascii")
-    except Exception:
-        import base64 as _b64
-        return "v0:" + _b64.b64encode(plaintext.encode("utf-8")).decode("ascii")
-
-
-def decrypt_session(encoded: str) -> str:
-    """Расшифровывает StringSession. v0: — простой base64, v1: — AES."""
-    if not encoded:
-        return ""
-    try:
-        if encoded.startswith("v0:"):
-            import base64 as _b64
-            return _b64.b64decode(encoded[3:].encode("ascii")).decode("utf-8")
-        if encoded.startswith("v1:"):
-            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-            from cryptography.hazmat.primitives import padding
-            import base64 as _b64
-            blob = _b64.b64decode(encoded[3:].encode("ascii"))
-            iv, ct = blob[:16], blob[16:]
-            cipher = Cipher(algorithms.AES(_session_crypto_key()), modes.CBC(iv))
-            dec = cipher.decryptor()
-            padded = dec.update(ct) + dec.finalize()
-            unpadder = padding.PKCS7(128).unpadder()
-            return (unpadder.update(padded) + unpadder.finalize()).decode("utf-8")
-        return encoded
-    except Exception:
-        return ""
-
-
     # ─────────── SCRIPTED TEXTS (welcome flow, экономия Claude API) ───────────
     # Админ редактирует тексты через /admin в @PrideInviteWork_bot.
     # Юзербот отправляет их через Telethon с premium emoji entities.
@@ -7693,6 +7635,65 @@ def decrypt_session(encoded: str) -> str:
             if existed:
                 await self._save_unlocked()
         return existed
+
+
+# ============================================================
+# AES-256-CBC шифрование StringSession для worker_sessions.
+# Module-level helpers (используются из api.py и userbot.py).
+# ============================================================
+
+def _session_crypto_key() -> bytes:
+    """32-байтный ключ AES из env SESSION_SECRET."""
+    import hashlib, os
+    secret = os.getenv("SESSION_SECRET", "") or "pride-default-fallback-please-change"
+    return hashlib.sha256(secret.encode()).digest()
+
+
+def encrypt_session(plaintext: str) -> str:
+    """Шифрует StringSession через AES-256-CBC + base64. Префикс v1: / v0: fallback."""
+    if not plaintext:
+        return ""
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives import padding
+        import os as _os, base64 as _b64
+        key = _session_crypto_key()
+        iv = _os.urandom(16)
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(plaintext.encode("utf-8")) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+        enc = cipher.encryptor()
+        ct = enc.update(padded) + enc.finalize()
+        return "v1:" + _b64.b64encode(iv + ct).decode("ascii")
+    except Exception:
+        import base64 as _b64
+        return "v0:" + _b64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+
+
+def decrypt_session(encoded: str) -> str:
+    """Расшифровывает StringSession. v0: — простой base64, v1: — AES."""
+    if not encoded:
+        return ""
+    try:
+        if encoded.startswith("v0:"):
+            import base64 as _b64
+            return _b64.b64decode(encoded[3:].encode("ascii")).decode("utf-8")
+        if encoded.startswith("v1:"):
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            from cryptography.hazmat.primitives import padding
+            import base64 as _b64
+            blob = _b64.b64decode(encoded[3:].encode("ascii"))
+            iv, ct = blob[:16], blob[16:]
+            cipher = Cipher(algorithms.AES(_session_crypto_key()), modes.CBC(iv))
+            dec = cipher.decryptor()
+            padded = dec.update(ct) + dec.finalize()
+            unpadder = padding.PKCS7(128).unpadder()
+            return (unpadder.update(padded) + unpadder.finalize()).decode("utf-8")
+        return encoded
+    except Exception:
+        return ""
+
+
 
 
 storage = Storage(config.STORAGE_PATH)
