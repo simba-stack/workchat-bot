@@ -2249,7 +2249,25 @@ class UserbotService:
                             chosen_dept, chat_id,
                         )
                         return
-                    # Если клиент написал что-то невалидное — повторим prompt одно сообщение
+                    # Если клиент написал что-то невалидное — повторим prompt,
+                    # НО не чаще 1 раза в 30 сек на чат (защита от спама).
+                    # Тот же паттерн что и для track-choice fallback.
+                    now_ts = time.time()
+                    if not hasattr(self, "_last_dept_prompt_ts"):
+                        self._last_dept_prompt_ts = {}
+                    if len(self._last_dept_prompt_ts) > 100:
+                        cutoff_ts = now_ts - 3600
+                        self._last_dept_prompt_ts = {
+                            cid: ts for cid, ts in self._last_dept_prompt_ts.items() if ts > cutoff_ts
+                        }
+                    last_dept_ts = self._last_dept_prompt_ts.get(chat_id, 0)
+                    if now_ts - last_dept_ts < 30:
+                        logger.info(
+                            "[helpdesk] throttled dept 'Не понял' for chat=%s (last %ds ago)",
+                            chat_id, int(now_ts - last_dept_ts),
+                        )
+                        return  # тихо — недавно уже переспросили
+                    self._last_dept_prompt_ts[chat_id] = now_ts
                     try:
                         target = await self._resolve_chat_target(chat_id)
                         await self.client.send_message(
