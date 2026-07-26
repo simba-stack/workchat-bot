@@ -322,11 +322,15 @@ def _serialize_aiogram_entities(entities) -> list:
     out = []
     for e in entities:
         et = getattr(e.type, "value", None) or str(e.type)
-        item = {"_": mapping.get(et, f"MessageEntity_{et}"),
+        # ВАЖНО: "type" — то что реально читает userbot._entities_to_telethon().
+        # "_" оставляем для читаемости в state.json (было в старой версии).
+        item = {"type": et,
+                "_": mapping.get(et, f"MessageEntity_{et}"),
                 "offset": e.offset, "length": e.length}
         if et == "custom_emoji":
-            # Premium emoji document_id
-            item["document_id"] = str(getattr(e, "custom_emoji_id", "") or "")
+            # Premium emoji ID (aiogram: custom_emoji_id — string).
+            # Deserializer в userbot читает именно "custom_emoji_id".
+            item["custom_emoji_id"] = str(getattr(e, "custom_emoji_id", "") or "")
         elif et == "text_link":
             item["url"] = getattr(e, "url", "") or ""
         elif et == "text_mention":
@@ -483,14 +487,41 @@ async def on_scripted_new_text(message: Message, state: FSMContext):
     if key in _defs:
         default_title = _defs[key].get("title", key)
 
+    # Скачиваем фото если оно прислано (Telegram photo — до 5MB).
+    # Юзербот потом отправит его через Telethon send_file с сохранёнными
+    # caption+entities (premium emoji работают на caption'e тоже).
+    photo_path = None
+    if message.photo:
+        import os as _os, time as _t
+        try:
+            from storage import config as _cfg  # noqa: F401
+        except Exception:
+            pass
+        import config as _cfg2
+        base_dir = _os.path.dirname(_os.path.abspath(_cfg2.STORAGE_PATH or "/app/data/state.json"))
+        media_dir = _os.path.join(base_dir, "scripted_media")
+        _os.makedirs(media_dir, exist_ok=True)
+        # Уникальное имя: key + timestamp (старое фото не затираем, дисковое место копеечное).
+        ts = int(_t.time())
+        photo_path = _os.path.join(media_dir, f"{key}_{ts}.jpg")
+        try:
+            # aiogram 3: message.bot.download(photo, destination=path)
+            await message.bot.download(message.photo[-1], destination=photo_path)
+            logger.info("[scripted] photo saved key=%s path=%s size=%d",
+                        key, photo_path, _os.path.getsize(photo_path))
+        except Exception as _pe:
+            logger.warning("[scripted] photo download failed key=%s: %s", key, _pe)
+            photo_path = None
+
     saved = await storage.set_scripted_text(
         key=key, text=text, entities=ents_json,
         updated_by=updated_by, title=default_title,
+        photo_path=photo_path,
     )
     await state.clear()
 
-    logger.info("[scripted] saved key=%s by=@%s entities=%d text_len=%d",
-                key, updated_by, saved, len(text))
+    logger.info("[scripted] saved key=%s by=@%s entities=%d text_len=%d photo=%s",
+                key, updated_by, saved, len(text), bool(photo_path))
 
     # Preview новой версии
     lines = [

@@ -7609,9 +7609,12 @@ class Storage:
         return result
 
     async def set_scripted_text(self, key: str, text: str, entities: list,
-                                 updated_by: str = "", title: str = "") -> int:
+                                 updated_by: str = "", title: str = "",
+                                 photo_path: str = None) -> int:
         """Сохраняет кастомный текст в state["scripted_texts"][key].
         entities — JSON-dump список dict, готовый для Telethon restore.
+        photo_path — путь к скачанному фото (или None), юзербот отправит
+        через Telethon send_file с caption=text + formatting_entities.
         Возвращает количество сохранённых entities (для лога/preview)."""
         import time
         async with _lock:
@@ -7622,6 +7625,7 @@ class Storage:
                 "title": title or key,
                 "updated_at": int(time.time()),
                 "updated_by": (updated_by or "").lstrip("@"),
+                "photo_path": photo_path or None,
             }
             await self._save_unlocked()
         return len(entities or [])
