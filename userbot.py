@@ -2839,6 +2839,64 @@ class UserbotService:
             return False
         return bool(self._ACK_RE.match(t))
 
+    async def _try_payment_reply_to_audit_bot(self, chat_id, text: str) -> bool:
+        """Детектит ответ клиента на "какой метод оплаты" и PATCH-ит audit-bot.
+        Возвращает True если что-то распознано (для лога). Не блокирует AI-flow —
+        Асик всё равно ответит клиенту, а audit-bot заранее получит данные.
+
+        Патерны:
+          - USDT TRC20 адрес:  T + 33 base58-chars (пример: TX7abc...)
+          - "гарант сейчас"  → method=guarantor_before
+          - "гарант после"   → method=guarantor_after
+          - просто "гарант"  → method=guarantor_before (default)
+          - просто "usdt"    → method=trc (без адреса, бухгалтер уточнит)
+        """
+        if not text or len(text) > 500:
+            return False
+        import audit_bot_client
+        low = text.lower()
+
+        # USDT-адрес regex (TRC20: T + 33 alphanum)
+        usdt_re = re.search(r"\bT[A-Za-z0-9]{33}\b", text)
+        method = None
+        usdt_address = ""
+
+        if usdt_re:
+            method = "trc"
+            usdt_address = usdt_re.group(0)
+        elif re.search(r"\bгарант\s+(сейчас|до\b|перед|заранее)", low):
+            method = "guarantor_before"
+        elif re.search(r"\bгарант\s+(после|потом|позже|отработ)", low):
+            method = "guarantor_after"
+        elif re.search(r"^\s*гарант\s*[.!?]?\s*$|^\s*гарант(?:ом)?\s+возьм", low):
+            method = "guarantor_before"  # default для одиночного "гарант"
+        elif re.search(r"^\s*usdt\s*[?.!]?\s*$|^\s*усдт\s*[?.!]?\s*$", low) and not usdt_re:
+            # Клиент сказал "USDT" но не прислал адрес — пометить но без адреса
+            method = "trc"
+
+        if not method:
+            return False
+
+        # Ищем последнюю карточку клиента через audit-bot
+        try:
+            card = await audit_bot_client.get_latest_lk_card_for_chat(int(chat_id))
+            if not card:
+                logger.info("[audit_bot] payment reply detected but no card for chat=%s", chat_id)
+                return False
+            await audit_bot_client.set_payment(
+                card_id=int(card.get("id", 0)),
+                method=method,
+                usdt_address=usdt_address,
+            )
+            logger.info(
+                "[audit_bot] payment set from client reply: card=%s method=%s addr=%s",
+                card.get("id"), method, usdt_address[:20] if usdt_address else "-",
+            )
+            return True
+        except Exception as e:
+            logger.warning("[audit_bot] payment reply → audit-bot failed: %s", e)
+            return False
+
     async def _try_faq_scripted_reply(self, event, chat_id, text: str) -> bool:
         """FAQ regex-перехват для экономии Claude API (Волна 3).
         Проверяет typical-вопросы по regex → шлёт scripted → return True.
@@ -2991,6 +3049,16 @@ class UserbotService:
                 return
         except Exception as e:
             logger.warning("ack check failed: %s", e)
+
+        # === PAYMENT REPLY DETECT (audit-bot интеграция) ===
+        # Если клиент только что ответил на ask_payment_method (USDT-адрес / "гарант")
+        # — тихо передаём в audit-bot через PATCH /payment, бухгалтер увидит заполненное.
+        try:
+            if text_now and await self._try_payment_reply_to_audit_bot(chat_id, text_now):
+                # Не return — продолжаем обычный AI-flow. Асик должен подтвердить клиенту.
+                pass
+        except Exception as _pe:
+            logger.warning("payment-reply detect failed: %s", _pe)
 
         # === ECONOMY GUARD #1.5 (Волна 3): FAQ regex-перехват ===
         # Ловим типовые вопросы (прайс, метод оплаты, холд, "что делаете", "почему блок?")

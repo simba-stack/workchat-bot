@@ -85,6 +85,17 @@ DEFAULT_WORKERS = ["pride_sys01", "pride_manager1", "TimonSkupCL", "SIMBA_PRIDE_
 # `send_message(formatting_entities=)` — премиум эмодзи анимируются у клиента.
 # Экономия: welcome+choice = 0 API calls к Claude, кредиты идут только на
 # живой диалог после выбора направления.
+# ═══════════════════════════════════════════════════════════════════════
+# Интеграция с @PRIDE_AUDIT_BOT (stroy-crm-bot) — управление LK-карточками
+# ═══════════════════════════════════════════════════════════════════════
+# URL Express API audit-bot'а (Railway deployment URL, без trailing slash)
+AUDIT_BOT_URL = os.getenv("AUDIT_BOT_URL", "")
+# Bearer-токен для API аутентификации (тот же что задан в audit-bot Railway env)
+AUDIT_BOT_API_TOKEN = os.getenv("AUDIT_BOT_API_TOKEN", "")
+# HMAC-секрет для верификации webhook'ов от audit-bot (тот же секрет в обоих)
+AUDIT_BOT_WEBHOOK_HMAC_SECRET = os.getenv("AUDIT_BOT_WEBHOOK_HMAC_SECRET", "")
+
+
 SCRIPTED_TEXTS_DEFAULTS = {
     # 1) Первое сообщение клиенту после присоединения к workchat
     "welcome": {
