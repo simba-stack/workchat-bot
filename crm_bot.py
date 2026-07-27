@@ -6034,7 +6034,7 @@ async def run_crm_bot():
         ),
         flush_interval=2.0,
     )
-    dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.CHAT)
+    dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.USER_IN_CHAT)
     dp.include_router(router)
 
     # ─── Middleware: игнор сообщений от юзербот-аккаунта (AI ассистент) ───
