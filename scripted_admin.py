@@ -79,6 +79,10 @@ HELP_TEXT = (
     "**Бэкап:**\n"
     "/export — прислать JSON со всеми scripted_texts\n"
     "/import — reply на JSON + команда → восстановить\n\n"
+    "**Наблюдаемость (Волна 4):**\n"
+    "/stats — счётчики использования каждого скрипта\n"
+    "/history KEY — последние 5 версий скрипта\n"
+    "/rollback KEY N — откатить на версию N (0 = самая старая из сохранённых)\n\n"
     "**Placeholder\\'ы** (подставляются при отправке клиенту):\n"
     "`{bank}` `{fio}` `{deal_id}` `{price_usdt}` `{usdt_address}` "
     "`{client_tag}` `{client_username}`\n\n"
@@ -444,6 +448,76 @@ async def _cmd_preview(event, storage, client, key: str):
         await client.send_message(event.chat_id, substituted)
 
 
+# ── /stats /history /rollback (Волна 4) ──────────────────────────────
+
+async def _cmd_stats(event, storage):
+    stats = storage.get_scripted_stats()
+    if not stats:
+        await event.reply("Пока нет статистики — ни один скрипт не был отправлен.")
+        return
+    items = sorted(stats.items(), key=lambda kv: -int(kv[1].get("sent_total", 0) or 0))
+    lines = ["**Статистика scripted_texts:**", ""]
+    for key, s in items[:30]:
+        total = int(s.get("sent_total", 0) or 0)
+        last_ts = int(s.get("last_sent_ts", 0) or 0)
+        last_str = time.strftime("%m-%d %H:%M", time.localtime(last_ts)) if last_ts else "—"
+        by_day = s.get("sent_by_day") or {}
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        today_cnt = int(by_day.get(today, 0) or 0)
+        lines.append(f"`{key}` — **{total}** (сегодня: {today_cnt}, посл: {last_str})")
+    if len(items) > 30:
+        lines.append(f"\n_...и ещё {len(items) - 30} ключей_")
+    await event.reply("\n".join(lines), parse_mode="markdown")
+
+
+async def _cmd_history(event, storage, key: str):
+    hist = storage.get_scripted_history(key)
+    if not hist:
+        await event.reply(f"История для `{key}` пуста (не было правок).", parse_mode="markdown")
+        return
+    lines = [f"**История `{key}`** — {len(hist)} версий:", ""]
+    for idx, v in enumerate(hist):
+        ts = int(v.get("updated_at", 0) or 0)
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "—"
+        by = v.get("updated_by") or "—"
+        ce_count = sum(1 for e in (v.get("entities") or []) if e.get("type") == "custom_emoji")
+        has_photo = "📷" if v.get("photo_path") else ""
+        preview = (v.get("text") or "")[:50].replace("\n", " ")
+        lines.append(
+            f"**{idx}.** {when} · @{by} · entities={len(v.get('entities') or [])} · ce={ce_count} {has_photo}\n"
+            f"    `{preview}...`"
+        )
+    lines.append("")
+    lines.append(f"Откатить: /rollback {key} N (N — индекс 0..{len(hist)-1})")
+    await event.reply("\n".join(lines), parse_mode="markdown")
+
+
+async def _cmd_rollback(event, storage, args: str):
+    parts = args.split()
+    if len(parts) != 2:
+        await event.reply("Формат: `/rollback KEY N` (N — индекс версии из /history)",
+                          parse_mode="markdown")
+        return
+    key = parts[0]
+    try:
+        n = int(parts[1])
+    except ValueError:
+        await event.reply("N должно быть числом.")
+        return
+    ok = await storage.rollback_scripted_text(key, n)
+    if ok:
+        await event.reply(
+            f"✅ `{key}` откачен на версию {n}. Текущая версия сохранена в history.",
+            parse_mode="markdown",
+        )
+        logger.info("[scripted_admin] rollback key=%s version_idx=%d", key, n)
+    else:
+        await event.reply(
+            f"❌ Не удалось откатить `{key}` на версию {n}. Проверь /history {key}.",
+            parse_mode="markdown",
+        )
+
+
 # ── /edit content handler (сохранение) ───────────────────────────────
 
 async def _handle_edit_content(event, storage, client, key: str):
@@ -642,6 +716,20 @@ async def register(client, storage):
                     await event.reply("Формат: /preview KEY")
                     return
                 await _cmd_preview(event, storage, client, parts[1].strip())
+            elif text == "/stats":
+                await _cmd_stats(event, storage)
+            elif text.startswith("/history"):
+                parts = text.split(maxsplit=1)
+                if len(parts) < 2:
+                    await event.reply("Формат: /history KEY")
+                    return
+                await _cmd_history(event, storage, parts[1].strip())
+            elif text.startswith("/rollback"):
+                parts = text.split(maxsplit=1)
+                if len(parts) < 2:
+                    await event.reply("Формат: /rollback KEY N")
+                    return
+                await _cmd_rollback(event, storage, parts[1].strip())
         except Exception as e:
             logger.exception("[scripted_admin] handler crashed: %s", e)
 
