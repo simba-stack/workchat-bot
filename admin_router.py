@@ -44,7 +44,6 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⏱ Кулдаун", callback_data="adm:cooldown")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
-        [InlineKeyboardButton(text="📝 Скрипты сообщений", callback_data="adm:scr:menu")],
         [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
         [InlineKeyboardButton(text="📨 Invite-бот (welcome)", callback_data="adm:invite")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],

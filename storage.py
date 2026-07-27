@@ -7640,6 +7640,22 @@ class Storage:
                 await self._save_unlocked()
         return existed
 
+    async def set_scripted_admin(self, chat_id: int, owner_id: int) -> None:
+        """Настраивает группу-админку для scripted_texts (см. scripted_admin.py).
+        Юзербот принимает /list /show /edit /reset только от owner_id в chat_id."""
+        import time
+        async with _lock:
+            self.state["scripted_admin"] = {
+                "chat_id": int(chat_id),
+                "owner_id": int(owner_id),
+                "setup_at": int(time.time()),
+            }
+            await self._save_unlocked()
+
+    def get_scripted_admin(self) -> dict:
+        """Возвращает {chat_id, owner_id, setup_at} или {} если /setup не запускали."""
+        return self.state.get("scripted_admin") or {}
+
 
 # ============================================================
 # AES-256-CBC шифрование StringSession для worker_sessions.

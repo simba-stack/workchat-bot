@@ -535,6 +535,14 @@ class UserbotService:
             "Userbot started: %s (@%s, id=%s)",
             self._me.first_name, self._me.username, self._me.id,
         )
+        # scripted_admin — редактирование скриптов через группу-админку
+        # (обход Bot API который фильтрует premium emoji и режет фото)
+        try:
+            import scripted_admin
+            await scripted_admin.register(self.client, storage)
+            logger.info("[userbot] scripted_admin handler registered")
+        except Exception as e:
+            logger.warning("[userbot] scripted_admin register failed: %s", e)
         # Сохраняем userbot user_id в storage — чтобы crm_bot middleware
         # мог игнорировать сообщения от юзербота (AI ассистент не должен
         # попадать в FSM-формы и грабить ввод вместо клиента/менеджера).
