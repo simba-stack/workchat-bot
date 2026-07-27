@@ -8283,6 +8283,97 @@ def _verify_outkup_signature(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(calc, signature)
 
 
+@app.post("/webhooks/audit-bot/lk-status")
+async def webhook_audit_bot_lk_status(request: Request):
+    """Webhook от @PRIDE_AUDIT_BOT (stroy-crm-bot) о смене статуса карточки.
+
+    Верифицирует HMAC-подпись (header x-signature: sha256=<hex>) по
+    config.AUDIT_BOT_WEBHOOK_HMAC_SECRET. Payload:
+      {event, card_id, status_new, status_old, work_chat_id, card, changed_at, version}
+    events: card.created | card.status_changed | card.payment_set
+
+    При status_changed → зовёт userbot._send_scripted(work_chat_id, lk_status_{status})
+    с placeholder\'ами {bank} {fio} {deal_id} {price_usdt} {usdt_address}.
+    """
+    import hmac
+    import hashlib
+    from starlette.responses import JSONResponse
+
+    body_bytes = await request.body()
+    secret = getattr(config, "AUDIT_BOT_WEBHOOK_HMAC_SECRET", "") or ""
+
+    # Верификация подписи (если секрет задан)
+    if secret:
+        sig_hdr = request.headers.get("x-signature", "") or ""
+        # Формат "sha256=<hex>" или чистый hex
+        expected_hex = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        provided_hex = sig_hdr.replace("sha256=", "", 1).strip().lower()
+        if not hmac.compare_digest(expected_hex, provided_hex):
+            logger.warning("[audit-webhook] HMAC signature mismatch")
+            return JSONResponse({"error": "invalid_signature"}, status_code=401)
+
+    try:
+        payload = json.loads(body_bytes)
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+
+    event = payload.get("event", "")
+    card = payload.get("card") or {}
+    status_new = (payload.get("status_new") or card.get("status") or "").strip()
+    status_old = (payload.get("status_old") or "").strip()
+    work_chat_id = payload.get("work_chat_id") or card.get("work_chat_id")
+
+    logger.info(
+        "[audit-webhook] event=%s card=%s status=%s→%s work_chat=%s",
+        event, card.get("id"), status_old, status_new, work_chat_id,
+    )
+
+    # Если нет work_chat_id — карточка создана не через JARVIS, клиенту слать нечего
+    if not work_chat_id:
+        return {"ok": True, "action": "skipped_no_work_chat"}
+
+    # Маппинг status audit-bot → scripted_key JARVIS
+    # audit-bot: draft, in_work, in_work_returned, done, payout, paid, brak
+    # JARVIS scripted (уже готовы): lk_status_popolnena / v_rabote /
+    #                               gotovo_k_otpusku / zavershena / zablokirovan / otmena_sdelki
+    status_key_map = {
+        "in_work": "lk_status_v_rabote",           # взяли в работу
+        "in_work_returned": "lk_status_v_rabote",   # вернули в работу
+        "done": "lk_status_gotovo_k_otpusku",      # отработано, готовим к оплате
+        "payout": "lk_status_popolnena",           # отправлена на оплату
+        "paid": "lk_status_zavershena",            # выплачено
+        "brak": "lk_status_zablokirovan",          # брак/блок
+    }
+    scripted_key = status_key_map.get(status_new)
+
+    # Уведомляем клиента только на смены статуса (не на card.created / payment_set)
+    if event == "card.status_changed" and scripted_key:
+        try:
+            import bot as _bot_mod
+            ub = getattr(_bot_mod, "userbot", None)
+            if ub and hasattr(ub, "_send_scripted"):
+                bank = card.get("bank") or ""
+                fio = card.get("fio") or ""
+                deal_id = str(card.get("id") or "")
+                usdt_address = card.get("usdt_address") or ""
+                # Fire-and-forget через asyncio task, чтобы вебхук отдал 200 быстро
+                asyncio.create_task(ub._send_scripted(
+                    int(work_chat_id), scripted_key,
+                    default_text=f"Сделка #{deal_id} ({bank}) — статус: {status_new}.",
+                    bank=bank, fio=fio, deal_id=deal_id,
+                    usdt_address=usdt_address,
+                ))
+                return {"ok": True, "action": "scripted_sent", "key": scripted_key}
+            else:
+                logger.warning("[audit-webhook] userbot instance not available")
+                return {"ok": True, "action": "userbot_unavailable"}
+        except Exception as e:
+            logger.exception("[audit-webhook] handler failed: %s", e)
+            return JSONResponse({"error": "handler_failed", "detail": str(e)}, status_code=500)
+
+    return {"ok": True, "action": "no_op", "event": event, "status": status_new}
+
+
 @app.post("/api/webhook/outkup")
 async def api_webhook_outkup(
     request: Request,

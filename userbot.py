@@ -797,6 +797,11 @@ class UserbotService:
                     await self.client.send_message(chat_id, text)
             logger.info("[scripted] sent key=%s chat=%s entities=%d len=%d photo=%s",
                         key, chat_id, len(entities_raw), len(text), bool(photo_path))
+            # Волна 4: счётчик использования (best-effort, не блокирует)
+            try:
+                await storage.incr_scripted_stat(key)
+            except Exception as _se:
+                logger.warning("[scripted] incr_stat failed key=%s: %s", key, _se)
             return True
         except Exception as e:
             logger.warning("[scripted] send failed key=%s chat=%s: %s", key, chat_id, e)
@@ -2834,6 +2839,192 @@ class UserbotService:
             return False
         return bool(self._ACK_RE.match(t))
 
+    async def _try_payment_reply_to_audit_bot(self, chat_id, text: str) -> bool:
+        """Детектит ответ клиента на "какой метод оплаты" и PATCH-ит audit-bot.
+        Возвращает True если что-то распознано (для лога). Не блокирует AI-flow —
+        Асик всё равно ответит клиенту, а audit-bot заранее получит данные.
+
+        Патерны:
+          - USDT TRC20 адрес:  T + 33 base58-chars (пример: TX7abc...)
+          - "гарант сейчас"  → method=guarantor_before
+          - "гарант после"   → method=guarantor_after
+          - просто "гарант"  → method=guarantor_before (default)
+          - просто "usdt"    → method=trc (без адреса, бухгалтер уточнит)
+        """
+        if not text or len(text) > 500:
+            return False
+        import audit_bot_client
+        low = text.lower()
+
+        # USDT-адрес regex (TRC20: T + 33 alphanum)
+        usdt_re = re.search(r"\bT[A-Za-z0-9]{33}\b", text)
+        method = None
+        usdt_address = ""
+
+        if usdt_re:
+            method = "trc"
+            usdt_address = usdt_re.group(0)
+        elif re.search(r"\bгарант\s+(сейчас|до\b|перед|заранее)", low):
+            method = "guarantor_before"
+        elif re.search(r"\bгарант\s+(после|потом|позже|отработ)", low):
+            method = "guarantor_after"
+        elif re.search(r"^\s*гарант\s*[.!?]?\s*$|^\s*гарант(?:ом)?\s+возьм", low):
+            method = "guarantor_before"  # default для одиночного "гарант"
+        elif re.search(r"^\s*usdt\s*[?.!]?\s*$|^\s*усдт\s*[?.!]?\s*$", low) and not usdt_re:
+            # Клиент сказал "USDT" но не прислал адрес — пометить но без адреса
+            method = "trc"
+
+        if not method:
+            return False
+
+        # Ищем последнюю карточку клиента через audit-bot
+        try:
+            card = await audit_bot_client.get_latest_lk_card_for_chat(int(chat_id))
+            if not card:
+                logger.info("[audit_bot] payment reply detected but no card for chat=%s", chat_id)
+                return False
+            await audit_bot_client.set_payment(
+                card_id=int(card.get("id", 0)),
+                method=method,
+                usdt_address=usdt_address,
+            )
+            logger.info(
+                "[audit_bot] payment set from client reply: card=%s method=%s addr=%s",
+                card.get("id"), method, usdt_address[:20] if usdt_address else "-",
+            )
+            return True
+        except Exception as e:
+            logger.warning("[audit_bot] payment reply → audit-bot failed: %s", e)
+            return False
+
+    async def _try_faq_scripted_reply(self, event, chat_id, text: str) -> bool:
+        """FAQ regex-перехват для экономии Claude API (Волна 3).
+        Проверяет typical-вопросы по regex → шлёт scripted → return True.
+        Не сработало → return False → идём в обычный AI-flow.
+
+        КОНСЕРВАТИВНЫЕ регексы: не должны ловить ложняки. Лучше пропустить в AI.
+        Каждый паттерн — простой явный запрос без упоминания конкретного банка."""
+        if not text or len(text) > 400:
+            return False
+        low = text.lower().strip()
+
+        # #1: Прайс — «сколько стоит?», «прайс?», «какие цены?» БЕЗ банка/деталей
+        _bank_re = re.compile(
+            r"уралсиб|сбер|тинькоф|альфа|\bвтб\b|почта\s*банк|"
+            r"открыти|райффайз|совкомбанк|росбанк|газпром|озон|"
+            r"точка|локо|модуль|мтс\s*банк",
+            re.IGNORECASE,
+        )
+        if _bank_re.search(low):
+            return False  # с банком — в AI
+
+        if re.search(
+            r"^\s*прайс\s*[?.!]?\s*$|"
+            r"какие\s+цен|"
+            r"сколько\s+стоит|"
+            r"скок\s+бер[её]т|"
+            r"за\s+сколько\s+забер[её]те|"
+            r"по\s+какой\s+цен|"
+            r"\bпрайс(?:лист|-лист|\s+лист)",
+            low,
+        ):
+            try:
+                pricing_text = str(storage.pricing or "").strip() or "уточните у оператора"
+            except Exception:
+                pricing_text = "уточните у оператора"
+            ok = await self._send_scripted(
+                chat_id, "reply_pricing_generic",
+                default_text=f"Актуальные цены:\n\n{pricing_text}\n\nЕсли интересует конкретный банк — напишите название.",
+                pricing=pricing_text,
+            )
+            return ok
+
+        # #2: Метод оплаты — общий вопрос
+        if re.search(
+            r"как\s+(?:вы\s+)?оплат|"
+            r"метод\s+оплат|"
+            r"способ\s+оплат|"
+            r"как\s+платите|"
+            r"что\s+по\s+оплат|"
+            r"варианты\s+оплат",
+            low,
+        ) and not re.search(r"usdt|тэзер|гарант", low):
+            return await self._send_scripted(
+                chat_id, "reply_payment_options",
+                default_text="У нас 3 варианта выплаты: USDT TRC20, Гарант в Continental сейчас или после отработки.",
+            )
+
+        # #3: USDT конкретно — попросить адрес (если ещё нет)
+        if re.search(
+            r"^\s*usdt\s*[?.!]?\s*$|"
+            r"^\s*усдт\s*[?.!]?\s*$|"
+            r"можно\s+usdt|"
+            r"хочу\s+usdt|"
+            r"давайте\s+usdt|"
+            r"через\s+usdt|"
+            r"по\s+usdt",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_payment_usdt_hint",
+                default_text="Ок, USDT TRC20. Пришлите ваш TRC20-адрес.",
+            )
+
+        # #4: Холд — «сколько холд?», «как долго ждать?»
+        if re.search(
+            r"сколько\s+холд|"
+            r"какой\s+холд|"
+            r"холд\s+какой|"
+            r"\bхолд\s*[?.]",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_hold",
+                default_text="Срок холда — от 1 до 3 дней в зависимости от банка.",
+            )
+
+        # #5: «Чем занимаетесь?» / «Что покупаете?»
+        if re.search(
+            r"чем\s+занима|"
+            r"что\s+вы\s+делаете|"
+            r"что\s+покупает|"
+            r"что\s+у\s+вас\s+за\s+(?:тем|услуг|бизнес)|"
+            r"что\s+за\s+услуг|"
+            r"что\s+вы\s+продаете",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_what_we_do",
+                default_text="Работаем с ИП/ООО-счетами (перевязка, работа со счётом, отработка). Основные банки — Альфа, Сбер, Тинькофф, ВТБ, Точка, Модуль. Что интересует?",
+            )
+
+        # #6: «Почему блок?» — только если у клиента есть LK карточка в статусе БЛОК/БРАК
+        if re.search(
+            r"почему\s+блок|"
+            r"почему\s+заблокир|"
+            r"из-за\s+чего\s+блок|"
+            r"что\s+случилось\s+с\s+(?:карт|счёт|аккаунт)|"
+            r"причин[аы]\s+блок",
+            low,
+        ):
+            try:
+                # Проверяем есть ли у этого work_chat LK-карточка в статусе БЛОК/БРАК
+                has_blocked = False
+                for _cid, _card in (storage.list_lk_cards() or {}).items():
+                    if _card.get("work_chat_id") == chat_id and _card.get("status") in ("БЛОК", "БРАК"):
+                        has_blocked = True
+                        break
+                if has_blocked:
+                    return await self._send_scripted(
+                        chat_id, "reply_lk_blocked_explain",
+                        default_text="Причину блокировки счёта знает только банк — обратитесь в поддержку банка. Мы влиять на решения не можем.",
+                    )
+            except Exception as _bce:
+                logger.warning("blocked-explain check failed: %s", _bce)
+                return False
+
+        return False
+
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
         chat_id = event.chat_id
         # Извлекаем текст один раз — используется в ack-фильтре, классификаторе
@@ -2858,6 +3049,28 @@ class UserbotService:
                 return
         except Exception as e:
             logger.warning("ack check failed: %s", e)
+
+        # === PAYMENT REPLY DETECT (audit-bot интеграция) ===
+        # Если клиент только что ответил на ask_payment_method (USDT-адрес / "гарант")
+        # — тихо передаём в audit-bot через PATCH /payment, бухгалтер увидит заполненное.
+        try:
+            if text_now and await self._try_payment_reply_to_audit_bot(chat_id, text_now):
+                # Не return — продолжаем обычный AI-flow. Асик должен подтвердить клиенту.
+                pass
+        except Exception as _pe:
+            logger.warning("payment-reply detect failed: %s", _pe)
+
+        # === ECONOMY GUARD #1.5 (Волна 3): FAQ regex-перехват ===
+        # Ловим типовые вопросы (прайс, метод оплаты, холд, "что делаете", "почему блок?")
+        # и отвечаем scripted БЕЗ вызова Claude. Экономия ~$0.012 × частота.
+        # Регексы КОНСЕРВАТИВНЫЕ — при малейшем сомнении отдаём в AI.
+        try:
+            if text_now and await self._try_faq_scripted_reply(event, chat_id, text_now):
+                await storage.bump_ai_stats(skipped_by_faq=1)
+                logger.info("AI: chat=%s — FAQ scripted перехват, Claude пропущен", chat_id)
+                return
+        except Exception as e:
+            logger.warning("FAQ scripted check failed: %s", e)
 
         delay = random.uniform(config.AI_TYPING_DELAY_MIN, config.AI_TYPING_DELAY_MAX)
         try:
@@ -3100,19 +3313,31 @@ class UserbotService:
             or ("выберите подразделение" in reply_low)
         )
         if not already_has_hint:
-            if ai_count == 0:
-                # Первый ответ — учим клиента триггеру
-                hint = (
-                    "\n\n<i>💬 Если я вам понадоблюсь — просто напишите "
-                    "«Ассистент» и дальше свой вопрос. "
-                    "Если хотите живого оператора — «Ассистент позови оператора».</i>"
-                )
-            else:
-                # Все последующие ответы — короткий hint про оператора
-                hint = (
-                    "\n\n<i>💬 Если нужен живой оператор — напишите "
-                    "«Ассистент позови оператора».</i>"
-                )
+            # Волна 2: hint теперь берётся из scripted_texts['ai_hint_first/next'].
+            # Fallback на hardcoded — если SIMBA случайно /delete эти ключи.
+            hint_default_first = (
+                "\n\n💬 Если я вам понадоблюсь — просто напишите "
+                "«Ассистент» и дальше свой вопрос. "
+                "Если хотите живого оператора — «Ассистент позови оператора»."
+            )
+            hint_default_next = (
+                "\n\n💬 Если нужен живой оператор — напишите "
+                "«Ассистент позови оператора»."
+            )
+            _hint_key = "ai_hint_first" if ai_count == 0 else "ai_hint_next"
+            _hint_default = hint_default_first if ai_count == 0 else hint_default_next
+            try:
+                _hint_data = storage.get_scripted_text(_hint_key) or {}
+                _hint_text = _hint_data.get("text") or _hint_default
+            except Exception:
+                _hint_text = _hint_default
+            # Оборачиваем в <i>...</i> для parse_mode=html (совместимо со старым UI)
+            hint = "<i>" + _hint_text.lstrip("\n") + "</i>"
+            # Восстанавливаем leading newlines
+            if _hint_text.startswith("\n\n"):
+                hint = "\n\n" + hint
+            elif _hint_text.startswith("\n"):
+                hint = "\n" + hint
         # ВАЖНО: prompt подразделения здесь НЕ показываем.
         # Меню 1/2/3 появляется ТОЛЬКО при срабатывании триггера
         # ("оператор/менеджер/Ассистент позови") — обрабатывается выше.
@@ -3952,17 +4177,43 @@ class UserbotService:
         deal = storage.get_deal(deal_id) or {}
 
         work_chat = deal.get("work_chat_id")
-        client_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
-        if not work_chat or not client_msg:
+        # Волна 2: маппинг статус → scripted_key. SIMBA правит формулировки
+        # через группу-админку без деплоя. Placeholder {bank} {deal_id}.
+        _status_key_map = {
+            "ПОПОЛНЕНО": "lk_status_popolnena",
+            "В_РАБОТЕ": "lk_status_v_rabote",
+            "ГОТОВО_К_ОТПУСКУ": "lk_status_gotovo_k_otpusku",
+            "ЗАВЕРШЕНА": "lk_status_zavershena",
+            "ЗАБЛОКИРОВАН": "lk_status_zablokirovan",
+            "ОТМЕНА_СДЕЛКИ": "lk_status_otmena_sdelki",
+        }
+        scripted_key = _status_key_map.get(new_status)
+        default_msg = self._client_status_message(new_status, deal, deal_id=deal_id)
+        if not work_chat or (not scripted_key and not default_msg):
             logger.info(
-                "client notify skipped: deal=%s work_chat=%s msg=%r",
-                deal_id, work_chat, bool(client_msg),
+                "client notify skipped: deal=%s work_chat=%s scripted_key=%s msg=%r",
+                deal_id, work_chat, scripted_key, bool(default_msg),
             )
             return
         try:
             target = await self._resolve_chat_target(work_chat)
-            await self.client.send_message(target, client_msg, link_preview=False)
-            logger.info("client notified deal=%s status=%s chat=%s", deal_id, new_status, work_chat)
+            bank = deal.get("bank", "") or ""
+            fio = deal.get("fio", "") or ""
+            price_usdt = deal.get("price_usdt", "") or ""
+            usdt_address = deal.get("usdt_address", "") or ""
+            if scripted_key:
+                ok = await self._send_scripted(
+                    target, scripted_key,
+                    default_text=default_msg,
+                    bank=bank, fio=fio, deal_id=deal_id or "",
+                    price_usdt=price_usdt, usdt_address=usdt_address,
+                )
+                if not ok and default_msg:
+                    await self.client.send_message(target, default_msg, link_preview=False)
+            else:
+                await self.client.send_message(target, default_msg, link_preview=False)
+            logger.info("client notified deal=%s status=%s chat=%s scripted=%s",
+                        deal_id, new_status, work_chat, scripted_key)
         except Exception as e:
             logger.warning("client notify failed for deal=%s: %s", deal_id, e)
 
@@ -4708,25 +4959,36 @@ class UserbotService:
             f"<a href='tg://user?id={client_id}'>👋</a> "
             if client_id else (f"@{client_uname} " if client_uname else "")
         )
-        msg = (
-            f"{client_tag}<b>Перевязка успешно завершена.</b>\n\n"
+        # Плейн-текст версия (без HTML) для scripted fallback:
+        default_msg = (
+            f"{client_tag}Перевязка успешно завершена.\n\n"
             f"Подскажите — как хотите получить выплату по этому ЛК?\n\n"
-            f"💸 <b>USDT TRC20</b> — пришлите ваш TRC20-адрес, "
+            f"💸 USDT TRC20 — пришлите ваш TRC20-адрес, "
             f"переведём сразу после отработки счёта операционистами\n"
-            f"🤝 <b>Гарант в Continental</b> (сделка с @PRIDE_CL)\n"
-            f"   • <b>сейчас</b> — мы пополним сделку, дальше работаем со счётом, "
+            f"🤝 Гарант в Continental (сделка с @PRIDE_CL)\n"
+            f"   • сейчас — мы пополним сделку, дальше работаем со счётом, "
             f"отпускаем после отработки\n"
-            f"   • <b>после отработки</b> — пополним и отпустим по факту "
+            f"   • после отработки — пополним и отпустим по факту "
             f"завершения работы со счётом"
         )
         try:
             target = await self._resolve_chat_target(chat_id)
-            await self.client.send_message(
-                target, msg, parse_mode="html", link_preview=False,
+            # Волна 2: сообщение теперь берётся из scripted_texts['ask_payment_method_after_perevyaz']
+            # с placeholder {client_tag}. Fallback на default_msg если не настроен.
+            ok = await self._send_scripted(
+                target, "ask_payment_method_after_perevyaz",
+                default_text=default_msg,
+                client_tag=client_tag or "",
+                client_username=client_uname or "",
             )
+            if not ok:
+                # Крайний fallback — исходный HTML-путь
+                await self.client.send_message(
+                    target, default_msg, parse_mode="html", link_preview=False,
+                )
             logger.info(
-                "AUTO-ASK payment method: chat=%s client=@%s",
-                chat_id, client_uname,
+                "AUTO-ASK payment method: chat=%s client=@%s (scripted=%s)",
+                chat_id, client_uname, ok,
             )
             _e("auto-ask-payment-method", {
                 "chat_id": chat_id, "client_username": client_uname,
