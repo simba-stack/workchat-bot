@@ -7618,10 +7618,26 @@ class Storage:
         entities — JSON-dump список dict, готовый для Telethon restore.
         photo_path — путь к скачанному фото (или None), юзербот отправит
         через Telethon send_file с caption=text + formatting_entities.
-        Возвращает количество сохранённых entities (для лога/preview)."""
+        Возвращает количество сохранённых entities (для лога/preview).
+        Автоматически пушит старую версию в scripted_texts_history[key] (last 5)."""
         import time
         async with _lock:
             table = self.state.setdefault("scripted_texts", {})
+            # Push старой версии в history перед overwrite
+            old = table.get(key)
+            if old:
+                hist = self.state.setdefault("scripted_texts_history", {})
+                lst = hist.setdefault(key, [])
+                lst.append({
+                    "text": old.get("text") or "",
+                    "entities": old.get("entities") or [],
+                    "title": old.get("title") or key,
+                    "photo_path": old.get("photo_path") or None,
+                    "updated_at": old.get("updated_at"),
+                    "updated_by": old.get("updated_by") or "",
+                })
+                # Держим последние 5 версий
+                hist[key] = lst[-5:]
             table[key] = {
                 "text": text or "",
                 "entities": entities or [],
@@ -7752,6 +7768,73 @@ class Storage:
         except Exception as e:
             import logging as _lg
             _lg.getLogger("storage").warning("[scripted] backup failed: %s", e)
+
+    async def incr_scripted_stat(self, key: str) -> None:
+        """Инкремент счётчика вызовов scripted-key. Вызывается из _send_scripted."""
+        import time
+        try:
+            async with _lock:
+                stats = self.state.setdefault("scripted_texts_stats", {})
+                s = stats.setdefault(key, {"sent_total": 0, "last_sent_ts": 0, "sent_by_day": {}})
+                s["sent_total"] = int(s.get("sent_total", 0)) + 1
+                s["last_sent_ts"] = int(time.time())
+                # Bucket по дням YYYY-MM-DD
+                day = time.strftime("%Y-%m-%d", time.gmtime())
+                by_day = s.setdefault("sent_by_day", {})
+                by_day[day] = int(by_day.get(day, 0)) + 1
+                # Держим последние 30 дней
+                if len(by_day) > 30:
+                    for old_day in sorted(by_day.keys())[:-30]:
+                        by_day.pop(old_day, None)
+                await self._save_unlocked()
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger("storage").warning("[scripted] incr_stat failed key=%s: %s", key, e)
+
+    def get_scripted_stats(self) -> dict:
+        """Возвращает {key: {sent_total, last_sent_ts, sent_by_day}}."""
+        return dict(self.state.get("scripted_texts_stats") or {})
+
+    def get_scripted_history(self, key: str) -> list:
+        """Возвращает список последних версий ключа [{text, entities, ...}, ...]
+        от старой к новой. Пусто если версий нет."""
+        hist = self.state.get("scripted_texts_history") or {}
+        return list(hist.get(key) or [])
+
+    async def rollback_scripted_text(self, key: str, version_idx: int) -> bool:
+        """Откатывает key к версии из history[version_idx]. version_idx 0-based
+        (0 — самая старая из сохранённых). Возвращает False если версии нет."""
+        import time
+        hist = (self.state.get("scripted_texts_history") or {}).get(key) or []
+        if not hist or version_idx < 0 or version_idx >= len(hist):
+            return False
+        target = hist[version_idx]
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            # Push текущей версии в history перед rollback (чтобы можно было откатить)
+            cur = table.get(key)
+            if cur:
+                lst = self.state.setdefault("scripted_texts_history", {}).setdefault(key, [])
+                lst.append({
+                    "text": cur.get("text") or "",
+                    "entities": cur.get("entities") or [],
+                    "title": cur.get("title") or key,
+                    "photo_path": cur.get("photo_path") or None,
+                    "updated_at": cur.get("updated_at"),
+                    "updated_by": cur.get("updated_by") or "",
+                })
+                self.state["scripted_texts_history"][key] = lst[-5:]
+            table[key] = {
+                "text": target.get("text") or "",
+                "entities": target.get("entities") or [],
+                "title": target.get("title") or key,
+                "updated_at": int(time.time()),
+                "updated_by": (target.get("updated_by") or "") + " (rollback)",
+                "photo_path": target.get("photo_path") or None,
+            }
+            await self._save_unlocked()
+            await self._backup_scripted_texts_unlocked()
+        return True
 
     async def set_scripted_admin(self, chat_id: int, owner_id: int) -> None:
         """Настраивает группу-админку для scripted_texts (см. scripted_admin.py).
