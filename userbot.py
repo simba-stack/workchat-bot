@@ -3076,6 +3076,130 @@ class UserbotService:
                 default_text="Готовы сразу — оформим перевязку в течение 10-30 минут. Дальше счёт в работу в тот же день.",
             )
 
+        # === FLOW: клиент готов → спросить метод ===
+        # #10: "готов / давайте / поехали / вязать / принимай" — Асик задаёт вопрос
+        # про метод оплаты (гарант или USDT). Ставит stage=pending_payment_method
+        # в chat_info чтобы следующий ответ клиента был правильно интерпретирован.
+        if re.search(
+            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы)?|"
+            r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
+            r"давай(?:те)?\s+(?:делать|вязать|начин|нач[её]м|сделаем|оформл|принимай)|"
+            r"хочу\s+сдать|"
+            r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
+            r"оформляй(?:те)?|"
+            r"сделаем\s*[!.?]?\s*$",
+            low,
+        ):
+            try:
+                await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "ask_payment_method_before_perevyaz",
+                default_text="Отлично! Как проведём сделку? Гарант в Continental (@PRIDE_BUHGALTERIA) или USDT?",
+            )
+
+        # #11: Ответ клиента на вопрос про метод — "гарант / континентал / сделк"
+        if re.search(
+            r"^\s*гарант\s*[.!?]?\s*$|"
+            r"^\s*гарант(?:ом|ой)?\s+возьм|"
+            r"через\s+гарант|"
+            r"контин(?:ентал)?|"
+            r"^\s*сделк[аиуой]\b|"
+            r"давайте?\s+гарант|"
+            r"хочу\s+гарант|"
+            r"буд(?:у|ем|ет)\s+гарант",
+            low,
+        ):
+            try:
+                await storage.set_chat_payment_info(
+                    chat_id,
+                    method="GUARANTOR_BEFORE_WORK",
+                    stage="pending_deal_number",
+                )
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "ask_continental_deal_number",
+                default_text="Ок, работаем через гарант. Создайте сделку в @PRIDE_BUHGALTERIA и пришлите её номер сюда.",
+            )
+
+        # #12: Ответ клиента на вопрос про метод — "usdt / трц / без гаранта"
+        if re.search(
+            r"^\s*(?:usdt|усдт|трц|трс|tрц)\s*[.!?]?\s*$|"
+            r"без\s+гарант|"
+            r"^\s*usdt\s+trc|"
+            r"давайте?\s+(?:usdt|трц|без\s+гарант)|"
+            r"хочу\s+(?:usdt|без\s+гарант)|"
+            r"буд(?:у|ем|ет)\s+(?:usdt|без\s+гарант)",
+            low,
+        ) and 'адрес' not in low:  # если пришёл только "USDT" без адреса
+            try:
+                await storage.set_chat_payment_info(
+                    chat_id,
+                    method="USDT_TRC20",
+                    stage="perevyaz_ready",
+                )
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "reply_when_take",
+                default_text="Ок, работаем напрямую USDT. Оформим перевязку в 10-30 минут, адрес спросим после отработки счёта.",
+            )
+
+        # #13: Клиент прислал номер сделки Continental (после ask_continental_deal_number)
+        # Ловим только когда stage=pending_deal_number чтобы не путать с другими цифрами
+        try:
+            _ci = storage.get_chat_info(chat_id) or {}
+            _stage = (_ci.get("payment_stage") or _ci.get("stage") or "").lower()
+        except Exception:
+            _stage = ""
+        if _stage == "pending_deal_number":
+            # Матчим номер: 3-8 цифр, или "сделка #123" / "№123" / "N 123"
+            m_deal = re.search(
+                r"(?:^|\s|#|№|N|N\s*|сделк[аиу]?\s*#?|номер\s*#?)(\d{3,8})\b",
+                text,
+            )
+            if m_deal:
+                deal_number = m_deal.group(1)
+                try:
+                    await storage.set_chat_payment_info(
+                        chat_id,
+                        deal_number=deal_number,
+                        stage="deal_number_received",
+                    )
+                except Exception:
+                    pass
+                # Отправляем клиенту подтверждение
+                await self._send_scripted(
+                    chat_id, "confirm_deal_number_received",
+                    default_text=f"Принял сделку №{deal_number} ✅. Передал в @PRIDE_BUHGALTERIA, ждём подтверждения.",
+                    deal_number=deal_number,
+                )
+                # Форвардим в audit-bot: создаём guarantor_deal
+                try:
+                    import audit_bot_client
+                    async def _push_guarantor():
+                        try:
+                            card = await audit_bot_client.get_latest_lk_card_for_chat(int(chat_id))
+                            if card:
+                                await audit_bot_client.set_payment(
+                                    card_id=int(card.get("id", 0)),
+                                    method="guarantor_before",
+                                    deal_number=deal_number,
+                                    accountant_comment=f"Continental deal #{deal_number}",
+                                )
+                                logger.info(
+                                    "[audit_bot] guarantor deal_number=%s set for card=%s",
+                                    deal_number, card.get("id"),
+                                )
+                        except Exception as _ge:
+                            logger.warning("[audit_bot] push guarantor deal failed: %s", _ge)
+                    asyncio.create_task(_push_guarantor())
+                except Exception:
+                    pass
+                return True
+
         return False
 
     async def _do_ai_reply(self, event, chat_info: dict, idle_sec: int, chat_key: str):
