@@ -36,12 +36,12 @@ PRIDE работает по **трём направлениям**, клиент�
 ## Проверка депозита — гарант Continental
 
 Для проверки депозита используем гарант Continental.
-Линк для проверки: @PRIDE_CL
+Линк для проверки: @PRIDE_BUHGALTERIA
 
 Связано: [[pricing]] [[policy]]
 
 ## Руководство
-Босс компании — @SIMBA_PRIDE_ADM, он же @PRIDE_CL.
+Босс компании — @SIMBA_PRIDE_ADM, он же @PRIDE_BUHGALTERIA.
 
 Связано: [[index]] [[policy]]
 

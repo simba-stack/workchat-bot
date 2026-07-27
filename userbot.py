@@ -4965,7 +4965,7 @@ class UserbotService:
             f"Подскажите — как хотите получить выплату по этому ЛК?\n\n"
             f"💸 USDT TRC20 — пришлите ваш TRC20-адрес, "
             f"переведём сразу после отработки счёта операционистами\n"
-            f"🤝 Гарант в Continental (сделка с @PRIDE_CL)\n"
+            f"🤝 Гарант в Continental (сделка с @PRIDE_BUHGALTERIA)\n"
             f"   • сейчас — мы пополним сделку, дальше работаем со счётом, "
             f"отпускаем после отработки\n"
             f"   • после отработки — пополним и отпустим по факту "
@@ -6965,11 +6965,11 @@ class UserbotService:
                 tail = (
                     f"\n🤝 <b>Метод оплаты:</b> гарант после отработки\n\n"
                     f"<b>📝 Как создать сделку в Continental:</b>\n"
-                    f"1️⃣ Зайдите на Continental → создайте новую сделку с пользователем <b>@PRIDE_CL</b>\n"
+                    f"1️⃣ Зайдите на Continental → создайте новую сделку с пользователем <b>@PRIDE_BUHGALTERIA</b>\n"
                     f"2️⃣ Заполните параметры:\n"
                     f"   • <b>Сумма:</b> {price_usdt} USDT\n"
                     f"   • <b>Назначение:</b> оплата ЛК {bank} · {fio}\n"
-                    f"   • <b>Кто пополняет:</b> @PRIDE_CL (мы)\n"
+                    f"   • <b>Кто пополняет:</b> @PRIDE_BUHGALTERIA (мы)\n"
                     f"   • <b>Получатель:</b> вы\n"
                     f"3️⃣ В описании сделки укажите ссылку на условия:\n"
                     f"   🔗 <a href=\"https://telegra.ph/PRIDE---Usloviya-i-polozheniya-provedeniya-sdelok-po-pokupke-rasschyotnyh-schetov-02-24\">УСЛОВИЯ ПРОВЕДЕНИЯ СДЕЛКИ PRIDE</a>\n"
@@ -7012,7 +7012,7 @@ class UserbotService:
                     f"\n💳 <b>Метод оплаты ещё не зафиксирован.</b>\n\n"
                     f"Подскажите, как удобнее получить оплату:\n"
                     f"• <b>USDT TRC20</b> — пришлите адрес\n"
-                    f"• <b>Гарант</b> — оформим сделку через Continental @PRIDE_CL"
+                    f"• <b>Гарант</b> — оформим сделку через Continental @PRIDE_BUHGALTERIA"
                 )
             msg = head + tail
 
