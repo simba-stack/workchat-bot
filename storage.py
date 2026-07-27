@@ -696,7 +696,7 @@ class Storage:
         """Workers подходящие для добавления в work_chat'ы клиентов.
         Whitelist по роли: owner/manager/accounting/system (любой синоним).
         Operationist/outkup_specialist НЕ попадают.
-        SIMBA_PRIDE_ADM/PRIDE_CL добавляются всегда (owner-аккаунты)."""
+        SIMBA_PRIDE_ADM/PRIDE_BUHGALTERIA добавляются всегда (owner-аккаунты)."""
         all_workers = self.state.get("workers") or []
         roles = self.state.get("worker_roles") or {}
         out = []

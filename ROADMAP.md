@@ -451,7 +451,7 @@ Telegram-экосистема для бизнеса **PRIDE** (поставки 
 
 - **Репо:** github.com/simba-stack/workchat-bot
 - **Деплой:** Railway (native auto-deploy на push to `main`)
-- **Владелец / разработчик:** SIMBA (@SIMBA_PRIDE_ADM = @PRIDE_CL)
+- **Владелец / разработчик:** SIMBA (@SIMBA_PRIDE_ADM = @PRIDE_BUHGALTERIA)
 - **Последний тег:** `v2.0.2` (16 мая) — основной поток. Запланирован `v2.0.3` для Electron desktop (popout звонки)
 
 ---
