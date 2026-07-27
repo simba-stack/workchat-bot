@@ -738,17 +738,46 @@ class UserbotService:
                 logger.warning("[scripted] empty text for key=%s chat=%s", key, chat_id)
                 return False
             entities_raw = data.get("entities") or []
-            if entities_raw:
+            photo_path = data.get("photo_path") or None
+            # Если файл фото пропал (volume не примонтирован / удалили) —
+            # трактуем как "фото нет" и отправляем только текст.
+            if photo_path:
+                import os as _os
+                if not _os.path.isfile(photo_path):
+                    logger.warning("[scripted] photo file missing for %s: %s — text-only fallback", key, photo_path)
+                    photo_path = None
+
+            ents = _entities_to_telethon(entities_raw) if entities_raw else None
+
+            if photo_path:
+                # Фото с caption. formatting_entities применяются к caption'y.
                 try:
-                    ents = _entities_to_telethon(entities_raw)
-                    await self.client.send_message(chat_id, text, formatting_entities=ents)
-                except Exception as _ee:
-                    logger.warning("[scripted] entities restore failed for %s: %s — plain fallback", key, _ee)
-                    await self.client.send_message(chat_id, text)
+                    await self.client.send_file(
+                        chat_id, photo_path,
+                        caption=text,
+                        formatting_entities=ents,
+                    )
+                except Exception as _pe:
+                    logger.warning("[scripted] send_file failed for %s: %s — text fallback", key, _pe)
+                    if ents:
+                        try:
+                            await self.client.send_message(chat_id, text, formatting_entities=ents)
+                        except Exception:
+                            await self.client.send_message(chat_id, text)
+                    else:
+                        await self.client.send_message(chat_id, text)
             else:
-                await self.client.send_message(chat_id, text)
-            logger.info("[scripted] sent key=%s chat=%s entities=%d len=%d",
-                        key, chat_id, len(entities_raw), len(text))
+                # Только текст (старое поведение).
+                if ents:
+                    try:
+                        await self.client.send_message(chat_id, text, formatting_entities=ents)
+                    except Exception as _ee:
+                        logger.warning("[scripted] entities restore failed for %s: %s — plain fallback", key, _ee)
+                        await self.client.send_message(chat_id, text)
+                else:
+                    await self.client.send_message(chat_id, text)
+            logger.info("[scripted] sent key=%s chat=%s entities=%d len=%d photo=%s",
+                        key, chat_id, len(entities_raw), len(text), bool(photo_path))
             return True
         except Exception as e:
             logger.warning("[scripted] send failed key=%s chat=%s: %s", key, chat_id, e)
