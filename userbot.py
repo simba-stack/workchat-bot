@@ -1506,19 +1506,45 @@ class UserbotService:
             if not info or info.get("welcome_sent"):
                 return False
 
-            # Welcome v2: новый текст с выбором направления (ИП/VoIP/Дебет).
-            # storage.get_welcome_v2() — редактируемый текст; entities/премиум-эмодзи
-            # пока через старые get_welcome_entities() — SIMBA позже привяжет.
-            welcome = storage.get_welcome_v2()
-            entities_raw = storage.get_welcome_entities()
+            # Welcome: приоритетно берём из scripted_texts['welcome'] (редактируется
+            # через группу-админку юзербота, поддерживает premium emoji и фото 1:1).
+            # Fallback — старая get_welcome_v2()/get_welcome_entities() (без фото).
+            scripted = storage.get_scripted_text("welcome") or {}
+            scripted_text = (scripted.get("text") or "").strip()
+            if scripted_text:
+                welcome = scripted.get("text") or ""
+                entities_raw = scripted.get("entities") or []
+                photo_path = scripted.get("photo_path") or None
+                source_kind = "scripted"
+            else:
+                welcome = storage.get_welcome_v2()
+                entities_raw = storage.get_welcome_entities()
+                photo_path = None
+                source_kind = "legacy"
             try:
-                if entities_raw:
-                    ents = _entities_to_telethon(entities_raw)
-                    await self.client.send_message(chat_id, welcome, formatting_entities=ents)
-                else:
-                    for chunk in _split_text(welcome, 3900):
-                        await self.client.send_message(chat_id, chunk)
-                        await asyncio.sleep(0.3)
+                ents = _entities_to_telethon(entities_raw) if entities_raw else None
+                # Если есть фото — send_file с caption; иначе — обычные send_message
+                if photo_path:
+                    import os as _os
+                    if not _os.path.isfile(photo_path):
+                        logger.warning("Welcome scripted photo missing: %s — text-only", photo_path)
+                        photo_path = None
+                if photo_path:
+                    try:
+                        await self.client.send_file(
+                            chat_id, photo_path,
+                            caption=welcome, formatting_entities=ents,
+                        )
+                    except Exception as _pe:
+                        logger.warning("Welcome send_file failed: %s — text fallback", _pe)
+                        photo_path = None
+                if not photo_path:
+                    if ents:
+                        await self.client.send_message(chat_id, welcome, formatting_entities=ents)
+                    else:
+                        for chunk in _split_text(welcome, 3900):
+                            await self.client.send_message(chat_id, chunk)
+                            await asyncio.sleep(0.3)
                 await storage.mark_welcome_sent(chat_id)
                 # Помечаем что ждём выбора направления — router в _on_new_message
                 # перехватит первое сообщение и определит track.
@@ -1565,8 +1591,8 @@ class UserbotService:
                 except Exception as e:
                     logger.warning("mark_awaiting_track_choice failed: %s", e)
                 logger.info(
-                    "Welcome sent (source=%s, entities=%d, len=%d) to chat=%s for client=%s",
-                    source, len(entities_raw), len(welcome), chat_id, expected_client_id,
+                    "Welcome sent (source=%s, kind=%s, entities=%d, len=%d, photo=%s) to chat=%s for client=%s",
+                    source, source_kind, len(entities_raw), len(welcome), bool(photo_path), chat_id, expected_client_id,
                 )
                 return True
             except FloodWaitError as e:
