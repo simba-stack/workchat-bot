@@ -7454,6 +7454,51 @@ class UserbotService:
             "card_id": card_id, "bank": bank, "fio": fio,
             "method": method, "source": "perevyaz",
         }, character="lk", severity="success")
+
+        # Этап 3: параллельно создаём карточку в audit-bot (stroy-crm-bot),
+        # чтобы бухгалтерия увидела её сразу без ручного /addlk. work_chat_id
+        # даст audit-bot возможность слать webhook обратно в JARVIS при
+        # смене статуса → клиент получит уведомление через _send_scripted.
+        try:
+            import audit_bot_client
+            _method_map = {
+                "USDT_TRC20": "trc",
+                "GUARANTOR_BEFORE_WORK": "guarantor_before",
+                "GUARANTOR_AFTER_WORK": "guarantor_after",
+            }
+            _ab_method = _method_map.get(method, "")
+
+            async def _push_audit_bot():
+                _card = await audit_bot_client.create_lk_card(
+                    work_chat_id=int(wc),
+                    supplier=f"@{client_uname}" if client_uname else "",
+                    material=f"{fio} — {bank}".strip(" —") if (fio or bank) else "",
+                    responsible="СУС (перевяз)",
+                    date_supply=time.strftime("%d.%m.%Y"),
+                    bank=bank or "",
+                    fio=fio or "",
+                    client_id=int(chat_info.get("client_id") or 0) or None,
+                    client_username=client_uname or "",
+                    source="jarvis-perevyaz",
+                    autopost=True,
+                )
+                if _card and _ab_method:
+                    try:
+                        await audit_bot_client.set_payment(
+                            card_id=int(_card.get("id", 0)),
+                            method=_ab_method,
+                            usdt_address=usdt_addr or "",
+                        )
+                    except Exception as _pe:
+                        logger.warning("[audit_bot] set_payment после create failed: %s", _pe)
+                if _card:
+                    logger.info("[audit_bot] card created id=%s local_card=%s bank=%s",
+                                _card.get("id"), card_id, bank)
+
+            asyncio.create_task(_push_audit_bot())
+        except Exception as _ae:
+            logger.warning("[audit_bot] perevyaz push task failed: %s", _ae)
+
         return card_id
 
     async def _request_lk_data_from_client(
