@@ -7576,7 +7576,7 @@ class Storage:
         }
 
     def list_scripted_texts(self) -> list:
-        """Возвращает список [{key, title, is_custom, updated_at, updated_by}].
+        """Возвращает список [{key, title, is_custom, has_photo, updated_at, updated_by}].
         Объединяет дефолты (SCRIPTED_TEXTS_DEFAULTS) и кастомные из state."""
         defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
         custom = self.state.get("scripted_texts") or {}
@@ -7584,14 +7584,16 @@ class Storage:
         # Сначала дефолтные ключи в порядке SCRIPTED_TEXTS_DEFAULTS
         for key, d in defaults.items():
             cst = custom.get(key)
+            merged = cst or d
             result.append({
                 "key": key,
-                "title": (cst or d).get("title") or d.get("title") or key,
+                "title": merged.get("title") or d.get("title") or key,
                 "is_custom": bool(cst),
+                "has_photo": bool((cst or {}).get("photo_path")),
                 "updated_at": (cst or {}).get("updated_at"),
                 "updated_by": (cst or {}).get("updated_by"),
-                "text_preview": ((cst or d).get("text") or "")[:60],
-                "entities_count": len((cst or d).get("entities") or []),
+                "text_preview": (merged.get("text") or "")[:60],
+                "entities_count": len(merged.get("entities") or []),
             })
         # Кастомные ключи которых нет в дефолтах (пользовательские шаблоны)
         for key, d in custom.items():
@@ -7601,6 +7603,7 @@ class Storage:
                 "key": key,
                 "title": d.get("title") or key,
                 "is_custom": True,
+                "has_photo": bool(d.get("photo_path")),
                 "updated_at": d.get("updated_at"),
                 "updated_by": d.get("updated_by"),
                 "text_preview": (d.get("text") or "")[:60],
@@ -7628,6 +7631,7 @@ class Storage:
                 "photo_path": photo_path or None,
             }
             await self._save_unlocked()
+            await self._backup_scripted_texts_unlocked()
         return len(entities or [])
 
     async def reset_scripted_text(self, key: str) -> bool:
@@ -7638,7 +7642,116 @@ class Storage:
             table.pop(key, None)
             if existed:
                 await self._save_unlocked()
+                await self._backup_scripted_texts_unlocked()
         return existed
+
+    async def add_scripted_text(self, key: str, title: str, updated_by: str = "") -> bool:
+        """Создаёт новый пустой ключ. Возвращает False если ключ уже есть
+        (в custom или в defaults). После /add SIMBA пришлёт контент через /edit."""
+        import time
+        defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            if key in table or key in defaults:
+                return False
+            table[key] = {
+                "text": "",
+                "entities": [],
+                "title": title or key,
+                "updated_at": int(time.time()),
+                "updated_by": (updated_by or "").lstrip("@"),
+                "photo_path": None,
+            }
+            await self._save_unlocked()
+            await self._backup_scripted_texts_unlocked()
+        return True
+
+    async def delete_scripted_text(self, key: str) -> bool:
+        """Полностью удаляет кастомный ключ. Для дефолтных ключей возвращает False
+        (нужно /reset, чтобы вернуться к дефолту, а не удалять)."""
+        defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
+        if key in defaults:
+            return False
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            existed = key in table
+            table.pop(key, None)
+            if existed:
+                await self._save_unlocked()
+                await self._backup_scripted_texts_unlocked()
+        return existed
+
+    async def rename_scripted_text(self, old_key: str, new_key: str) -> str:
+        """Переименовывает кастомный ключ. Возвращает 'ok' / 'not_found' /
+        'default_forbidden' / 'target_exists'."""
+        defaults = getattr(config, "SCRIPTED_TEXTS_DEFAULTS", {}) or {}
+        if old_key in defaults:
+            return "default_forbidden"
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            if old_key not in table:
+                return "not_found"
+            if new_key in table or new_key in defaults:
+                return "target_exists"
+            table[new_key] = table.pop(old_key)
+            await self._save_unlocked()
+            await self._backup_scripted_texts_unlocked()
+        return "ok"
+
+    def export_scripted_texts(self) -> dict:
+        """Возвращает полный dump scripted_texts как dict (для /export JSON)."""
+        return {
+            "scripted_texts": dict(self.state.get("scripted_texts") or {}),
+            "exported_at": int(__import__("time").time()),
+            "version": 1,
+        }
+
+    async def import_scripted_texts(self, data: dict, updated_by: str = "") -> int:
+        """Импортирует scripted_texts из dict (см. export_scripted_texts).
+        Overwrite поведение — существующие ключи заменяются. Возвращает count."""
+        import time
+        if not isinstance(data, dict):
+            return 0
+        payload = data.get("scripted_texts") if "scripted_texts" in data else data
+        if not isinstance(payload, dict):
+            return 0
+        count = 0
+        async with _lock:
+            table = self.state.setdefault("scripted_texts", {})
+            for k, v in payload.items():
+                if not isinstance(v, dict):
+                    continue
+                table[k] = {
+                    "text": v.get("text") or "",
+                    "entities": v.get("entities") or [],
+                    "title": v.get("title") or k,
+                    "updated_at": int(v.get("updated_at") or time.time()),
+                    "updated_by": (v.get("updated_by") or updated_by or "").lstrip("@"),
+                    "photo_path": v.get("photo_path") or None,
+                }
+                count += 1
+            if count:
+                await self._save_unlocked()
+                await self._backup_scripted_texts_unlocked()
+        return count
+
+    async def _backup_scripted_texts_unlocked(self):
+        """Пишет копию scripted_texts в /app/data/scripted_texts_backup.json.
+        Вызывается под _lock. Ошибки не бросает — только логирует."""
+        try:
+            import os, json, time
+            base_dir = os.path.dirname(os.path.abspath(config.STORAGE_PATH or "/app/data/state.json"))
+            backup_path = os.path.join(base_dir, "scripted_texts_backup.json")
+            payload = {
+                "scripted_texts": dict(self.state.get("scripted_texts") or {}),
+                "backup_at": int(time.time()),
+                "version": 1,
+            }
+            with open(backup_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger("storage").warning("[scripted] backup failed: %s", e)
 
     async def set_scripted_admin(self, chat_id: int, owner_id: int) -> None:
         """Настраивает группу-админку для scripted_texts (см. scripted_admin.py).

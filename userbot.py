@@ -727,7 +727,7 @@ class UserbotService:
             except Exception as e:
                 logger.exception("AI message handler error: %s", e)
 
-    async def _send_scripted(self, chat_id, key: str, default_text: str = "") -> bool:
+    async def _send_scripted(self, chat_id, key: str, default_text: str = "", **vars) -> bool:
         """Отправляет заскриптованный текст (welcome/reply_ip/reply_debet/...) с
         сохранёнными в storage entities. Экономит Claude API — 0 вызовов.
 
@@ -736,7 +736,14 @@ class UserbotService:
         2) Если админ переопределил через /admin — используем его текст+entities
         3) Иначе — берём дефолт из config.SCRIPTED_TEXTS_DEFAULTS
         4) Если и там нет — используем default_text (fallback внутри кода)
-        5) Отправляем через Telethon с formatting_entities (premium emoji 1:1)
+        5) Подставляем placeholder'ы {bank} {fio} и т.д. из **vars
+        6) Отправляем через Telethon с formatting_entities (premium emoji 1:1)
+
+        Placeholder'ы (передаются как kwargs): bank, fio, deal_id, price_usdt,
+        usdt_address, client_tag, client_username. Подстановка простая: text.replace(
+        "{name}", str(value)). Entities offsets НЕ пересчитываются — если admin
+        меняет длину текста через placeholder, premium emoji может сдвинуться.
+        Поэтому placeholder'ы должны быть в конце строк или в местах без entities.
 
         Возвращает True если отправлено успешно."""
         try:
@@ -745,6 +752,10 @@ class UserbotService:
             if not text:
                 logger.warning("[scripted] empty text for key=%s chat=%s", key, chat_id)
                 return False
+            # Placeholder-подстановка (безопасно: если vars пусты — no-op)
+            if vars:
+                for _k, _v in vars.items():
+                    text = text.replace("{" + _k + "}", str(_v if _v is not None else ""))
             entities_raw = data.get("entities") or []
             photo_path = data.get("photo_path") or None
             # Если файл фото пропал (volume не примонтирован / удалили) —
