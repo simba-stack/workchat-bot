@@ -4399,7 +4399,13 @@ async def _dashboard_command_worker_crm(bot):
                 # ЦРМ v2 Волна E: если хочется программно открыть визард
                 # (например по /продать команде или из другой логики).
                 m_sw = _re.match(r"^__start_sell_wizard\s+chat=(-?\d+)\s*$", text, _re.I)
-                if not (m_adv or m_rst or m_rt or m_pwd or m_lk or m_btn or m_sw):
+                # SIMBA: авто-«+партнер @клиент» сразу при создании чата.
+                # __auto_register_partner chat=<id> user=<id> username=<name>
+                m_ap = _re.match(
+                    r"^__auto_register_partner\s+chat=(-?\d+)\s+user=(\d+)\s+username=(\S*)\s*$",
+                    text, _re.I,
+                )
+                if not (m_adv or m_rst or m_rt or m_pwd or m_lk or m_btn or m_sw or m_ap):
                     continue
                 try:
                     if m_adv:
@@ -4441,6 +4447,44 @@ async def _dashboard_command_worker_crm(bot):
                         except Exception as _we:
                             logger.exception("start_sell_wizard failed: %s", _we)
                             result = f"⚠️ start_sell_wizard: {_we}"
+                    elif m_ap:
+                        # SIMBA: авто-«+партнер @клиент» на старте чата.
+                        # Регистрируем client_id как crm_owner + привязываем
+                        # чат к нему в crm_chats (эквивалент cmd_add_partner).
+                        try:
+                            _chat = int(m_ap.group(1))
+                            _uid = int(m_ap.group(2))
+                            _uname = (m_ap.group(3) or "").lstrip("@").strip()
+                            # 1) ищем существующий owner
+                            _owner = crm_storage.find_crm_owner_by_tg(_uid)
+                            if _owner:
+                                if int(_owner.get("work_chat_id") or 0) != _chat:
+                                    await crm_storage.update_crm_owner(
+                                        _owner["owner_id"], work_chat_id=_chat,
+                                        username=(_uname or _owner.get("username") or ""),
+                                    )
+                                _oid = _owner["owner_id"]
+                                result = f"✅ auto-partner re-bind owner={_oid} chat={_chat}"
+                            else:
+                                _oid = await crm_storage.add_crm_owner(
+                                    tg_user_id=_uid,
+                                    username=_uname or "",
+                                    name=_uname or f"client_{_uid}",
+                                    work_chat_id=_chat,
+                                )
+                                result = f"✅ auto-partner created owner={_oid} tg={_uid} @{_uname}"
+                            # 2) register_crm_chat (иначе /clients в чате не сработает)
+                            try:
+                                await crm_storage.register_crm_chat(
+                                    chat_id=_chat, owner_id=_oid,
+                                    is_admin=False, is_password=False, is_otr=False,
+                                )
+                            except Exception as _rce:
+                                logger.warning("[crm-v2 auto-partner] register_crm_chat failed: %s", _rce)
+                            logger.info("[crm-v2 auto-partner] %s", result)
+                        except Exception as _ape:
+                            logger.exception("auto_register_partner failed: %s", _ape)
+                            result = f"⚠️ auto_register_partner: {_ape}"
                     else:
                         # Перерисуем PASSWORD сообщение в TG-группе ПАРОЛИ
                         droplk_id = m_pwd.group(1)

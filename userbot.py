@@ -1720,6 +1720,32 @@ class UserbotService:
                             await self.client.send_message(chat_id, chunk)
                             await asyncio.sleep(0.3)
                 await storage.mark_welcome_sent(chat_id)
+                # SIMBA: сразу «+партнер @<клиент>» через dashboard-команду.
+                # CRM-воркер создаст crm_owner + register_crm_chat, чтобы клиент
+                # был partner-owner с самого старта — не ждать LK-form.
+                try:
+                    _uname = ""
+                    try:
+                        _ent = await self.client.get_entity(int(expected_client_id))
+                        _uname = (getattr(_ent, "username", "") or "").strip()
+                        if _uname:
+                            try:
+                                await storage.update_client_username(chat_id, _uname)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    await storage.enqueue_dashboard_command(
+                        f"__auto_register_partner chat={int(chat_id)} "
+                        f"user={int(expected_client_id)} username={_uname}",
+                        source="asik_welcome_autopartner",
+                    )
+                    logger.info(
+                        "[crm-v2 auto-partner] queued for chat=%s user=%s @%s",
+                        chat_id, expected_client_id, _uname,
+                    )
+                except Exception as _ape:
+                    logger.warning("[crm-v2 auto-partner] enqueue failed: %s", _ape)
                 # Помечаем что ждём выбора направления — router в _on_new_message
                 # перехватит первое сообщение и определит track.
                 # НО: если клиент УЖЕ написал коммерческое сообщение ДО welcome
