@@ -1909,20 +1909,10 @@ class UserbotService:
 
         from storage import _norm_chat_id
 
-        # КРИТИЧНО: slash-команды (/clients, /start, /crm_register_chat и т.д.) —
-        # это команды для bot'ов (crm_bot, main bot, invite_bot). AI userbot НЕ
-        # должен на них реагировать ни welcome'ом, ни (silence), ни AI-ответом.
-        # Если бот, который должен обработать команду, не в чате — пользователь
-        # увидит «команда не работает», но это лучше чем спам welcome'ом от AI.
         try:
             raw_text = (getattr(event, "raw_text", "") or getattr(event, "text", "") or "").strip()
         except Exception:
             raw_text = ""
-        if raw_text.startswith("/"):
-            logger.info(
-                "AI: chat=%s — skip slash command (%.40s)", chat_id, raw_text,
-            )
-            return
 
         try:
             sender_id_dbg = event.sender_id
@@ -1934,8 +1924,22 @@ class UserbotService:
             (_norm_chat_id(bid) if bid else "—"), sender_id_dbg,
         )
 
+        # 🔴 BRAIN-CHAT ROUTING — ДО slash-guard.
+        # Иначе `/broadcast_workflow` / `/promote_admins` / `/learn` / `/edit` (в брейне)
+        # дропались slash-guard'ом и не доходили до _handle_brain_chat_writeback.
         if bid and _norm_chat_id(chat_id) == _norm_chat_id(bid):
             await self._handle_brain_chat_writeback(event)
+            return
+
+        # КРИТИЧНО: slash-команды (/clients, /start, /crm_register_chat и т.д.) —
+        # это команды для bot'ов (crm_bot, main bot, invite_bot). AI userbot НЕ
+        # должен на них реагировать ни welcome'ом, ни (silence), ни AI-ответом.
+        # Если бот, который должен обработать команду, не в чате — пользователь
+        # увидит «команда не работает», но это лучше чем спам welcome'ом от AI.
+        if raw_text.startswith("/"):
+            logger.info(
+                "AI: chat=%s — skip slash command (%.40s)", chat_id, raw_text,
+            )
             return
 
         # === ОТКУПЫ — обмен RUB → USDT ===
