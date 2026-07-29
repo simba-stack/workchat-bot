@@ -4340,7 +4340,13 @@ async def _dashboard_command_worker_crm(bot):
                 # ЦРМ v2: open_lk_form от Асика (sell_wizard finalized).
                 # Формат: __open_lk_form|chat=..|client=..|username=..|bank=..|price=..|method=..|deal=..
                 m_lk = _re.match(r"^__open_lk_form\|(.+)$", text, _re.I)
-                if not (m_adv or m_rst or m_rt or m_pwd or m_lk):
+                # ЦРМ v2 Волна E: Асик после reply_ip просит нас показать
+                # клиенту в managed_chat inline-кнопку «🛒 Начать оформление».
+                m_btn = _re.match(r"^__send_sell_button\s+chat=(-?\d+)\s*$", text, _re.I)
+                # ЦРМ v2 Волна E: если хочется программно открыть визард
+                # (например по /продать команде или из другой логики).
+                m_sw = _re.match(r"^__start_sell_wizard\s+chat=(-?\d+)\s*$", text, _re.I)
+                if not (m_adv or m_rst or m_rt or m_pwd or m_lk or m_btn or m_sw):
                     continue
                 try:
                     if m_adv:
@@ -4364,6 +4370,24 @@ async def _dashboard_command_worker_crm(bot):
                         except Exception as _oe:
                             logger.exception("open_lk_form failed: %s", _oe)
                             result = f"⚠️ open_lk_form: {_oe}"
+                    elif m_btn:
+                        # ЦРМ v2 Волна E: показать клиенту кнопку старта визарда
+                        try:
+                            import sell_wizard_crm as _swc
+                            await _swc.send_start_button(bot, int(m_btn.group(1)))
+                            result = f"✅ start-button sent chat={m_btn.group(1)}"
+                        except Exception as _be:
+                            logger.exception("send_sell_button failed: %s", _be)
+                            result = f"⚠️ send_sell_button: {_be}"
+                    elif m_sw:
+                        # ЦРМ v2 Волна E: программный старт визарда
+                        try:
+                            import sell_wizard_crm as _swc
+                            await _swc.start_wizard(bot, int(m_sw.group(1)))
+                            result = f"✅ wizard started chat={m_sw.group(1)}"
+                        except Exception as _we:
+                            logger.exception("start_sell_wizard failed: %s", _we)
+                            result = f"⚠️ start_sell_wizard: {_we}"
                     else:
                         # Перерисуем PASSWORD сообщение в TG-группе ПАРОЛИ
                         droplk_id = m_pwd.group(1)
@@ -6137,6 +6161,14 @@ async def run_crm_bot():
         logger.info("[crm-v2] admin router /crm_admin registered")
     except Exception as _ae:
         logger.warning("[crm-v2] admin router register failed: %s", _ae)
+    # ЦРМ v2 Волна E · sell_wizard на aiogram (inline-кнопки работают)
+    try:
+        import sell_wizard_crm
+        sell_wizard_crm.set_dependencies(crm_storage)
+        dp.include_router(sell_wizard_crm.router)
+        logger.info("[crm-v2] sell_wizard_crm router (sw:*) registered")
+    except Exception as _we:
+        logger.warning("[crm-v2] sell_wizard_crm register failed: %s", _we)
 
     # ─── Middleware: игнор сообщений от юзербот-аккаунта (AI ассистент) ───
     # Юзербот работает в том же процессе через Telethon. Когда CRM-бот ставит

@@ -1034,19 +1034,19 @@ class UserbotService:
                     chat_id, "reply_ip",
                     default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
                 )
-                # ЦРМ v2: призыв «когда готов — напиши ПРОДАТЬ».
-                # Inline-кнопки от юзербота Telethon не рендерятся (нужны
-                # только для bot-аккаунтов). Полноценная миграция визарда
-                # на @PrideCONTROLE_bot (aiogram) — в Волне E.
-                # Сейчас: текст-приглашение, ловим намерение через regex #10.
+                # ЦРМ v2 Волна E: просим @PrideCONTROLE_bot (aiogram)
+                # показать клиенту inline-кнопку «🛒 Начать оформление».
+                # Юзербот Telethon не может слать inline callback buttons —
+                # только bot-аккаунт. Через dashboard-command воркер CRM-бота
+                # подхватывает и рендерит кнопку в managed_chat.
                 try:
-                    _sd = storage.get_scripted_text("sell_start_button") or {}
-                    prompt = (_sd.get("text") or
-                              "🛒 Когда будете готовы оформить продажу ЛК — напишите «ПРОДАТЬ» "
-                              "в этот чат, и мы проведём вас по шагам.")
-                    await self.client.send_message(chat_id, prompt, parse_mode="html")
+                    await storage.enqueue_dashboard_command(
+                        f"__send_sell_button chat={int(chat_id)}",
+                        source="asik_reply_ip",
+                    )
+                    logger.info("[sell_wizard_crm] queued send_sell_button chat=%s", chat_id)
                 except Exception as _se:
-                    logger.warning("[sell_wizard v2] start-prompt send failed: %s", _se)
+                    logger.warning("[sell_wizard_crm] enqueue send_sell_button failed: %s", _se)
             elif "debet" in tracks:
                 await self._send_scripted(
                     chat_id, "reply_debet",
@@ -3213,19 +3213,20 @@ class UserbotService:
             r"сделаем\s*[!.?]?\s*$",
             low, re.IGNORECASE,
         ):
-            # Волна E TODO: sell_wizard.start_wizard() пока не вызываем —
-            # Telethon юзербот не рендерит inline callback buttons (это
-            # только у bot-аккаунтов). Полная миграция визарда на
-            # @PrideCONTROLE_bot (aiogram) — в отдельном PR. Сейчас
-            # оставляем старый scripted-flow (Гарант/USDT через regex).
+            # ЦРМ v2 Волна E: клиент готов → просим CRM-бота открыть
+            # aiogram-визард в managed_chat. Асик просто enqueue команду,
+            # CRM-воркер подхватит и покажет inline-меню (материал → банк →
+            # проверка → оплата). Без ответа Асика — вся диалоговая логика
+            # переходит в кнопки CRM.
             try:
-                await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
-            except Exception:
-                pass
-            return await self._send_scripted(
-                chat_id, "ask_payment_method_before_perevyaz",
-                default_text="Отлично! Как проведём сделку? Гарант в Continental (@PRIDE_BUHGALTERIA) или USDT?",
-            )
+                await storage.enqueue_dashboard_command(
+                    f"__start_sell_wizard chat={int(chat_id)}",
+                    source="asik_ready_regex",
+                )
+                logger.info("[sell_wizard_crm] queued start_wizard chat=%s", chat_id)
+            except Exception as _we:
+                logger.warning("[sell_wizard_crm] enqueue start_wizard failed: %s", _we)
+            return True
 
         # #11: Ответ клиента на вопрос про метод — "гарант / континентал / сделк"
         if re.search(
