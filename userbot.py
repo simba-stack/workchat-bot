@@ -2231,6 +2231,40 @@ class UserbotService:
             return
 
         if not storage.is_ai_enabled():
+            # ЦРМ v2 Волна E: даже при AI-off клиент должен мочь запустить
+            # sell_wizard через ключевые слова «готов вязать / я готов / го /
+            # продать» — визард ведёт CRM-бот (0 AI-токенов).
+            try:
+                _msg_text = ((event.message and (event.message.text or event.message.message)) or "")
+                _low = _msg_text.lower().strip()
+                if _low and re.search(
+                    r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы|а)?|"
+                    r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
+                    r"(?:^|\s)(?:я\s+)?готов(?:ы|а)?\s+(?:вязать|связать|сдать|"
+                    r"сдавать|продать|продавать|оформ\w*|начин\w*|нач[её]м|"
+                    r"делать|работать)|"
+                    r"(?:^|\s)(?:я|мы)\s+готов(?:ы|а)?\s*[!.?]*\s*$|"
+                    r"(?:^|\s)(?:давай(?:те)?|го|поехали|погнали)\s+(?:делать|"
+                    r"вязать|начин\w*|нач[её]м|сделаем|оформл\w*|принимай|"
+                    r"работать|продавать|продать)|"
+                    r"хочу\s+(?:сдать|продать|оформ\w*)|продать\s+лк|"
+                    r"^\s*продать\s*[!.?]?\s*$",
+                    _low, re.IGNORECASE,
+                ):
+                    try:
+                        await storage.enqueue_dashboard_command(
+                            f"__start_sell_wizard chat={int(chat_id)}",
+                            source="asik_aioff_regex",
+                        )
+                        logger.info(
+                            "[sell_wizard_crm] AI-off trigger → queued start_wizard chat=%s",
+                            chat_id,
+                        )
+                    except Exception as _wq:
+                        logger.warning("[sell_wizard_crm] AI-off enqueue failed: %s", _wq)
+                    return
+            except Exception as _we:
+                logger.warning("[sell_wizard_crm] AI-off trigger check failed: %s", _we)
             logger.info("AI: chat=%s — SKIP: ai_enabled=False (включи в JARVIS Settings → AI)", chat_id)
             return
         if not config.ANTHROPIC_API_KEY:
