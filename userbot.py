@@ -3139,6 +3139,40 @@ class UserbotService:
             return False
         low = text.lower().strip()
 
+        # 🔴🔴🔴 SIMBA HARD RULE: любой контакт с одним из 3 банков ИЛИ
+        # намерением работать/сдать/завязать/оформить → sell_wizard через
+        # CRM. AI-текстовые ответы про банки/сроки/гарант — ЗАПРЕЩЕНЫ.
+        # Только визард или ссылка на условия.
+        _BANK_MENTION = re.compile(
+            r"\b(?:альф\w*|озон\w*|райф\w*|райффайз\w*)\b",
+            re.IGNORECASE,
+        )
+        _WORK_INTENT = re.compile(
+            r"завяж\w*|заберём|беру\b|беру[тщ]\w*|сдам\b|сдаю\b|сда[её]м\b|"
+            r"сда(?:ва|ю)ть|сдавать|оформ\w*|прин[иеё]м\w*|прин(?:ять|имать)|"
+            r"продам\b|продаю\b|прода[её]м\b|продавать|"
+            r"завязать\b|начн[её]м|начин\w*|отдам\b|отдаю\b|отда[её]м\b|"
+            r"давай(?:те)?\s+начн|давай(?:те)?\s+делать|давай(?:те)?\s+вязать|"
+            r"давай(?:те)?\s+оформ|"
+            r"через\s+гарант|с\s+гарантом|идём\s+в\s+гарант|"
+            r"работать\s+через\s+гарант",
+            re.IGNORECASE,
+        )
+        if _BANK_MENTION.search(low) or _WORK_INTENT.search(low):
+            try:
+                await storage.enqueue_dashboard_command(
+                    f"__start_sell_wizard chat={int(chat_id)}",
+                    source="asik_bank_or_intent",
+                )
+                logger.info(
+                    "[sell_wizard_crm] HARD-trigger → start_wizard chat=%s text=%r",
+                    chat_id, low[:80],
+                )
+            except Exception as _e:
+                logger.warning("[sell_wizard_crm] hard-trigger enqueue failed: %s", _e)
+            # ВАЖНО: return True → AI-ответ НЕ будет сгенерирован (нет дублей)
+            return True
+
         # #1: Прайс — «сколько стоит?», «прайс?», «какие цены?» БЕЗ банка/деталей
         _bank_re = re.compile(
             r"уралсиб|сбер|тинькоф|альфа|\bвтб\b|почта\s*банк|"
