@@ -552,21 +552,21 @@ async def _trigger_crm_lk_form(userbot, storage, chat_id):
     client_id = chat_info.get("client_id") or 0
     client_uname = chat_info.get("client_username") or ""
 
-    # Инжект команды в dashboard_commands (CRM-воркер её подхватит)
+    # Инжект команды в dashboard_commands (CRM-воркер её подхватит по regex).
+    # Формат: __open_lk_form|chat=<id>|client=<id>|bank=<TITLE>|price=<N>|method=<M>|deal=<num>
     try:
-        if hasattr(storage, "add_dashboard_command"):
-            await storage.add_dashboard_command({
-                "type": "open_lk_form",
-                "chat_id": int(chat_id),
-                "client_id": int(client_id or 0),
-                "client_username": client_uname,
-                "forced_bank": bank_title,
-                "price": float(flow.get("price") or 0),
-                "method": method,
-                "deal_number": flow.get("deal_number") or "",
-            })
-            logger.info("[sell_wizard v2] LK-form triggered for chat=%s bank=%s",
-                        chat_id, bank_title)
+        cmd = (
+            f"__open_lk_form|chat={int(chat_id)}"
+            f"|client={int(client_id or 0)}"
+            f"|username={client_uname or ''}"
+            f"|bank={bank_title}"
+            f"|price={float(flow.get('price') or 0)}"
+            f"|method={method}"
+            f"|deal={flow.get('deal_number') or ''}"
+        )
+        await storage.enqueue_dashboard_command(cmd, source="sell_wizard")
+        logger.info("[sell_wizard v2] LK-form triggered for chat=%s bank=%s",
+                    chat_id, bank_title)
     except Exception as e:
         logger.warning("[sell_wizard v2] LK-form trigger failed: %s", e)
 

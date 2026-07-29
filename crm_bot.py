@@ -4057,6 +4057,135 @@ async def cb_smsreset(call: CallbackQuery):
     await call.answer("🔄 Flow сброшен")
 
 
+# ─────────────────────────────────────────────────────────────────
+# ЦРМ v2 · open_lk_form handoff от Асика (sell_wizard finalized)
+# ─────────────────────────────────────────────────────────────────
+
+def _find_owner_for_work_chat(chat_id) -> Optional[dict]:
+    """Ищем crm_owner привязанного к work_chat_id (нормализуем через _norm)."""
+    try:
+        from storage import _norm_chat_id as _n
+        target = _n(chat_id)
+    except Exception:
+        target = int(chat_id) if chat_id else 0
+    for oid, o in (crm_storage.state.get("crm_owners") or {}).items():
+        try:
+            if _n(o.get("work_chat_id") or 0) == target:
+                return dict(o, owner_id=oid)
+        except Exception:
+            if int(o.get("work_chat_id") or 0) == int(chat_id or 0):
+                return dict(o, owner_id=oid)
+    return None
+
+
+def _find_drop_for_work_chat(owner_id, chat_id) -> Optional[dict]:
+    """Ищем существующий crm_drop у этого owner привязанный к work_chat_id."""
+    try:
+        from storage import _norm_chat_id as _n
+        target = _n(chat_id)
+    except Exception:
+        target = int(chat_id) if chat_id else 0
+    for did, d in (crm_storage.list_crm_drops(owner_id=owner_id) or {}).items():
+        try:
+            if _n(d.get("work_chat_id") or 0) == target:
+                return dict(d, drop_id=did)
+        except Exception:
+            pass
+    return None
+
+
+async def _open_lk_form_for_client(bot, params: dict) -> str:
+    """ЦРМ v2 handoff: Асик закончил sell_wizard и просит нас показать
+    клиенту в managed_chat меню заполнения данных ЛК (login/password/2FA)
+    с forced банком и 1-слот restriction.
+
+    params: chat, client, username, bank (TITLE), price, method, deal
+    """
+    chat_id = int(params.get("chat") or 0)
+    if not chat_id:
+        return "⚠️ open_lk_form: missing chat"
+    bank_title = (params.get("bank") or "").strip().upper()
+    if not bank_title:
+        return "⚠️ open_lk_form: missing bank"
+    client_id = int(params.get("client") or 0)
+    client_uname = (params.get("username") or "").lstrip("@")
+    price_str = params.get("price") or "0"
+    try:
+        price = float(price_str)
+    except Exception:
+        price = 0.0
+    method = params.get("method") or ""
+    deal = params.get("deal") or ""
+
+    # 1) Найти owner для этого work_chat
+    owner = _find_owner_for_work_chat(chat_id)
+    if not owner:
+        # Fallback: если не привязан партнёр — уведомляем клиента, ждём Волну D
+        try:
+            await bot.send_message(
+                chat_id,
+                "⚠️ Партнёр ещё не подключён к этому чату. "
+                "Оператор скоро подключится и заполнит данные с вами.",
+            )
+        except Exception:
+            pass
+        return f"⚠️ open_lk_form: no owner for chat={chat_id}"
+    owner_id = owner["owner_id"]
+
+    # 2) Найти/создать drop
+    drop = _find_drop_for_work_chat(owner_id, chat_id)
+    if not drop:
+        fio_seed = f"@{client_uname}" if client_uname else f"client_{client_id}"
+        try:
+            drop_id = await crm_storage.add_crm_drop(
+                owner_id=owner_id, fio=fio_seed, work_chat_id=chat_id,
+            )
+        except Exception as e:
+            return f"⚠️ open_lk_form: add_crm_drop failed: {e}"
+        drop = crm_storage.get_crm_drop(drop_id) or {}
+        drop["drop_id"] = drop_id
+    drop_id = drop.get("drop_id") or ""
+
+    # 3) 1-слот restriction: если у дропа УЖЕ есть LK — не даём новый
+    existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
+    if existing:
+        try:
+            await bot.send_message(
+                chat_id,
+                f"ℹ️ По вашему клиенту уже создан ЛК. "
+                f"Один банк — один слот. Продолжайте с текущим заполнением или свяжитесь с оператором.",
+            )
+        except Exception:
+            pass
+        return f"ℹ️ open_lk_form: slot taken drop={drop_id}"
+
+    # 4) Показать клиенту в managed_chat меню заполнения — одна кнопка,
+    #    banklk → newlk использует существующий FSM (waiting_login → ...)
+    method_label = "USDT TRC20 (после работы)" if method == "USDT_TRC20" else "Гарант в Continental"
+    deal_line = f"\n📄 Сделка: <b>№{deal}</b>" if deal else ""
+    text = (
+        f"🏦 <b>Заполните данные ЛК {bank_title}</b>\n\n"
+        f"💰 Цена: <b>{int(price)}$</b>\n"
+        f"💳 Оплата: <b>{method_label}</b>{deal_line}\n\n"
+        f"Нажмите кнопку ниже и по шагам введите:\n"
+        f"1) логин, 2) пароль, 3) номер карты/счёта, 4) кодовое слово, 5) e-mail."
+    )
+    try:
+        await bot.send_message(
+            chat_id, text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=f"🏦 Заполнить данные {bank_title}",
+                    callback_data=f"newlk:{drop_id}:{bank_title}",
+                ),
+            ]]),
+        )
+    except Exception as e:
+        return f"⚠️ open_lk_form: send_message failed: {e}"
+
+    return f"✅ open_lk_form sent chat={chat_id} drop={drop_id} bank={bank_title}"
+
+
 async def _sms_reset_flow(bot, droplk_id: str) -> str:
     """Сбрасывает SMS-флоу до старта. Возвращает текст результата."""
     await crm_storage.update_drop_lk_any(
@@ -4208,7 +4337,10 @@ async def _dashboard_command_worker_crm(bot):
                 m_rst = _re.match(r"^__sms_reset\s+(\S+)\s*$", text, _re.I)
                 m_rt  = _re.match(r"^__sms_refresh_tracker\s+(\S+)\s*$", text, _re.I)
                 m_pwd = _re.match(r"^__refresh_password_post\s+(\S+)\s*$", text, _re.I)
-                if not (m_adv or m_rst or m_rt or m_pwd):
+                # ЦРМ v2: open_lk_form от Асика (sell_wizard finalized).
+                # Формат: __open_lk_form|chat=..|client=..|username=..|bank=..|price=..|method=..|deal=..
+                m_lk = _re.match(r"^__open_lk_form\|(.+)$", text, _re.I)
+                if not (m_adv or m_rst or m_rt or m_pwd or m_lk):
                     continue
                 try:
                     if m_adv:
@@ -4219,6 +4351,19 @@ async def _dashboard_command_worker_crm(bot):
                         # Перерисуем tracker сообщение в TG-группе ДОСТУПЫ
                         await _post_or_update_sms_tracker(bot, m_rt.group(1))
                         result = f"✅ tracker refreshed for {m_rt.group(1)}"
+                    elif m_lk:
+                        # ЦРМ v2 handoff от sell_wizard → открыть LK-form
+                        # клиенту в managed_chat с forced банком и 1-слот.
+                        params = {}
+                        for kv in m_lk.group(1).split("|"):
+                            if "=" in kv:
+                                k, v = kv.split("=", 1)
+                                params[k.strip()] = v.strip()
+                        try:
+                            result = await _open_lk_form_for_client(bot, params)
+                        except Exception as _oe:
+                            logger.exception("open_lk_form failed: %s", _oe)
+                            result = f"⚠️ open_lk_form: {_oe}"
                     else:
                         # Перерисуем PASSWORD сообщение в TG-группе ПАРОЛИ
                         droplk_id = m_pwd.group(1)
@@ -5984,6 +6129,14 @@ async def run_crm_bot():
     )
     dp = Dispatcher(storage=_fsm_storage, fsm_strategy=FSMStrategy.USER_IN_CHAT)
     dp.include_router(router)
+    # ЦРМ v2 · админка /crm_admin (owner-only ЛС)
+    try:
+        import crm_admin
+        crm_admin.set_dependencies(crm_storage, is_owner)
+        dp.include_router(crm_admin.router)
+        logger.info("[crm-v2] admin router /crm_admin registered")
+    except Exception as _ae:
+        logger.warning("[crm-v2] admin router register failed: %s", _ae)
 
     # ─── Middleware: игнор сообщений от юзербот-аккаунта (AI ассистент) ───
     # Юзербот работает в том же процессе через Telethon. Когда CRM-бот ставит
