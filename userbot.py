@@ -107,6 +107,64 @@ def _is_silence_announcement(text: str) -> bool:
     return False
 
 
+# ╔══════════════════════════════════════════════════════════════╗
+# ║ HALLUCINATION FILTER (SIMBA hard rules)                     ║
+# ║ Асик под нагрузкой игнорит system prompt: обещает сроки     ║
+# ║ холда цифрами, ссылается на Тимона, «выплатим сразу».       ║
+# ║ Post-фильтр перехватывает такие ответы и БЛОКИРУЕТ их —     ║
+# ║ вместо отправки клиенту дальше вызывается escalate.         ║
+# ╚══════════════════════════════════════════════════════════════╝
+import re as _re_hall
+
+_HALLUCINATION_PATTERNS = [
+    # Придуманные сроки холда цифрами: «1-3 рабочих дня», «до 5 дней»,
+    # «в течение 2-3 дней», «пару часов», «через N минут» (кроме
+    # scripted-текстов — они прошиты, юзербот их не гоняет через AI).
+    _re_hall.compile(r"\d+\s*[–\-]\s*\d+\s*(?:рабоч\w*|раб)?\s*дн[еяй]", _re_hall.I),
+    _re_hall.compile(r"\d+\s*[–\-]\s*\d+\s*час\w*", _re_hall.I),
+    _re_hall.compile(r"до\s+\d+\s+(?:рабоч\w*\s+)?дн[еяй]", _re_hall.I),
+    _re_hall.compile(r"в\s+течени[еи]\s+\d+\s*[–\-]?\s*\d*\s*(?:рабоч\w*\s+)?дн[еяй]", _re_hall.I),
+    _re_hall.compile(r"холд\s+(?:на\s+счет\w*\s+)?(?:идёт\s+|составл\w*\s+)?(?:от\s+)?\d+", _re_hall.I),
+    _re_hall.compile(r"обычно\s+заним\w*", _re_hall.I),
+    _re_hall.compile(r"в\s+сред\w+\s+заним\w*", _re_hall.I),
+
+    # Упоминания коллег/менеджеров по имени
+    _re_hall.compile(r"\bТимон\w*\b", _re_hall.I),
+    _re_hall.compile(r"уточн[юяить]+\s+у\s+(?:Тимон\w*|менеджер\w*|бухгалт\w*|команд\w*|коллег\w*|специал\w*|операц\w*)", _re_hall.I),
+    _re_hall.compile(r"перед[аамдётъ]+\s+(?:Тимон\w*|менеджер\w*|бухгалт\w*|команд\w*|коллег\w*|специал\w*|операц\w*|оператор\w*)", _re_hall.I),
+    _re_hall.compile(r"(?:Тимон\w*|менеджер\w*|бухгалт\w*|коллег\w*)\s+(?:в\s+курсе|уже\s+смотрит|разбер[её]тся|пересчита\w*|отправ\w*)", _re_hall.I),
+    _re_hall.compile(r"отпиш[уия]тс?[ья]?\s+(?:в\s+течени[еи]|через)\s+\d+", _re_hall.I),
+    _re_hall.compile(r"сейчас\s+узна[юя]\s+и\s+верн[уеё]сь", _re_hall.I),
+    _re_hall.compile(r"как\s+будет\s+готово\s*[—-]?\s*напиш[уи]", _re_hall.I),
+    _re_hall.compile(r"держит[ье]\s+связ", _re_hall.I),
+
+    # Успокаивающая отсебятина / ложные обещания
+    _re_hall.compile(r"переживать\s+не\s+нужно", _re_hall.I),
+    _re_hall.compile(r"не\s+переживайте", _re_hall.I),
+    _re_hall.compile(r"всё\s+на\s+месте", _re_hall.I),
+    _re_hall.compile(r"связь\s+.*(?:оборвал\w*|потерял\w*)", _re_hall.I),
+    _re_hall.compile(r"выплатим\s+(?:сразу|быстро|скоро)", _re_hall.I),
+    _re_hall.compile(r"начинаем\s+перевязку\s+завтра", _re_hall.I),
+]
+
+
+def find_hallucinations(text: str) -> list:
+    """Возвращает список сработавших запретов (для лога / метрик)."""
+    if not text:
+        return []
+    hits = []
+    for rx in _HALLUCINATION_PATTERNS:
+        m = rx.search(text)
+        if m:
+            hits.append(m.group(0)[:80])
+    return hits
+
+
+def _is_hallucination(text: str) -> list:
+    """True (в форме непустого списка) если ответ AI содержит запрещённое."""
+    return find_hallucinations(text)
+
+
 # Forbidden patterns (AI safety) extracted to userbot_forbidden_patterns.py
 # (Phase 2 JARVIS refactor — first step of userbot.py split)
 from userbot_forbidden_patterns import (
@@ -2848,6 +2906,38 @@ class UserbotService:
             return
         if text.startswith("[AI-LOG]"):
             return
+
+        # 🔴 AI FALLBACK: если это REPLY на pending «AI не знает» — берём
+        # текст reply и отправляем клиенту в managed_chat как ответ Асика.
+        try:
+            _reply_to = getattr(event.message, "reply_to_msg_id", None) or getattr(
+                getattr(event.message, "reply_to", None), "reply_to_msg_id", None,
+            )
+            if _reply_to:
+                pending = storage.find_ai_pending_by_brain_msg(int(_reply_to))
+                if pending:
+                    _cid = int(pending.get("chat_id") or 0)
+                    if _cid:
+                        try:
+                            target = await self._resolve_chat_target(_cid)
+                            await self.client.send_message(target, text)
+                            logger.info(
+                                "[ai-fallback] admin answered chat=%s brain_msg=%s len=%d",
+                                _cid, _reply_to, len(text),
+                            )
+                        except Exception as _se:
+                            logger.warning("[ai-fallback] send to client failed: %s", _se)
+                        try:
+                            await storage.clear_ai_pending_by_brain_msg(int(_reply_to))
+                        except Exception:
+                            pass
+                        try:
+                            await event.reply("✅ Ответ отправлен клиенту.")
+                        except Exception:
+                            pass
+                    return
+        except Exception as _fe:
+            logger.warning("[ai-fallback] reply-handler err: %s", _fe)
         # /learn — bulk-обучение из истории чатов
         if text.lower().startswith("/learn"):
             await self._handle_learn_command(event, text)
@@ -3554,6 +3644,33 @@ class UserbotService:
             }, severity="warning")
             return
 
+        # 🔴🔴🔴 HALLUCINATION FILTER — SIMBA hard rules:
+        # если AI придумал сроки холда цифрами / упомянул Тимона / обещал
+        # «выплатим сразу» — НЕ отправляем клиенту. Вместо этого просим
+        # в брейн-чате: «Что ответить клиенту?». Админ REPLY-ит — Асик
+        # пересылает ответ клиенту.
+        _hall_hits = find_hallucinations(reply)
+        if _hall_hits:
+            logger.warning(
+                "AI: chat=%s — HALLUCINATION blocked, hits=%s | reply=%r",
+                chat_id, _hall_hits, reply[:200],
+            )
+            _e("ai-hallucination-blocked", {
+                "chat_id": chat_id,
+                "hits": _hall_hits,
+                "reply_preview": reply[:200],
+            }, severity="warning")
+            try:
+                await self._ai_fallback_to_brain(
+                    chat_id, chat_info,
+                    client_text=((event.message and event.message.text) or ""),
+                    ai_bad_reply=reply,
+                    hits=_hall_hits,
+                )
+            except Exception as _fbe:
+                logger.exception("[ai-fallback] send to brain failed: %s", _fbe)
+            return
+
         # 🔴 GUARD: если AI говорит клиенту «/clients» НО CRM-бот ещё НЕ
         # добавлен в чат (нет crm_owner записи) — насильно дёргаем
         # add_partner_to_crm СНАЧАЛА, потом уже отдаём ответ. Иначе клиент
@@ -3875,6 +3992,62 @@ class UserbotService:
             await self.client.send_message(target, log_msg)
         except Exception as e:
             logger.warning("brain log send failed: %s", e)
+
+    async def _ai_fallback_to_brain(
+        self, chat_id, chat_info: dict,
+        client_text: str, ai_bad_reply: str, hits: list,
+    ) -> None:
+        """AI хотел ответить чем-то запрещённым (галлюцинация). Вместо
+        отправки клиенту — пишем в брейн-чат вопрос, ждём REPLY админа.
+        Handler _handle_brain_chat_writeback подхватит reply и перешлёт
+        текст админа клиенту в managed_chat.
+        """
+        bid = storage.get_brain_chat_id()
+        if not bid:
+            logger.warning("[ai-fallback] brain_chat_id не задан — не могу спросить оператора")
+            return
+        # Не спамим брейн повторами по одному чату
+        try:
+            if storage.has_ai_pending_for_chat(chat_id):
+                logger.info("[ai-fallback] chat=%s уже есть pending — пропускаю", chat_id)
+                return
+        except Exception:
+            pass
+
+        client_name = (chat_info.get("client_name") or "клиент").strip()
+        client_uname = (chat_info.get("client_username") or "").lstrip("@").strip()
+        tag = f"@{client_uname}" if client_uname else client_name
+        ct = (client_text or "").strip()[:600]
+        bad = (ai_bad_reply or "").strip()[:600]
+        hits_str = " · ".join(hits[:5]) if hits else "—"
+        text = (
+            f"🚨 <b>AI не знает что ответить</b>\n\n"
+            f"Чат: <code>{chat_id}</code>\n"
+            f"Клиент: {tag}\n"
+            f"Триггеры фильтра: <i>{hits_str}</i>\n\n"
+            f"<b>Вопрос клиента:</b>\n"
+            f"<blockquote>{ct or '(пусто)'}</blockquote>\n"
+            f"<b>Что AI хотел ответить (заблокировано):</b>\n"
+            f"<blockquote>{bad}</blockquote>\n\n"
+            f"👉 <b>REPLY на это сообщение</b> — ваш ответ отправится клиенту "
+            f"как есть, без изменений."
+        )
+        try:
+            target = await self._resolve_chat_target(bid)
+            sent = await self.client.send_message(target, text, parse_mode="html")
+            await storage.add_ai_pending_question(
+                brain_msg_id=int(sent.id),
+                chat_id=int(chat_id),
+                client_text=ct,
+                ai_bad_reply=bad,
+                hits=hits,
+            )
+            logger.info(
+                "[ai-fallback] posted to brain chat=%s brain_msg=%s hits=%s",
+                chat_id, sent.id, hits,
+            )
+        except Exception as e:
+            logger.exception("[ai-fallback] send to brain failed: %s", e)
 
     # === AI tool-use ===
     CRM_BOT_USERNAME = "PrideCONTROLE_bot"

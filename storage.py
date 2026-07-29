@@ -3001,6 +3001,57 @@ class Storage:
             await self._save_unlocked()
             return dict(cur)
 
+    # ═══════════════════════════════════════════════════════════════════
+    # ЦРМ v2 · ai_pending_questions (fallback: AI не знает — админ отвечает)
+    # ═══════════════════════════════════════════════════════════════════
+    # Структура: {"<brain_msg_id>": {chat_id, client_text, ai_bad_reply,
+    #                                hits, opened_ts}}
+    # Ключ = msg_id в брейн-чате (админ REPLY-ит именно на него).
+
+    async def add_ai_pending_question(
+        self, brain_msg_id: int, chat_id, client_text: str,
+        ai_bad_reply: str = "", hits: Optional[list] = None,
+    ) -> None:
+        async with _lock:
+            q = self.state.setdefault("ai_pending_questions", {})
+            q[str(int(brain_msg_id))] = {
+                "chat_id": int(chat_id),
+                "client_text": (client_text or "")[:2000],
+                "ai_bad_reply": (ai_bad_reply or "")[:2000],
+                "hits": list(hits or []),
+                "opened_ts": time.time(),
+            }
+            # Ограничим до 200 pending — старые чистим
+            if len(q) > 200:
+                for k in sorted(q.keys(),
+                               key=lambda x: q[x].get("opened_ts", 0))[: len(q) - 200]:
+                    q.pop(k, None)
+            await self._save_unlocked()
+
+    def find_ai_pending_by_brain_msg(self, brain_msg_id) -> dict:
+        try:
+            mid = str(int(brain_msg_id))
+        except Exception:
+            return {}
+        return dict((self.state.get("ai_pending_questions") or {}).get(mid) or {})
+
+    async def clear_ai_pending_by_brain_msg(self, brain_msg_id) -> None:
+        async with _lock:
+            q = self.state.setdefault("ai_pending_questions", {})
+            q.pop(str(int(brain_msg_id)), None)
+            await self._save_unlocked()
+
+    def has_ai_pending_for_chat(self, chat_id) -> bool:
+        """True если для этого чата уже висит вопрос в брейне (не спамим повторами)."""
+        try:
+            cid = int(chat_id)
+        except Exception:
+            return False
+        for v in (self.state.get("ai_pending_questions") or {}).values():
+            if int(v.get("chat_id") or 0) == cid:
+                return True
+        return False
+
     async def clear_sell_flow(self, chat_id) -> None:
         async with _lock:
             flows = self.state.setdefault("client_sell_flow", {})
