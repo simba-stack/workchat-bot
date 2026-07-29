@@ -5719,7 +5719,12 @@ class UserbotService:
     async def _handle_broadcast_workflow(self, event):
         """SIMBA HARD RULE v3: рассылка «Обновление рабочего процесса»
         во все managed_chats + PIN. Клиент видит закреплённое сообщение —
-        одна команда «Ассистент, хочу сдать РС» запускает визард."""
+        одна команда «Ассистент, хочу сдать РС» запускает визард.
+
+        Текст, фото и entities берутся из scripted_texts['workflow_update_broadcast'].
+        SIMBA редактирует через группу-админку Асика:
+            /edit workflow_update_broadcast
+        """
         try:
             managed = storage.state.get("managed_chats") or {}
         except Exception as e:
@@ -5729,24 +5734,28 @@ class UserbotService:
             await event.reply("⚠️ managed_chats пуст — некому рассылать.")
             return
 
-        text = (
-            "🚀 <b>ОБНОВЛЕНИЕ РАБОЧЕГО ПРОЦЕССА</b>\n\n"
-            "Теперь работаем через <b>одну команду</b>:\n\n"
-            "📌 <b><code>Ассистент, хочу сдать РС</code></b>\n\n"
-            "После этой фразы система <b>по шагам</b> проведёт вас:\n\n"
-            "1️⃣ Выбор материала — <b>ИП / ООО</b> или <b>Дебет</b>\n"
-            "2️⃣ Выбор банка — <b>АЛЬФА · ОЗОН · РАЙФ</b>\n"
-            "3️⃣ <b>Проверка ЛК</b> — по инструкции банка (пруфы: фото / видео / текст)\n"
-            "4️⃣ Способ оплаты — <b>Гарант в Continental</b> или <b>USDT TRC20</b>\n"
-            "5️⃣ Заполнение данных ЛК — <b>прямо в этом чате</b>\n\n"
-            "🔒 Все условия сделки: "
-            "https://telegra.ph/PRIDE--Usloviya-skupa-schetov-v2-07-02\n\n"
-            "💰 <b>Прайс:</b> АЛЬФА 700$ · ОЗОН 500-650$ · РАЙФ 500-650$\n"
-            "🏦 Берём <b>только</b> эти 3 банка. Другие банки — не принимаем.\n\n"
-            "Никакой каши в тексте, никаких «сколько холд?» — всё через inline-кнопки. "
-            "Готовы оформить? Просто напишите:\n\n"
-            "<b><code>Ассистент, хочу сдать РС</code></b>"
-        )
+        # Берём scripted (админ-версия) → fallback дефолт из config.
+        scripted = storage.get_scripted_text("workflow_update_broadcast") or {}
+        text = (scripted.get("text") or "").strip()
+        entities_raw = scripted.get("entities") or []
+        photo_path = scripted.get("photo_path") or None
+        if not text:
+            await event.reply(
+                "⚠️ scripted_texts['workflow_update_broadcast'] пуст. "
+                "Отредактируй в группе-админке Асика:\n"
+                "<code>/edit workflow_update_broadcast</code>",
+                parse_mode="html",
+            )
+            return
+        ents = _entities_to_telethon(entities_raw) if entities_raw else None
+        # Если photo_path задан но файл пропал — text-only
+        if photo_path:
+            import os as _os
+            if not _os.path.isfile(photo_path):
+                logger.warning(
+                    "[broadcast_workflow] photo missing: %s — text-only", photo_path,
+                )
+                photo_path = None
 
         sent_ok = 0
         pinned_ok = 0
@@ -5760,8 +5769,19 @@ class UserbotService:
                 continue
             try:
                 target = await self._resolve_chat_target(cid)
-                msg = await self.client.send_message(target, text, parse_mode="html",
-                                                     link_preview=False)
+                if photo_path:
+                    msg = await self.client.send_file(
+                        target, photo_path, caption=text,
+                        formatting_entities=ents,
+                    )
+                elif ents:
+                    msg = await self.client.send_message(
+                        target, text, formatting_entities=ents, link_preview=False,
+                    )
+                else:
+                    msg = await self.client.send_message(
+                        target, text, parse_mode="html", link_preview=False,
+                    )
                 sent_ok += 1
                 try:
                     await self.client.pin_message(target, msg, notify=False)
