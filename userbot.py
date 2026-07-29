@@ -1034,20 +1034,19 @@ class UserbotService:
                     chat_id, "reply_ip",
                     default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
                 )
-                # ЦРМ v2: кнопка «🛒 Начать оформление» под reply_ip.
-                # Клиент нажимает когда готов — открывается визард
-                # (материал → банк → проверка → оплата → LK-form).
+                # ЦРМ v2: призыв «когда готов — напиши ПРОДАТЬ».
+                # Inline-кнопки от юзербота Telethon не рендерятся (нужны
+                # только для bot-аккаунтов). Полноценная миграция визарда
+                # на @PrideCONTROLE_bot (aiogram) — в Волне E.
+                # Сейчас: текст-приглашение, ловим намерение через regex #10.
                 try:
-                    from telethon import Button as _Btn
                     _sd = storage.get_scripted_text("sell_start_button") or {}
                     prompt = (_sd.get("text") or
-                              "Когда будете готовы оформить продажу ЛК — жмите ниже 👇")
-                    await self.client.send_message(
-                        chat_id, prompt, parse_mode="html",
-                        buttons=[[_Btn.inline("🛒 Начать оформление", b"sw:start")]],
-                    )
+                              "🛒 Когда будете готовы оформить продажу ЛК — напишите «ПРОДАТЬ» "
+                              "в этот чат, и мы проведём вас по шагам.")
+                    await self.client.send_message(chat_id, prompt, parse_mode="html")
                 except Exception as _se:
-                    logger.warning("[sell_wizard v2] start-button send failed: %s", _se)
+                    logger.warning("[sell_wizard v2] start-prompt send failed: %s", _se)
             elif "debet" in tracks:
                 await self._send_scripted(
                     chat_id, "reply_debet",
@@ -3195,23 +3194,30 @@ class UserbotService:
         # Если визард не смог открыться (пустой прайс) — fallback на
         # старый scripted-текст (Гарант/USDT через regex).
         if re.search(
-            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы)?|"
+            # 1) короткие «го / давайте / поехали / готов / начали»
+            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы|а)?|"
             r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
-            r"давай(?:те)?\s+(?:делать|вязать|начин|нач[её]м|сделаем|оформл|принимай)|"
-            r"хочу\s+сдать|хочу\s+продать|продать\s+лк|"
+            # 2) готов + глагол: «готов вязать / готов сдать / готова продать / я готов»
+            r"(?:^|\s)(?:я\s+)?готов(?:ы|а)?\s+(?:вязать|связать|сдать|сдавать|"
+            r"продать|продавать|оформ\w*|начин\w*|нач[её]м|делать|работать)|"
+            # 3) готов один в конце «я готов» / «мы готовы»
+            r"(?:^|\s)(?:я|мы)\s+готов(?:ы|а)?\s*[!.?]*\s*$|"
+            # 4) давайте / го + глагол: «давайте делать / го делать / поехали делать»
+            r"(?:^|\s)(?:давай(?:те)?|го|поехали|погнали)\s+(?:делать|вязать|"
+            r"начин\w*|нач[её]м|сделаем|оформл\w*|принимай|работать|продавать|"
+            r"продать)|"
+            r"хочу\s+(?:сдать|продать|оформ\w*)|продать\s+лк|"
             r"^\s*продать\s*[!.?]?\s*$|"
             r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
             r"оформляй(?:те)?|"
             r"сделаем\s*[!.?]?\s*$",
-            low,
+            low, re.IGNORECASE,
         ):
-            try:
-                import sell_wizard as _sw
-                if await _sw.start_wizard(self, storage, chat_id):
-                    return True
-            except Exception as _we:
-                logger.warning("[sell_wizard] start failed, fallback to scripted: %s", _we)
-            # Fallback: если визард не открылся — старый текстовый flow
+            # Волна E TODO: sell_wizard.start_wizard() пока не вызываем —
+            # Telethon юзербот не рендерит inline callback buttons (это
+            # только у bot-аккаунтов). Полная миграция визарда на
+            # @PrideCONTROLE_bot (aiogram) — в отдельном PR. Сейчас
+            # оставляем старый scripted-flow (Гарант/USDT через regex).
             try:
                 await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
             except Exception:
