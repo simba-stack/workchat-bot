@@ -2871,6 +2871,164 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # ═══════════════════════════════════════════════════════════════════
+    # ЦРМ v2 — verification / payment configs + client_sell_flow state
+    # ═══════════════════════════════════════════════════════════════════
+
+    # --- verification_configs ---
+    # Структура: {"ALFA": {text, allow_photo, allow_video, allow_text}, ...}
+    # Текст — инструкция клиенту (что прислать), allow_* — разрешённые типы
+    # вложений на этапе загрузки пруфов. Редактируется через /crm_admin
+    # → Проверки → выбор банка.
+
+    def get_verification_config(self, bank: str) -> dict:
+        """Возвращает конфиг проверки для банка или дефолт."""
+        key = self._norm_bank_key(bank)
+        cfg = (self.state.get("verification_configs") or {}).get(key) or {}
+        return {
+            "text": cfg.get("text") or "",
+            "allow_photo": bool(cfg.get("allow_photo", True)),
+            "allow_video": bool(cfg.get("allow_video", True)),
+            "allow_text": bool(cfg.get("allow_text", True)),
+        }
+
+    def list_verification_configs(self) -> dict:
+        """Все конфигы проверок (для админки)."""
+        return dict(self.state.get("verification_configs") or {})
+
+    async def set_verification_config(self, bank: str, **fields) -> bool:
+        """Обновляет конфиг проверки. Передавайте только те поля что меняете:
+        text, allow_photo, allow_video, allow_text."""
+        if not bank:
+            return False
+        key = self._norm_bank_key(bank)
+        async with _lock:
+            configs = self.state.setdefault("verification_configs", {})
+            cur = configs.get(key) or {}
+            for k in ("text", "allow_photo", "allow_video", "allow_text"):
+                if k in fields:
+                    cur[k] = fields[k]
+            configs[key] = cur
+            await self._save_unlocked()
+            return True
+
+    # --- payment_texts ---
+    # Ключи: "after_verification" (текст перед выбором способа оплаты),
+    #        "guarantor" (инструкция по гаранту),
+    #        "usdt" (инструкция по USDT). Редактируется через /crm_admin
+    # → Оплата.
+
+    _PAYMENT_KEYS = ("after_verification", "guarantor", "usdt")
+
+    def get_payment_text(self, key: str) -> str:
+        if key not in self._PAYMENT_KEYS:
+            return ""
+        return ((self.state.get("payment_texts") or {}).get(key) or "").strip()
+
+    def list_payment_texts(self) -> dict:
+        return dict(self.state.get("payment_texts") or {})
+
+    async def set_payment_text(self, key: str, text: str) -> bool:
+        if key not in self._PAYMENT_KEYS:
+            return False
+        async with _lock:
+            texts = self.state.setdefault("payment_texts", {})
+            texts[key] = (text or "").strip()
+            await self._save_unlocked()
+            return True
+
+    # --- verification_group_id / guarantor_group_id ---
+    # ID групп куда пересылаются: пруфы клиентов (проверка) и номера сделок
+    # (бухгалтерия/гарант). Задаются через /crm_admin → Проверки/Оплата.
+
+    def get_verification_group_id(self):
+        return self.state.get("verification_group_id") or 0
+
+    async def set_verification_group_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["verification_group_id"] = int(chat_id)
+            except Exception:
+                self.state["verification_group_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    def get_guarantor_group_id(self):
+        return self.state.get("guarantor_group_id") or 0
+
+    async def set_guarantor_group_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["guarantor_group_id"] = int(chat_id)
+            except Exception:
+                self.state["guarantor_group_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    # --- client_sell_flow ---
+    # Единое состояние клиента в новом ЦРМ v2 визарде. Ключ — str(chat_id).
+    # {step, material, bank, price, method, uploads: [{type,file_id,caption}],
+    #  deal_number, verification_msg_id, guarantor_msg_id, opened_ts, updated_ts}
+
+    def get_sell_flow(self, chat_id) -> dict:
+        wf = (self.state.get("client_sell_flow") or {}).get(str(chat_id)) or {}
+        return dict(wf)
+
+    async def set_sell_flow(self, chat_id, **patch) -> dict:
+        """Merge-patch поверх текущего состояния. Возвращает новое состояние."""
+        async with _lock:
+            flows = self.state.setdefault("client_sell_flow", {})
+            cur = flows.get(str(chat_id)) or {}
+            for k, v in patch.items():
+                cur[k] = v
+            cur["updated_ts"] = time.time()
+            if "opened_ts" not in cur:
+                cur["opened_ts"] = time.time()
+            flows[str(chat_id)] = cur
+            await self._save_unlocked()
+            return dict(cur)
+
+    async def sell_flow_append_upload(self, chat_id, upload: dict) -> dict:
+        """Добавляет один upload (фото/видео/текст) в буфер uploads."""
+        async with _lock:
+            flows = self.state.setdefault("client_sell_flow", {})
+            cur = flows.get(str(chat_id)) or {}
+            uploads = list(cur.get("uploads") or [])
+            uploads.append(upload)
+            cur["uploads"] = uploads
+            cur["updated_ts"] = time.time()
+            flows[str(chat_id)] = cur
+            await self._save_unlocked()
+            return dict(cur)
+
+    async def clear_sell_flow(self, chat_id) -> None:
+        async with _lock:
+            flows = self.state.setdefault("client_sell_flow", {})
+            flows.pop(str(chat_id), None)
+            await self._save_unlocked()
+
+    def find_sell_flow_by_verification_msg(self, msg_id) -> dict:
+        """Ищем flow по verification_msg_id — для обработки callback от
+        проверяющих в verification_group."""
+        try:
+            mid = int(msg_id)
+        except Exception:
+            return {}
+        for cid, flow in (self.state.get("client_sell_flow") or {}).items():
+            if int(flow.get("verification_msg_id") or 0) == mid:
+                return {"chat_id": cid, **flow}
+        return {}
+
+    def find_sell_flow_by_guarantor_msg(self, msg_id) -> dict:
+        try:
+            mid = int(msg_id)
+        except Exception:
+            return {}
+        for cid, flow in (self.state.get("client_sell_flow") or {}).items():
+            if int(flow.get("guarantor_msg_id") or 0) == mid:
+                return {"chat_id": cid, **flow}
+        return {}
+
     async def delete_lk_card(self, card_id: str) -> bool:
         """Удаляет одну карточку ЛК по card_id. Возвращает True если
         карточка существовала и удалена."""

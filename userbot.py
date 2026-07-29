@@ -770,6 +770,16 @@ class UserbotService:
                     handled = await self._handle_track_choice(event)
                     if handled:
                         return
+                # ЦРМ v2 sell_wizard — перехват upload'ов / номера сделки
+                # ДО AI. Если клиент в шаге verification_upload или
+                # guarantor_wait_deal_number → сохраняем в flow, тихо
+                # реагируем, AI НЕ вызываем.
+                try:
+                    import sell_wizard as _sw
+                    if await _sw.handle_managed_chat_message(self, storage, event):
+                        return
+                except Exception as _we:
+                    logger.warning("[sell_wizard v2] hook error: %s", _we)
                 # AI mute от оператора (VoIP/Дебет) — отвечаем только на «Ассистент».
                 if storage.is_chat_ai_muted(event.chat_id):
                     text_raw = (event.message.text or event.message.message or "")
@@ -988,6 +998,20 @@ class UserbotService:
                     chat_id, "reply_ip",
                     default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
                 )
+                # ЦРМ v2: кнопка «🛒 Начать оформление» под reply_ip.
+                # Клиент нажимает когда готов — открывается визард
+                # (материал → банк → проверка → оплата → LK-form).
+                try:
+                    from telethon import Button as _Btn
+                    _sd = storage.get_scripted_text("sell_start_button") or {}
+                    prompt = (_sd.get("text") or
+                              "Когда будете готовы оформить продажу ЛК — жмите ниже 👇")
+                    await self.client.send_message(
+                        chat_id, prompt, parse_mode="html",
+                        buttons=[[_Btn.inline("🛒 Начать оформление", b"sw:start")]],
+                    )
+                except Exception as _se:
+                    logger.warning("[sell_wizard v2] start-button send failed: %s", _se)
             elif "debet" in tracks:
                 await self._send_scripted(
                     chat_id, "reply_debet",
