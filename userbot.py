@@ -3580,6 +3580,27 @@ class UserbotService:
         except Exception as e:
             logger.warning("FAQ scripted check failed: %s", e)
 
+        # 🔴🔴🔴 SIMBA HARD-OFF: Claude свободные ответы ОТКЛЮЧЕНЫ.
+        # Работают только: welcome / track_choice / sell_wizard trigger /
+        # FAQ regex-scripted / dept-меню. Всё что не поймано выше —
+        # тихо уходит в брейн-чат: «Асик не знает что ответить», админ
+        # REPLY-ит → Асик пересылает reply клиенту (см. _ai_fallback_to_brain).
+        # НЕТ AI reasoning, НЕТ галлюцинаций, только скрипт.
+        try:
+            if text_now:
+                await self._ai_fallback_to_brain(
+                    chat_id, chat_info,
+                    client_text=text_now,
+                    ai_bad_reply="(AI-reasoning отключён — Асик не знает готового ответа)",
+                    hits=["ai-off-simba-hard-rule"],
+                )
+        except Exception as _fbe:
+            logger.warning("[ai-hard-off] fallback to brain failed: %s", _fbe)
+        return
+
+        # NOTE: код ниже (Claude generate_reply) больше НЕ выполняется —
+        # SIMBA отключил свободные ответы. Оставлен как reference на случай
+        # если решим включить обратно.
         delay = random.uniform(config.AI_TYPING_DELAY_MIN, config.AI_TYPING_DELAY_MAX)
         try:
             async with self.client.action(chat_id, "typing"):
