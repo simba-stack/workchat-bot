@@ -3969,49 +3969,14 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
         try:
             pay_line = _resolve_payment_method_line(owner, drop)
-            # PRICE NEGOTIATION: если карточка создана без согласованной цены —
-            # тегаем клиента в чате и предлагаем стартовую цену для торга.
-            try:
-                card_obj = crm_storage.get_lk_card(card_id) if (card_id and hasattr(crm_storage, "get_lk_card")) else None
-                card_price = float(card_obj.get("price_usdt") or 0) if card_obj else 0
-            except Exception:
-                card_price = 0
-            client_uname = (owner.get("username") or "").lstrip("@")
-            tag = f"@{client_uname}" if client_uname else "клиент"
-            if card_price > 0 and (crm_storage.state.get("pricing") or {}).get(bank.upper()):
-                # Цена была в прайсе — стандартный handoff
-                handoff = (
-                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                    f"📋 Карточка: #{card_id or '—'}\n"
-                    f"💰 Цена: <b>{card_price:.2f}$</b>\n"
-                    f"💳 Метод оплаты: {pay_line}\n\n"
-                    f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
-                )
-            else:
-                # Цены не было — мы ПОКУПАЕМ ЛК у клиента. Старт с минималки 400$.
-                # ⚠️ В тексте клиенту НИКОГДА не упоминаем потолок 650 и шаг +50 —
-                # иначе все будут торговаться сразу до максимума.
-                handoff = (
-                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                    f"📋 Карточка: #{card_id or '—'}\n"
-                    f"💳 Метод оплаты: {pay_line}\n\n"
-                    f"{tag}, по выкупу ЛК <b>{bank}</b>:\n"
-                    f"💰 Готовы выкупить за <b>{int(card_price)}$</b>."
-                )
+            # ЦРМ не касается цены выкупа — цену/торг ведёт Асик по прайсу из
+            # welcome-сообщения. Здесь только сухой handoff без сумм.
+            handoff = (
+                f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                f"📋 Карточка: #{card_id or '—'}\n"
+                f"💳 Метод оплаты: {pay_line}"
+            )
             await _notify_work_chat(bot, owner, handoff)
-        except Exception:
-            pass
-        # Сохраним в карточку статус торга, чтобы userbot мог реагировать на ответы клиента
-        try:
-            if card_id and needs_price_negotiation and hasattr(crm_storage, "update_lk_card"):
-                await crm_storage.update_lk_card(
-                    card_id,
-                    price_status="negotiating",
-                    price_offer_current=price,
-                    price_min=400,
-                    price_max=650,
-                    price_step=50,
-                )
         except Exception:
             pass
         await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
@@ -4194,30 +4159,13 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
             )
             try:
                 pay_line = _resolve_payment_method_line(owner, drop)
-                try:
-                    card_obj = crm_storage.get_lk_card(card_id) if (card_id and hasattr(crm_storage, "get_lk_card")) else None
-                    card_price = float(card_obj.get("price_usdt") or 0) if card_obj else 0
-                except Exception:
-                    card_price = 0
-                client_uname = (owner.get("username") or "").lstrip("@")
-                tag = f"@{client_uname}" if client_uname else "клиент"
-                if card_price > 0 and (crm_storage.state.get("pricing") or {}).get((bank or "").upper()):
-                    handoff = (
-                        f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                        f"📋 Карточка: #{card_id or '—'}\n"
-                        f"💰 Цена: <b>{card_price:.2f}$</b>\n"
-                        f"💳 Метод оплаты: {pay_line}\n\n"
-                        f"<i>Если метод ещё не подтверждён — ассистент уточнит у клиента.</i>"
-                    )
-                else:
-                    # ⚠️ Без упоминания потолка/шага — иначе все торгуются до максимума.
-                    handoff = (
-                        f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                        f"📋 Карточка: #{card_id or '—'}\n"
-                        f"💳 Метод оплаты: {pay_line}\n\n"
-                        f"{tag}, по выкупу ЛК <b>{bank}</b>:\n"
-                        f"💰 Готовы выкупить за <b>{int(card_price)}$</b>."
-                    )
+                # ЦРМ не касается цены выкупа — цену/торг ведёт Асик по прайсу
+                # из welcome-сообщения. Здесь только сухой handoff без сумм.
+                handoff = (
+                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                    f"📋 Карточка: #{card_id or '—'}\n"
+                    f"💳 Метод оплаты: {pay_line}"
+                )
                 await _notify_work_chat(bot, owner, handoff)
             except Exception:
                 pass
