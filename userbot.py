@@ -465,6 +465,42 @@ class UserbotService:
         except Exception as e:
             logger.warning("workers admin grant pass failed: %s", e)
 
+        # 5.5) ЦРМ v2 · раннее добавление @PrideCONTROLE_bot в managed_chat.
+        # SIMBA: «чтобы црмка всегда была на готове с самого старта беседы».
+        # Ранее CRM-бот приглашался только когда клиент говорил «готов сдать»
+        # — теперь он в чате с первой секунды, чтобы sell_wizard мог сразу
+        # передать ему handoff (open_lk_form) когда клиент нажмёт «Оформить».
+        try:
+            crm_bot_username = getattr(self, "CRM_BOT_USERNAME", "PrideCONTROLE_bot")
+            crm_entity = await self.client.get_entity(crm_bot_username)
+            try:
+                await self.client(InviteToChannelRequest(channel, [crm_entity]))
+                statuses[crm_bot_username] = "добавлен (ЦРМ v2, ранняя привязка)"
+            except UserAlreadyParticipantError:
+                statuses[crm_bot_username] = "уже в чате (ЦРМ)"
+            except Exception as _ie:
+                statuses[crm_bot_username] = f"invite fail: {_ie}"
+                logger.warning("[crm-v2] invite %s failed: %s", crm_bot_username, _ie)
+            # Промотим как admin — нужно чтобы бот мог слать inline-кнопки,
+            # удалять сообщения FSM, invite (если понадобится).
+            try:
+                _crm_rights = ChatAdminRights(
+                    change_info=False, post_messages=False, edit_messages=False,
+                    delete_messages=True, ban_users=False, invite_users=True,
+                    pin_messages=False, add_admins=False, anonymous=False,
+                    manage_call=False,
+                )
+                await self.client(EditAdminRequest(
+                    channel=channel, user_id=crm_entity,
+                    admin_rights=_crm_rights, rank="CRM",
+                ))
+            except Exception as _ae:
+                logger.warning("[crm-v2] promote %s failed: %s", crm_bot_username, _ae)
+        except UsernameNotOccupiedError:
+            logger.warning("[crm-v2] CRM_BOT_USERNAME not resolvable — early attach skipped")
+        except Exception as e:
+            logger.warning("[crm-v2] early attach CRM-bot failed: %s", e)
+
         # 6) Invite-ссылка
         invite = await self.client(ExportChatInviteRequest(channel))
         invite_link = invite.link
