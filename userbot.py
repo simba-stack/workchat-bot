@@ -543,6 +543,14 @@ class UserbotService:
             logger.info("[userbot] scripted_admin handler registered")
         except Exception as e:
             logger.warning("[userbot] scripted_admin register failed: %s", e)
+        # sell_wizard — inline-кнопочный визард продажи ЛК (банк → метод →
+        # confirm). Клиент вместо текстовой каши идёт по 3-м экранам.
+        try:
+            import sell_wizard
+            await sell_wizard.register(self.client, storage, self)
+            logger.info("[userbot] sell_wizard handler registered")
+        except Exception as e:
+            logger.warning("[userbot] sell_wizard register failed: %s", e)
         # Сохраняем userbot user_id в storage — чтобы crm_bot middleware
         # мог игнорировать сообщения от юзербота (AI ассистент не должен
         # попадать в FSM-формы и грабить ввод вместо клиента/менеджера).
@@ -3120,20 +3128,30 @@ class UserbotService:
                 default_text="Готовы сразу — оформим перевязку в течение 10-30 минут. Дальше счёт в работу в тот же день.",
             )
 
-        # === FLOW: клиент готов → спросить метод ===
-        # #10: "готов / давайте / поехали / вязать / принимай" — Асик задаёт вопрос
-        # про метод оплаты (гарант или USDT). Ставит stage=pending_payment_method
-        # в chat_info чтобы следующий ответ клиента был правильно интерпретирован.
+        # === FLOW: клиент готов → открываем визард продажи ЛК ===
+        # #10: "готов / давайте / поехали / вязать / принимай / продать" —
+        # запускаем inline-визард (банк → метод → confirm). Он сам создаст
+        # ЛК-карточку и пушнёт её в audit-bot. Никакой текстовой каши.
+        # Если визард не смог открыться (пустой прайс) — fallback на
+        # старый scripted-текст (Гарант/USDT через regex).
         if re.search(
             r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы)?|"
             r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
             r"давай(?:те)?\s+(?:делать|вязать|начин|нач[её]м|сделаем|оформл|принимай)|"
-            r"хочу\s+сдать|"
+            r"хочу\s+сдать|хочу\s+продать|продать\s+лк|"
+            r"^\s*продать\s*[!.?]?\s*$|"
             r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
             r"оформляй(?:те)?|"
             r"сделаем\s*[!.?]?\s*$",
             low,
         ):
+            try:
+                import sell_wizard as _sw
+                if await _sw.start_wizard(self, storage, chat_id):
+                    return True
+            except Exception as _we:
+                logger.warning("[sell_wizard] start failed, fallback to scripted: %s", _we)
+            # Fallback: если визард не открылся — старый текстовый flow
             try:
                 await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
             except Exception:
