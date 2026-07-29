@@ -1716,16 +1716,27 @@ async def handle_fio(message: Message, state: FSMContext):
     # - 2-5 слов
     # - каждое слово только из букв (кириллица/латиница), дефисы и апострофы разрешены
     # - нет цифр, не одно слово
-    import re as _re
-    parts = fio.split()
-    word_pat = _re.compile(r"^[А-ЯЁA-Zа-яёa-z][а-яёa-zА-ЯЁA-Z\-']*$")
+    import re as _re, unicodedata as _ud
+    # Нормализуем Unicode + чистим невидимые символы (BOM, zero-width),
+    # которые ловятся при reply/copy-paste и ломают валидацию слов.
+    fio = _ud.normalize("NFC", fio)
+    fio = "".join(ch for ch in fio if _ud.category(ch) not in ("Cf", "Cc") or ch in "\n\t")
+    fio = fio.strip()
+    parts = [p for p in fio.split() if p]
+    # Слово: любая последовательность букв (кириллица/латиница/пробел не нужен),
+    # разрешены дефис/апостроф внутри и в конце — не требуем first-capital
+    # (SIMBA: слишком жёсткая проверка ломала «Власова Елена Викторовна»).
+    word_pat = _re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\-']*$")
     is_fio = (
-        2 <= len(parts) <= 5
-        and 5 <= len(fio) <= 100
+        2 <= len(parts) <= 6
+        and 4 <= len(fio) <= 120
         and all(word_pat.match(p) for p in parts)
         and not any(ch.isdigit() for ch in fio)
     )
-    logger.info("[handle_fio] validation is_fio=%s parts=%d", is_fio, len(parts))
+    logger.info(
+        "[handle_fio] validation is_fio=%s parts=%d text=%r bytes=%r",
+        is_fio, len(parts), fio[:80], fio.encode("utf-8")[:120],
+    )
     if not is_fio:
         # НЕ выходим из FSM. Оставляем юзера в режиме ожидания ФИО,
         # просто говорим что введённое — не ФИО. Кнопка ◀ Отмена выше его выведет.

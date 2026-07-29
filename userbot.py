@@ -2025,7 +2025,8 @@ class UserbotService:
                             sent_notice = await self.client.send_message(
                                 target,
                                 "📞 <b>На какое подразделение вас перевести?</b>\n\n"
-                                "Ответьте цифрой или словом:\n\n"
+                                "<b>🔴 ОТВЕТЬТЕ (REPLY) НА ЭТО СООБЩЕНИЕ</b>\n"
+                                "цифрой <b>1</b>, <b>2</b> или <b>3</b>:\n\n"
                                 "<b>1</b> — 👤 <b>Менеджер</b>\n"
                                 "<i>общие вопросы, цены, условия сделки</i>\n\n"
                                 "<b>2</b> — ⚙️ <b>System</b>\n"
@@ -2034,6 +2035,16 @@ class UserbotService:
                                 "<i>выплаты, предоплаты, финансовые вопросы</i>",
                                 parse_mode="html",
                             )
+                            # Сохраняем msg_id меню — dept-choice handler примет
+                            # только reply на именно это сообщение (без спама).
+                            try:
+                                _menu_mid = int(getattr(sent_notice, "id", 0) or 0)
+                                if _menu_mid:
+                                    await storage.set_support_state(
+                                        chat_id, dept_menu_msg_id=_menu_mid,
+                                    )
+                            except Exception:
+                                pass
                             # Кэшируем outgoing-уведомление чтобы появилось в дашборде
                             try:
                                 from storage import _norm_chat_id as _nrm
@@ -2394,9 +2405,22 @@ class UserbotService:
             logger.warning("auto-detect deal_id failed: %s", e)
 
         # 📞 AWAITING DEPARTMENT: клиент должен выбрать 1/2/3 подразделение
+        # SIMBA: обрабатываем ТОЛЬКО reply на наше меню-сообщение, никаких
+        # других сообщений (перестало спамить «Не понял выбор»).
         try:
             sup_aw = (chat_info or {}).get("support") or {}
-            if sup_aw.get("status") == "awaiting_department":
+            _menu_mid = int(sup_aw.get("dept_menu_msg_id") or 0)
+            _reply_to = getattr(event.message, "reply_to_msg_id", None) or getattr(
+                getattr(event.message, "reply_to", None), "reply_to_msg_id", None,
+            )
+            try:
+                _reply_to_int = int(_reply_to or 0)
+            except Exception:
+                _reply_to_int = 0
+            # Правило: если меню задано И клиент прислал НЕ reply на него — тихо
+            # игнорируем блок и идём дальше (AI ответит если нужно).
+            _is_reply_to_menu = (_menu_mid == 0) or (_reply_to_int == _menu_mid)
+            if sup_aw.get("status") == "awaiting_department" and _is_reply_to_menu:
                 low_a = (event.message.text or "").lower().strip()
                 if event.message.sender_id == (chat_info or {}).get("client_id"):
                     chosen_dept = None
@@ -2462,35 +2486,13 @@ class UserbotService:
                             chosen_dept, chat_id,
                         )
                         return
-                    # Если клиент написал что-то невалидное — повторим prompt,
-                    # НО не чаще 1 раза в 30 сек на чат (защита от спама).
-                    # Тот же паттерн что и для track-choice fallback.
-                    now_ts = time.time()
-                    if not hasattr(self, "_last_dept_prompt_ts"):
-                        self._last_dept_prompt_ts = {}
-                    if len(self._last_dept_prompt_ts) > 100:
-                        cutoff_ts = now_ts - 3600
-                        self._last_dept_prompt_ts = {
-                            cid: ts for cid, ts in self._last_dept_prompt_ts.items() if ts > cutoff_ts
-                        }
-                    last_dept_ts = self._last_dept_prompt_ts.get(chat_id, 0)
-                    if now_ts - last_dept_ts < 30:
-                        logger.info(
-                            "[helpdesk] throttled dept 'Не понял' for chat=%s (last %ds ago)",
-                            chat_id, int(now_ts - last_dept_ts),
-                        )
-                        return  # тихо — недавно уже переспросили
-                    self._last_dept_prompt_ts[chat_id] = now_ts
-                    try:
-                        target = await self._resolve_chat_target(chat_id)
-                        await self.client.send_message(
-                            target,
-                            "⚠️ Не понял выбор. Напишите <b>1</b>, <b>2</b> или <b>3</b>:\n"
-                            "1 — Менеджер · 2 — System · 3 — Бухгалтерия",
-                            parse_mode="html",
-                        )
-                    except Exception:
-                        pass
+                    # Клиент прислал reply, но не 1/2/3 — молчим. SIMBA
+                    # запретил спам «Не понял выбор». Пусть менеджер сам
+                    # разберётся, либо клиент напишет корректно.
+                    logger.info(
+                        "[helpdesk] dept invalid reply in chat=%s text=%r — silent",
+                        chat_id, (event.message.text or "")[:40],
+                    )
                     return
         except Exception as e:
             logger.warning("dept-choice handler error: %s", e)
@@ -3901,6 +3903,14 @@ class UserbotService:
             return await self._tool_update_deal_status(**tool_input)
         if tool_name == "find_deal":
             return await self._tool_find_deal(**tool_input)
+        if tool_name == "find_lk_in_audit":
+            return await self._tool_find_lk_in_audit(
+                chat_id=chat_id,
+                work_chat_id_current=bool(tool_input.get("work_chat_id_current", True)),
+                fio_contains=tool_input.get("fio_contains", "") or "",
+                bank=tool_input.get("bank", "") or "",
+                status=tool_input.get("status", "") or "",
+            )
         if tool_name == "create_lk_card":
             return await self._tool_create_lk_card(
                 chat_id=chat_id,
@@ -4292,6 +4302,61 @@ class UserbotService:
             "client_username": d.get("client_username"),
             "fio": d.get("fio"),
             "bank": d.get("bank"),
+        }
+
+    async def _tool_find_lk_in_audit(
+        self, chat_id, work_chat_id_current: bool = True,
+        fio_contains: str = "", bank: str = "", status: str = "",
+    ) -> dict:
+        """Ищет ЛК-карточки в @PRIDE_AUDIT_BOT. Единый источник статусов
+        карточек (бухгалтерия ведёт там). Возвращает список найденных.
+
+        Фильтры: work_chat_id (текущий чат если work_chat_id_current=True),
+        далее в python fio_contains / bank case-insensitive.
+        """
+        try:
+            import audit_bot_client
+        except Exception as e:
+            return {"status": "error", "error": f"audit_bot_client import: {e}"}
+        wc = int(chat_id) if work_chat_id_current else None
+        try:
+            items = await audit_bot_client.list_lk_cards(
+                work_chat_id=wc, status=(status or ""), use_cache=True,
+            )
+        except Exception as e:
+            return {"status": "error", "error": f"list_lk_cards: {e}"}
+        if not isinstance(items, list):
+            items = []
+        # Клиентская фильтрация по fio_contains / bank
+        _fio_lc = (fio_contains or "").strip().lower()
+        _bank_lc = (bank or "").strip().lower()
+        out = []
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            _f = (c.get("fio") or c.get("material") or "").lower()
+            _b = (c.get("bank") or "").lower()
+            if _fio_lc and _fio_lc not in _f:
+                continue
+            if _bank_lc and _bank_lc not in _b:
+                continue
+            out.append({
+                "id": c.get("id"),
+                "bank": c.get("bank") or "",
+                "fio": c.get("fio") or "",
+                "supplier": c.get("supplier") or "",
+                "status": c.get("status") or "",
+                "date_supply": c.get("date_supply") or "",
+                "responsible": c.get("responsible") or "",
+                "deal_number": c.get("deal_number") or "",
+                "price_usdt": c.get("price_usdt") or 0,
+            })
+        return {
+            "status": "ok",
+            "count": len(out),
+            "cards": out[:20],  # верхняя граница чтобы не забить контекст
+            "hint": ("Нет карточек — либо клиент только что подал ЛК и она ещё "
+                    "не попала в аудит, либо ФИО/банк не совпал. Уточни у клиента.") if not out else "",
         }
 
     async def _tool_find_deal(self, deal_id: str = "", username: str = "", fio: str = "", bank: str = "") -> dict:
