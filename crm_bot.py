@@ -1442,6 +1442,49 @@ async def cmd_clients(message: Message):
         )
     except Exception:
         pass
+    # 🔴 SIMBA HARD RULE v3: /clients — только для админ-состава.
+    # Клиенты работают ТОЛЬКО через «Ассистент, хочу сдать РС» → sell_wizard.
+    try:
+        _from_id = message.from_user.id if message.from_user else 0
+        _from_uname = ((message.from_user.username or "") if message.from_user else "").lower()
+        # Owner (hardcoded IDs / env) — всегда пропускаем
+        if is_owner(_from_id):
+            pass
+        else:
+            # Проверяем worker_roles — только owner/manager/system/accounting
+            _allowed_roles = {"owner", "manager", "system", "system_dept", "accounting"}
+            _role_data = {}
+            try:
+                # storage может быть разного вида, пробуем и в crm и в main
+                _worker_roles = crm_storage.state.get("worker_roles") or {}
+                _role_data = _worker_roles.get(_from_uname, {}) or {}
+                if isinstance(_role_data, str):
+                    _role_str = _role_data.strip().lower()
+                    _is_worker_admin = _role_str in _allowed_roles
+                else:
+                    _role_str = (_role_data.get("role") or "").strip().lower()
+                    _is_worker_admin = (_role_str in _allowed_roles) or bool(_role_data.get("is_admin"))
+            except Exception:
+                _is_worker_admin = False
+            if not _is_worker_admin:
+                # Клиенту — отказ + подсказка по правильной команде
+                try:
+                    await message.reply(
+                        "ℹ️ Команда /clients — для админ-состава.\n\n"
+                        "Чтобы <b>оформить сдачу счёта</b>, напишите:\n"
+                        "<b><code>Ассистент, хочу сдать РС</code></b>\n\n"
+                        "Система проведёт вас по шагам через inline-кнопки.",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                logger.info(
+                    "[/clients] REJECT non-admin user=%s @%s chat=%s",
+                    _from_id, _from_uname, message.chat.id,
+                )
+                return
+    except Exception as _e:
+        logger.warning("[/clients] admin-check crash: %s", _e)
     # === CREDIT branch: если чат закреплён за кредитованием — другой flow ===
     try:
         is_credit = (message.chat.type != "private"

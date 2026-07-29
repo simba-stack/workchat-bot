@@ -1744,6 +1744,24 @@ class UserbotService:
                         "[crm-v2 auto-partner] queued for chat=%s user=%s @%s",
                         chat_id, expected_client_id, _uname,
                     )
+                    # SIMBA HARD RULE v3: дополнительно шлём в managed_chat
+                    # текстовую команду «+партнер @<username>» — CRM подхватит
+                    # своим нативным handler cmd_add_partner_command. Второй
+                    # путь надёжности: если dashboard-command воркер по каким-то
+                    # причинам не отработает, +партнер всё равно зарегистрирует.
+                    try:
+                        if _uname:
+                            await self.client.send_message(
+                                chat_id, f"+партнер @{_uname}",
+                            )
+                            logger.info(
+                                "[crm-v2 auto-partner] sent inline '+партнер @%s' chat=%s",
+                                _uname, chat_id,
+                            )
+                    except Exception as _pe:
+                        logger.warning(
+                            "[crm-v2 auto-partner] inline send failed: %s", _pe,
+                        )
                 except Exception as _ape:
                     logger.warning("[crm-v2 auto-partner] enqueue failed: %s", _ape)
                 # Помечаем что ждём выбора направления — router в _on_new_message
@@ -2995,6 +3013,20 @@ class UserbotService:
             await self._handle_checkchat_brain_command(event, text)
             return
 
+        # /broadcast_workflow — SIMBA HARD RULE v3:
+        # рассылка «Обновление рабочего процесса» + PIN во все managed_chats.
+        # Клиент видит закреплённое сообщение — «пиши: Ассистент, хочу сдать РС».
+        if low.startswith("/broadcast_workflow") or low.startswith("/broadcast_update"):
+            await self._handle_broadcast_workflow(event)
+            return
+
+        # /promote_admins — SIMBA HARD RULE v3:
+        # пройти по всем managed_chats + промотить всех worker_roles с is_admin=True
+        # до полных ChatAdminRights (миграция для старых чатов).
+        if low.startswith("/promote_admins") or low.startswith("/reboot_admins"):
+            await self._handle_promote_admins_all_chats(event)
+            return
+
         # /sync_lk — синхронизация карточек ЛК из истории Группы 1
         if (
             low.startswith("/sync_lk")
@@ -3165,37 +3197,17 @@ class UserbotService:
             return False
         low = text.lower().strip()
 
-        # 🔴 SIMBA HARD RULE: КОНКРЕТНОЕ намерение работать/сдать/завязать/
-        # оформить → sell_wizard через CRM. Просто упоминание банка ("у меня
-        # альфа?" / "прайс?" / "через гарант работаете?") — НЕ триггерит
-        # визард, идёт в FAQ regex ниже где сработают красивые scripted
-        # тексты (с фото) которые SIMBA оформил вручную.
-        _WORK_INTENT = re.compile(
-            # прямые глаголы согласия «беру / сдам / сдаю / продам / отдам /
-            # оформляем / принимаем / завяжем / начнём / отработаем»
-            r"\bзавяж\w*|заберём|беру\b|беру[тщ]\w*|сдам\b|сдаю\b|сда[её]м\b|"
-            r"сда(?:ва|ю)ть|сдавать|оформ\w*|прин[иеё]м\w*|прин(?:ять|имать)|"
-            r"продам\b|продаю\b|прода[её]м\b|продавать|"
-            r"завязать\b|начн[её]м|начин(?:аем|аю|аешь)|отдам\b|отдаю\b|отда[её]м\b|"
-            r"сделаем\b|сделаю\b|делаем\b|"
-            # прямые команды-побуждения «давайте / го / поехали / погнали»
-            r"давай(?:те)?\s+(?:начн|делать|вязать|оформ|сделаем|принимай|"
-            r"работать|сдавать|отдавать|продавать|поехали|погнали)|"
-            r"(?:^|\s)(?:го|давай(?:те)?|погнали|поехали)\s+(?:делать|вязать|"
-            r"оформ|сделаем|работать|сдавать|отдавать|продавать|начин|нач[её]м)|"
-            # «я готов / мы готовы / готов вязать / готов сдать / готов делать»
-            r"(?:^|\s)(?:я|мы)\s+готов(?:ы|а)?\s*[!.?]*\s*$|"
-            r"(?:^|\s)готов(?:ы|а)?\s+(?:вязать|связать|сдать|сдавать|"
-            r"продать|продавать|оформ\w*|начин\w*|нач[её]м|делать|работать)|"
-            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы|а)?|"
-            r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
-            # «хочу сдать/продать/оформить»
-            r"хочу\s+(?:сдать|продать|отдать|оформ\w*)|"
-            # «работаем/вязать будем»
-            r"(?:работать|вязать|делать|сдавать|оформ\w*)\s+будем",
+        # 🔴🔴🔴 SIMBA HARD RULE v3: ЕДИНСТВЕННЫЙ триггер визарда —
+        # ровно одна фраза «Ассистент, хочу сдать РС» (регистр/пунктуация/
+        # окончания слова «сдать» и «РС/счёт/счет» гибкие, но без синонимов).
+        # НИКАКИХ «го вязать», «беру альфу», «готов» — только эта фраза.
+        _WIZARD_TRIGGER = re.compile(
+            r"^\s*ассистент[,!.\s]+хочу\s+сда(?:ть|вать|м)\s+"
+            r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|"
+            r"рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
             re.IGNORECASE,
         )
-        if _WORK_INTENT.search(low):
+        if _WIZARD_TRIGGER.search(low):
             try:
                 await storage.enqueue_dashboard_command(
                     f"__start_sell_wizard chat={int(chat_id)}",
@@ -5703,6 +5715,139 @@ class UserbotService:
             await self._cmd_check_chat_for_lk_card(event, chat_id)
             return True
         return False
+
+    async def _handle_broadcast_workflow(self, event):
+        """SIMBA HARD RULE v3: рассылка «Обновление рабочего процесса»
+        во все managed_chats + PIN. Клиент видит закреплённое сообщение —
+        одна команда «Ассистент, хочу сдать РС» запускает визард."""
+        try:
+            managed = storage.state.get("managed_chats") or {}
+        except Exception as e:
+            await event.reply(f"⚠️ managed_chats fetch failed: {e}")
+            return
+        if not managed:
+            await event.reply("⚠️ managed_chats пуст — некому рассылать.")
+            return
+
+        text = (
+            "🚀 <b>ОБНОВЛЕНИЕ РАБОЧЕГО ПРОЦЕССА</b>\n\n"
+            "Теперь работаем через <b>одну команду</b>:\n\n"
+            "📌 <b><code>Ассистент, хочу сдать РС</code></b>\n\n"
+            "После этой фразы система <b>по шагам</b> проведёт вас:\n\n"
+            "1️⃣ Выбор материала — <b>ИП / ООО</b> или <b>Дебет</b>\n"
+            "2️⃣ Выбор банка — <b>АЛЬФА · ОЗОН · РАЙФ</b>\n"
+            "3️⃣ <b>Проверка ЛК</b> — по инструкции банка (пруфы: фото / видео / текст)\n"
+            "4️⃣ Способ оплаты — <b>Гарант в Continental</b> или <b>USDT TRC20</b>\n"
+            "5️⃣ Заполнение данных ЛК — <b>прямо в этом чате</b>\n\n"
+            "🔒 Все условия сделки: "
+            "https://telegra.ph/PRIDE--Usloviya-skupa-schetov-v2-07-02\n\n"
+            "💰 <b>Прайс:</b> АЛЬФА 700$ · ОЗОН 500-650$ · РАЙФ 500-650$\n"
+            "🏦 Берём <b>только</b> эти 3 банка. Другие банки — не принимаем.\n\n"
+            "Никакой каши в тексте, никаких «сколько холд?» — всё через inline-кнопки. "
+            "Готовы оформить? Просто напишите:\n\n"
+            "<b><code>Ассистент, хочу сдать РС</code></b>"
+        )
+
+        sent_ok = 0
+        pinned_ok = 0
+        failed = []
+        for key, info in list(managed.items()):
+            try:
+                cid = int(key) if str(key).lstrip("-").isdigit() else info.get("chat_id")
+            except Exception:
+                cid = info.get("chat_id")
+            if not cid:
+                continue
+            try:
+                target = await self._resolve_chat_target(cid)
+                msg = await self.client.send_message(target, text, parse_mode="html",
+                                                     link_preview=False)
+                sent_ok += 1
+                try:
+                    await self.client.pin_message(target, msg, notify=False)
+                    pinned_ok += 1
+                except Exception as _pe:
+                    logger.warning("[broadcast_workflow] pin failed chat=%s: %s", cid, _pe)
+            except Exception as e:
+                failed.append(f"{cid}: {e}")
+                logger.warning("[broadcast_workflow] send failed chat=%s: %s", cid, e)
+
+        report = (
+            f"📢 <b>Broadcast workflow update</b>\n\n"
+            f"Отправлено: <b>{sent_ok}</b> / {len(managed)}\n"
+            f"Закреплено: <b>{pinned_ok}</b>\n"
+        )
+        if failed:
+            report += f"\n❌ Ошибки ({len(failed)}):\n" + "\n".join(failed[:10])
+            if len(failed) > 10:
+                report += f"\n… и ещё {len(failed) - 10}"
+        try:
+            await event.reply(report, parse_mode="html")
+        except Exception:
+            pass
+
+    async def _handle_promote_admins_all_chats(self, event):
+        """SIMBA HARD RULE v3: пройти по всем managed_chats и промотить
+        всех работников с worker_roles.is_admin=True до полных прав."""
+        try:
+            managed = storage.state.get("managed_chats") or {}
+            worker_roles = storage.state.get("worker_roles") or {}
+        except Exception as e:
+            await event.reply(f"⚠️ fetch failed: {e}")
+            return
+        # Собираем admin-работников
+        admins = []
+        for uname, role_data in worker_roles.items():
+            _is_admin = False
+            if isinstance(role_data, dict):
+                _is_admin = bool(role_data.get("is_admin"))
+            elif isinstance(role_data, str):
+                _is_admin = bool(role_data.strip())
+            if _is_admin:
+                admins.append(uname.lstrip("@"))
+        if not admins:
+            await event.reply("⚠️ worker_roles.is_admin=True пусто.")
+            return
+
+        promoted = 0
+        errors = []
+        _rights = ChatAdminRights(
+            change_info=True, post_messages=True, edit_messages=True,
+            delete_messages=True, ban_users=True, invite_users=True,
+            pin_messages=True, add_admins=False, anonymous=False,
+            manage_call=True,
+        )
+        for key, info in list(managed.items()):
+            try:
+                cid = int(key) if str(key).lstrip("-").isdigit() else info.get("chat_id")
+            except Exception:
+                cid = info.get("chat_id")
+            if not cid:
+                continue
+            for uname in admins:
+                try:
+                    ent = await self.client.get_entity(uname)
+                    await self.client(EditAdminRequest(
+                        channel=cid, user_id=ent,
+                        admin_rights=_rights, rank="Admin",
+                    ))
+                    promoted += 1
+                except Exception as e:
+                    errors.append(f"{cid}/@{uname}: {type(e).__name__}")
+
+        report = (
+            f"👑 <b>Promote admins</b>\n\n"
+            f"Промоций: <b>{promoted}</b>\n"
+            f"Чатов: <b>{len(managed)}</b> · админов: <b>{len(admins)}</b>\n"
+        )
+        if errors:
+            report += f"\n❌ Ошибки ({len(errors)}):\n" + "\n".join(errors[:15])
+            if len(errors) > 15:
+                report += f"\n… и ещё {len(errors) - 15}"
+        try:
+            await event.reply(report, parse_mode="html")
+        except Exception:
+            pass
 
     async def _handle_checkchat_brain_command(self, event, text: str):
         """Запуск /checkchatforLKCARD <chat_id> из брейн-чата (или любого
