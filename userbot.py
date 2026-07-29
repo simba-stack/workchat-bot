@@ -1034,20 +1034,19 @@ class UserbotService:
                     chat_id, "reply_ip",
                     default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
                 )
-                # ЦРМ v2: кнопка «🛒 Начать оформление» под reply_ip.
-                # Клиент нажимает когда готов — открывается визард
-                # (материал → банк → проверка → оплата → LK-form).
+                # ЦРМ v2 Волна E: просим @PrideCONTROLE_bot (aiogram)
+                # показать клиенту inline-кнопку «🛒 Начать оформление».
+                # Юзербот Telethon не может слать inline callback buttons —
+                # только bot-аккаунт. Через dashboard-command воркер CRM-бота
+                # подхватывает и рендерит кнопку в managed_chat.
                 try:
-                    from telethon import Button as _Btn
-                    _sd = storage.get_scripted_text("sell_start_button") or {}
-                    prompt = (_sd.get("text") or
-                              "Когда будете готовы оформить продажу ЛК — жмите ниже 👇")
-                    await self.client.send_message(
-                        chat_id, prompt, parse_mode="html",
-                        buttons=[[_Btn.inline("🛒 Начать оформление", b"sw:start")]],
+                    await storage.enqueue_dashboard_command(
+                        f"__send_sell_button chat={int(chat_id)}",
+                        source="asik_reply_ip",
                     )
+                    logger.info("[sell_wizard_crm] queued send_sell_button chat=%s", chat_id)
                 except Exception as _se:
-                    logger.warning("[sell_wizard v2] start-button send failed: %s", _se)
+                    logger.warning("[sell_wizard_crm] enqueue send_sell_button failed: %s", _se)
             elif "debet" in tracks:
                 await self._send_scripted(
                     chat_id, "reply_debet",
@@ -3195,31 +3194,39 @@ class UserbotService:
         # Если визард не смог открыться (пустой прайс) — fallback на
         # старый scripted-текст (Гарант/USDT через regex).
         if re.search(
-            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы)?|"
+            # 1) короткие «го / давайте / поехали / готов / начали»
+            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы|а)?|"
             r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
-            r"давай(?:те)?\s+(?:делать|вязать|начин|нач[её]м|сделаем|оформл|принимай)|"
-            r"хочу\s+сдать|хочу\s+продать|продать\s+лк|"
+            # 2) готов + глагол: «готов вязать / готов сдать / готова продать / я готов»
+            r"(?:^|\s)(?:я\s+)?готов(?:ы|а)?\s+(?:вязать|связать|сдать|сдавать|"
+            r"продать|продавать|оформ\w*|начин\w*|нач[её]м|делать|работать)|"
+            # 3) готов один в конце «я готов» / «мы готовы»
+            r"(?:^|\s)(?:я|мы)\s+готов(?:ы|а)?\s*[!.?]*\s*$|"
+            # 4) давайте / го + глагол: «давайте делать / го делать / поехали делать»
+            r"(?:^|\s)(?:давай(?:те)?|го|поехали|погнали)\s+(?:делать|вязать|"
+            r"начин\w*|нач[её]м|сделаем|оформл\w*|принимай|работать|продавать|"
+            r"продать)|"
+            r"хочу\s+(?:сдать|продать|оформ\w*)|продать\s+лк|"
             r"^\s*продать\s*[!.?]?\s*$|"
             r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
             r"оформляй(?:те)?|"
             r"сделаем\s*[!.?]?\s*$",
-            low,
+            low, re.IGNORECASE,
         ):
+            # ЦРМ v2 Волна E: клиент готов → просим CRM-бота открыть
+            # aiogram-визард в managed_chat. Асик просто enqueue команду,
+            # CRM-воркер подхватит и покажет inline-меню (материал → банк →
+            # проверка → оплата). Без ответа Асика — вся диалоговая логика
+            # переходит в кнопки CRM.
             try:
-                import sell_wizard as _sw
-                if await _sw.start_wizard(self, storage, chat_id):
-                    return True
+                await storage.enqueue_dashboard_command(
+                    f"__start_sell_wizard chat={int(chat_id)}",
+                    source="asik_ready_regex",
+                )
+                logger.info("[sell_wizard_crm] queued start_wizard chat=%s", chat_id)
             except Exception as _we:
-                logger.warning("[sell_wizard] start failed, fallback to scripted: %s", _we)
-            # Fallback: если визард не открылся — старый текстовый flow
-            try:
-                await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
-            except Exception:
-                pass
-            return await self._send_scripted(
-                chat_id, "ask_payment_method_before_perevyaz",
-                default_text="Отлично! Как проведём сделку? Гарант в Continental (@PRIDE_BUHGALTERIA) или USDT?",
-            )
+                logger.warning("[sell_wizard_crm] enqueue start_wizard failed: %s", _we)
+            return True
 
         # #11: Ответ клиента на вопрос про метод — "гарант / континентал / сделк"
         if re.search(
