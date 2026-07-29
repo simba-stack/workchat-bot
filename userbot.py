@@ -465,6 +465,42 @@ class UserbotService:
         except Exception as e:
             logger.warning("workers admin grant pass failed: %s", e)
 
+        # 5.5) ЦРМ v2 · раннее добавление @PrideCONTROLE_bot в managed_chat.
+        # SIMBA: «чтобы црмка всегда была на готове с самого старта беседы».
+        # Ранее CRM-бот приглашался только когда клиент говорил «готов сдать»
+        # — теперь он в чате с первой секунды, чтобы sell_wizard мог сразу
+        # передать ему handoff (open_lk_form) когда клиент нажмёт «Оформить».
+        try:
+            crm_bot_username = getattr(self, "CRM_BOT_USERNAME", "PrideCONTROLE_bot")
+            crm_entity = await self.client.get_entity(crm_bot_username)
+            try:
+                await self.client(InviteToChannelRequest(channel, [crm_entity]))
+                statuses[crm_bot_username] = "добавлен (ЦРМ v2, ранняя привязка)"
+            except UserAlreadyParticipantError:
+                statuses[crm_bot_username] = "уже в чате (ЦРМ)"
+            except Exception as _ie:
+                statuses[crm_bot_username] = f"invite fail: {_ie}"
+                logger.warning("[crm-v2] invite %s failed: %s", crm_bot_username, _ie)
+            # Промотим как admin — нужно чтобы бот мог слать inline-кнопки,
+            # удалять сообщения FSM, invite (если понадобится).
+            try:
+                _crm_rights = ChatAdminRights(
+                    change_info=False, post_messages=False, edit_messages=False,
+                    delete_messages=True, ban_users=False, invite_users=True,
+                    pin_messages=False, add_admins=False, anonymous=False,
+                    manage_call=False,
+                )
+                await self.client(EditAdminRequest(
+                    channel=channel, user_id=crm_entity,
+                    admin_rights=_crm_rights, rank="CRM",
+                ))
+            except Exception as _ae:
+                logger.warning("[crm-v2] promote %s failed: %s", crm_bot_username, _ae)
+        except UsernameNotOccupiedError:
+            logger.warning("[crm-v2] CRM_BOT_USERNAME not resolvable — early attach skipped")
+        except Exception as e:
+            logger.warning("[crm-v2] early attach CRM-bot failed: %s", e)
+
         # 6) Invite-ссылка
         invite = await self.client(ExportChatInviteRequest(channel))
         invite_link = invite.link
@@ -543,6 +579,14 @@ class UserbotService:
             logger.info("[userbot] scripted_admin handler registered")
         except Exception as e:
             logger.warning("[userbot] scripted_admin register failed: %s", e)
+        # sell_wizard — inline-кнопочный визард продажи ЛК (банк → метод →
+        # confirm). Клиент вместо текстовой каши идёт по 3-м экранам.
+        try:
+            import sell_wizard
+            await sell_wizard.register(self.client, storage, self)
+            logger.info("[userbot] sell_wizard handler registered")
+        except Exception as e:
+            logger.warning("[userbot] sell_wizard register failed: %s", e)
         # Сохраняем userbot user_id в storage — чтобы crm_bot middleware
         # мог игнорировать сообщения от юзербота (AI ассистент не должен
         # попадать в FSM-формы и грабить ввод вместо клиента/менеджера).
@@ -712,12 +756,66 @@ class UserbotService:
                             return
                 except Exception as _kn_err:
                     logger.warning("knowledge handler check failed: %s", _kn_err)
+
+                # Managed-chat guard: игнорируем сообщения от НЕ-клиента
+                # в managed_chat, чтобы служебные тексты (CRM-бот
+                # «Партнёр @X добавлен», команда «+партнер @X» от партнёра,
+                # invite-бот и т.п.) не сбивали welcome-фазу и не
+                # триггерили повторное приветствие / «Не понял выбор» / AI.
+                #  • sender=бот  → всегда skip (в managed_chat боты не
+                #    должны инициировать AI-ответ).
+                #  • sender=человек, не клиент, но чат в welcome-фазе
+                #    (awaiting_track_choice) → skip (выбирает только клиент).
+                # Оператор-человек ВНЕ welcome-фазы пропускается дальше —
+                # его «ассистент» может призвать Асика (ai_mute-логика ниже).
+                try:
+                    _mc_info = storage.get_chat_info(event.chat_id)
+                except Exception:
+                    _mc_info = None
+                if _mc_info:
+                    try:
+                        _msg_sid = getattr(event.message, "sender_id", None) \
+                            or getattr(event, "sender_id", None)
+                        _cli_id = _mc_info.get("client_id")
+                        if _msg_sid and _cli_id and int(_msg_sid) != int(_cli_id):
+                            _is_bot_sender = False
+                            try:
+                                _snd = await event.get_sender()
+                                _is_bot_sender = bool(getattr(_snd, "bot", False))
+                            except Exception:
+                                pass
+                            if _is_bot_sender:
+                                logger.info(
+                                    "[managed] skip bot sender chat=%s sid=%s cli=%s",
+                                    event.chat_id, _msg_sid, _cli_id,
+                                )
+                                return
+                            if storage.is_awaiting_track_choice(event.chat_id):
+                                logger.info(
+                                    "[managed] skip non-client in welcome-phase "
+                                    "chat=%s sid=%s cli=%s",
+                                    event.chat_id, _msg_sid, _cli_id,
+                                )
+                                return
+                    except Exception as _mc_err:
+                        logger.warning("managed-chat guard failed: %s", _mc_err)
+
                 # Welcome v2: если чат ждёт выбор направления — обрабатываем тут,
                 # AI не вызывается на это сообщение.
                 if storage.is_awaiting_track_choice(event.chat_id):
                     handled = await self._handle_track_choice(event)
                     if handled:
                         return
+                # ЦРМ v2 sell_wizard — перехват upload'ов / номера сделки
+                # ДО AI. Если клиент в шаге verification_upload или
+                # guarantor_wait_deal_number → сохраняем в flow, тихо
+                # реагируем, AI НЕ вызываем.
+                try:
+                    import sell_wizard as _sw
+                    if await _sw.handle_managed_chat_message(self, storage, event):
+                        return
+                except Exception as _we:
+                    logger.warning("[sell_wizard v2] hook error: %s", _we)
                 # AI mute от оператора (VoIP/Дебет) — отвечаем только на «Ассистент».
                 if storage.is_chat_ai_muted(event.chat_id):
                     text_raw = (event.message.text or event.message.message or "")
@@ -936,6 +1034,20 @@ class UserbotService:
                     chat_id, "reply_ip",
                     default_text="Отлично! Направление ИП/ООО. Расскажите о банке и обороте.",
                 )
+                # ЦРМ v2: кнопка «🛒 Начать оформление» под reply_ip.
+                # Клиент нажимает когда готов — открывается визард
+                # (материал → банк → проверка → оплата → LK-form).
+                try:
+                    from telethon import Button as _Btn
+                    _sd = storage.get_scripted_text("sell_start_button") or {}
+                    prompt = (_sd.get("text") or
+                              "Когда будете готовы оформить продажу ЛК — жмите ниже 👇")
+                    await self.client.send_message(
+                        chat_id, prompt, parse_mode="html",
+                        buttons=[[_Btn.inline("🛒 Начать оформление", b"sw:start")]],
+                    )
+                except Exception as _se:
+                    logger.warning("[sell_wizard v2] start-button send failed: %s", _se)
             elif "debet" in tracks:
                 await self._send_scripted(
                     chat_id, "reply_debet",
@@ -3022,6 +3134,193 @@ class UserbotService:
             except Exception as _bce:
                 logger.warning("blocked-explain check failed: %s", _bce)
                 return False
+
+        # #7: Про гарант — «идём в гарант?», «с гарантом?», «можно через гарант?»
+        if re.search(
+            r"\bгарант\w*\b(?:\s+есть)?[?.]?\s*$|"
+            r"\bчерез\s+гарант|"
+            r"\bс\s+гарантом|"
+            r"\bесть\s+гарант|"
+            r"\bид[её]м\s+в\s+гарант|"
+            r"\bид[её]т\s+в\s+гарант|"
+            r"\bмож(?:но|ем|ете)\s+гарант|"
+            r"\bпо\s+гаранту",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_guarantor_question",
+                default_text="Да, работаем через гарант в Continental. Есть варианты: сейчас, после отработки, или без гаранта (USDT). Что предпочитаете?",
+            )
+
+        # #8: Про трафик / объём — «сколько ЛК в день?», «какой трафик?»
+        if re.search(
+            r"какой\s+траф|"
+            r"\bтраф(?:ик)?\s*[?.]|"
+            r"скол[ьк]?\s+ЛК|"
+            r"скол[ьк]?\s+сможете\s+взять|"
+            r"скол[ьк]?\s+бер[её]те\s+в\s+день|"
+            r"\bобъ[её]м\b|"
+            r"скол[ьк]?\s+в\s+день\s+можете|"
+            r"скол[ьк]?\s+можно\s+в\s+день",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_traffic_volume",
+                default_text="Берём столько сколько дадите, ограничений нет. Скорость зависит от банка. Ср: ЛК запускаем в день перевязки, отработка 1-3 дня.",
+            )
+
+        # #9: Когда заберёте / сейчас можно? — про сроки принятия в работу
+        if re.search(
+            r"сейчас\s+забер[её]те|"
+            r"когда\s+забер[её]те|"
+            r"когда\s+сможете|"
+            r"прям\s+сейчас|"
+            r"уже\s+сейчас|"
+            r"срочно\s+можно|"
+            r"\bсейчас\s+прин[её]те|"
+            r"\bсейчас\s+можно\s+начать|"
+            r"\bмож(?:но|ете)\s+начать\s+сейчас|"
+            r"когда\s+нач[её]м",
+            low,
+        ):
+            return await self._send_scripted(
+                chat_id, "reply_when_take",
+                default_text="Готовы сразу — оформим перевязку в течение 10-30 минут. Дальше счёт в работу в тот же день.",
+            )
+
+        # === FLOW: клиент готов → открываем визард продажи ЛК ===
+        # #10: "готов / давайте / поехали / вязать / принимай / продать" —
+        # запускаем inline-визард (банк → метод → confirm). Он сам создаст
+        # ЛК-карточку и пушнёт её в audit-bot. Никакой текстовой каши.
+        # Если визард не смог открыться (пустой прайс) — fallback на
+        # старый scripted-текст (Гарант/USDT через regex).
+        if re.search(
+            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы)?|"
+            r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
+            r"давай(?:те)?\s+(?:делать|вязать|начин|нач[её]м|сделаем|оформл|принимай)|"
+            r"хочу\s+сдать|хочу\s+продать|продать\s+лк|"
+            r"^\s*продать\s*[!.?]?\s*$|"
+            r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
+            r"оформляй(?:те)?|"
+            r"сделаем\s*[!.?]?\s*$",
+            low,
+        ):
+            try:
+                import sell_wizard as _sw
+                if await _sw.start_wizard(self, storage, chat_id):
+                    return True
+            except Exception as _we:
+                logger.warning("[sell_wizard] start failed, fallback to scripted: %s", _we)
+            # Fallback: если визард не открылся — старый текстовый flow
+            try:
+                await storage.set_chat_payment_info(chat_id, stage="pending_payment_method")
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "ask_payment_method_before_perevyaz",
+                default_text="Отлично! Как проведём сделку? Гарант в Continental (@PRIDE_BUHGALTERIA) или USDT?",
+            )
+
+        # #11: Ответ клиента на вопрос про метод — "гарант / континентал / сделк"
+        if re.search(
+            r"^\s*гарант\s*[.!?]?\s*$|"
+            r"^\s*гарант(?:ом|ой)?\s+возьм|"
+            r"через\s+гарант|"
+            r"контин(?:ентал)?|"
+            r"^\s*сделк[аиуой]\b|"
+            r"давайте?\s+гарант|"
+            r"хочу\s+гарант|"
+            r"буд(?:у|ем|ет)\s+гарант",
+            low,
+        ):
+            try:
+                await storage.set_chat_payment_info(
+                    chat_id,
+                    method="GUARANTOR_BEFORE_WORK",
+                    stage="pending_deal_number",
+                )
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "ask_continental_deal_number",
+                default_text="Ок, работаем через гарант. Создайте сделку в @PRIDE_BUHGALTERIA и пришлите её номер сюда.",
+            )
+
+        # #12: Ответ клиента на вопрос про метод — "usdt / трц / без гаранта"
+        if re.search(
+            r"^\s*(?:usdt|усдт|трц|трс|tрц)\s*[.!?]?\s*$|"
+            r"без\s+гарант|"
+            r"^\s*usdt\s+trc|"
+            r"давайте?\s+(?:usdt|трц|без\s+гарант)|"
+            r"хочу\s+(?:usdt|без\s+гарант)|"
+            r"буд(?:у|ем|ет)\s+(?:usdt|без\s+гарант)",
+            low,
+        ) and 'адрес' not in low:  # если пришёл только "USDT" без адреса
+            try:
+                await storage.set_chat_payment_info(
+                    chat_id,
+                    method="USDT_TRC20",
+                    stage="perevyaz_ready",
+                )
+            except Exception:
+                pass
+            return await self._send_scripted(
+                chat_id, "reply_when_take",
+                default_text="Ок, работаем напрямую USDT. Оформим перевязку в 10-30 минут, адрес спросим после отработки счёта.",
+            )
+
+        # #13: Клиент прислал номер сделки Continental (после ask_continental_deal_number)
+        # Ловим только когда stage=pending_deal_number чтобы не путать с другими цифрами
+        try:
+            _ci = storage.get_chat_info(chat_id) or {}
+            _stage = (_ci.get("payment_stage") or _ci.get("stage") or "").lower()
+        except Exception:
+            _stage = ""
+        if _stage == "pending_deal_number":
+            # Матчим номер: 3-8 цифр, или "сделка #123" / "№123" / "N 123"
+            m_deal = re.search(
+                r"(?:^|\s|#|№|N|N\s*|сделк[аиу]?\s*#?|номер\s*#?)(\d{3,8})\b",
+                text,
+            )
+            if m_deal:
+                deal_number = m_deal.group(1)
+                try:
+                    await storage.set_chat_payment_info(
+                        chat_id,
+                        deal_number=deal_number,
+                        stage="deal_number_received",
+                    )
+                except Exception:
+                    pass
+                # Отправляем клиенту подтверждение
+                await self._send_scripted(
+                    chat_id, "confirm_deal_number_received",
+                    default_text=f"Принял сделку №{deal_number} ✅. Передал в @PRIDE_BUHGALTERIA, ждём подтверждения.",
+                    deal_number=deal_number,
+                )
+                # Форвардим в audit-bot: создаём guarantor_deal
+                try:
+                    import audit_bot_client
+                    async def _push_guarantor():
+                        try:
+                            card = await audit_bot_client.get_latest_lk_card_for_chat(int(chat_id))
+                            if card:
+                                await audit_bot_client.set_payment(
+                                    card_id=int(card.get("id", 0)),
+                                    method="guarantor_before",
+                                    deal_number=deal_number,
+                                    accountant_comment=f"Continental deal #{deal_number}",
+                                )
+                                logger.info(
+                                    "[audit_bot] guarantor deal_number=%s set for card=%s",
+                                    deal_number, card.get("id"),
+                                )
+                        except Exception as _ge:
+                            logger.warning("[audit_bot] push guarantor deal failed: %s", _ge)
+                    asyncio.create_task(_push_guarantor())
+                except Exception:
+                    pass
+                return True
 
         return False
 
