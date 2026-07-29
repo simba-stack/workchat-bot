@@ -712,6 +712,50 @@ class UserbotService:
                             return
                 except Exception as _kn_err:
                     logger.warning("knowledge handler check failed: %s", _kn_err)
+
+                # Managed-chat guard: игнорируем сообщения от НЕ-клиента
+                # в managed_chat, чтобы служебные тексты (CRM-бот
+                # «Партнёр @X добавлен», команда «+партнер @X» от партнёра,
+                # invite-бот и т.п.) не сбивали welcome-фазу и не
+                # триггерили повторное приветствие / «Не понял выбор» / AI.
+                #  • sender=бот  → всегда skip (в managed_chat боты не
+                #    должны инициировать AI-ответ).
+                #  • sender=человек, не клиент, но чат в welcome-фазе
+                #    (awaiting_track_choice) → skip (выбирает только клиент).
+                # Оператор-человек ВНЕ welcome-фазы пропускается дальше —
+                # его «ассистент» может призвать Асика (ai_mute-логика ниже).
+                try:
+                    _mc_info = storage.get_chat_info(event.chat_id)
+                except Exception:
+                    _mc_info = None
+                if _mc_info:
+                    try:
+                        _msg_sid = getattr(event.message, "sender_id", None) \
+                            or getattr(event, "sender_id", None)
+                        _cli_id = _mc_info.get("client_id")
+                        if _msg_sid and _cli_id and int(_msg_sid) != int(_cli_id):
+                            _is_bot_sender = False
+                            try:
+                                _snd = await event.get_sender()
+                                _is_bot_sender = bool(getattr(_snd, "bot", False))
+                            except Exception:
+                                pass
+                            if _is_bot_sender:
+                                logger.info(
+                                    "[managed] skip bot sender chat=%s sid=%s cli=%s",
+                                    event.chat_id, _msg_sid, _cli_id,
+                                )
+                                return
+                            if storage.is_awaiting_track_choice(event.chat_id):
+                                logger.info(
+                                    "[managed] skip non-client in welcome-phase "
+                                    "chat=%s sid=%s cli=%s",
+                                    event.chat_id, _msg_sid, _cli_id,
+                                )
+                                return
+                    except Exception as _mc_err:
+                        logger.warning("managed-chat guard failed: %s", _mc_err)
+
                 # Welcome v2: если чат ждёт выбор направления — обрабатываем тут,
                 # AI не вызывается на это сообщение.
                 if storage.is_awaiting_track_choice(event.chat_id):
