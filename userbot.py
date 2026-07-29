@@ -579,14 +579,9 @@ class UserbotService:
             logger.info("[userbot] scripted_admin handler registered")
         except Exception as e:
             logger.warning("[userbot] scripted_admin register failed: %s", e)
-        # sell_wizard — inline-кнопочный визард продажи ЛК (банк → метод →
-        # confirm). Клиент вместо текстовой каши идёт по 3-м экранам.
-        try:
-            import sell_wizard
-            await sell_wizard.register(self.client, storage, self)
-            logger.info("[userbot] sell_wizard handler registered")
-        except Exception as e:
-            logger.warning("[userbot] sell_wizard register failed: %s", e)
+        # ЦРМ v2 Волна E: sell_wizard мигрирован на aiogram @PrideCONTROLE_bot
+        # (crm_bot.py регистрирует sell_wizard_crm.router). Здесь ничего
+        # не подключаем — Telethon inline callback у юзербота не работает.
         # Сохраняем userbot user_id в storage — чтобы crm_bot middleware
         # мог игнорировать сообщения от юзербота (AI ассистент не должен
         # попадать в FSM-формы и грабить ввод вместо клиента/менеджера).
@@ -806,16 +801,10 @@ class UserbotService:
                     handled = await self._handle_track_choice(event)
                     if handled:
                         return
-                # ЦРМ v2 sell_wizard — перехват upload'ов / номера сделки
-                # ДО AI. Если клиент в шаге verification_upload или
-                # guarantor_wait_deal_number → сохраняем в flow, тихо
-                # реагируем, AI НЕ вызываем.
-                try:
-                    import sell_wizard as _sw
-                    if await _sw.handle_managed_chat_message(self, storage, event):
-                        return
-                except Exception as _we:
-                    logger.warning("[sell_wizard v2] hook error: %s", _we)
+                # ЦРМ v2 Волна E: sell_wizard теперь полностью на aiogram
+                # @PrideCONTROLE_bot (см. sell_wizard_crm.py) — upload/deal_number
+                # ловит его FSM. Старый Telethon-хук отключён, иначе он
+                # дублировал форвард и валился на PeerChannel unknown.
                 # AI mute от оператора (VoIP/Дебет) — отвечаем только на «Ассистент».
                 if storage.is_chat_ai_muted(event.chat_id):
                     text_raw = (event.message.text or event.message.message or "")

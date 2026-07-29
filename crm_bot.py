@@ -4117,19 +4117,61 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
     method = params.get("method") or ""
     deal = params.get("deal") or ""
 
-    # 1) Найти owner для этого work_chat
+    # 1) Найти owner для этого work_chat, или создать (авто «+партнер»)
     owner = _find_owner_for_work_chat(chat_id)
     if not owner:
-        # Fallback: если не привязан партнёр — уведомляем клиента, ждём Волну D
+        # SIMBA v2 автоматика: клиент этой беседы = partner-owner.
+        # Регистрируем его без ручного «+партнер @username».
         try:
-            await bot.send_message(
-                chat_id,
-                "⚠️ Партнёр ещё не подключён к этому чату. "
-                "Оператор скоро подключится и заполнит данные с вами.",
-            )
-        except Exception:
-            pass
-        return f"⚠️ open_lk_form: no owner for chat={chat_id}"
+            existing = crm_storage.find_crm_owner_by_tg(int(client_id or 0)) if client_id else None
+            if existing:
+                owner_id = existing["owner_id"]
+                # Обновляем work_chat_id — привязываем к текущей беседе
+                await crm_storage.update_crm_owner(
+                    owner_id, work_chat_id=int(chat_id),
+                )
+                owner = dict(existing, work_chat_id=int(chat_id))
+                logger.info(
+                    "[crm-v2 auto-partner] existing owner=%s re-bound to chat=%s",
+                    owner_id, chat_id,
+                )
+            elif client_id:
+                owner_id = await crm_storage.add_crm_owner(
+                    tg_user_id=int(client_id),
+                    username=client_uname or "",
+                    name=client_uname or f"client_{client_id}",
+                    work_chat_id=int(chat_id),
+                )
+                owner = {"owner_id": owner_id, "tg_user_id": int(client_id),
+                         "username": client_uname or "", "work_chat_id": int(chat_id)}
+                logger.info(
+                    "[crm-v2 auto-partner] created owner=%s tg=%s @%s chat=%s",
+                    owner_id, client_id, client_uname, chat_id,
+                )
+            else:
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ Не могу определить клиента этого чата. Оператор скоро подключится.",
+                )
+                return f"⚠️ open_lk_form: no client_id for chat={chat_id}"
+            # Регистрируем chat → owner в crm_chats (иначе /clients в чате не сработает)
+            try:
+                await crm_storage.register_crm_chat(
+                    chat_id=int(chat_id), owner_id=owner_id,
+                    is_admin=False, is_password=False, is_otr=False,
+                )
+            except Exception as _rce:
+                logger.warning("[crm-v2 auto-partner] register_crm_chat failed: %s", _rce)
+        except Exception as e:
+            logger.exception("[crm-v2 auto-partner] failed: %s", e)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ Ошибка привязки партнёра. Оператор скоро подключится.",
+                )
+            except Exception:
+                pass
+            return f"⚠️ open_lk_form: auto-partner failed: {e}"
     owner_id = owner["owner_id"]
 
     # 2) Найти/создать drop
