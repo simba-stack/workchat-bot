@@ -3197,11 +3197,15 @@ class UserbotService:
         low = text.lower().strip()
 
         # 🔴🔴🔴 SIMBA HARD RULE v3: ЕДИНСТВЕННЫЙ триггер визарда —
-        # ровно одна фраза «Ассистент, хочу сдать РС» (регистр/пунктуация/
-        # окончания слова «сдать» и «РС/счёт/счет» гибкие, но без синонимов).
-        # НИКАКИХ «го вязать», «беру альфу», «готов» — только эта фраза.
+        # фраза с «Ассистент» + «хочу сдать РС» (с любыми словами-связками
+        # между «ассистент» и «хочу» — «я/мы/будьте добры/пожалуйста/можно»
+        # и т.п.). Пунктуация и окончания гибкие.
         _WIZARD_TRIGGER = re.compile(
-            r"^\s*ассистент[,!.\s]+хочу\s+сда(?:ть|вать|м)\s+"
+            # «ассистент [.,!:\s пожалуйста я мы] хочу/хотим сдать [рс/счёт/…]»
+            r"^\s*ассистент\b[\s,.:!?]*"
+            r"(?:\S+\s+){0,4}"  # 0-4 слова-связки (я / мы / пожалуйста / можно / …)
+            r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+            r"сда(?:ть|вать|м|[её]м)\s+"
             r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|"
             r"рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
             re.IGNORECASE,
@@ -5807,26 +5811,51 @@ class UserbotService:
 
     async def _handle_promote_admins_all_chats(self, event):
         """SIMBA HARD RULE v3: пройти по всем managed_chats и промотить
-        всех работников с worker_roles.is_admin=True до полных прав."""
+        всех работников с worker_roles.is_admin=True до полных прав.
+
+        Жёсткий фильтр: только явно указанная роль owner/manager/system/
+        system_dept/accounting И только dict-формат с is_admin=True.
+        Строки-роли (legacy) считаем admin ТОЛЬКО если строка входит в
+        whitelist разрешённых admin-ролей. Иначе — пропускаем."""
         try:
             managed = storage.state.get("managed_chats") or {}
             worker_roles = storage.state.get("worker_roles") or {}
         except Exception as e:
             await event.reply(f"⚠️ fetch failed: {e}")
             return
-        # Собираем admin-работников
+
+        _ADMIN_ROLES = {
+            "owner", "manager", "system", "system_dept", "accounting",
+            "system+пере", "перевяз", "перевязчик",
+        }
         admins = []
         for uname, role_data in worker_roles.items():
-            _is_admin = False
+            _u = (uname or "").lstrip("@").strip()
+            if not _u:
+                continue
+            _role_str = ""
+            _is_admin_flag = False
             if isinstance(role_data, dict):
-                _is_admin = bool(role_data.get("is_admin"))
+                _role_str = (role_data.get("role") or "").strip().lower()
+                _is_admin_flag = bool(role_data.get("is_admin"))
             elif isinstance(role_data, str):
-                _is_admin = bool(role_data.strip())
-            if _is_admin:
-                admins.append(uname.lstrip("@"))
+                _role_str = role_data.strip().lower()
+            # Жёстко: role должен быть в whitelist. Одного is_admin_flag
+            # без роли — недостаточно (защита от битых записей).
+            if _role_str in _ADMIN_ROLES and (isinstance(role_data, str) or _is_admin_flag):
+                admins.append(_u)
         if not admins:
-            await event.reply("⚠️ worker_roles.is_admin=True пусто.")
+            await event.reply(
+                "⚠️ Не нашёл ни одного admin-работника в worker_roles "
+                "(проверил роли: " + ", ".join(sorted(_ADMIN_ROLES)) + ")."
+            )
             return
+        # Отчёт SIMBA какие именно юзеры будут промотнуты — перед exec
+        await event.reply(
+            "🔍 Готовлюсь промотить <b>" + str(len(admins)) + "</b> админ-"
+            "работников:\n<code>@" + "</code>, <code>@".join(admins[:30]) + "</code>",
+            parse_mode="HTML",
+        )
 
         promoted = 0
         errors = []
