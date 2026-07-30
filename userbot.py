@@ -1735,20 +1735,10 @@ class UserbotService:
                                 pass
                     except Exception:
                         pass
-                    await storage.enqueue_dashboard_command(
-                        f"__auto_register_partner chat={int(chat_id)} "
-                        f"user={int(expected_client_id)} username={_uname}",
-                        source="asik_welcome_autopartner",
-                    )
-                    logger.info(
-                        "[crm-v2 auto-partner] queued for chat=%s user=%s @%s",
-                        chat_id, expected_client_id, _uname,
-                    )
-                    # SIMBA HARD RULE v3: дополнительно шлём в managed_chat
-                    # текстовую команду «+партнер @<username>» — CRM подхватит
-                    # своим нативным handler cmd_add_partner_command. Второй
-                    # путь надёжности: если dashboard-command воркер по каким-то
-                    # причинам не отработает, +партнер всё равно зарегистрирует.
+                    # SIMBA HARD RULE v3: только ОДИН путь — inline «+партнер»
+                    # в managed_chat, чтобы @PrideCONTROLE_bot подхватил через
+                    # cmd_add_partner_command. Enqueue-путь убран — он создавал
+                    # дубль (owner регался и через воркер, и через CRM бот).
                     try:
                         if _uname:
                             await self.client.send_message(
@@ -1757,6 +1747,11 @@ class UserbotService:
                             logger.info(
                                 "[crm-v2 auto-partner] sent inline '+партнер @%s' chat=%s",
                                 _uname, chat_id,
+                            )
+                        else:
+                            logger.warning(
+                                "[crm-v2 auto-partner] client username missing chat=%s user=%s",
+                                chat_id, expected_client_id,
                             )
                     except Exception as _pe:
                         logger.warning(
