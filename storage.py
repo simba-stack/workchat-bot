@@ -2965,6 +2965,197 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    # --- dept chat_id (Волна F: координаторки) ---
+    # 4 отдельные группы куда Асик роутит клиентов после «Асик позови оператора»:
+    #   MANAGER (сделки), SYSTEM/СУС (перевяз/доступы),
+    #   ACCOUNTING (выплаты/USDT/гарант), FAIL_TRACKER (КОСЯКИ — авто-репорт молчания).
+    # Задаются через /crm_admin → Группы (или через /set_dept_chat команду).
+
+    def get_manager_dept_chat_id(self):
+        return self.state.get("manager_dept_chat_id") or 0
+
+    async def set_manager_dept_chat_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["manager_dept_chat_id"] = int(chat_id)
+            except Exception:
+                self.state["manager_dept_chat_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    def get_system_dept_chat_id(self):
+        return self.state.get("system_dept_chat_id") or 0
+
+    async def set_system_dept_chat_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["system_dept_chat_id"] = int(chat_id)
+            except Exception:
+                self.state["system_dept_chat_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    def get_accounting_dept_chat_id(self):
+        return self.state.get("accounting_dept_chat_id") or 0
+
+    async def set_accounting_dept_chat_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["accounting_dept_chat_id"] = int(chat_id)
+            except Exception:
+                self.state["accounting_dept_chat_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    def get_fail_tracker_chat_id(self):
+        return self.state.get("fail_tracker_chat_id") or 0
+
+    async def set_fail_tracker_chat_id(self, chat_id) -> bool:
+        async with _lock:
+            try:
+                self.state["fail_tracker_chat_id"] = int(chat_id)
+            except Exception:
+                self.state["fail_tracker_chat_id"] = chat_id
+            await self._save_unlocked()
+            return True
+
+    def get_dept_chat_id_by_key(self, dept_key: str):
+        """dept_key: 'manager' / 'system' / 'accounting' / 'fail_tracker'."""
+        mapping = {
+            "manager": self.get_manager_dept_chat_id(),
+            "system":  self.get_system_dept_chat_id(),
+            "accounting": self.get_accounting_dept_chat_id(),
+            "fail_tracker": self.get_fail_tracker_chat_id(),
+        }
+        return mapping.get(dept_key, 0)
+
+    # --- awaiting_dept_choice ---
+    # Флаг что клиент в managed_chat нажал «Асик позови оператора» и
+    # следующее его сообщение ЖДЁМ как 1/2/3 (выбор департамента).
+    # Также храним orig_text — оригинальное сообщение до вызова оператора,
+    # чтобы переслать его в dept-группу вместе с ссылкой.
+
+    async def mark_awaiting_dept_choice(self, chat_id, orig_text: str = ""):
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is not None:
+                info["awaiting_dept_choice"] = True
+                info["awaiting_dept_orig_text"] = (orig_text or "")[:600]
+                info["awaiting_dept_since_ts"] = time.time()
+                await self._save_unlocked()
+
+    def is_awaiting_dept_choice(self, chat_id) -> bool:
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        if not info.get("awaiting_dept_choice"):
+            return False
+        # Таймаут — 5 минут: если клиент не ответил 1/2/3 за это время,
+        # сбрасываем флаг (иначе цифра «1» в общем контексте много позже
+        # неожиданно триггернёт запрос оператора).
+        since = float(info.get("awaiting_dept_since_ts") or 0)
+        if since and (time.time() - since) > 300:
+            return False
+        return True
+
+    def get_awaiting_dept_orig_text(self, chat_id) -> str:
+        key = _norm_chat_id(chat_id)
+        info = self.state.get("managed_chats", {}).get(key) or {}
+        return str(info.get("awaiting_dept_orig_text") or "")
+
+    async def clear_awaiting_dept_choice(self, chat_id):
+        key = _norm_chat_id(chat_id)
+        async with _lock:
+            info = self.state["managed_chats"].get(key)
+            if info is not None:
+                info["awaiting_dept_choice"] = False
+                info["awaiting_dept_orig_text"] = ""
+                info["awaiting_dept_since_ts"] = 0
+                await self._save_unlocked()
+
+    # --- pending_operator_calls ---
+    # Клиент попросил оператора → Асик отправил в dept-группу сообщение с
+    # запросом → сохраняем связь {dept_chat_id: {dept_msg_id: {...}}}.
+    # Когда оператор в dept-группе делает reply на это сообщение, мы находим
+    # запись по (dept_chat_id, reply_to_msg_id) и пересылаем ответ клиенту.
+
+    async def add_pending_operator_call(
+        self, *, dept_msg_id: int, dept_chat_id: int, client_chat_id,
+        dept: str, orig_text: str = "", client_username: str = "",
+    ):
+        async with _lock:
+            all_calls = self.state.setdefault("pending_operator_calls", {})
+            per_dept = all_calls.setdefault(str(int(dept_chat_id)), {})
+            per_dept[str(int(dept_msg_id))] = {
+                "client_chat_id": int(client_chat_id),
+                "dept": dept,
+                "orig_text": (orig_text or "")[:600],
+                "client_username": (client_username or "")[:100],
+                "sent_at": time.time(),
+                "notified_late": False,
+                "resolved": False,
+            }
+            await self._save_unlocked()
+
+    def get_pending_operator_call(self, dept_chat_id, dept_msg_id) -> dict:
+        all_calls = self.state.get("pending_operator_calls", {}) or {}
+        per_dept = all_calls.get(str(int(dept_chat_id))) or {}
+        return dict(per_dept.get(str(int(dept_msg_id))) or {})
+
+    async def mark_operator_call_resolved(self, dept_chat_id, dept_msg_id, operator_username: str = ""):
+        async with _lock:
+            all_calls = self.state.setdefault("pending_operator_calls", {})
+            per_dept = all_calls.setdefault(str(int(dept_chat_id)), {})
+            key = str(int(dept_msg_id))
+            call = per_dept.get(key)
+            if call:
+                call["resolved"] = True
+                call["resolved_at"] = time.time()
+                call["operator_username"] = (operator_username or "")[:100]
+                await self._save_unlocked()
+
+    async def mark_operator_call_late_notified(self, dept_chat_id, dept_msg_id):
+        async with _lock:
+            all_calls = self.state.setdefault("pending_operator_calls", {})
+            per_dept = all_calls.setdefault(str(int(dept_chat_id)), {})
+            key = str(int(dept_msg_id))
+            call = per_dept.get(key)
+            if call:
+                call["notified_late"] = True
+                await self._save_unlocked()
+
+    def list_pending_operator_calls(self) -> list:
+        """Возвращает список [(dept_chat_id, dept_msg_id, call_dict)] для background task."""
+        out = []
+        all_calls = self.state.get("pending_operator_calls", {}) or {}
+        for dc_id_s, per_dept in all_calls.items():
+            try:
+                dc_id = int(dc_id_s)
+            except Exception:
+                continue
+            for msg_id_s, call in (per_dept or {}).items():
+                try:
+                    m_id = int(msg_id_s)
+                except Exception:
+                    continue
+                out.append((dc_id, m_id, dict(call)))
+        return out
+
+    async def purge_old_operator_calls(self, keep_hours: int = 48):
+        """Убирает записи старше N часов чтобы файл не пух."""
+        cutoff = time.time() - keep_hours * 3600
+        async with _lock:
+            all_calls = self.state.setdefault("pending_operator_calls", {})
+            for dc_id_s in list(all_calls.keys()):
+                per_dept = all_calls.get(dc_id_s) or {}
+                for msg_id_s in list(per_dept.keys()):
+                    call = per_dept.get(msg_id_s) or {}
+                    if float(call.get("sent_at") or 0) < cutoff:
+                        per_dept.pop(msg_id_s, None)
+                if not per_dept:
+                    all_calls.pop(dc_id_s, None)
+            await self._save_unlocked()
+
     # --- client_sell_flow ---
     # Единое состояние клиента в новом ЦРМ v2 визарде. Ключ — str(chat_id).
     # {step, material, bank, price, method, uploads: [{type,file_id,caption}],

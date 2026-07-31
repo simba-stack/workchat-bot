@@ -344,6 +344,10 @@ class UserbotService:
         # Структура: {chat_key: {bank, fio, price_usdt, payment_method, deal_id,
         #                       usdt_address, requested_at, expires_at}}.
         self._pending_lk_card_confirm: dict[str, dict] = {}
+        # ВОЛНА F: последнее клиентское сообщение (кроме самого CALL_OPERATOR
+        # и выбора 1/2/3) — используем как orig_text при пересылке в dept-группу.
+        # In-memory, не persist (не критично при рестарте — тогда просто без orig).
+        self._last_client_msg_text: dict[int, str] = {}
 
     async def create_work_chat(self, client_name: str, client_id: int = 0) -> dict:
         """Создаёт супергруппу-беседу под клиента, инвайтит работников,
@@ -667,6 +671,14 @@ class UserbotService:
             logger.info("asik_broadcast_scheduler started")
         except Exception as e:
             logger.warning("asik_broadcast_scheduler start failed: %s", e)
+        # ВОЛНА F: watchdog для КОСЯКОВ — раз в минуту сверяет pending
+        # operator-calls, если >5 мин без reply → шлёт в FAIL_TRACKER_CHAT_ID
+        # + повторяет запрос в dept-группе с @all.
+        try:
+            asyncio.create_task(self._operator_call_watchdog())
+            logger.info("operator_call_watchdog started")
+        except Exception as e:
+            logger.warning("operator_call_watchdog start failed: %s", e)
         for label, cid in (
             ("brain_chat", storage.get_brain_chat_id()),
             ("coord_chat", storage.get_coordination_chat_id()),
@@ -809,6 +821,29 @@ class UserbotService:
                             return
                 except Exception as _kn_err:
                     logger.warning("knowledge handler check failed: %s", _kn_err)
+
+                # ═══════ ВОЛНА F: dept-chat reply от оператора ═══════
+                # Если сообщение пришло из одной из 3 dept-групп и это reply
+                # на запрос от Асика — форвардим ответ клиенту в managed_chat.
+                try:
+                    _dept_ids = {
+                        storage.get_manager_dept_chat_id(),
+                        storage.get_system_dept_chat_id(),
+                        storage.get_accounting_dept_chat_id(),
+                    }
+                    _dept_ids.discard(0)
+                    if event.chat_id in _dept_ids or _norm(event.chat_id) in {
+                        _norm(x) for x in _dept_ids
+                    }:
+                        _msg = event.message
+                        # Только reply на сообщение (иначе оператор просто
+                        # болтает в dept-чате — не форвардим).
+                        if _msg and getattr(_msg, "reply_to", None):
+                            handled = await self._handle_dept_operator_reply(event)
+                            if handled:
+                                return
+                except Exception as _drh:
+                    logger.warning("dept-reply handler failed: %s", _drh)
 
                 # Managed-chat guard: игнорируем сообщения от НЕ-клиента
                 # в managed_chat, чтобы служебные тексты (CRM-бот
@@ -1162,6 +1197,95 @@ class UserbotService:
                 logger.warning("[asik_broadcast] loop tick error: %s", e)
             # Спим ~55 сек чтобы не пропустить минуту
             await asyncio.sleep(55)
+
+    async def _operator_call_watchdog(self):
+        """ВОЛНА F: раз в минуту проверяет pending_operator_calls.
+        Если запрос висит >5 мин без reply и ещё не был помечен late →
+          1) шлём в FAIL_TRACKER_CHAT_ID («КОСЯКИ»): «Отдел X молчит 5 мин»
+          2) шлём повтор в саму dept-группу с пингом
+          3) помечаем notified_late=True (чтобы не спамить каждую минуту)
+        Раз в час чистим записи старше 48 часов.
+        """
+        await asyncio.sleep(30)  # warm-up
+        _purge_counter = 0
+        while True:
+            try:
+                calls = storage.list_pending_operator_calls() or []
+                now = time.time()
+                fail_tracker_chat = storage.get_fail_tracker_chat_id() or 0
+                for dept_chat_id, dept_msg_id, call in calls:
+                    if call.get("resolved") or call.get("notified_late"):
+                        continue
+                    sent_at = float(call.get("sent_at") or 0)
+                    if not sent_at or (now - sent_at) < 300:  # <5 мин
+                        continue
+                    # 5 минут прошло — эскалируем
+                    dept_key = str(call.get("dept") or "")
+                    dept_name_map = {
+                        "manager": "Менеджерский отдел",
+                        "system": "Отдел СУС",
+                        "accounting": "Бухгалтерия",
+                    }
+                    dept_name = dept_name_map.get(dept_key, dept_key)
+                    client_chat_id = int(call.get("client_chat_id") or 0)
+                    cli_uname = str(call.get("client_username") or "").lstrip("@")
+                    cli_at = f"@{cli_uname}" if cli_uname else "(без username)"
+                    orig_text = (call.get("orig_text") or "")[:200]
+                    # ссылка на dept-запрос
+                    try:
+                        _abs = abs(int(dept_chat_id))
+                        _pos = int(str(_abs)[3:]) if str(_abs).startswith("100") else _abs
+                        dept_link = f"https://t.me/c/{_pos}/{dept_msg_id}"
+                    except Exception:
+                        dept_link = f"chat={dept_chat_id} msg={dept_msg_id}"
+                    # 1) КОСЯКИ
+                    if fail_tracker_chat:
+                        try:
+                            await self.client.send_message(
+                                int(fail_tracker_chat),
+                                (
+                                    f"⚠️ КОСЯК · {dept_name} молчит 5+ мин\n"
+                                    f"Клиент: {cli_at}\n"
+                                    f"Тема (клиент писал): «{orig_text or '(без контекста)'}»\n"
+                                    f"Запрос в отделе: {dept_link}\n"
+                                    f"────\n"
+                                    f"Разберитесь и напомните ответственным."
+                                ),
+                            )
+                        except Exception as _fte:
+                            logger.warning("[watchdog] send to fail_tracker failed: %s", _fte)
+                    # 2) Повтор в dept-группе с пингом (reply на исходное сообщение)
+                    try:
+                        await self.client.send_message(
+                            int(dept_chat_id),
+                            (
+                                f"⏰ Клиент {cli_at} ждёт уже 5+ минут.\n"
+                                f"Пожалуйста, ответьте reply-ом на запрос выше."
+                            ),
+                            reply_to=int(dept_msg_id),
+                        )
+                    except Exception as _drt:
+                        logger.warning("[watchdog] repeat in dept failed: %s", _drt)
+                    # 3) Отмечаем late notified
+                    try:
+                        await storage.mark_operator_call_late_notified(int(dept_chat_id), int(dept_msg_id))
+                    except Exception:
+                        pass
+                    logger.info(
+                        "[watchdog] KOSYAK notified: dept=%s dept_chat=%s dept_msg=%s client=%s",
+                        dept_key, dept_chat_id, dept_msg_id, cli_at,
+                    )
+                # Периодически чистим старые записи (раз в ~60 минут)
+                _purge_counter += 1
+                if _purge_counter >= 60:
+                    _purge_counter = 0
+                    try:
+                        await storage.purge_old_operator_calls(keep_hours=48)
+                    except Exception:
+                        pass
+            except Exception as _we:
+                logger.warning("[watchdog] loop error: %s", _we)
+            await asyncio.sleep(60)
 
     async def _asik_broadcast_send(self, slot: str, cfg: dict):
         """Шлёт текст рассылки во все managed_chats. Если append_pricing —
@@ -3185,6 +3309,71 @@ class UserbotService:
             logger.warning("[audit_bot] payment reply → audit-bot failed: %s", e)
             return False
 
+    async def _handle_dept_operator_reply(self, event) -> bool:
+        """ВОЛНА F: оператор в dept-группе делает reply на pending-запрос от Асика.
+        Форвардим ответ клиенту в managed_chat + пишем «Департамент X (@ник) подключён».
+        Возвращает True если reply был обработан (или должен был быть), иначе False.
+        """
+        try:
+            msg = event.message
+            reply_to = getattr(msg, "reply_to", None)
+            if not reply_to:
+                return False
+            reply_to_msg_id = getattr(reply_to, "reply_to_msg_id", None) or getattr(reply_to, "reply_to_top_id", None)
+            if not reply_to_msg_id:
+                return False
+            dept_chat_id = int(event.chat_id)
+            call = storage.get_pending_operator_call(dept_chat_id, int(reply_to_msg_id))
+            if not call:
+                # Reply на не-Асик сообщение (оператор отвечает коллеге) — игнор
+                return False
+            client_chat_id = int(call.get("client_chat_id") or 0)
+            if not client_chat_id:
+                return False
+            dept_key = str(call.get("dept") or "")
+            dept_name_map = {
+                "manager": "Менеджерский отдел",
+                "system": "Отдел СУС",
+                "accounting": "Бухгалтерия",
+            }
+            dept_name = dept_name_map.get(dept_key, "Оператор")
+
+            # Ник оператора (кто ответил в dept-группе)
+            operator_username = ""
+            try:
+                sender = await event.get_sender()
+                operator_username = (getattr(sender, "username", "") or "").strip()
+            except Exception:
+                pass
+            op_tag = f"@{operator_username}" if operator_username else "оператор"
+
+            # Пересылаем текст оператора в managed_chat.
+            # Сначала объявление «X подключён», потом сам текст (если текст непустой).
+            reply_text = (getattr(msg, "text", "") or getattr(msg, "message", "") or "").strip()
+            header = f"{dept_name} ({op_tag}) подключён к чату"
+            body = f"{header}\n────────\n{reply_text}" if reply_text else header
+            try:
+                await self.client.send_message(int(client_chat_id), body)
+                logger.info(
+                    "[dept] operator reply forwarded: dept=%s op=%s client_chat=%s",
+                    dept_key, op_tag, client_chat_id,
+                )
+            except Exception as _fe:
+                logger.warning("[dept] forward operator reply failed: %s", _fe)
+                return False
+
+            # Помечаем call как resolved (background task больше не будет пинговать)
+            try:
+                await storage.mark_operator_call_resolved(
+                    dept_chat_id, int(reply_to_msg_id), operator_username=operator_username,
+                )
+            except Exception:
+                pass
+            return True
+        except Exception as _e:
+            logger.warning("[dept] _handle_dept_operator_reply error: %s", _e)
+            return False
+
     async def _try_faq_scripted_reply(self, event, chat_id, text: str) -> bool:
         """FAQ regex-перехват для экономии Claude API (Волна 3).
         Проверяет typical-вопросы по regex → шлёт scripted → return True.
@@ -3196,12 +3385,175 @@ class UserbotService:
             return False
         low = text.lower().strip()
 
+        # ═══════════════ ВОЛНА F — CALL_OPERATOR ═══════════════
+        # (0.a) Клиент в состоянии выбора dept (уже видел меню 1/2/3)
+        try:
+            if storage.is_awaiting_dept_choice(chat_id):
+                # Мапим ответ на dept
+                dept_key = None
+                dept_name = ""
+                if re.match(r"^\s*1\s*[!.?)]*\s*$", low) or re.search(
+                    r"\b(?:менеджер|мендж|мнж|manager)\b", low
+                ):
+                    dept_key, dept_name = "manager", "Менеджеры"
+                elif re.match(r"^\s*2\s*[!.?)]*\s*$", low) or re.search(
+                    r"\b(?:сус|перевяз\w*|system)\b", low
+                ):
+                    dept_key, dept_name = "system", "СУС"
+                elif re.match(r"^\s*3\s*[!.?)]*\s*$", low) or re.search(
+                    r"\b(?:бух\w*|бухгалт\w*|accounting)\b", low
+                ):
+                    dept_key, dept_name = "accounting", "Бухгалтерия"
+
+                if dept_key is None:
+                    # Не 1/2/3 → переспрашиваем, флаг оставляем (в течение TTL 5 мин)
+                    return await self._send_scripted(
+                        chat_id, "reply_operator_menu_reask",
+                        default_text=(
+                            "Не понял выбор. Ответьте цифрой:\n"
+                            "1️⃣ Менеджер · 2️⃣ СУС · 3️⃣ Бухгалтерия"
+                        ),
+                    )
+
+                # Выбор сделан — отправляем в dept-группу
+                dept_chat_id = storage.get_dept_chat_id_by_key(dept_key)
+                if not dept_chat_id:
+                    logger.warning("[dept] клиент выбрал %s но dept_chat_id не настроен", dept_key)
+                    await storage.clear_awaiting_dept_choice(chat_id)
+                    return await self._send_scripted(
+                        chat_id, "reply_operator_dept_not_configured",
+                        default_text=(
+                            "Департамент временно недоступен. Напишите ещё раз чуть позже — "
+                            "мы уже подключили эскалацию."
+                        ),
+                    )
+
+                orig_text = storage.get_awaiting_dept_orig_text(chat_id)
+                if not orig_text:
+                    orig_text = self._last_client_msg_text.get(int(chat_id), "")
+
+                # Собираем инфо о клиенте и чате
+                try:
+                    _cinfo = storage.get_chat_info(chat_id) or {}
+                except Exception:
+                    _cinfo = {}
+                client_username = str(_cinfo.get("client_username") or "").strip().lstrip("@")
+                chat_title = str(_cinfo.get("title") or "").strip() or f"chat {chat_id}"
+
+                # Ссылка на конкретный чат / последнее сообщение
+                # (для супергрупп: t.me/c/<abs(id-без_-100)>/<msg_id>)
+                try:
+                    _raw_id = abs(int(chat_id))
+                    if str(_raw_id).startswith("100"):
+                        _pos_id = int(str(_raw_id)[3:])
+                    else:
+                        _pos_id = _raw_id
+                    _msg_id = getattr(event.message, "id", 0) or 0
+                    chat_link = f"https://t.me/c/{_pos_id}/{_msg_id}" if _msg_id else f"chat_id={chat_id}"
+                except Exception:
+                    chat_link = f"chat_id={chat_id}"
+
+                _cli_at = f"@{client_username}" if client_username else "(без username)"
+                dept_req_text = (
+                    f"🆘 Новое сообщение от клиента {_cli_at}\n"
+                    f"Чат: {chat_title}\n"
+                    f"Ссылка: {chat_link}\n"
+                    f"Тема: {dept_name}\n"
+                    f"\n"
+                    f"Клиент писал:\n"
+                    f"«{orig_text or '(без контекста — клиент просто позвал оператора)'}»\n"
+                    f"\n"
+                    f"👉 Ответьте reply-ом на это сообщение — Асик перешлёт клиенту."
+                )
+                try:
+                    dept_msg = await self.client.send_message(int(dept_chat_id), dept_req_text)
+                    await storage.add_pending_operator_call(
+                        dept_msg_id=int(dept_msg.id),
+                        dept_chat_id=int(dept_chat_id),
+                        client_chat_id=int(chat_id),
+                        dept=dept_key,
+                        orig_text=orig_text,
+                        client_username=client_username,
+                    )
+                    logger.info(
+                        "[dept] operator call sent: dept=%s dept_chat=%s dept_msg=%s client_chat=%s",
+                        dept_key, dept_chat_id, dept_msg.id, chat_id,
+                    )
+                except Exception as _dse:
+                    logger.warning("[dept] send to dept-chat failed: %s", _dse)
+                    await storage.clear_awaiting_dept_choice(chat_id)
+                    return await self._send_scripted(
+                        chat_id, "reply_operator_dept_not_configured",
+                        default_text=(
+                            "Департамент временно недоступен. Напишите ещё раз чуть позже — "
+                            "мы уже подключили эскалацию."
+                        ),
+                    )
+
+                await storage.clear_awaiting_dept_choice(chat_id)
+                return await self._send_scripted(
+                    chat_id, "reply_operator_called",
+                    default_text=(
+                        f"Оператор {dept_name} оповещён, ожидайте — обычно отвечают в течение "
+                        f"нескольких минут."
+                    ),
+                    dept_name=dept_name,
+                )
+        except Exception as _dxe:
+            logger.warning("[dept] awaiting_dept_choice branch failed: %s", _dxe)
+
+        # (0.b) Триггер «Асик, позови оператора» / «нужен оператор» / «зови оператора»
+        if re.search(
+            r"(?:^|\W)асик\W*[,]?\W*позов(?:и|ите)\W+оператор|"
+            r"позов(?:и|ите)\W+оператор|"
+            r"зов(?:и|ите)\W+оператор|"
+            r"нужен\W+оператор|"
+            r"нужн[аы]\W+(?:живы[йх]\s+)?оператор|"  # «нужны живые операторы»
+            r"дай(?:те)?\W+оператор|"
+            r"хочу\W+оператор|"
+            r"позвать\W+оператор|"
+            r"^\s*оператор\s*[?!.]*\s*$|"
+            r"живого\W+оператор|"
+            r"живой\W+оператор|"
+            r"живы[йех]\W+оператор|"                 # «живые операторы»
+            r"живые\W+операторы|"
+            r"^\s*асик[,.!?]?\s+оператор\b|"       # «асик, оператор!» / «асик оператор»
+            r"^\s*оператор\W+(?:нужен|срочно|плиз|пожалуйста)",  # «оператор нужен»
+            low,
+        ):
+            # orig_text = что клиент писал в предыдущем сообщении (до вызова оператора)
+            _prev_text = self._last_client_msg_text.get(int(chat_id), "") or ""
+            try:
+                await storage.mark_awaiting_dept_choice(chat_id, orig_text=_prev_text)
+            except Exception as _mae:
+                logger.warning("[dept] mark_awaiting_dept_choice failed: %s", _mae)
+            return await self._send_scripted(
+                chat_id, "reply_call_operator_menu",
+                default_text=(
+                    "Кого позвать?\n\n"
+                    "1️⃣ Менеджер — по сделкам, банкам, готовности\n"
+                    "2️⃣ СУС — перевяз, доступы, тех. вопросы\n"
+                    "3️⃣ Бухгалтерия — выплаты, деньги, USDT, гарант\n\n"
+                    "Ответьте цифрой: 1 / 2 / 3"
+                ),
+            )
+
+        # Сохраняем last_client_msg_text (для orig_text в будущих CALL_OPERATOR)
+        # только для полноценных текстов (не 1/2/3, не сам «Асик позови оператора»).
+        if len(text) >= 3:
+            self._last_client_msg_text[int(chat_id)] = text[:600]
+        # ═══════════════ конец ВОЛНА F — CALL_OPERATOR ═══════════════
+
         # 🔴🔴🔴 SIMBA HARD RULE v3: ЕДИНСТВЕННЫЙ триггер визарда —
-        # ровно одна фраза «Ассистент, хочу сдать РС» (регистр/пунктуация/
-        # окончания слова «сдать» и «РС/счёт/счет» гибкие, но без синонимов).
-        # НИКАКИХ «го вязать», «беру альфу», «готов» — только эта фраза.
+        # фраза с «Ассистент» + «хочу сдать РС» (с любыми словами-связками
+        # между «ассистент» и «хочу» — «я/мы/будьте добры/пожалуйста/можно»
+        # и т.п.). Пунктуация и окончания гибкие.
         _WIZARD_TRIGGER = re.compile(
-            r"^\s*ассистент[,!.\s]+хочу\s+сда(?:ть|вать|м)\s+"
+            # «ассистент [.,!:\s пожалуйста я мы] хочу/хотим сдать [рс/счёт/…]»
+            r"^\s*ассистент\b[\s,.:!?]*"
+            r"(?:\S+\s+){0,4}"  # 0-4 слова-связки (я / мы / пожалуйста / можно / …)
+            r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+            r"сда(?:ть|вать|м|[её]м)\s+"
             r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|"
             r"рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
             re.IGNORECASE,
@@ -3231,7 +3583,12 @@ class UserbotService:
             r"скок\s+бер[её]т|"
             r"за\s+сколько\s+забер[её]те|"
             r"по\s+какой\s+цен|"
-            r"\bпрайс(?:лист|-лист|\s+лист)",
+            r"\bпрайс(?:лист|-лист|\s+лист)|"
+            r"^\s*цен[ыаоуе]\w*\s*[?.!]*\s*$|"  # «цены?», «цена», «ценник»
+            r"\bпочём\b|\bпо\s+чём\b|"
+            r"\bставк[аиуеы]\b|"
+            r"\bтариф\w*\b|"
+            r"сколько\s+плат[иь]",
             low,
         ):
             try:
@@ -3245,55 +3602,49 @@ class UserbotService:
             )
             return ok
 
-        # #2: Метод оплаты — общий вопрос
-        if re.search(
-            r"как\s+(?:вы\s+)?оплат|"
-            r"метод\s+оплат|"
-            r"способ\s+оплат|"
-            r"как\s+платите|"
-            r"что\s+по\s+оплат|"
-            r"варианты\s+оплат",
-            low,
-        ) and not re.search(r"usdt|тэзер|гарант", low):
-            return await self._send_scripted(
-                chat_id, "reply_payment_options",
-                default_text="У нас 3 варианта выплаты: USDT TRC20, Гарант в Continental сейчас или после отработки.",
-            )
-
-        # #3: USDT конкретно — попросить адрес (если ещё нет)
-        if re.search(
-            r"^\s*usdt\s*[?.!]?\s*$|"
-            r"^\s*усдт\s*[?.!]?\s*$|"
-            r"можно\s+usdt|"
-            r"хочу\s+usdt|"
-            r"давайте\s+usdt|"
-            r"через\s+usdt|"
-            r"по\s+usdt",
-            low,
-        ):
-            return await self._send_scripted(
-                chat_id, "reply_payment_usdt_hint",
-                default_text="Ок, USDT TRC20. Пришлите ваш TRC20-адрес.",
-            )
+        # #2 reply_payment_options — УДАЛЁН (SIMBA HARD RULE v3):
+        # вопросы «как оплата?» → идут в брейн-fallback (админ отвечает).
+        # #3 reply_payment_usdt_hint — УДАЛЁН: USDT/адрес flow ведёт CRM-визард.
 
         # #4: Холд/сроки/условия — ЖЁСТКО: только по официальным условиям.
         if re.search(
+            # холд
             r"сколько\s+холд|"
             r"какой\s+холд|"
             r"холд\s+какой|"
             r"\bхолд\s*[?.]|"
+            r"на\s+сколько\s+холд|"
+            # когда деньги / выплата / перевод / получение
             r"когда\s+выпла|"
             r"когда\s+перевод|"
+            r"когда\s+перевед|"
+            r"когда\s+деньг|"
+            r"когда\s+денег|"
+            r"когда\s+получ|"
+            r"когда\s+придут|"
+            r"когда\s+придёт|"
+            r"когда\s+придет|"
+            r"когда\s+зачисл|"
+            r"когда\s+отправ|"
+            # сроки / долго ли
             r"сроки\s+вы?плат|"
+            r"сроки\s+перевод|"
+            r"какие\s+сроки|"
             r"условия\s+сделк|"
-            r"как\s+долго\s+ждать",
+            r"условия\s+вы?плат|"
+            r"как\s+долго\s+ждать|"
+            r"сколько\s+ждать|"
+            r"сколько\s+по\s+времен|"
+            r"через\s+сколько\s+вы?плат|"
+            r"за\s+сколько\s+вы?плат",
             low,
         ):
             return await self._send_scripted(
                 chat_id, "reply_hold",
                 default_text=(
                     "Холд — 3 рабочих дня, отсчёт начинается ПОСЛЕ отработки счёта.\n"
-                    "Полные условия: https://telegra.ph/PRIDE--Usloviya-skupa-schetov-v2-07-02"
+                    "Полные условия: https://telegra.ph/PRIDE--Usloviya-skupa-schetov-v2-07-02\n\n"
+                    "Если хотите живого оператора — напишите: Асик, позови оператора."
                 ),
             )
 
@@ -3340,154 +3691,115 @@ class UserbotService:
                 logger.warning("blocked-explain check failed: %s", _bce)
                 return False
 
-        # #7: Про гарант — «идём в гарант?», «с гарантом?», «можно через гарант?»
+        # ═══════════════ ВОЛНА F — 3 новых scripted-темы ═══════════════
+        # Каждая заканчивается CTA «Асик, позови оператора» (текст самих
+        # ответов лежит в config.SCRIPTED_TEXTS_DEFAULTS — можно /edit).
+
+        # F.a) СДЕЛКИ / готовность работать / трафик / объём
+        # «сделаем альфу», «го вязать», «готов», «беру озон», «сколько сможете взять»
         if re.search(
-            r"\bгарант\w*\b(?:\s+есть)?[?.]?\s*$|"
-            r"\bчерез\s+гарант|"
-            r"\bс\s+гарантом|"
-            r"\bесть\s+гарант|"
-            r"\bид[её]м\s+в\s+гарант|"
-            r"\bид[её]т\s+в\s+гарант|"
-            r"\bмож(?:но|ем|ете)\s+гарант|"
-            r"\bпо\s+гаранту",
+            r"^\s*готов\s*[?!.]*\s*$|"
+            r"готов\s+(?:сдать|вязать|работать|подключит)|"
+            r"я\s+готов\b|"
+            r"го\s+вязать|"
+            r"хочу\s+вязать|"
+            r"давайте\s+вязать|"
+            r"поехали\s+вязать|"
+            r"сделаем\s+(?:альф|озон|райф)|"
+            r"делаем\s+(?:альф|озон|райф)|"
+            r"беру\s+(?:альф|озон|райф)|"
+            r"возьму\s+(?:альф|озон|райф)|"
+            r"какой\s+трафик|"
+            r"сколько\s+трафик|"
+            r"какой\s+объ[её]м|"
+            r"сколько\s+сможете\s+взять|"
+            r"сколько\s+лк\s+в\s+день",
             low,
         ):
             return await self._send_scripted(
-                chat_id, "reply_guarantor_question",
-                default_text="Да, работаем через гарант в Continental. Есть варианты: сейчас, после отработки, или без гаранта (USDT). Что предпочитаете?",
+                chat_id, "reply_deals_general",
+                default_text=(
+                    "Работаем ТОЛЬКО с 3 банками: АЛЬФА · ОЗОН · РАЙФ.\n"
+                    "Чтобы начать сдачу счёта — напишите: Ассистент, хочу сдать РС.\n\n"
+                    "Если хотите живого оператора — напишите: Асик, позови оператора."
+                ),
             )
 
-        # #8: Про трафик / объём — «сколько ЛК в день?», «какой трафик?»
+        # F.b) ПЕРЕВЯЗ / СУС / доступы
         if re.search(
-            r"какой\s+траф|"
-            r"\bтраф(?:ик)?\s*[?.]|"
-            r"скол[ьк]?\s+ЛК|"
-            r"скол[ьк]?\s+сможете\s+взять|"
-            r"скол[ьк]?\s+бер[её]те\s+в\s+день|"
-            r"\bобъ[её]м\b|"
-            r"скол[ьк]?\s+в\s+день\s+можете|"
-            r"скол[ьк]?\s+можно\s+в\s+день",
+            r"когда\s+перевяз|"
+            r"когда\s+сус|"
+            r"когда\s+доступ|"
+            r"дадут\s+доступ|"
+            r"откроют\s+доступ|"
+            r"доступ\s+когда|"
+            r"перевяз\s+когда|"
+            r"сколько\s+перевяз|"
+            r"что\s+с\s+перевяз|"
+            r"как\s+перевяз|"
+            r"как\s+сус|"
+            r"что\s+по\s+перевяз|"
+            r"почему\s+нет\s+перевяз|"
+            r"почему\s+нет\s+доступ",
             low,
         ):
             return await self._send_scripted(
-                chat_id, "reply_traffic_volume",
-                default_text="Берём столько сколько дадите, ограничений нет. Скорость зависит от банка. Ср: ЛК запускаем в день перевязки, отработка 1-3 дня.",
+                chat_id, "reply_perevyaz_status",
+                default_text=(
+                    "Перевяз ведёт отдел СУС по графику после отработки счёта.\n"
+                    "Обычно доступы открываются в течение рабочих часов.\n\n"
+                    "Если хотите живого оператора — напишите: Асик, позови оператора."
+                ),
             )
 
-        # #9: Когда заберёте / сейчас можно? — про сроки принятия в работу
+        # F.c) ВЫПЛАТЫ / USDT / гарант / пополнение
+        # (в дополнение к HOLD_QUESTION #4 выше — там уже про «когда деньги»,
+        # здесь ловим то, что не покрыто: usdt, гарант, пополнение сделки).
         if re.search(
-            r"сейчас\s+забер[её]те|"
-            r"когда\s+забер[её]те|"
-            r"когда\s+сможете|"
-            r"прям\s+сейчас|"
-            r"уже\s+сейчас|"
-            r"срочно\s+можно|"
-            r"\bсейчас\s+прин[её]те|"
-            r"\bсейчас\s+можно\s+начать|"
-            r"\bмож(?:но|ете)\s+начать\s+сейчас|"
-            r"когда\s+нач[её]м",
-            low,
-        ):
-            return await self._send_scripted(
-                chat_id, "reply_when_take",
-                default_text="Готовы сразу — оформим перевязку в течение 10-30 минут. Дальше счёт в работу в тот же день.",
-            )
-
-        # === FLOW: клиент готов → открываем визард продажи ЛК ===
-        # #10: "готов / давайте / поехали / вязать / принимай / продать" —
-        # запускаем inline-визард (банк → метод → confirm). Он сам создаст
-        # ЛК-карточку и пушнёт её в audit-bot. Никакой текстовой каши.
-        # Если визард не смог открыться (пустой прайс) — fallback на
-        # старый scripted-текст (Гарант/USDT через regex).
-        if re.search(
-            # 1) короткие «го / давайте / поехали / готов / начали»
-            r"^\s*(?:го|давай(?:те)?|погнали|поехали|готов(?:ы|а)?|"
-            r"начин(?:аем|айте)|нач[её]м)\b[!.?]?\s*$|"
-            # 2) готов + глагол: «готов вязать / готов сдать / готова продать / я готов»
-            r"(?:^|\s)(?:я\s+)?готов(?:ы|а)?\s+(?:вязать|связать|сдать|сдавать|"
-            r"продать|продавать|оформ\w*|начин\w*|нач[её]м|делать|работать)|"
-            # 3) готов один в конце «я готов» / «мы готовы»
-            r"(?:^|\s)(?:я|мы)\s+готов(?:ы|а)?\s*[!.?]*\s*$|"
-            # 4) давайте / го + глагол
-            r"(?:^|\s)(?:давай(?:те)?|го|поехали|погнали)\s+(?:делать|вязать|"
-            r"начин\w*|нач[её]м|сделаем|оформл\w*|принимай|работать|продавать|"
-            r"продать)|"
-            # 5) «с альфой/озоном/райфом всё/ок/готово/порядок/что дальше?»
-            r"(?:^|\s)с\s+(?:альф\w*|озон\w*|райф\w*|райффайз\w*)\s+"
-            r"(?:вс[её]|ок|всё\s+ок|порядок|готово|отработ\w*)\s*[?!.]?\s*$|"
-            # 6) короткие «что дальше / что нужно / что делать / что делаем / приступаем»
-            r"^\s*что\s+(?:дальше|нужно|делать|делаем|нам\s+делать)\s*[?!.]?\s*$|"
-            r"^\s*приступа(?:ем|ешь|ть)\s*[?!.]?\s*$|"
-            r"^\s*дальше\s+что\s*[?!.]?\s*$|"
-            r"хочу\s+(?:сдать|продать|оформ\w*)|продать\s+лк|"
-            r"^\s*продать\s*[!.?]?\s*$|"
-            r"принимай(?:те)?\s+(?:ЛК|счёт|счет|аккаунт)|"
-            r"оформляй(?:те)?|"
-            r"сделаем\s*[!.?]?\s*$",
-            low, re.IGNORECASE,
-        ):
-            # ЦРМ v2 Волна E: клиент готов → просим CRM-бота открыть
-            # aiogram-визард в managed_chat. Асик просто enqueue команду,
-            # CRM-воркер подхватит и покажет inline-меню (материал → банк →
-            # проверка → оплата). Без ответа Асика — вся диалоговая логика
-            # переходит в кнопки CRM.
-            try:
-                await storage.enqueue_dashboard_command(
-                    f"__start_sell_wizard chat={int(chat_id)}",
-                    source="asik_ready_regex",
-                )
-                logger.info("[sell_wizard_crm] queued start_wizard chat=%s", chat_id)
-            except Exception as _we:
-                logger.warning("[sell_wizard_crm] enqueue start_wizard failed: %s", _we)
-            return True
-
-        # #11: Ответ клиента на вопрос про метод — "гарант / континентал / сделк"
-        if re.search(
-            r"^\s*гарант\s*[.!?]?\s*$|"
-            r"^\s*гарант(?:ом|ой)?\s+возьм|"
+            r"\busdt\b|"
+            r"\busd\s*t\b|"
+            r"\btrc20\b|"
+            r"\btr20\b|"
+            r"тэрэсэ|"
+            r"\bгарант\w*\b|"
             r"через\s+гарант|"
-            r"контин(?:ентал)?|"
-            r"^\s*сделк[аиуой]\b|"
-            r"давайте?\s+гарант|"
-            r"хочу\s+гарант|"
-            r"буд(?:у|ем|ет)\s+гарант",
+            r"с\s+гарантом|"
+            r"без\s+гаранта|"
+            r"пополн(?:ит|ен|яйте|яю|ю|ю\s+сделк|и\s+сделк)|"
+            r"пополни(?:те|ть|ла|ли)?\s+сделк|"
+            r"докиньте\s+на\s+сделк|"
+            r"доложите\s+на\s+сделк",
             low,
         ):
-            try:
-                await storage.set_chat_payment_info(
-                    chat_id,
-                    method="GUARANTOR_BEFORE_WORK",
-                    stage="pending_deal_number",
-                )
-            except Exception:
-                pass
             return await self._send_scripted(
-                chat_id, "ask_continental_deal_number",
-                default_text="Ок, работаем через гарант. Создайте сделку в @PRIDE_BUHGALTERIA и пришлите её номер сюда.",
+                chat_id, "reply_payment_status",
+                default_text=(
+                    "Выплаты по официальным условиям:\n"
+                    "https://telegra.ph/PRIDE--Usloviya-skupa-schetov-v2-07-02\n\n"
+                    "Если хотите живого оператора — напишите: Асик, позови оператора."
+                ),
             )
+        # ═══════════════ конец ВОЛНА F scripted-тем ═══════════════
 
-        # #12: Ответ клиента на вопрос про метод — "usdt / трц / без гаранта"
-        if re.search(
-            r"^\s*(?:usdt|усдт|трц|трс|tрц)\s*[.!?]?\s*$|"
-            r"без\s+гарант|"
-            r"^\s*usdt\s+trc|"
-            r"давайте?\s+(?:usdt|трц|без\s+гарант)|"
-            r"хочу\s+(?:usdt|без\s+гарант)|"
-            r"буд(?:у|ем|ет)\s+(?:usdt|без\s+гарант)",
-            low,
-        ) and 'адрес' not in low:  # если пришёл только "USDT" без адреса
-            try:
-                await storage.set_chat_payment_info(
-                    chat_id,
-                    method="USDT_TRC20",
-                    stage="perevyaz_ready",
-                )
-            except Exception:
-                pass
-            return await self._send_scripted(
-                chat_id, "reply_when_take",
-                default_text="Ок, работаем напрямую USDT. Оформим перевязку в 10-30 минут, адрес спросим после отработки счёта.",
-            )
+        # #7 reply_guarantor_question — УДАЛЁН (SIMBA HARD RULE v3):
+        # «через гарант / с гарантом / гарант?» → в брейн-fallback,
+        # админ отвечает вручную. Единственный старт визарда — фраза
+        # «Ассистент, хочу сдать РС» (см. _WIZARD_TRIGGER выше).
+        #
+        # #8 reply_traffic_volume — УДАЛЁН: вопросы про трафик/объём →
+        # в брейн (админ уточняет по обстоятельствам).
+        #
+        # #9 reply_when_take — УДАЛЁН: сроки/готовность → в брейн.
+        #
+        # #10 старый «готов/давайте/поехали» триггер визарда — УДАЛЁН:
+        # заменён строгим _WIZARD_TRIGGER в самом начале функции.
+        #
+        # #11 ask_continental_deal_number — УДАЛЁН: гарант-flow ведёт
+        # CRM-визард (sell_wizard_crm.py). Асик больше НЕ должен слать
+        # «Создайте сделку в @PRIDE_BUHGALTERIA» — это конкурировало с
+        # визардом и путало клиента.
+        #
+        # #12 USDT-shortcut — УДАЛЁН: USDT-выбор внутри визарда, не текстом.
 
         # #13: Клиент прислал номер сделки Continental (после ask_continental_deal_number)
         # Ловим только когда stage=pending_deal_number чтобы не путать с другими цифрами
@@ -3541,6 +3853,29 @@ class UserbotService:
                 except Exception:
                     pass
                 return True
+
+        # #14: Приветствие ПОСЛЕ уже отправленного welcome.
+        # Если клиент пишет «привет / здравствуйте / доброе утро / хай»
+        # в уже активной беседе — отвечаем коротким scripted-подтверждением.
+        # Если welcome ещё не отправлен — молчим (welcome сам сработает).
+        if re.match(
+            r"^\s*(?:асик|ассистент)?[,.\s]*(?:"
+            r"привет\w*|здравствуй\w*|здоров\w*|здоровеньки\s+булы|"  # здорово/здорова
+            r"добрый\s+(?:день|вечер|утро)|доброе\s+утро|доброго\s+времени|"
+            r"хай|хеллоу|hello|hi|салют|приветствую"
+            r")\s*[!.?)(]*\s*$",
+            low,
+        ):
+            try:
+                _ginfo = storage.get_chat_info(chat_id) or {}
+            except Exception:
+                _ginfo = {}
+            # Только если welcome уже был отправлен (иначе welcome сам ответит).
+            if _ginfo.get("welcome_sent"):
+                return await self._send_scripted(
+                    chat_id, "reply_greeting",
+                    default_text="Здравствуйте! Чем могу помочь?",
+                )
 
         return False
 
@@ -5807,26 +6142,51 @@ class UserbotService:
 
     async def _handle_promote_admins_all_chats(self, event):
         """SIMBA HARD RULE v3: пройти по всем managed_chats и промотить
-        всех работников с worker_roles.is_admin=True до полных прав."""
+        всех работников с worker_roles.is_admin=True до полных прав.
+
+        Жёсткий фильтр: только явно указанная роль owner/manager/system/
+        system_dept/accounting И только dict-формат с is_admin=True.
+        Строки-роли (legacy) считаем admin ТОЛЬКО если строка входит в
+        whitelist разрешённых admin-ролей. Иначе — пропускаем."""
         try:
             managed = storage.state.get("managed_chats") or {}
             worker_roles = storage.state.get("worker_roles") or {}
         except Exception as e:
             await event.reply(f"⚠️ fetch failed: {e}")
             return
-        # Собираем admin-работников
+
+        _ADMIN_ROLES = {
+            "owner", "manager", "system", "system_dept", "accounting",
+            "system+пере", "перевяз", "перевязчик",
+        }
         admins = []
         for uname, role_data in worker_roles.items():
-            _is_admin = False
+            _u = (uname or "").lstrip("@").strip()
+            if not _u:
+                continue
+            _role_str = ""
+            _is_admin_flag = False
             if isinstance(role_data, dict):
-                _is_admin = bool(role_data.get("is_admin"))
+                _role_str = (role_data.get("role") or "").strip().lower()
+                _is_admin_flag = bool(role_data.get("is_admin"))
             elif isinstance(role_data, str):
-                _is_admin = bool(role_data.strip())
-            if _is_admin:
-                admins.append(uname.lstrip("@"))
+                _role_str = role_data.strip().lower()
+            # Жёстко: role должен быть в whitelist. Одного is_admin_flag
+            # без роли — недостаточно (защита от битых записей).
+            if _role_str in _ADMIN_ROLES and (isinstance(role_data, str) or _is_admin_flag):
+                admins.append(_u)
         if not admins:
-            await event.reply("⚠️ worker_roles.is_admin=True пусто.")
+            await event.reply(
+                "⚠️ Не нашёл ни одного admin-работника в worker_roles "
+                "(проверил роли: " + ", ".join(sorted(_ADMIN_ROLES)) + ")."
+            )
             return
+        # Отчёт SIMBA какие именно юзеры будут промотнуты — перед exec
+        await event.reply(
+            "🔍 Готовлюсь промотить <b>" + str(len(admins)) + "</b> админ-"
+            "работников:\n<code>@" + "</code>, <code>@".join(admins[:30]) + "</code>",
+            parse_mode="HTML",
+        )
 
         promoted = 0
         errors = []
