@@ -3386,6 +3386,36 @@ class UserbotService:
         low = text.lower().strip()
 
         # ═══════════════ ВОЛНА F — CALL_OPERATOR ═══════════════
+        # 🆘 EARLY BYPASS: WIZARD_TRIGGER и CALL_OPERATOR перебивают любое
+        # состояние (в т.ч. awaiting_dept_choice). Клиент передумал звать
+        # оператора и решил сдать РС — не блокируем REASK'ом.
+        # Оба регекса дублируются ниже в основных проверках — здесь только
+        # проверка bypass'а флага.
+        try:
+            if storage.is_awaiting_dept_choice(chat_id):
+                _bypass = bool(re.search(
+                    r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
+                    r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+                    r"сда(?:ть|вать|м|[её]м)\s+",
+                    low, re.IGNORECASE,
+                )) or bool(re.search(
+                    r"(?:позов(?:и|ите)|зов(?:и|ите))\W+оператор|"
+                    r"(?:нужен|нужн[аы])\W+(?:живы[йх]\s+)?оператор|"
+                    r"хочу\W+оператор|дай(?:те)?\W+оператор",
+                    low, re.IGNORECASE,
+                ))
+                if _bypass:
+                    try:
+                        await storage.clear_awaiting_dept_choice(chat_id)
+                    except Exception:
+                        pass
+                    logger.info(
+                        "[dept] awaiting_dept BYPASS: клиент передумал chat=%s text=%r",
+                        chat_id, low[:60],
+                    )
+        except Exception as _bxe:
+            logger.warning("[dept] bypass check failed: %s", _bxe)
+
         # (0.a) Клиент в состоянии выбора dept (уже видел меню 1/2/3)
         try:
             if storage.is_awaiting_dept_choice(chat_id):
