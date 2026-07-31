@@ -1037,10 +1037,11 @@ class UserbotService:
 
         # Собираем треки из сообщения. VoIP УБРАН (июль 2026, SIMBA):
         # оставили только ИП/ООО (продолжает AI) и Дебет (приглашает оператора).
+        # Дебет ловим и на «2» (новый welcome), и на «3» (старый welcome с VoIP=2).
         tracks = set()
         if re.search(r"\b1\b|\bип\b|\booo\b|\bооо\b|\bip\b", text):
             tracks.add("ip")
-        if re.search(r"\b3\b|\bдебет\w*\b|\bdebet\b", text):
+        if re.search(r"\b[23]\b|\bдебет\w*\b|\bdebet\b", text):
             tracks.add("debet")
 
         if not tracks:
@@ -2773,6 +2774,20 @@ class UserbotService:
         silent_until = self._ai_silent_until.get(chat_key, 0)
         if silent_until and time.time() < silent_until:
             text_lc = ((event.message.text or "") if event.message else "").lower()
+            # ═══ ВОЛНА F HOTFIX: WIZARD-триггер / CALL_OPERATOR / прямое
+            # обращение к «ассистенту» / «асику» — ВСЕГДА снимают silent
+            # (иначе «Ассистент хочу сдать РС» = 4 слова = блок 30 мин).
+            _bypass_silent = (
+                re.search(r"\bассистент\w*\b|\bасик\w*\b", text_lc)
+                or re.search(
+                    r"хоч[уеё]м?\s+сда(?:ть|вать|м|[её]м)|"
+                    r"позов(?:и|ите)\W+оператор|"
+                    r"нужен\W+оператор|нужн[аы]\W+оператор|"
+                    r"дай(?:те)?\W+оператор|хочу\W+оператор|"
+                    r"живого?\W+оператор|живы[йех]\W+оператор",
+                    text_lc,
+                )
+            )
             HELP_MARKERS = (
                 "?", "помог", "помощ", "не получ", "не работ", "не пойм",
                 "не понимаю", "сколько", "когда", "куда", "что дальше",
@@ -2794,6 +2809,7 @@ class UserbotService:
             looks_like_help = (
                 any(m in text_lc for m in HELP_MARKERS)
                 or word_count <= 3  # короткое сообщение почти всегда требует ответа
+                or bool(_bypass_silent)  # ВОЛНА F: «ассистент/асик» / WIZARD / CALL_OPERATOR
             )
             if not looks_like_help:
                 logger.info(
