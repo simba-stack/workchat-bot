@@ -2282,10 +2282,14 @@ class UserbotService:
         except Exception as e:
             logger.warning("support_msg_cache update fail: %s", e)
 
-        # 📞 HELPDESK TRIGGER: клиент пишет про оператора / менеджера / человека —
-        # переводим чат в inbox менеджера + замолкаем AI.
+        # 📞 HELPDESK TRIGGER — ОТКЛЮЧЁН (Волна F, авг 2026, SIMBA).
+        # Заменён CALL_OPERATOR-механикой в _try_faq_scripted_reply:
+        # клиент пишет «Асик позови оператора» → меню 1/2/3 → dept-группа.
+        # Раньше старый helpdesk-trigger перехватывал «оператор/менеджер»
+        # ДО _try_faq и Волна F не срабатывала. Оставляем как dead code
+        # если понадобится вернуть — обернуть if True: обратно.
         try:
-            if (chat_info and event.message and event.message.text
+            if False and (chat_info and event.message and event.message.text
                     and event.message.sender_id == chat_info.get("client_id")):
                 low_text = event.message.text.lower().strip()
                 # Гибкий regex: слово «оператор/менеджер/человек/админ/owner»
@@ -3635,7 +3639,11 @@ class UserbotService:
             r"живы[йех]\W+оператор|"                 # «живые операторы»
             r"живые\W+операторы|"
             r"^\s*асик[,.!?]?\s+оператор\b|"       # «асик, оператор!» / «асик оператор»
-            r"^\s*оператор\W+(?:нужен|срочно|плиз|пожалуйста)",  # «оператор нужен»
+            r"^\s*оператор\W+(?:нужен|срочно|плиз|пожалуйста)|"  # «оператор нужен»
+            r"\bгде\W+оператор|"                    # «где оператор?!»
+            r"\bнайти\W+оператор|"                  # «найти оператора»
+            r"свяж(?:ите|ешь)\W+с\W+оператор|"      # «свяжите с оператором»
+            r"подключ(?:ите|и)\W+оператор",         # «подключите оператора»
             low,
         ):
             # orig_text = что клиент писал в предыдущем сообщении (до вызова оператора)
