@@ -651,13 +651,19 @@ async def cmd_add_partner_command(message: Message):
     except Exception as e:
         logger.warning("register_crm_chat failed: %s", e)
 
-    await message.reply(
+    sent_partner = await message.reply(
         f"✅ <b>Партнёр @{username} добавлен.</b>\n\n"
         f"@{username}, чтобы оформить продажу счёта — напишите в этот чат:\n\n"
         f"<b><code>Ассистент, хочу сдать РС</code></b>\n\n"
         f"Дальше система по шагам проведёт вас через inline-кнопки: "
         f"выбор материала → банк → проверка → способ оплаты → данные ЛК.",
     )
+    # SIMBA: закрепляем сразу — клиент видит инструкцию как pinned сообщение,
+    # не потеряется в чате. disable_notification чтобы не пуш-нотификация.
+    try:
+        await sent_partner.pin(disable_notification=True)
+    except Exception as _pe:
+        logger.warning("pin partner-added failed chat=%s: %s", chat_id, _pe)
 
 
 # ─── /profile ───────────────────────────────────────────────────
@@ -2347,9 +2353,40 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
         return
     drop_id, bank = parts[1], parts[2]
     drop = crm_storage.get_drop_any(drop_id)
+    # SIMBA fix: если drop не найден — race с save/reload storage. Пробуем reload и снова.
     if not drop:
-        await call.answer("Клиент не найден", show_alert=True)
-        return
+        try:
+            crm_storage.reload_sync()
+        except Exception:
+            pass
+        drop = crm_storage.get_drop_any(drop_id)
+    # AUTOHEAL: если drop всё ещё нет — создаём на лету для текущего чата
+    if not drop:
+        logger.warning(
+            "[cb_newlk] drop=%s not found after reload — autoheal create for chat=%s",
+            drop_id, call.message.chat.id,
+        )
+        try:
+            # Ищем owner для этого чата
+            chat_owner = _find_owner_for_work_chat(call.message.chat.id)
+            if not chat_owner:
+                await call.answer(
+                    "Не могу найти партнёра этого чата. Попробуйте ещё раз через минуту "
+                    "или напишите оператору.", show_alert=True,
+                )
+                return
+            new_drop_id = await crm_storage.add_crm_drop(
+                owner_id=chat_owner["owner_id"],
+                fio=chat_owner.get("username") or f"client_{chat_owner['owner_id']}",
+                work_chat_id=call.message.chat.id,
+            )
+            drop = crm_storage.get_crm_drop(new_drop_id) or {"drop_id": new_drop_id}
+            drop_id = new_drop_id
+            logger.info("[cb_newlk] autoheal created drop=%s chat=%s", drop_id, call.message.chat.id)
+        except Exception as _ahe:
+            logger.warning("[cb_newlk] autoheal failed: %s", _ahe)
+            await call.answer("Клиент не найден. Попробуйте начать заново.", show_alert=True)
+            return
     await call.answer()
     await state.set_state(LKForm.waiting_login)
     await state.update_data(
