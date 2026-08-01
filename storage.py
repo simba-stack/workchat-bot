@@ -4298,15 +4298,31 @@ class Storage:
     # === Dashboard commands queue ===
 
     async def enqueue_dashboard_command(self, text: str, source: str = "dashboard") -> dict:
-        """Добавляет команду в очередь для userbot."""
+        """Добавляет команду в очередь для userbot.
+        DEDUP: если та же команда (по тексту) уже в очереди в статусе pending
+        или обработана < 30 сек назад — не создаём дубль (иначе visard/wizard
+        и т.п. запускаются N раз подряд при клиентском повторе)."""
         if not text or not text.strip():
             return {}
+        text_clean = text.strip()
         async with _lock:
             q = self.state.setdefault("dashboard_commands", [])
+            # DEDUP-check (последние 50 записей)
+            now = time.time()
+            for c in q[-50:]:
+                if (c or {}).get("text") == text_clean:
+                    st = str(c.get("status") or "")
+                    ts = float(c.get("ts") or 0)
+                    # pending — точно дубль, скипаем
+                    if st == "pending":
+                        return dict(c)
+                    # done/error < 30 сек назад — тоже скипаем (повторный клик)
+                    if st in ("done", "error") and (now - ts) < 30:
+                        return dict(c)
             entry = {
                 "id": int(time.time() * 1000),
                 "ts": time.time(),
-                "text": text.strip(),
+                "text": text_clean,
                 "status": "pending",
                 "result": "",
                 "source": source,
