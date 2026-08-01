@@ -2282,24 +2282,26 @@ class Storage:
         return dict(self.state.get("deals_stats") or {})
 
     # === Бухгалтерия V2: Группа 2 «Бухгалтерия» (заявки v2) ===
+    # ⛔ SIMBA (авг 2026): УБРАНО. Функционал заменён АУДИТ-ботом (stroy-crm-bot).
+    # Getters всегда возвращают 0 — все callers увидят «не настроен», ничего не
+    # запостят в старую группу. Setters no-op. Смотрите АУДИТ-бот group1/group2/group3.
 
     def get_accounting_group_id(self) -> int:
-        return int(self.state.get("accounting_group_id") or 0)
+        return 0  # KILL_SWITCH — Бухгалтерия перенесена в АУДИТ-бот
 
     async def set_accounting_group_id(self, chat_id: int):
-        async with _lock:
-            self.state["accounting_group_id"] = int(chat_id)
-            await self._save_unlocked()
+        # no-op, kill-switch (см. выше)
+        pass
 
     # === ЛК-карточки (Группа 1) ===
+    # ⛔ SIMBA (авг 2026): УБРАНО. Заменено АУДИТ-ботом. См. get_accounting_group_id выше.
 
     def get_lk_group_id(self) -> int:
-        return int(self.state.get("lk_group_id") or 0)
+        return 0  # KILL_SWITCH — ЛК Отдел перенесён в АУДИТ-бот
 
     async def set_lk_group_id(self, chat_id: int):
-        async with _lock:
-            self.state["lk_group_id"] = int(chat_id)
-            await self._save_unlocked()
+        # no-op, kill-switch
+        pass
 
     # ===== Очереди выплат (payout queues) =====
     # 3 очереди по методу оплаты:

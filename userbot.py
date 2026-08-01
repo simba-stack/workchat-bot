@@ -1009,6 +1009,36 @@ class UserbotService:
         if not text:
             return False
 
+        # ═══ SIMBA CRITICAL: WIZARD-TRIGGER имеет ПРИОРИТЕТ над всем ═══
+        # Если клиент пишет «Ассистент, хочу сдать РС» — снимаем track-guard,
+        # ставим track=ip, enqueue __start_sell_wizard и выходим с handled=True.
+        # Иначе WIZARD не срабатывал когда welcome-фаза активна.
+        _wizard_re = re.compile(
+            r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
+            r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+            r"сда(?:ть|вать|м|[её]м)\s+"
+            r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
+            re.IGNORECASE,
+        )
+        if _wizard_re.search(text):
+            try:
+                await storage.set_chat_track(chat_id, "ip")
+            except Exception as _te:
+                logger.warning("wizard-priority set_chat_track failed: %s", _te)
+            try:
+                await storage.enqueue_dashboard_command(
+                    f"__start_sell_wizard chat={int(chat_id)}",
+                    source="asik_wizard_priority",
+                )
+                logger.info(
+                    "[wizard] PRIORITY trigger (in track handler): chat=%s text=%r",
+                    chat_id, text[:80],
+                )
+            except Exception as _we:
+                logger.warning("wizard-priority enqueue failed: %s", _we)
+            # Клиенту НЕ отвечаем сами — CRM-бот откроет визард через inline-кнопку
+            return True
+
         # SHORTCUT: если клиент сразу пишет КОММЕРЧЕСКИЙ запрос (упоминает банк,
         # реки, заявку, цену, оборот, выкуп и т.п.) — направление и так понятно
         # (ИП/ООО), хватит дёргать его «выберите 1/2/3». Автоматически ставим
@@ -2034,6 +2064,47 @@ class UserbotService:
         except Exception:
             raw_text = ""
 
+        # ═══ SIMBA MEGA-PRIORITY: WIZARD-триггер обходит ВСЁ ═══
+        # Silent-mode / cooldown / ai_muted / lock — не блокируют «Ассистент, хочу сдать РС».
+        # (дублируется ниже в _try_faq_scripted_reply, но там куча guard'ов может съесть).
+        try:
+            _rtxt_low = (raw_text or "").lower().strip()
+            _wiz_mega = re.search(
+                r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
+                r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+                r"сда(?:ть|вать|м|[её]м)\s+"
+                r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
+                _rtxt_low, re.IGNORECASE,
+            )
+            if _wiz_mega:
+                # Снимаем все возможные локальные блокировки
+                try:
+                    self._ai_silent_until.pop(_norm_chat_id(chat_id), None)
+                except Exception:
+                    pass
+                try:
+                    await storage.clear_awaiting_dept_choice(chat_id)
+                except Exception:
+                    pass
+                try:
+                    await storage.set_chat_track(chat_id, "ip")
+                except Exception:
+                    pass
+                try:
+                    await storage.enqueue_dashboard_command(
+                        f"__start_sell_wizard chat={int(chat_id)}",
+                        source="asik_wizard_mega_priority",
+                    )
+                    logger.info(
+                        "[wizard] MEGA-PRIORITY (in _handle_ai_message): chat=%s text=%r",
+                        chat_id, _rtxt_low[:80],
+                    )
+                except Exception as _we:
+                    logger.warning("wizard-mega enqueue failed: %s", _we)
+                return
+        except Exception as _mpe:
+            logger.warning("wizard mega-priority failed: %s", _mpe)
+
         try:
             sender_id_dbg = event.sender_id
         except Exception:
@@ -2211,10 +2282,14 @@ class UserbotService:
         except Exception as e:
             logger.warning("support_msg_cache update fail: %s", e)
 
-        # 📞 HELPDESK TRIGGER: клиент пишет про оператора / менеджера / человека —
-        # переводим чат в inbox менеджера + замолкаем AI.
+        # 📞 HELPDESK TRIGGER — ОТКЛЮЧЁН (Волна F, авг 2026, SIMBA).
+        # Заменён CALL_OPERATOR-механикой в _try_faq_scripted_reply:
+        # клиент пишет «Асик позови оператора» → меню 1/2/3 → dept-группа.
+        # Раньше старый helpdesk-trigger перехватывал «оператор/менеджер»
+        # ДО _try_faq и Волна F не срабатывала. Оставляем как dead code
+        # если понадобится вернуть — обернуть if True: обратно.
         try:
-            if (chat_info and event.message and event.message.text
+            if False and (chat_info and event.message and event.message.text
                     and event.message.sender_id == chat_info.get("client_id")):
                 low_text = event.message.text.lower().strip()
                 # Гибкий regex: слово «оператор/менеджер/человек/админ/owner»
@@ -3564,7 +3639,11 @@ class UserbotService:
             r"живы[йех]\W+оператор|"                 # «живые операторы»
             r"живые\W+операторы|"
             r"^\s*асик[,.!?]?\s+оператор\b|"       # «асик, оператор!» / «асик оператор»
-            r"^\s*оператор\W+(?:нужен|срочно|плиз|пожалуйста)",  # «оператор нужен»
+            r"^\s*оператор\W+(?:нужен|срочно|плиз|пожалуйста)|"  # «оператор нужен»
+            r"\bгде\W+оператор|"                    # «где оператор?!»
+            r"\bнайти\W+оператор|"                  # «найти оператора»
+            r"свяж(?:ите|ешь)\W+с\W+оператор|"      # «свяжите с оператором»
+            r"подключ(?:ите|и)\W+оператор",         # «подключите оператора»
             low,
         ):
             # orig_text = что клиент писал в предыдущем сообщении (до вызова оператора)

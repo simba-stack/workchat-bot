@@ -90,9 +90,19 @@ async def create_lk_card(
             return None
         data = r.json() or {}
         card = data.get("card")
-        if card:
+        # SIMBA fix: server-side dedup — если карточка уже есть, API вернёт 200
+        # с duplicate=True и существующую карточку. НЕ создаём вторую.
+        if data.get("duplicate"):
+            logger.info(
+                "[audit_bot] DUPLICATE — карточка уже была id=%s fio=%s bank=%s status=%s "
+                "(дубль НЕ создан, возвращаем существующую)",
+                (card or {}).get("id"), (card or {}).get("fio"),
+                (card or {}).get("bank"), (card or {}).get("status"),
+            )
+        elif card:
             logger.info("[audit_bot] card created id=%s work_chat=%s bank=%s",
                         card.get("id"), work_chat_id, bank)
+        if card:
             # Инвалидируем кэш этого work_chat
             async with _cache_lock:
                 for k in list(_list_cache.keys()):
@@ -101,6 +111,43 @@ async def create_lk_card(
         return card
     except Exception as e:
         logger.warning("[audit_bot] create_lk_card exception: %s", e)
+        return None
+
+
+async def find_duplicate_lk_card(
+    fio: str,
+    bank: str,
+    client_id: Optional[int] = None,
+    work_chat_id: Optional[int] = None,
+) -> Optional[dict]:
+    """GET /api/v1/lk-cards/search/dup — ищет активную карточку по fio+bank.
+    Возвращает card dict если найдена, иначе None.
+    Асик должен вызывать ПЕРЕД create_lk_card, чтобы избежать дубля."""
+    if not _is_configured():
+        return None
+    if not fio or not bank:
+        return None
+    params = {"fio": fio, "bank": bank}
+    if client_id:
+        params["client_id"] = str(int(client_id))
+    if work_chat_id:
+        params["work_chat_id"] = str(int(work_chat_id))
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(
+                f"{AUDIT_BOT_URL}/api/v1/lk-cards/search/dup",
+                headers=_auth_headers(),
+                params=params,
+            )
+        if r.status_code >= 400:
+            logger.warning("[audit_bot] find_duplicate failed: %s %s", r.status_code, r.text[:200])
+            return None
+        data = r.json() or {}
+        if data.get("found") and data.get("card"):
+            return data["card"]
+        return None
+    except Exception as e:
+        logger.warning("[audit_bot] find_duplicate exception: %s", e)
         return None
 
 
