@@ -303,12 +303,37 @@ async def send_start_button(bot, chat_id):
 
 async def start_wizard(bot, chat_id):
     """Открывает первый экран (материал) — вызывается из sw:start callback
-    или из dashboard-command __start_sell_wizard (fallback)."""
+    или из dashboard-command __start_sell_wizard (fallback).
+    RETRY: до 3 попыток с backoff — CRM-бот мог только-что вступить в чат
+    (Telegram может задержать membership) или сработать rate-limit."""
+    import asyncio as _asyncio
     await set_flow(chat_id, step="material", material="", bank="", price=0,
                    method="", uploads=[], deal_number="",
                    verification_msg_id=0, guarantor_msg_id=0)
-    await _render_material(bot, chat_id)
-    logger.info("[sell_wizard_crm] wizard opened chat=%s", chat_id)
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            await _render_material(bot, chat_id)
+            logger.info(
+                "[sell_wizard_crm] wizard opened chat=%s attempt=%d", chat_id, attempt,
+            )
+            return
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "[sell_wizard_crm] wizard render failed chat=%s attempt=%d: %s",
+                chat_id, attempt, e,
+            )
+            # Backoff: 2s, 4s
+            if attempt < 3:
+                await _asyncio.sleep(attempt * 2)
+    # Все 3 попытки провалились — логируем как ошибку. Клиент увидит молчание,
+    # но mega-priority в userbot повторит enqueue при следующем «Ассистент, хочу сдать РС».
+    logger.error(
+        "[sell_wizard_crm] wizard FAILED after 3 attempts chat=%s last_err=%s",
+        chat_id, last_err,
+    )
+    raise last_err if last_err else RuntimeError("wizard render failed")
 
 
 # ─────────────────────── VERIFICATION FORWARD ───────────────────────
@@ -414,8 +439,13 @@ async def _forward_deal_to_guarantor(bot, chat_id, deal_number):
 
 async def _trigger_lk_form(bot, chat_id):
     """После successful payment path — просим CRM показать заполнение ЛК.
-    Реиспользуем существующий handler crm_bot._open_lk_form_for_client
-    через ту же dashboard-command что и раньше — консистентность."""
+    ДВОЙНАЯ ГАРАНТИЯ:
+      1) СИНХРОННО вызываем _open_lk_form_for_client — клиент видит форму
+         СРАЗУ без ожидания 5-сек polling.
+      2) ЕЩЁ enqueue команду в очередь как fallback (на случай если
+         синхронный вызов упал — retry через worker).
+    Раньше был только enqueue → клиент ждал 5 сек, а если worker падал —
+    молчание навсегда."""
     flow = get_flow(chat_id)
     bank_key = (flow.get("bank") or "").upper()
     bank_title = BANK_TITLES.get(bank_key, bank_key)
@@ -423,20 +453,51 @@ async def _trigger_lk_form(bot, chat_id):
     chat_info = _storage.get_chat_info(chat_id) or {}
     client_id = chat_info.get("client_id") or 0
     client_uname = chat_info.get("client_username") or ""
-    cmd = (
-        f"__open_lk_form|chat={int(chat_id)}"
-        f"|client={int(client_id or 0)}"
-        f"|username={client_uname or ''}"
-        f"|bank={bank_title}"
-        f"|price={float(flow.get('price') or 0)}"
-        f"|method={method}"
-        f"|deal={flow.get('deal_number') or ''}"
-    )
+    params = {
+        "chat": str(int(chat_id)),
+        "client": str(int(client_id or 0)),
+        "username": client_uname or "",
+        "bank": bank_title,
+        "price": str(float(flow.get("price") or 0)),
+        "method": method,
+        "deal": flow.get("deal_number") or "",
+    }
+    # (1) СИНХРОННЫЙ путь — крайняя надёжность.
+    sync_ok = False
     try:
-        await _storage.enqueue_dashboard_command(cmd, source="sell_wizard_crm")
-        logger.info("[sell_wizard_crm] LK-form triggered chat=%s", chat_id)
+        # Импорт локально, чтобы избежать circular import при загрузке модуля.
+        from crm_bot import _open_lk_form_for_client as _openlk
+        result = await _openlk(bot, params)
+        logger.info("[sell_wizard_crm] LK-form SYNC opened chat=%s → %s", chat_id, result)
+        # Даже если result начинается с ⚠️ — считаем что клиенту уже отправлено сообщение
+        sync_ok = True
     except Exception as e:
-        logger.warning("[sell_wizard_crm] LK-form trigger failed: %s", e)
+        logger.warning("[sell_wizard_crm] LK-form SYNC failed chat=%s: %s — падаем в fallback", chat_id, e)
+
+    # (2) FALLBACK через очередь — если синхронный вызов упал.
+    if not sync_ok:
+        cmd = (
+            f"__open_lk_form|chat={int(chat_id)}"
+            f"|client={int(client_id or 0)}"
+            f"|username={client_uname or ''}"
+            f"|bank={bank_title}"
+            f"|price={float(flow.get('price') or 0)}"
+            f"|method={method}"
+            f"|deal={flow.get('deal_number') or ''}"
+        )
+        try:
+            await _storage.enqueue_dashboard_command(cmd, source="sell_wizard_crm")
+            logger.info("[sell_wizard_crm] LK-form fallback enqueued chat=%s", chat_id)
+        except Exception as e:
+            logger.warning("[sell_wizard_crm] LK-form fallback enqueue failed: %s", e)
+        # Плюс — сообщаем клиенту что что-то пошло не так, оператор подключится
+        try:
+            await bot.send_message(
+                int(chat_id),
+                "⏳ Обрабатываю данные, форма ЛК откроется через пару секунд. Если не появится — оператор подключится.",
+            )
+        except Exception:
+            pass
     await set_flow(chat_id, step="done")
 
 
