@@ -4974,24 +4974,47 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             default_method = saved_method
     except Exception:
         pass
+    # SIMBA (04.08.2026): МИГРАЦИЯ на АУДИТ-бот (stroy-crm-bot).
+    # Старая система lk_cards (id=lkNNN, в crm_storage.state) отключена
+    # KILL_SWITCH'ем. Теперь после перевяза создаётся карточка в АУДИТ-боте
+    # через REST API — она сама постится в его group1 «В РАБОТЕ» и получает
+    # числовой id (77, 78, ...). Возвращаем str(id) для handoff-сообщения.
     try:
-        card_id = await crm_storage.add_lk_card(
+        import audit_bot_client
+        # ФИО берём из drop (сохранено при создании LK через seller_wizard).
+        # supplier — @username клиента (владельца дропа).
+        # responsible — заглушка «СУС (перевяз)», можно позже брать из sms-log.
+        fio_raw = drop.get("fio") or ""
+        supplier_raw = (owner.get("username") or "").lstrip("@")
+        work_chat_id = owner.get("work_chat_id") or 0
+        client_id = int(owner.get("tg_user_id") or 0)
+        card = await audit_bot_client.create_lk_card(
+            work_chat_id=int(work_chat_id),
+            supplier=supplier_raw,
+            material=f"{fio_raw} — {bank}" if fio_raw else bank,
+            responsible="СУС (перевяз)",
+            date_supply=time.strftime("%d.%m.%Y"),
             bank=bank,
-            fio=drop.get("fio") or "",
-            supplier=owner.get("username") or "",
-            price_usdt=price,
-            payment_method=default_method,
-            status="В_РАБОТЕ",
-            work_chat_id=owner.get("work_chat_id") or 0,
-            client_username=owner.get("username") or "",
-            created_by="crm_bot:after_perevyaz",
-            deal_id=lk.get("deal") or "",
+            fio=fio_raw,
+            client_id=client_id or None,
+            client_username=supplier_raw,
+            source="crm_bot:after_perevyaz",
+            autopost=True,
         )
+        if not card:
+            logger.warning(
+                "post-perevyaz: audit_bot вернул пусто для drop=%s droplk=%s bank=%s",
+                drop.get("drop_id"), lk.get("droplk_id"), bank,
+            )
+            return None
+        card_id = str(card.get("id") or "")
+        is_duplicate = bool(card.get("duplicate"))
         logger.info(
-            "post-perevyaz lk_card: drop=%s crm_lk=%s → lk_card=%s",
-            drop.get("drop_id"), lk.get("droplk_id"), card_id,
+            "post-perevyaz lk_card: drop=%s crm_lk=%s → audit_card=#%s (dup=%s)",
+            drop.get("drop_id"), lk.get("droplk_id"), card_id, is_duplicate,
         )
-        # IDEMPOTENCY: сохраняем lk_card_id в drop_lk чтобы повторный вызов не создавал дубль
+        # IDEMPOTENCY: сохраняем audit_card_id в drop_lk (поле lk_card_id
+        # для совместимости) — при повторном вызове ранний check вернёт его.
         try:
             droplk_id_save = lk.get("droplk_id") or ""
             if droplk_id_save and card_id:
@@ -5000,7 +5023,7 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             pass
         return card_id
     except Exception as e:
-        logger.warning("create single lk_card failed: %s", e)
+        logger.warning("post-perevyaz audit_bot.create_lk_card failed: %s", e)
         return None
 
 
@@ -5050,16 +5073,14 @@ async def _create_lk_cards_from_crm_drop(drop: dict) -> list:
 
 
 async def _queue_anketa_post_via_userbot(drop_id: str):
-    """Энкуит команду в dashboard_commands — userbot подберёт и
-    запостит анкету в нашу Группу 1 ЛК PRIDE (через Telethon)."""
-    try:
-        await crm_storage.enqueue_dashboard_command(
-            f"__crm_post_anketa {drop_id}",
-            source="crm_bot:acceptdrop",
-        )
-        logger.info("queued __crm_post_anketa for drop=%s", drop_id)
-    except Exception as e:
-        logger.warning("queue anketa post failed: %s", e)
+    """DEPRECATED (SIMBA, авг 2026): раньше энкуило __crm_post_anketa
+    команду для userbot чтобы он постил анкету ЛК в старую Группу 1
+    (lk_group_id). Теперь эта группа отключена KILL_SWITCH'ем — карточки
+    ЛК идут в АУДИТ-бот (stroy-crm-bot) через audit_bot_client.create_lk_card
+    внутри _create_single_lk_card. Оставляем как no-op для совместимости
+    со старыми вызовами по коду — ничего не делаем."""
+    logger.debug("[deprecated] _queue_anketa_post_via_userbot(%s) — no-op (АУДИТ-бот заменил)", drop_id)
+    return
 
 
 async def _notify_work_chat(bot, owner: dict, text: str):
