@@ -10670,7 +10670,22 @@ class UserbotService:
                     # SMS-команды обрабатывает ОТДЕЛЬНЫЙ worker в crm_bot.py
                     # (нужен bot-инстанс CRM-бота для отправки сообщений
                     # с inline-кнопками). Пропускаем — пусть CRM подберёт.
-                    if re.match(r"^__sms_(advance|reset)\s+\S+\s*$", text, re.I):
+                    # SIMBA CRITICAL FIX (04.08.2026): userbot ЗАБИРАЛ CRM-команды
+                    # и помечал их "unknown command" → CRM бот их больше не видел.
+                    # Race condition двух workers на одной очереди.
+                    # Skip-список расширен всеми CRM/aiogram-only командами:
+                    _CRM_CMDS = re.compile(
+                        r"^(?:"
+                        r"__sms_(?:advance|reset|refresh_tracker)|"
+                        r"__refresh_password_post|"
+                        r"__start_sell_wizard|"
+                        r"__send_sell_button|"
+                        r"__open_lk_form|"
+                        r"__auto_register_partner"
+                        r")\b",
+                        re.IGNORECASE,
+                    )
+                    if _CRM_CMDS.match(text):
                         continue
                     try:
                         result = await self._execute_dashboard_command(text)
