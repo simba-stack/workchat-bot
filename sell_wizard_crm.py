@@ -289,14 +289,21 @@ async def _render_guarantor_instruction(bot, chat_id, edit_call: Optional[Callba
 # ─────────────────────── PUBLIC ENTRY ───────────────────────
 
 async def send_start_button(bot, chat_id):
-    """Асик после reply_ip → dashboard-command __send_sell_button → мы шлём."""
+    """Асик после reply_ip → dashboard-command __send_sell_button → мы шлём.
+    SIMBA (авг 2026): сообщение с кнопкой «🛒 Начать оформление» ПИНИМ,
+    чтобы клиент видел его в закрепе — не терялось в чате."""
     _sd = _storage.get_scripted_text("sell_start_button") or {}
     prompt = (_sd.get("text") or
               "Когда будете готовы оформить продажу ЛК — жмите кнопку ниже 👇")
     try:
-        await bot.send_message(chat_id, prompt, parse_mode="HTML",
-                               reply_markup=_kb_start_button())
+        sent = await bot.send_message(chat_id, prompt, parse_mode="HTML",
+                                       reply_markup=_kb_start_button())
         logger.info("[sell_wizard_crm] start-button sent to chat=%s", chat_id)
+        # Пинним для видимости — disable_notification чтобы без пуша
+        try:
+            await bot.pin_chat_message(chat_id, sent.message_id, disable_notification=True)
+        except Exception as _pe:
+            logger.warning("[sell_wizard_crm] pin start-button failed chat=%s: %s", chat_id, _pe)
     except Exception as e:
         logger.warning("[sell_wizard_crm] send start-button failed chat=%s: %s", chat_id, e)
 
