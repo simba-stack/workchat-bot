@@ -3010,7 +3010,7 @@ async def admin_cleanup_lk_suppliers(request: Request, me: dict = Depends(_get_m
         "pridecontrole_bot", "prideкоntrol", "prideконтроль",
         "pride_sys01", "pride_sys02", "pride_manager1",
         "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
-        "prideassistant", "pride_assistant", "pride_invite_bot",
+        "prideassistant", "pride_assistant", "aleksandrkarpov_aw", "pride_invite_bot",
         "pridework_invite_bot", "prideoutsource_bot",
     }
     cards = storage.list_lk_cards() or {}
@@ -3062,7 +3062,7 @@ async def admin_cleanup_crm_owners(request: Request, me: dict = Depends(_get_me)
         "pridecontrole_bot", "prideкоntrol", "prideконтроль",
         "pride_sys01", "pride_sys02", "pride_manager1",
         "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
-        "prideassistant", "pride_assistant", "pride_invite_bot",
+        "prideassistant", "pride_assistant", "aleksandrkarpov_aw", "pride_invite_bot",
         "pridework_invite_bot", "prideoutsource_bot",
     }
     owners = storage.state.get("crm_owners") or {}

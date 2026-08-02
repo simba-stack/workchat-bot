@@ -8164,6 +8164,7 @@ class UserbotService:
             "pride_sys01", "pride_sys02", "pride_manager1",
             "simba_pride_adm", "timonskupcl", "aleksandrkarpov_aw",
             "prideassistant", "pride_assistant", "pride_invite_bot",
+            "aleksandrkarpov_aw",  # ← username восстановленного Асика (авг 2026, SIMBA)
             "pridework_invite_bot", "prideoutsource_bot",
         }
         if supplier and supplier.lower() in SYSTEM_USERNAMES:
