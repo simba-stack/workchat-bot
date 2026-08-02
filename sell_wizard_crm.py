@@ -63,8 +63,13 @@ def set_dependencies(storage_ref):
 
 
 class SellWizardForm(StatesGroup):
-    waiting_upload = State()       # клиент шлёт пруфы в managed_chat
+    waiting_upload = State()       # клиент шлёт пруфы в managed_chat (legacy)
     waiting_deal_number = State()  # клиент шлёт номер сделки Continental
+    # SIMBA (авг 2026): разделённые state для каждого типа пруфа —
+    # клиент нажимает конкретную кнопку и шлёт ТОЛЬКО этот тип, без путаницы.
+    waiting_screenshot = State()   # ждём фото/картинку
+    waiting_video = State()        # ждём видео (только для АЛЬФА)
+    waiting_inn = State()          # ждём ИНН (текст с цифрами)
 
 
 # ─────────────────────── STATE HELPERS ───────────────────────
@@ -136,13 +141,44 @@ def _kb_debet_stub():
     ]])
 
 
-def _kb_verification(uploads_count: int):
-    check_lbl = f"📤 На проверку ({uploads_count})" if uploads_count else "📤 На проверку"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=check_lbl, callback_data="sw:sendcheck")],
-        [InlineKeyboardButton(text="◀️ К банкам", callback_data="sw:back:bank"),
-         InlineKeyboardButton(text="❌ Отмена", callback_data="sw:x")],
+def _kb_verification(uploads: list, bank_key: str = ""):
+    """SIMBA (авг 2026): разделённые кнопки для каждого типа пруфа.
+    Не-АЛЬФА: 📷 Скриншот · ✏️ ИНН · 📤 Отправить
+    АЛЬФА:    🎥 Видео · 📷 Скриншот · ✏️ ИНН · 📤 Отправить
+    Каждая кнопка показывает ✅ если этот тип уже загружен.
+    Отправить — активна если есть все обязательные типы.
+    """
+    types_present = {u.get("type") for u in (uploads or []) if u.get("type")}
+    is_alfa = bank_key.upper() == "АЛЬФА"
+
+    def _btn(icon, label, present_key, cb):
+        prefix = "✅ " if present_key in types_present else ""
+        return InlineKeyboardButton(text=f"{prefix}{icon} {label}", callback_data=cb)
+
+    rows = []
+    if is_alfa:
+        rows.append([_btn("🎥", "Загрузить видео", "video", "sw:up:video")])
+    rows.append([_btn("📷", "Загрузить скриншот", "screenshot", "sw:up:screen")])
+    rows.append([_btn("✏️", "Вписать ИНН", "inn", "sw:up:inn")])
+
+    # Обязательные типы для отправки:
+    required = {"screenshot", "inn"}
+    if is_alfa:
+        required.add("video")
+    ready = required.issubset(types_present)
+    send_lbl = (
+        f"📤 Отправить на проверку ({len(uploads or [])})"
+        if ready else f"⏳ Загрузите все пруфы ({len(types_present)}/{len(required)})"
+    )
+    rows.append([InlineKeyboardButton(
+        text=send_lbl,
+        callback_data="sw:sendcheck" if ready else "sw:noop",
+    )])
+    rows.append([
+        InlineKeyboardButton(text="◀️ К банкам", callback_data="sw:back:bank"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="sw:x"),
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _kb_verification_review(client_chat_id):
@@ -224,21 +260,28 @@ async def _render_verification(bot, chat_id, edit_call: Optional[CallbackQuery] 
         text = f"🛡 Проверка ЛК {bank_title}\n\nПришлите пруф в чат и жмите «📤 На проверку»."
 
     header = f"💰 Цена: <b>{int(price)}$</b>\n\n" if price > 0 else ""
-    footer = ""
-    if uploads:
-        types = {}
-        for u in uploads:
-            t = u.get("type") or "?"
-            types[t] = types.get(t, 0) + 1
-        parts = []
-        for k, lbl in (("photo", "фото"), ("video", "видео"),
-                       ("document", "файлов"), ("text", "текст")):
-            if types.get(k):
-                parts.append(f"{lbl}×{types[k]}")
-        footer = "\n\n📎 <b>В буфере:</b> " + ", ".join(parts)
+    # SIMBA (авг 2026): считаем по типам пруфов, показываем чекбоксы
+    types_present = {u.get("type") for u in (uploads or []) if u.get("type")}
+    is_alfa = bank_key == "АЛЬФА"
+    footer_lines = ["", "📋 <b>Что нужно предоставить:</b>"]
+    if is_alfa:
+        footer_lines.append(
+            f"{'✅' if 'video' in types_present else '⬜'} Видео (для АЛЬФА)"
+        )
+    footer_lines.append(
+        f"{'✅' if 'screenshot' in types_present else '⬜'} Скриншот"
+    )
+    footer_lines.append(
+        f"{'✅' if 'inn' in types_present else '⬜'} ИНН"
+    )
+    footer_lines.append(
+        "\n👉 Жмите кнопку под нужным типом, затем присылайте одним сообщением. "
+        "Когда все ✅ — жмите <b>«📤 Отправить на проверку»</b>."
+    )
+    footer = "\n".join(footer_lines)
 
     full = header + text + footer
-    kb = _kb_verification(len(uploads))
+    kb = _kb_verification(uploads, bank_key)
     if edit_call:
         try:
             await edit_call.message.edit_text(full, parse_mode="HTML", reply_markup=kb)
@@ -289,14 +332,21 @@ async def _render_guarantor_instruction(bot, chat_id, edit_call: Optional[Callba
 # ─────────────────────── PUBLIC ENTRY ───────────────────────
 
 async def send_start_button(bot, chat_id):
-    """Асик после reply_ip → dashboard-command __send_sell_button → мы шлём."""
+    """Асик после reply_ip → dashboard-command __send_sell_button → мы шлём.
+    SIMBA (авг 2026): сообщение с кнопкой «🛒 Начать оформление» ПИНИМ,
+    чтобы клиент видел его в закрепе — не терялось в чате."""
     _sd = _storage.get_scripted_text("sell_start_button") or {}
     prompt = (_sd.get("text") or
               "Когда будете готовы оформить продажу ЛК — жмите кнопку ниже 👇")
     try:
-        await bot.send_message(chat_id, prompt, parse_mode="HTML",
-                               reply_markup=_kb_start_button())
+        sent = await bot.send_message(chat_id, prompt, parse_mode="HTML",
+                                       reply_markup=_kb_start_button())
         logger.info("[sell_wizard_crm] start-button sent to chat=%s", chat_id)
+        # Пинним для видимости — disable_notification чтобы без пуша
+        try:
+            await bot.pin_chat_message(chat_id, sent.message_id, disable_notification=True)
+        except Exception as _pe:
+            logger.warning("[sell_wizard_crm] pin start-button failed chat=%s: %s", chat_id, _pe)
     except Exception as e:
         logger.warning("[sell_wizard_crm] send start-button failed chat=%s: %s", chat_id, e)
 
@@ -524,6 +574,44 @@ async def cb_cancel(call: CallbackQuery, state: FSMContext):
     await call.answer("Отменено")
 
 
+# SIMBA (авг 2026): 3 разделённые кнопки загрузки пруфов — каждая жмётся
+# отдельно, клиент шлёт ровно этот тип. Нет мешанины «фото+видео+текст».
+@router.callback_query(F.data == "sw:up:screen")
+async def cb_upload_screenshot(call: CallbackQuery, state: FSMContext):
+    flow = get_flow(call.message.chat.id)
+    if not flow or _is_stale(flow):
+        await call.answer("Сессия истекла", show_alert=True); return
+    await state.set_state(SellWizardForm.waiting_screenshot)
+    await state.update_data(sw_chat_id=call.message.chat.id)
+    await call.answer("📷 Пришлите скриншот одним сообщением", show_alert=False)
+
+
+@router.callback_query(F.data == "sw:up:video")
+async def cb_upload_video(call: CallbackQuery, state: FSMContext):
+    flow = get_flow(call.message.chat.id)
+    if not flow or _is_stale(flow):
+        await call.answer("Сессия истекла", show_alert=True); return
+    await state.set_state(SellWizardForm.waiting_video)
+    await state.update_data(sw_chat_id=call.message.chat.id)
+    await call.answer("🎥 Пришлите видео одним сообщением", show_alert=False)
+
+
+@router.callback_query(F.data == "sw:up:inn")
+async def cb_upload_inn(call: CallbackQuery, state: FSMContext):
+    flow = get_flow(call.message.chat.id)
+    if not flow or _is_stale(flow):
+        await call.answer("Сессия истекла", show_alert=True); return
+    await state.set_state(SellWizardForm.waiting_inn)
+    await state.update_data(sw_chat_id=call.message.chat.id)
+    await call.answer("✏️ Пришлите ИНН цифрами (10 или 12 знаков)", show_alert=False)
+
+
+@router.callback_query(F.data == "sw:noop")
+async def cb_noop(call: CallbackQuery):
+    """Заглушка для disabled кнопки «Загрузите все пруфы» — silent toast."""
+    await call.answer("Сначала загрузите все обязательные пруфы", show_alert=False)
+
+
 @router.callback_query(F.data.startswith("sw:mat:"))
 async def cb_material(call: CallbackQuery, state: FSMContext):
     mat = call.data.split(":", 2)[2]
@@ -604,10 +692,47 @@ async def cb_sendcheck(call: CallbackQuery, state: FSMContext):
     if not ok:
         await call.answer(f"Ошибка: {err}", show_alert=True)
         return
+    # SIMBA (авг 2026): чистим клиентские upload-сообщения из managed_chat —
+    # они уже форварднуты в verification-группу, в чате клиента остаются
+    # только «Загружено N пруфов» + служебные меню.
+    chat_id = call.message.chat.id
+    try:
+        _cnt = 0
+        for u in uploads:
+            mid = u.get("msg_id")
+            if not mid:
+                continue
+            try:
+                await call.bot.delete_message(chat_id, int(mid))
+                _cnt += 1
+            except Exception:
+                pass
+        logger.info("[sell_wizard_crm] cleanup: deleted %d upload msgs from chat=%s", _cnt, chat_id)
+    except Exception as _de:
+        logger.warning("[sell_wizard_crm] cleanup uploads failed: %s", _de)
     waiting = _scripted("verification_awaiting",
                         "⏳ Пруфы на проверке. Ожидайте.")
     try:
         await call.message.edit_text(waiting, parse_mode="HTML")
+    except Exception:
+        pass
+    # Сводка «сколько чего загружено» — одно чистое сообщение
+    try:
+        types_present = {}
+        for u in uploads:
+            t = u.get("type") or "?"
+            types_present[t] = types_present.get(t, 0) + 1
+        summary_parts = []
+        for k, lbl in (("screenshot", "📷 скриншот"), ("video", "🎥 видео"),
+                       ("inn", "✏️ ИНН")):
+            if types_present.get(k):
+                summary_parts.append(f"{lbl}×{types_present[k]}")
+        if summary_parts:
+            await call.bot.send_message(
+                chat_id,
+                f"📎 <b>Загружено на проверку:</b> {', '.join(summary_parts)}",
+                parse_mode="HTML",
+            )
     except Exception:
         pass
     await state.clear()
@@ -769,6 +894,137 @@ async def msg_upload(message: Message, state: FSMContext):
         await message.react([{"type": "emoji", "emoji": "👍"}])
     except Exception:
         pass
+
+
+# SIMBA (авг 2026): message-handlers для 3 отдельных типов пруфов.
+# Каждый принимает СТРОГО свой тип, иначе клиент получает пояснение
+# что не так и что делать.
+
+@router.message(SellWizardForm.waiting_screenshot)
+async def msg_upload_screenshot(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    flow = get_flow(message.chat.id)
+    if not flow or _is_stale(flow):
+        return
+    if not (message.photo or message.document):
+        try:
+            await message.reply("❌ Нужен именно скриншот (фото или картинка-документ). Попробуйте ещё раз.")
+        except Exception:
+            pass
+        return
+    upload = {"type": "screenshot", "msg_id": int(message.message_id),
+              "caption": (message.caption or "")[:200]}
+    await _storage.sell_flow_append_upload(message.chat.id, upload)
+    logger.info("[sell_wizard_crm] screenshot+ chat=%s", message.chat.id)
+    try: await message.react([{"type": "emoji", "emoji": "👍"}])
+    except Exception: pass
+    await state.clear()  # Выходим из state — клиент возвращается к меню кнопок
+    # Ре-рендерим меню с обновлёнными чекбоксами (edit прежнего wizard_msg_id)
+    try:
+        await _rerender_verification_after_upload(message.bot, message.chat.id)
+    except Exception:
+        pass
+
+
+@router.message(SellWizardForm.waiting_video)
+async def msg_upload_video(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    flow = get_flow(message.chat.id)
+    if not flow or _is_stale(flow):
+        return
+    if not message.video:
+        try:
+            await message.reply("❌ Нужно видео (не фото и не текст). Попробуйте ещё раз.")
+        except Exception:
+            pass
+        return
+    upload = {"type": "video", "msg_id": int(message.message_id),
+              "caption": (message.caption or "")[:200]}
+    await _storage.sell_flow_append_upload(message.chat.id, upload)
+    logger.info("[sell_wizard_crm] video+ chat=%s", message.chat.id)
+    try: await message.react([{"type": "emoji", "emoji": "👍"}])
+    except Exception: pass
+    await state.clear()
+    try:
+        await _rerender_verification_after_upload(message.bot, message.chat.id)
+    except Exception:
+        pass
+
+
+@router.message(SellWizardForm.waiting_inn)
+async def msg_upload_inn(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    flow = get_flow(message.chat.id)
+    if not flow or _is_stale(flow):
+        return
+    text = (message.text or "").strip()
+    # ИНН = 10 или 12 цифр
+    m = re.match(r"^\s*(\d{10}|\d{12})\s*$", text)
+    if not m:
+        try:
+            await message.reply(
+                "❌ ИНН должен быть 10 (для ИП) или 12 цифр (для физлица), "
+                "без пробелов и других символов. Попробуйте ещё раз."
+            )
+        except Exception:
+            pass
+        return
+    inn = m.group(1)
+    upload = {"type": "inn", "msg_id": int(message.message_id), "caption": inn}
+    await _storage.sell_flow_append_upload(message.chat.id, upload)
+    logger.info("[sell_wizard_crm] inn+ chat=%s inn=%s", message.chat.id, inn)
+    try: await message.react([{"type": "emoji", "emoji": "👍"}])
+    except Exception: pass
+    await state.clear()
+    try:
+        await _rerender_verification_after_upload(message.bot, message.chat.id)
+    except Exception:
+        pass
+
+
+async def _rerender_verification_after_upload(bot, chat_id):
+    """После загрузки пруфа — обновляем существующее wizard-сообщение с
+    новыми чекбоксами (без создания нового меню)."""
+    flow = get_flow(chat_id)
+    wizard_msg_id = int(flow.get("wizard_msg_id") or 0)
+    if not wizard_msg_id:
+        # fallback — просто отрендерим заново новым сообщением
+        await _render_verification(bot, chat_id)
+        return
+    bank_key = (flow.get("bank") or "").upper()
+    bank_title = BANK_TITLES.get(bank_key, bank_key)
+    price = float(flow.get("price") or 0)
+    uploads = flow.get("uploads") or []
+    cfg = _storage.get_verification_config(bank_title) or {}
+    text = (cfg.get("text") or "").strip()
+    if not text:
+        scripted_key = VERIFICATION_SCRIPTED_KEY.get(bank_key)
+        if scripted_key:
+            text = _scripted(scripted_key, "")
+    if not text:
+        text = f"🛡 Проверка ЛК {bank_title}"
+    header = f"💰 Цена: <b>{int(price)}$</b>\n\n" if price > 0 else ""
+    types_present = {u.get("type") for u in uploads if u.get("type")}
+    is_alfa = bank_key == "АЛЬФА"
+    footer_lines = ["", "📋 <b>Что нужно предоставить:</b>"]
+    if is_alfa:
+        footer_lines.append(f"{'✅' if 'video' in types_present else '⬜'} Видео (для АЛЬФА)")
+    footer_lines.append(f"{'✅' if 'screenshot' in types_present else '⬜'} Скриншот")
+    footer_lines.append(f"{'✅' if 'inn' in types_present else '⬜'} ИНН")
+    footer_lines.append("\n👉 Жмите кнопку, затем присылайте одним сообщением.")
+    full = header + text + "\n".join(footer_lines)
+    kb = _kb_verification(uploads, bank_key)
+    try:
+        await bot.edit_message_text(full, chat_id=chat_id, message_id=wizard_msg_id,
+                                     parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.warning("[sell_wizard_crm] rerender edit failed chat=%s: %s", chat_id, e)
 
 
 @router.message(SellWizardForm.waiting_deal_number, F.text)
