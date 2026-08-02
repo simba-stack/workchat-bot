@@ -2982,7 +2982,11 @@ async def cb_acceptdrop(call: CallbackQuery):
             await call.answer("Клиент не найден", show_alert=True)
             return
         if drop.get("status") == "accepted":
-            await call.answer("Уже принят", show_alert=True)
+            # SIMBA fix (авг 2026): race от double-click или Telegram callback
+            # retry — первый обработчик успешно принял, второй видит accepted.
+            # НЕ показываем alert (popup) — это пугает оператора, будто ошибка.
+            # Просто тихий toast: приняли, всё ок.
+            await call.answer("✅ Уже принято", show_alert=False)
             return
         if drop.get("status") not in ("pending", "draft"):
             await call.answer("Нельзя принять в этом статусе", show_alert=True)
@@ -3164,6 +3168,7 @@ _PAYMENT_METHOD_LABELS = {
 
 def _resolve_payment_method_line(owner: dict, drop: dict) -> str:
     """Собирает строку «Метод оплаты» для handoff'а. Приоритет:
+    0) sell_flow(work_chat_id).method — свежий выбор клиента в визарде (SIMBA авг 2026)
     1) owner.payment_method (set_payment_method AI-tool сохраняет сюда)
     2) chat_info(work_chat_id).method (managed_chats — save_chat в _tool_set_payment_method)
     3) client_preferences[username].payment_method (save_client_preferences)
@@ -3172,8 +3177,16 @@ def _resolve_payment_method_line(owner: dict, drop: dict) -> str:
     """
     method = ""
     addr = ""
+    # PRIORITY 0 (SIMBA авг 2026): свежий выбор в визарде (sell_flow.method)
     try:
-        if owner and isinstance(owner, dict):
+        wc = (owner or {}).get("work_chat_id")
+        if wc:
+            sf = crm_storage.get_sell_flow(int(wc)) or {}
+            method = (sf.get("method") or "").strip().upper()
+    except Exception:
+        pass
+    try:
+        if not method and owner and isinstance(owner, dict):
             method = (owner.get("payment_method") or "").strip().upper()
             addr = (owner.get("usdt_address") or "").strip()
     except Exception:
@@ -4058,16 +4071,23 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
         )
         # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
+        # SIMBA (авг 2026): пиним handoff — клиент видит итог в закрепе.
         try:
             pay_line = _resolve_payment_method_line(owner, drop)
-            # ЦРМ не касается цены выкупа — цену/торг ведёт Асик по прайсу из
-            # welcome-сообщения. Здесь только сухой handoff без сумм.
             handoff = (
                 f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
                 f"📋 Карточка: #{card_id or '—'}\n"
                 f"💳 Метод оплаты: {pay_line}"
             )
-            await _notify_work_chat(bot, owner, handoff)
+            sent_handoff = await _notify_work_chat(bot, owner, handoff)
+            # Пиним handoff если удалось получить sent-объект
+            try:
+                _wcid = owner.get("work_chat_id")
+                _hid = getattr(sent_handoff, "message_id", None)
+                if _wcid and _hid:
+                    await bot.pin_chat_message(int(_wcid), int(_hid), disable_notification=True)
+            except Exception as _pe:
+                logger.warning("[perevyaz] pin handoff failed: %s", _pe)
         except Exception:
             pass
         await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
@@ -4988,10 +5008,23 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         supplier_raw = (owner.get("username") or "").lstrip("@")
         work_chat_id = owner.get("work_chat_id") or 0
         client_id = int(owner.get("tg_user_id") or 0)
+        # SIMBA (авг 2026): подтягиваем метод оплаты из sell_flow (свежий
+        # выбор клиента в визарде) — передаём в АУДИТ для отображения.
+        method_label = ""
+        try:
+            sf = crm_storage.get_sell_flow(int(work_chat_id)) or {}
+            _m = (sf.get("method") or "").upper()
+            method_label = _PAYMENT_METHOD_LABELS.get(_m, _m)
+        except Exception:
+            pass
+        # Дополним material меткой метода оплаты чтобы оператор в АУДИТ видел
+        material_line = f"{fio_raw} — {bank}" if fio_raw else bank
+        if method_label:
+            material_line = f"{material_line} · 💳 {method_label}"
         card = await audit_bot_client.create_lk_card(
             work_chat_id=int(work_chat_id),
             supplier=supplier_raw,
-            material=f"{fio_raw} — {bank}" if fio_raw else bank,
+            material=material_line,
             responsible="СУС (перевяз)",
             date_supply=time.strftime("%d.%m.%Y"),
             bank=bank,
@@ -5086,22 +5119,24 @@ async def _queue_anketa_post_via_userbot(drop_id: str):
 async def _notify_work_chat(bot, owner: dict, text: str):
     """Кросс-нотификация: партнёр работал в ЛС бота — в его work-чате
     с ассистентом появляется уведомление о новой активности.
-    Ассистент / тимлид видит без необходимости лезть в CRM."""
+    Ассистент / тимлид видит без необходимости лезть в CRM.
+    Возвращает sent-объект (Message) или None — для последующего pin."""
     if not owner:
-        return
+        return None
     wc = owner.get("work_chat_id")
     if not wc:
-        return
+        return None
     decorated = _decor(text)
     try:
-        await bot.send_message(wc, decorated)
+        return await bot.send_message(wc, decorated)
     except Exception as e:
         # Fallback без premium-emoji
         logger.debug("notify work_chat with premium emoji failed: %s", e)
         try:
-            await bot.send_message(wc, text)
+            return await bot.send_message(wc, text)
         except Exception as e2:
             logger.debug("notify work_chat plain failed: %s", e2)
+            return None
 
 
 # ════════════════════════════════════════════════════════════════
