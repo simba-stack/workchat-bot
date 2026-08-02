@@ -1374,7 +1374,13 @@ class Storage:
     # Welcome v2 text (с выбором направления) — редактируется через JARVIS
     # VoIP УБРАН (SIMBA, июль 2026): только ИП и Дебет.
     def get_welcome_v2(self) -> str:
-        return self.state.get("welcome_v2") or (
+        stored = self.state.get("welcome_v2") or ""
+        # SIMBA auto-migrate: если в сохранённом тексте всё ещё старый VoIP-пункт —
+        # игнорируем и возвращаем дефолт. Пользователь может переопределить
+        # через /edit welcome_v2 с новым текстом (без VoIP) — оно сохранится нормально.
+        if stored and ("voip" in stored.lower() or "телефонии" in stored.lower()):
+            stored = ""
+        return stored or (
             "🤩 Вы попали в рабочую инфраструктуру корпорации PRIDE.\n\n"
             "🤝 Какой вариант сотрудничества Вас интересует?\n\n"
             "1. ИП/ООО\n"
@@ -3236,14 +3242,22 @@ class Storage:
             await self._save_unlocked()
 
     def has_ai_pending_for_chat(self, chat_id) -> bool:
-        """True если для этого чата уже висит вопрос в брейне (не спамим повторами)."""
+        """True если для этого чата уже висит СВЕЖИЙ вопрос в брейне (не спамим).
+        TTL 5 мин: если pending старше 5 мин — считаем что админ игнорит,
+        разрешаем новый запрос (иначе клиент застревает навсегда).
+        """
         try:
             cid = int(chat_id)
         except Exception:
             return False
+        now = time.time()
         for v in (self.state.get("ai_pending_questions") or {}).values():
-            if int(v.get("chat_id") or 0) == cid:
-                return True
+            if int(v.get("chat_id") or 0) != cid:
+                continue
+            ts = float(v.get("ts") or 0)
+            if ts and (now - ts) > 300:  # 5 мин — pending истёк
+                continue
+            return True
         return False
 
     async def clear_sell_flow(self, chat_id) -> None:
@@ -4300,25 +4314,32 @@ class Storage:
     async def enqueue_dashboard_command(self, text: str, source: str = "dashboard") -> dict:
         """Добавляет команду в очередь для userbot.
         DEDUP: если та же команда (по тексту) уже в очереди в статусе pending
-        или обработана < 30 сек назад — не создаём дубль (иначе visard/wizard
-        и т.п. запускаются N раз подряд при клиентском повторе)."""
+        или обработана < 30 сек назад — не создаём дубль.
+        ИСКЛЮЧЕНИЯ (idempotent — можно спамить):
+          __start_sell_wizard — открывает свежий wizard, дубль не вреден
+          __send_sell_button — inline кнопка, дубль не вреден
+        """
         if not text or not text.strip():
             return {}
         text_clean = text.strip()
+        # SIMBA fix: idempotent commands не дедупим
+        _NO_DEDUP = ("__start_sell_wizard ", "__send_sell_button ")
+        _skip_dedup = any(text_clean.startswith(p) for p in _NO_DEDUP)
         async with _lock:
             q = self.state.setdefault("dashboard_commands", [])
-            # DEDUP-check (последние 50 записей)
-            now = time.time()
-            for c in q[-50:]:
-                if (c or {}).get("text") == text_clean:
-                    st = str(c.get("status") or "")
-                    ts = float(c.get("ts") or 0)
-                    # pending — точно дубль, скипаем
-                    if st == "pending":
-                        return dict(c)
-                    # done/error < 30 сек назад — тоже скипаем (повторный клик)
-                    if st in ("done", "error") and (now - ts) < 30:
-                        return dict(c)
+            # DEDUP-check (последние 50 записей), кроме idempotent-команд
+            if not _skip_dedup:
+                now = time.time()
+                for c in q[-50:]:
+                    if (c or {}).get("text") == text_clean:
+                        st = str(c.get("status") or "")
+                        ts = float(c.get("ts") or 0)
+                        # pending — точно дубль, скипаем
+                        if st == "pending":
+                            return dict(c)
+                        # done/error < 30 сек назад — тоже скипаем (повторный клик)
+                        if st in ("done", "error") and (now - ts) < 30:
+                            return dict(c)
             entry = {
                 "id": int(time.time() * 1000),
                 "ts": time.time(),
