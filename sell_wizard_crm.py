@@ -93,6 +93,49 @@ def _is_stale(flow: dict) -> bool:
         return False
 
 
+# AUDIT #3 HIGH-5 (авг 2026): текстовые команды отмены wizard.
+# Раньше единственный выход — кнопка sw:x или час ожидания (WIZARD_TIMEOUT_SEC).
+# Клиент внутри waiting_screenshot писал «отмена» → бот отвечал «❌ Нужен именно
+# скриншот». Теперь ловим отмену на любом waiting_* этапе.
+_CANCEL_RE = re.compile(
+    r"^\s*(?:отмена|отмен(?:и|ить|яю)|стоп|выход|выйти|назад|"
+    r"передумал\w*|не\s+буд[уу])\s*[!.?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_cancel_text(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_CANCEL_RE.match(text.strip()))
+
+
+async def _maybe_wizard_cancel(message: Message, state: FSMContext) -> bool:
+    """Если сообщение — команда отмены, сбрасывает FSM+flow и отвечает
+    подтверждением. Возвращает True если отмена сработала."""
+    if not _is_cancel_text(message.text or ""):
+        return False
+    try:
+        await state.clear()
+    except Exception:
+        pass
+    try:
+        await clear_flow(message.chat.id)
+    except Exception:
+        pass
+    try:
+        await message.reply(
+            "❌ Оформление отменено.\n\n"
+            "Когда снова захотите — напишите:\n"
+            "<code>Ассистент, хочу сдать РС</code>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    logger.info("[sell_wizard_crm] cancel by text chat=%s", message.chat.id)
+    return True
+
+
 def _scripted(key: str, default: str = "", **placeholders) -> str:
     data = _storage.get_scripted_text(key) or {}
     text = (data.get("text") or default or "").strip()
@@ -580,9 +623,34 @@ async def _trigger_lk_form(bot, chat_id):
 
 # ─────────────────────── CALLBACK HANDLERS ───────────────────────
 
+# AUDIT #3 CRIT-2 (авг 2026): idempotency для sw:start.
+# MED-9 закрыл dedup только для dashboard-команд __start_sell_wizard,
+# но inline-кнопка sw:start шла напрямую в start_wizard — двойной клик
+# показывал 2 экрана «Какой материал сдаёте?». Guard: chat_id + 10s.
+_SW_START_PROCESSING: dict = {}  # chat_id -> unix ts
+
 @router.callback_query(F.data == "sw:start")
 async def cb_start(call: CallbackQuery, state: FSMContext):
-    await start_wizard(call.bot, call.message.chat.id)
+    import time as _time
+    _cid = int(call.message.chat.id)
+    _now = _time.time()
+    _last = _SW_START_PROCESSING.get(_cid, 0)
+    if _now - _last < 10:
+        await call.answer("Уже открываю визард…", show_alert=False)
+        return
+    _SW_START_PROCESSING[_cid] = _now
+    # Периодическая чистка старых записей
+    if len(_SW_START_PROCESSING) > 200:
+        _cutoff = _now - 3600
+        for _k in list(_SW_START_PROCESSING.keys()):
+            if _SW_START_PROCESSING[_k] < _cutoff:
+                _SW_START_PROCESSING.pop(_k, None)
+    try:
+        await start_wizard(call.bot, call.message.chat.id)
+    except Exception:
+        # если start_wizard упал, снимем guard чтобы клиент мог повторить
+        _SW_START_PROCESSING.pop(_cid, None)
+        raise
     try:
         await call.message.delete()
     except Exception:
@@ -905,6 +973,8 @@ async def msg_upload(message: Message, state: FSMContext):
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
         return
+    if await _maybe_wizard_cancel(message, state):
+        return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow) or flow.get("step") != "verification_upload":
         return
@@ -959,6 +1029,8 @@ async def msg_upload_screenshot(message: Message, state: FSMContext):
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
         return
+    if await _maybe_wizard_cancel(message, state):
+        return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
         return
@@ -987,6 +1059,8 @@ async def msg_upload_video(message: Message, state: FSMContext):
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
         return
+    if await _maybe_wizard_cancel(message, state):
+        return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
         return
@@ -1013,6 +1087,8 @@ async def msg_upload_video(message: Message, state: FSMContext):
 async def msg_upload_inn(message: Message, state: FSMContext):
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    if await _maybe_wizard_cancel(message, state):
         return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
@@ -1085,6 +1161,8 @@ async def _rerender_verification_after_upload(bot, chat_id):
 async def msg_deal_number(message: Message, state: FSMContext):
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    if await _maybe_wizard_cancel(message, state):
         return
     m = re.match(r"^\s*#?\s*(\d{3,10})\s*$", message.text or "")
     if not m:
