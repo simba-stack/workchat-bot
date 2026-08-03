@@ -2891,13 +2891,19 @@ class Storage:
     # → Проверки → выбор банка.
 
     def get_verification_config(self, bank: str) -> dict:
-        """Возвращает конфиг проверки для банка или дефолт."""
+        """Возвращает конфиг проверки для банка или дефолт.
+        AUDIT #2 CRIT-6 (авг 2026): allow_video по умолчанию True ТОЛЬКО для АЛЬФА
+        (по бизнес-правилу видео обязательно только для Альфы). Раньше дефолт был
+        True банк-агностично → ОЗОН/РАЙФ тоже требовали видео, если админ не
+        сохранял конфиг вручную. Fallback в sell_wizard_crm.py теперь работает.
+        """
         key = self._norm_bank_key(bank)
         cfg = (self.state.get("verification_configs") or {}).get(key) or {}
+        _is_alfa = key in ("АЛЬФА", "ALFA", "АЛЬФА-БАНК", "ALFABANK", "ALFA-BANK")
         return {
             "text": cfg.get("text") or "",
             "allow_photo": bool(cfg.get("allow_photo", True)),
-            "allow_video": bool(cfg.get("allow_video", True)),
+            "allow_video": bool(cfg.get("allow_video", _is_alfa)),
             "allow_text": bool(cfg.get("allow_text", True)),
         }
 

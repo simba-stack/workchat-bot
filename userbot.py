@@ -1013,11 +1013,13 @@ class UserbotService:
         # Если клиент пишет «Ассистент, хочу сдать РС» — снимаем track-guard,
         # ставим track=ip, enqueue __start_sell_wizard и выходим с handled=True.
         # Иначе WIZARD не срабатывал когда welcome-фаза активна.
+        # AUDIT #2 HIGH-7 (авг 2026): разрешаем 0-3 слова после «РС».
         _wizard_re = re.compile(
             r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
-            r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
+            r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)"
+            r"(?:\s+\S+){0,3}\s*[?!.,]*\s*$",
             re.IGNORECASE,
         )
         if _wizard_re.search(text):
@@ -2077,15 +2079,28 @@ class UserbotService:
         # ═══ SIMBA MEGA-PRIORITY: WIZARD-триггер обходит ВСЁ ═══
         # Silent-mode / cooldown / ai_muted / lock — не блокируют «Ассистент, хочу сдать РС».
         # (дублируется ниже в _try_faq_scripted_reply, но там куча guard'ов может съесть).
+        # AUDIT #2 CRIT-1 (авг 2026): работает ТОЛЬКО в managed_chat клиента.
+        # Иначе фраза в бухгалтерии/ЛК-группе/брейн-чате запустит визард не в том
+        # чате. Расширили regex — разрешаем 0-3 слова после «РС»
+        # («пожалуйста», «побыстрее», «сегодня»).
         try:
             _rtxt_low = (raw_text or "").lower().strip()
             _wiz_mega = re.search(
                 r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
                 r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
                 r"сда(?:ть|вать|м|[её]м)\s+"
-                r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
+                r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)"
+                r"(?:\s+\S+){0,3}\s*[?!.,]*\s*$",
                 _rtxt_low, re.IGNORECASE,
             )
+            # CRIT-1: guard managed_chat — иначе триггер полезет в чужой чат
+            if _wiz_mega and not storage.get_chat_info(chat_id):
+                logger.info(
+                    "[wizard] MEGA-PRIORITY SKIP: chat=%s not in managed_chats "
+                    "(text=%r) — визард не для служебных групп",
+                    chat_id, _rtxt_low[:80],
+                )
+                _wiz_mega = None
             if _wiz_mega:
                 # Снимаем все возможные локальные блокировки
                 try:
@@ -2114,6 +2129,24 @@ class UserbotService:
                 return
         except Exception as _mpe:
             logger.warning("wizard mega-priority failed: %s", _mpe)
+
+        # ═══ AUDIT #2 HIGH-8: skip если клиент внутри активного wizard ═══
+        # CRM-бот (@PrideCONTROLE_bot) ведёт клиента через FSM
+        # (material→bank→verification→payment→lk). Асик НЕ должен перехватывать
+        # цифры/фразы клиента dept-регексами или FAQ — они обработаются в FSM
+        # CRM-бота. MEGA-PRIORITY WIZARD выше уже отработал — клиент может
+        # рестартовать визард в любой момент.
+        try:
+            _sf = storage.get_sell_flow(chat_id) or {}
+            _sf_step = (_sf.get("step") or "").lower()
+            if _sf_step and _sf_step not in ("done", "cancelled", ""):
+                logger.info(
+                    "[wizard] active FSM step=%r → skip AI/dept/FAQ handlers (chat=%s)",
+                    _sf_step, chat_id,
+                )
+                return
+        except Exception as _sfe:
+            logger.warning("wizard-active check failed: %s", _sfe)
 
         # ═══ SIMBA HOTFIX (авг 2026): повторный welcome-choice ═══
         # После welcome_v2 клиент мог послать коммерческий запрос («прайсы по РС»),
@@ -3721,14 +3754,16 @@ class UserbotService:
         # фраза с «Ассистент» + «хочу сдать РС» (с любыми словами-связками
         # между «ассистент» и «хочу» — «я/мы/будьте добры/пожалуйста/можно»
         # и т.п.). Пунктуация и окончания гибкие.
+        # AUDIT #2 HIGH-7 (авг 2026): разрешаем 0-3 слова после «РС».
         _WIZARD_TRIGGER = re.compile(
-            # «ассистент [.,!:\s пожалуйста я мы] хочу/хотим сдать [рс/счёт/…]»
+            # «ассистент [.,!:\s пожалуйста я мы] хочу/хотим сдать [рс/счёт/…] [пожалуйста/побыстрее/сегодня]»
             r"^\s*ассистент\b[\s,.:!?]*"
             r"(?:\S+\s+){0,4}"  # 0-4 слова-связки (я / мы / пожалуйста / можно / …)
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
             r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|"
-            r"рабочий\s+сч[её]т\w*)\s*[?!.]*\s*$",
+            r"рабочий\s+сч[её]т\w*)"
+            r"(?:\s+\S+){0,3}\s*[?!.,]*\s*$",
             re.IGNORECASE,
         )
         if _WIZARD_TRIGGER.search(low):

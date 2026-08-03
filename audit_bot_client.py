@@ -60,6 +60,10 @@ async def create_lk_card(
     client_username: str = "",
     source: str = "jarvis-auto",
     autopost: bool = True,
+    # AUDIT #2 CRIT-2 (авг 2026): payment_method как структурное поле.
+    # trc | deal | guarantor_before | guarantor_after | cash | card | usdt | ...
+    payment_method: str = "",
+    payment_label: str = "",  # человекочитаемая метка для отображения
 ) -> Optional[dict]:
     """POST /api/v1/lk-cards. Возвращает card dict или None при ошибке.
     autopost=True — audit-bot сразу постит карточку в Группу 1 (В РАБОТЕ)."""
@@ -78,6 +82,12 @@ async def create_lk_card(
         "source": source,
         "autopost": bool(autopost),
     }
+    # CRIT-2: способ оплаты как структурное поле — иначе downstream-гейт
+    # выплаты не сработает (см. stroy-crm-bot/src/index.js:460).
+    if payment_method:
+        payload["payment_method"] = str(payment_method)
+    if payment_label:
+        payload["payment_label"] = str(payment_label)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.post(

@@ -2998,6 +2998,9 @@ async def cb_acceptdrop(call: CallbackQuery):
 
 # Локальный set для защиты от двойного нажатия Accept/Decline
 _accepting_now: set = set()
+# AUDIT #2 HIGH-11 (авг 2026): idempotency-guard для cb_smsok — двойной клик
+# по «✅ Успех» больше не отправляет двойной advance / двойной notify клиенту.
+_smsok_processing: set = set()
 
 
 async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
@@ -3154,11 +3157,14 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
 
 
 # Маппинг кодов метода → русские лейблы для отображения
+# AUDIT #2 MEDIUM-1 (авг 2026): визард пишет GUARANTOR_BEFORE_WORK, а лейбл был
+# только для GUARANTOR_BEFORE — уходил сырой код. Держим оба ключа.
 _PAYMENT_METHOD_LABELS = {
     "USDT_TRC20": "USDT TRC20 (на кошелёк)",
     "USDT_BEP20": "USDT BEP20 (на кошелёк)",
     "USDT_ERC20": "USDT ERC20 (на кошелёк)",
     "GUARANTOR_BEFORE": "Гарант — деньги вперёд",
+    "GUARANTOR_BEFORE_WORK": "Гарант — деньги вперёд",  # из sell_wizard_crm.py
     "GUARANTOR_AFTER_WORK": "Гарант — после отработки",
     "SBP": "СБП (по номеру телефона)",
     "CARD": "На карту",
@@ -4091,7 +4097,30 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
         except Exception:
             pass
         await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
-        await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
+        # AUDIT #2 CRIT-5 (авг 2026): не врём оператору что карточка создана,
+        # если audit-bot вернул None. Логируем + алерт в чат оператора.
+        if card_id:
+            await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
+        else:
+            await call.answer(
+                "⚠️ Перевязка выполнена, но АУДИТ-бот не создал карточку. "
+                "Проверьте вручную — сохраните ФИО/банк.",
+                show_alert=True,
+            )
+            try:
+                await _notify_work_chat(
+                    bot, owner,
+                    f"⚠️ Перевязка ЛК <b>{bank}</b> ЗАВЕРШЕНА, но карточка в "
+                    f"АУДИТ-боте <b>не создалась</b> (audit-bot вернул пусто).\n"
+                    f"Создайте вручную: ФИО {drop.get('fio') or '—'}, "
+                    f"банк {bank}, drop={drop.get('drop_id')}.",
+                )
+            except Exception:
+                pass
+            logger.error(
+                "[perevyaz CRIT-5] audit card not created: droplk=%s drop=%s bank=%s",
+                droplk_id, drop.get("drop_id"), bank,
+            )
     elif stage == "done":
         # Re-click после завершения перевязки (двойной тап оператора /
         # cached keyboard из старого сообщения). Просто отвечаем что готово
@@ -4814,26 +4843,43 @@ async def cb_smsok(call: CallbackQuery):
     if not lk:
         await call.answer("ЛК не найден", show_alert=True)
         return
-    # Advance stage: login_received/perevyaz_received → _sms_advance_flow
-    # шлёт следующий запрос клиенту (СМС-код перевяза / создаёт карточку).
-    try:
-        result = await _sms_advance_flow(call.bot, droplk_id)
-        logger.info("[smsok] advance for droplk=%s kind=%s → %s", droplk_id, sms_kind, result)
-    except Exception as e:
-        logger.exception("[smsok] _sms_advance_flow failed: %s", e)
-        await call.answer(f"⚠️ Ошибка: {e}", show_alert=True)
+    # AUDIT #2 HIGH-11: idempotency — двойной клик даёт silent toast, не двойной advance.
+    if droplk_id in _smsok_processing:
+        await call.answer("Уже обрабатывается…", show_alert=False)
         return
-    # Удаляем сообщение с кодом (оно больше не нужно)
+    _smsok_processing.add(droplk_id)
     try:
-        await call.message.delete()
-    except Exception:
-        pass
-    # Обновляем tracker в группе ДОСТУПЫ (следующий этап)
-    try:
-        await _post_or_update_sms_tracker(call.bot, droplk_id)
-    except Exception:
-        pass
-    await call.answer("✅ Код принят, клиент уведомлён")
+        # Advance stage: login_received/perevyaz_received → _sms_advance_flow
+        # шлёт следующий запрос клиенту (СМС-код перевяза / создаёт карточку).
+        try:
+            result = await _sms_advance_flow(call.bot, droplk_id)
+            logger.info("[smsok] advance for droplk=%s kind=%s → %s", droplk_id, sms_kind, result)
+        except Exception as e:
+            logger.exception("[smsok] _sms_advance_flow failed: %s", e)
+            await call.answer(f"⚠️ Ошибка: {e}", show_alert=True)
+            return
+        # Удаляем сообщение с кодом (оно больше не нужно)
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        # Обновляем tracker в группе ДОСТУПЫ (следующий этап)
+        try:
+            await _post_or_update_sms_tracker(call.bot, droplk_id)
+        except Exception:
+            pass
+        # AUDIT #2 CRIT-5: не пишем «клиент уведомлён» если _sms_advance_flow
+        # вернул False (send-to-client провалился). Оператор увидит правду.
+        if result is False:
+            await call.answer(
+                "⚠️ Код принят, но клиенту не удалось отправить уведомление. "
+                "Проверьте чат.",
+                show_alert=True,
+            )
+        else:
+            await call.answer("✅ Код принят, клиент уведомлён")
+    finally:
+        _smsok_processing.discard(droplk_id)
 
 
 # Цена покупки (этап 4)
@@ -5010,11 +5056,13 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         client_id = int(owner.get("tg_user_id") or 0)
         # SIMBA (авг 2026): подтягиваем метод оплаты из sell_flow (свежий
         # выбор клиента в визарде) — передаём в АУДИТ для отображения.
+        # AUDIT #2 CRIT-2: теперь method — структурное поле, а не только текст.
+        method_code = ""
         method_label = ""
         try:
             sf = crm_storage.get_sell_flow(int(work_chat_id)) or {}
-            _m = (sf.get("method") or "").upper()
-            method_label = _PAYMENT_METHOD_LABELS.get(_m, _m)
+            method_code = (sf.get("method") or "").upper()
+            method_label = _PAYMENT_METHOD_LABELS.get(method_code, method_code)
         except Exception:
             pass
         # Дополним material меткой метода оплаты чтобы оператор в АУДИТ видел
@@ -5033,6 +5081,9 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             client_username=supplier_raw,
             source="crm_bot:after_perevyaz",
             autopost=True,
+            # CRIT-2: structured payment method
+            payment_method=method_code,
+            payment_label=method_label,
         )
         if not card:
             logger.warning(
