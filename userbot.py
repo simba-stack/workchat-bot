@@ -1838,18 +1838,28 @@ class UserbotService:
             # Welcome: приоритетно берём из scripted_texts['welcome'] (редактируется
             # через группу-админку юзербота, поддерживает premium emoji и фото 1:1).
             # Fallback — старая get_welcome_v2()/get_welcome_entities() (без фото).
+            # SIMBA auto-migrate (авг 2026): если scripted-welcome содержит VoIP/
+            # телефонии (старый пункт) — игнорируем и валимся в get_welcome_v2,
+            # он тоже почищен. Иначе клиент видит устаревший «2. Телефонии/VoIP»
+            # который ни к чему не привязан.
             scripted = storage.get_scripted_text("welcome") or {}
             scripted_text = (scripted.get("text") or "").strip()
-            if scripted_text:
+            _has_voip = ("voip" in scripted_text.lower() or "телефонии" in scripted_text.lower())
+            if scripted_text and not _has_voip:
                 welcome = scripted.get("text") or ""
                 entities_raw = scripted.get("entities") or []
                 photo_path = scripted.get("photo_path") or None
                 source_kind = "scripted"
             else:
+                if scripted_text and _has_voip:
+                    logger.info(
+                        "[welcome] scripted contains VoIP/телефонии — auto-migrate to get_welcome_v2 (chat=%s)",
+                        chat_id,
+                    )
                 welcome = storage.get_welcome_v2()
                 entities_raw = storage.get_welcome_entities()
                 photo_path = None
-                source_kind = "legacy"
+                source_kind = "legacy_v2"
             try:
                 ents = _entities_to_telethon(entities_raw) if entities_raw else None
                 # Если есть фото — send_file с caption; иначе — обычные send_message
@@ -2104,6 +2114,44 @@ class UserbotService:
                 return
         except Exception as _mpe:
             logger.warning("wizard mega-priority failed: %s", _mpe)
+
+        # ═══ SIMBA HOTFIX (авг 2026): повторный welcome-choice ═══
+        # После welcome_v2 клиент мог послать коммерческий запрос («прайсы по РС»),
+        # тогда commercial_re сбросил awaiting_track_choice в set_chat_track("ip").
+        # Если после этого клиент присылает одиночное «1» / «2» / «ип» / «ооо» /
+        # «дебет» — это ЯВНО выбор направления (не dept-menu, не цена, не банк).
+        # Роутим повторно в _handle_track_choice, чтобы Асик отправил reply_ip /
+        # reply_debet + enqueue __send_sell_button. Пропускаем если чат ждёт
+        # dept-choice (там своя логика 1/2/3 CALL_OPERATOR).
+        try:
+            _tok = _rtxt_low.rstrip("?!.,;: \t")
+            if _tok in {"1", "2", "3", "ип", "ооо", "ooo", "ip", "дебет", "debet"}:
+                _dept_waiting = False
+                try:
+                    _dept_waiting = bool(
+                        hasattr(storage, "is_awaiting_dept_choice")
+                        and storage.is_awaiting_dept_choice(chat_id)
+                    )
+                except Exception:
+                    pass
+                _in_managed = bool(storage.get_chat_info(chat_id))
+                if _in_managed and not _dept_waiting:
+                    try:
+                        # Принудительно поднимаем флаг чтобы _handle_track_choice
+                        # обработал сообщение по своей ветке (иначе он выше по
+                        # стеку не вызывается).
+                        await storage.mark_awaiting_track_choice(chat_id)
+                    except Exception:
+                        pass
+                    logger.info(
+                        "[welcome] re-route standalone track token %r → _handle_track_choice (chat=%s)",
+                        _tok, chat_id,
+                    )
+                    handled = await self._handle_track_choice(event)
+                    if handled:
+                        return
+        except Exception as _rerr:
+            logger.warning("welcome re-route failed: %s", _rerr)
 
         try:
             sender_id_dbg = event.sender_id
@@ -3698,22 +3746,24 @@ class UserbotService:
             # ВАЖНО: return True → AI-ответ НЕ будет сгенерирован (нет дублей)
             return True
 
-        # #1: Прайс — «сколько стоит?», «прайс?», «какие цены?»
+        # #1: Прайс — «сколько стоит?», «прайс?», «какие цены?», «прайсы по РС»
         # (простое упоминание банка БЕЗ вопроса про цену — не триггерим,
         # пусть AI отвечает сам либо клиент задаст полноценный вопрос).
+        # SIMBA (авг 2026): расширили \bпрайс\w*\b — ловим «прайсы», «прайса», «прайсам».
         if re.search(
-            r"^\s*прайс\s*[?.!]?\s*$|"
+            r"^\s*прайс\w*\s*[?.!]*\s*$|"           # «прайс», «прайсы?», «прайсик»
             r"какие\s+цен|"
             r"сколько\s+стоит|"
             r"скок\s+бер[её]т|"
             r"за\s+сколько\s+забер[её]те|"
             r"по\s+какой\s+цен|"
-            r"\bпрайс(?:лист|-лист|\s+лист)|"
-            r"^\s*цен[ыаоуе]\w*\s*[?.!]*\s*$|"  # «цены?», «цена», «ценник»
+            r"\bпрайс\w*\b|"                         # «прайсы по РС», «скажите прайс», «прайсам»
+            r"^\s*цен[ыаоуе]\w*\s*[?.!]*\s*$|"      # «цены?», «цена», «ценник»
             r"\bпочём\b|\bпо\s+чём\b|"
             r"\bставк[аиуеы]\b|"
             r"\bтариф\w*\b|"
-            r"сколько\s+плат[иь]",
+            r"сколько\s+плат[иь]|"
+            r"расценк\w*",                            # «расценки»
             low,
         ):
             try:
