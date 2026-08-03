@@ -4328,6 +4328,25 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
         drop["drop_id"] = drop_id
     drop_id = drop.get("drop_id") or ""
 
+    # AUDIT #3 CRIT-1 (авг 2026): SNAPSHOT метода оплаты в сам drop.
+    # Раньше _create_single_lk_card читал method «на живую» из
+    # sell_flow[chat_id] в момент постановки карточки в АУДИТ (после
+    # перевяза, спустя часы). При параллельных визардах одного клиента
+    # (РС#1 USDT → РС#2 Гарант) метод одной РС мог «уйти» в карточку
+    # другой. Теперь фиксируем сразу — в drop, откуда читаем позже.
+    if method:
+        try:
+            _mlabel = _PAYMENT_METHOD_LABELS.get(method.upper(), method)
+            await crm_storage.update_drop_any(
+                drop_id, method=method, method_label=_mlabel,
+            )
+            logger.info(
+                "[perevyaz CRIT-1] snapshot method=%s label=%s → drop=%s",
+                method, _mlabel, drop_id,
+            )
+        except Exception as _me:
+            logger.warning("[perevyaz CRIT-1] snapshot method failed: %s", _me)
+
     # 3) 1-слот restriction: если у дропа УЖЕ есть LK — не даём новый
     existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
     if existing:
@@ -5056,15 +5075,48 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         client_id = int(owner.get("tg_user_id") or 0)
         # SIMBA (авг 2026): подтягиваем метод оплаты из sell_flow (свежий
         # выбор клиента в визарде) — передаём в АУДИТ для отображения.
-        # AUDIT #2 CRIT-2: теперь method — структурное поле, а не только текст.
+        # AUDIT #2 CRIT-2: теперь method — структурное поле.
+        # AUDIT #3 CRIT-1 (авг 2026): FIRST читаем snapshot из lk-record
+        # (записан в момент создания ЛК). Иначе при параллельных визардах
+        # метод плыл — sell_flow[chat_id] один слот, перезаписывается.
+        # Fallback к sell_flow — только для legacy-записей БЕЗ lk.method.
         method_code = ""
         method_label = ""
         try:
-            sf = crm_storage.get_sell_flow(int(work_chat_id)) or {}
-            method_code = (sf.get("method") or "").upper()
-            method_label = _PAYMENT_METHOD_LABELS.get(method_code, method_code)
+            method_code = (lk.get("method") or "").upper()
+            if method_code:
+                method_label = lk.get("method_label") or _PAYMENT_METHOD_LABELS.get(method_code, method_code)
         except Exception:
             pass
+        # AUDIT #3 CRIT-1: fallback 2 — snapshot из drop (сохранён при
+        # _open_lk_form_for_client). Защита от «плывущего» метода при
+        # параллельных визардах: drop зафиксирован в момент подачи РС.
+        if not method_code:
+            try:
+                _dmethod = (drop.get("method") or "").upper()
+                if _dmethod:
+                    method_code = _dmethod
+                    method_label = drop.get("method_label") or _PAYMENT_METHOD_LABELS.get(method_code, method_code)
+                    logger.info(
+                        "[perevyaz CRIT-1] fallback-2: lk.method пуст, snapshot из drop=%s method=%s",
+                        drop.get("drop_id"), method_code,
+                    )
+            except Exception:
+                pass
+        # Fallback 3 — «на живую» из sell_flow (legacy, для дропов созданных
+        # до этого фикса). ЗАПИСЬ В drop-snapshot больше не делаем — иначе
+        # можно переписать зафиксированный метод более свежим.
+        if not method_code:
+            try:
+                sf = crm_storage.get_sell_flow(int(work_chat_id)) or {}
+                method_code = (sf.get("method") or "").upper()
+                method_label = _PAYMENT_METHOD_LABELS.get(method_code, method_code)
+                logger.info(
+                    "[perevyaz CRIT-1] fallback-3 (legacy): sell_flow chat=%s method=%s",
+                    work_chat_id, method_code,
+                )
+            except Exception:
+                pass
         # Дополним material меткой метода оплаты чтобы оператор в АУДИТ видел
         material_line = f"{fio_raw} — {bank}" if fio_raw else bank
         if method_label:
