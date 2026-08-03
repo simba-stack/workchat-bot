@@ -336,16 +336,38 @@ async def _render_guarantor_instruction(bot, chat_id, edit_call: Optional[Callba
 
 # ─────────────────────── PUBLIC ENTRY ───────────────────────
 
+# AUDIT #2 MED-8 (авг 2026): idempotency-guard для send_start_button.
+# Раньше повторный dashboard-command __send_sell_button дублировал
+# закреплённую кнопку старта визарда в чате клиента (клиент видел 2 одинаковых).
+# Ключ = chat_id + минутный bucket → в течение 60 сек второй вызов no-op.
+_START_BUTTON_SENT_TS: dict = {}  # chat_id -> unix ts
+
 async def send_start_button(bot, chat_id):
     """Асик после reply_ip → dashboard-command __send_sell_button → мы шлём.
     SIMBA (авг 2026): сообщение с кнопкой «🛒 Начать оформление» ПИНИМ,
     чтобы клиент видел его в закрепе — не терялось в чате."""
+    import time as _time
+    now = _time.time()
+    last_ts = _START_BUTTON_SENT_TS.get(int(chat_id), 0)
+    if now - last_ts < 60:
+        logger.info(
+            "[sell_wizard_crm] start-button idempotent skip chat=%s "
+            "(last sent %ds ago)", chat_id, int(now - last_ts),
+        )
+        return
     _sd = _storage.get_scripted_text("sell_start_button") or {}
     prompt = (_sd.get("text") or
               "Когда будете готовы оформить продажу ЛК — жмите кнопку ниже 👇")
     try:
         sent = await bot.send_message(chat_id, prompt, parse_mode="HTML",
                                        reply_markup=_kb_start_button())
+        _START_BUTTON_SENT_TS[int(chat_id)] = now
+        # Периодически чистим таблицу от старых записей (>1 час)
+        if len(_START_BUTTON_SENT_TS) > 200:
+            _cutoff = now - 3600
+            for _k in list(_START_BUTTON_SENT_TS.keys()):
+                if _START_BUTTON_SENT_TS[_k] < _cutoff:
+                    _START_BUTTON_SENT_TS.pop(_k, None)
         logger.info("[sell_wizard_crm] start-button sent to chat=%s", chat_id)
         # Пинним для видимости — disable_notification чтобы без пуша
         try:

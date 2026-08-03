@@ -3594,16 +3594,18 @@ class UserbotService:
                 # Мапим ответ на dept
                 dept_key = None
                 dept_name = ""
+                # AUDIT #2 MED-5 (авг 2026): «менеджер»/«сус» без \w* — «менеджеру»,
+                # «к менеджеру», «сусу» не ловилось, шло в reask. Добавили \w*.
                 if re.match(r"^\s*1\s*[!.?)]*\s*$", low) or re.search(
-                    r"\b(?:менеджер|мендж|мнж|manager)\b", low
+                    r"\b(?:менеджер\w*|мендж\w*|мнж|manager\w*)\b", low
                 ):
                     dept_key, dept_name = "manager", "Менеджеры"
                 elif re.match(r"^\s*2\s*[!.?)]*\s*$", low) or re.search(
-                    r"\b(?:сус|перевяз\w*|system)\b", low
+                    r"\b(?:сус\w*|перевяз\w*|system\w*)\b", low
                 ):
                     dept_key, dept_name = "system", "СУС"
                 elif re.match(r"^\s*3\s*[!.?)]*\s*$", low) or re.search(
-                    r"\b(?:бух\w*|бухгалт\w*|accounting)\b", low
+                    r"\b(?:бух\w*|бухгалт\w*|accounting\w*)\b", low
                 ):
                     dept_key, dept_name = "accounting", "Бухгалтерия"
 

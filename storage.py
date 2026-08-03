@@ -3195,11 +3195,20 @@ class Storage:
             return dict(cur)
 
     async def sell_flow_append_upload(self, chat_id, upload: dict) -> dict:
-        """Добавляет один upload (фото/видео/текст) в буфер uploads."""
+        """Добавляет один upload (фото/видео/текст) в буфер uploads.
+
+        AUDIT #2 MED-13 (авг 2026): для 'inn' — заменяем существующий (клиент
+        часто вводит ИНН по частям, оставляем последнее корректное значение).
+        Для 'screenshot'/'video' — accumulate (клиент может догрузить ещё).
+        """
         async with _lock:
             flows = self.state.setdefault("client_sell_flow", {})
             cur = flows.get(str(chat_id)) or {}
             uploads = list(cur.get("uploads") or [])
+            up_type = (upload.get("type") or "").lower()
+            if up_type == "inn":
+                # replace previous inn — только последнее валидное значение
+                uploads = [u for u in uploads if (u.get("type") or "").lower() != "inn"]
             uploads.append(upload)
             cur["uploads"] = uploads
             cur["updated_ts"] = time.time()
@@ -4321,31 +4330,33 @@ class Storage:
         """Добавляет команду в очередь для userbot.
         DEDUP: если та же команда (по тексту) уже в очереди в статусе pending
         или обработана < 30 сек назад — не создаём дубль.
-        ИСКЛЮЧЕНИЯ (idempotent — можно спамить):
-          __start_sell_wizard — открывает свежий wizard, дубль не вреден
-          __send_sell_button — inline кнопка, дубль не вреден
+
+        AUDIT #2 MED-9 (авг 2026): раньше __start_sell_wizard и __send_sell_button
+        были в _NO_DEDUP — двойной триггер клиента слал 2 старта визарда,
+        клиент видел 2 стартовых экрана подряд. Теперь дедуп применяется ко ВСЕМ
+        командам с более коротким TTL (10 сек) — повторные клики не порождают
+        дублей, но легитимный ре-старт через минуту сработает.
         """
         if not text or not text.strip():
             return {}
         text_clean = text.strip()
-        # SIMBA fix: idempotent commands не дедупим
-        _NO_DEDUP = ("__start_sell_wizard ", "__send_sell_button ")
-        _skip_dedup = any(text_clean.startswith(p) for p in _NO_DEDUP)
+        # AUDIT #2 MED-9: короткий dedup TTL (10s) даже для wizard-команд
+        _SHORT_TTL_PREFIXES = ("__start_sell_wizard ", "__send_sell_button ")
+        _is_short_ttl = any(text_clean.startswith(p) for p in _SHORT_TTL_PREFIXES)
+        _dedup_window = 10 if _is_short_ttl else 30
         async with _lock:
             q = self.state.setdefault("dashboard_commands", [])
-            # DEDUP-check (последние 50 записей), кроме idempotent-команд
-            if not _skip_dedup:
-                now = time.time()
-                for c in q[-50:]:
-                    if (c or {}).get("text") == text_clean:
-                        st = str(c.get("status") or "")
-                        ts = float(c.get("ts") or 0)
-                        # pending — точно дубль, скипаем
-                        if st == "pending":
-                            return dict(c)
-                        # done/error < 30 сек назад — тоже скипаем (повторный клик)
-                        if st in ("done", "error") and (now - ts) < 30:
-                            return dict(c)
+            now = time.time()
+            for c in q[-50:]:
+                if (c or {}).get("text") == text_clean:
+                    st = str(c.get("status") or "")
+                    ts = float(c.get("ts") or 0)
+                    # pending — точно дубль, скипаем
+                    if st == "pending":
+                        return dict(c)
+                    # done/error в окне dedup — скипаем (повторный клик)
+                    if st in ("done", "error") and (now - ts) < _dedup_window:
+                        return dict(c)
             entry = {
                 "id": int(time.time() * 1000),
                 "ts": time.time(),
