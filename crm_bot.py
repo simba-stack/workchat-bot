@@ -4328,26 +4328,11 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
         drop["drop_id"] = drop_id
     drop_id = drop.get("drop_id") or ""
 
-    # AUDIT #3 CRIT-1 (авг 2026): SNAPSHOT метода оплаты в сам drop.
-    # Раньше _create_single_lk_card читал method «на живую» из
-    # sell_flow[chat_id] в момент постановки карточки в АУДИТ (после
-    # перевяза, спустя часы). При параллельных визардах одного клиента
-    # (РС#1 USDT → РС#2 Гарант) метод одной РС мог «уйти» в карточку
-    # другой. Теперь фиксируем сразу — в drop, откуда читаем позже.
-    if method:
-        try:
-            _mlabel = _PAYMENT_METHOD_LABELS.get(method.upper(), method)
-            await crm_storage.update_drop_any(
-                drop_id, method=method, method_label=_mlabel,
-            )
-            logger.info(
-                "[perevyaz CRIT-1] snapshot method=%s label=%s → drop=%s",
-                method, _mlabel, drop_id,
-            )
-        except Exception as _me:
-            logger.warning("[perevyaz CRIT-1] snapshot method failed: %s", _me)
-
     # 3) 1-слот restriction: если у дропа УЖЕ есть LK — не даём новый
+    # AUDIT #4 C-1 (авг 2026): 1-слот проверка ПЕРЕД snapshot метода.
+    # Раньше update_drop_any(method=...) писался безусловно ДО этой проверки —
+    # РС#2 блокировался, но drop.method уже перезаписан → карточка#1 при
+    # перевязе получала неверный метод.
     existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
     if existing:
         try:
@@ -4359,6 +4344,21 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
         except Exception:
             pass
         return f"ℹ️ open_lk_form: slot taken drop={drop_id}"
+
+    # AUDIT #3 CRIT-1 + #4 C-1 (авг 2026): SNAPSHOT метода оплаты в drop
+    # ТОЛЬКО ЕСЛИ проверка 1-слот прошла (иначе перезаписывали чужой метод).
+    if method:
+        try:
+            _mlabel = _PAYMENT_METHOD_LABELS.get(method.upper(), method)
+            await crm_storage.update_drop_any(
+                drop_id, method=method, method_label=_mlabel,
+            )
+            logger.info(
+                "[perevyaz CRIT-1] snapshot method=%s label=%s → drop=%s (after 1-slot check)",
+                method, _mlabel, drop_id,
+            )
+        except Exception as _me:
+            logger.warning("[perevyaz CRIT-1] snapshot method failed: %s", _me)
 
     # 4) Показать клиенту в managed_chat меню заполнения — одна кнопка,
     #    banklk → newlk использует существующий FSM (waiting_login → ...)

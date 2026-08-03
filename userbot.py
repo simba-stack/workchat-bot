@@ -1042,6 +1042,44 @@ class UserbotService:
             # Клиенту НЕ отвечаем сами — CRM-бот откроет визард через inline-кнопку
             return True
 
+        # AUDIT #4 C-2 (авг 2026): CALL_OPERATOR bypass в welcome-фазе.
+        # Новый клиент (awaiting_track_choice=True) пишет «Асик позови оператора»
+        # — раньше уходило в fallback «Не понял выбор» + следующее «3» ловил
+        # welcome-track как debet → reply_debet (тот же класс бага что #78).
+        # Fix: снимаем awaiting_track_choice и пропускаем сообщение дальше в
+        # _handle_ai_message → CALL_OPERATOR handler покажет dept-меню.
+        _call_op_re = re.search(
+            r"(?:^|\W)асик\W*[,]?\W*позов(?:и|ите)\W+оператор|"
+            r"позов(?:и|ите)\W+оператор|"
+            r"зов(?:и|ите)\W+оператор|"
+            r"нужен\W+оператор|"
+            r"нужн[аы]\W+(?:живы[йх]\s+)?оператор|"
+            r"дай(?:те)?\W+оператор|"
+            r"хочу\W+оператор|"
+            r"позвать\W+оператор|"
+            r"^\s*оператор\s*[?!.]*\s*$|"
+            r"живого\W+оператор|"
+            r"живой\W+оператор|"
+            r"живы[йех]\W+оператор|"
+            r"живые\W+операторы|"
+            r"свяж(?:ите|ешь)\W+с\W+оператор|"
+            r"подключ(?:ите|и)\W+оператор",
+            text, re.IGNORECASE,
+        )
+        if _call_op_re:
+            # Снимаем welcome-guard, чтобы сообщение прошло в _handle_ai_message,
+            # где CALL_OPERATOR handler покажет dept-меню.
+            try:
+                await storage.set_chat_track(chat_id, "ip")
+            except Exception as _te:
+                logger.warning("call-op bypass set_chat_track failed: %s", _te)
+            logger.info(
+                "[welcome C-2] CALL_OPERATOR bypass in welcome-phase: "
+                "chat=%s text=%r → pass to _handle_ai_message",
+                chat_id, text[:80],
+            )
+            return False  # НЕ handled — пусть _handle_ai_message обработает
+
         # AUDIT #3 HIGH-6 (авг 2026): «прайс»/«расценки»/«сколько» во время
         # welcome-фазы. Раньше все такие фразы шли только в _handle_track_choice
         # → «Не понял выбор». Теперь: отвечаем прайсом ЗАСКРИПТОВАННО (без
@@ -2191,14 +2229,18 @@ class UserbotService:
         # ═══ SIMBA HOTFIX (авг 2026): повторный welcome-choice ═══
         # После welcome_v2 клиент мог послать коммерческий запрос («прайсы по РС»),
         # тогда commercial_re сбросил awaiting_track_choice в set_chat_track("ip").
-        # Если после этого клиент присылает одиночное «1» / «2» / «ип» / «ооо» /
-        # «дебет» — это ЯВНО выбор направления (не dept-menu, не цена, не банк).
-        # Роутим повторно в _handle_track_choice, чтобы Асик отправил reply_ip /
-        # reply_debet + enqueue __send_sell_button. Пропускаем если чат ждёт
-        # dept-choice (там своя логика 1/2/3 CALL_OPERATOR).
+        # Если после этого клиент присылает одиночное «ип» / «ооо» / «дебет» —
+        # это ЯВНО выбор направления. Роутим повторно в _handle_track_choice.
+        #
+        # AUDIT #4 CRIT (авг 2026): УБРАЛИ «1»/«2»/«3» из welcome re-route —
+        # они конфликтуют с dept-choice (Асик позови оператора → меню 1/2/3).
+        # Клиент MAVRODI SKUP: «3» на dept-menu → welcome-re-route схватил →
+        # reply_debet (прайс дебета) вместо форварда в бухгалтерию.
+        # Теперь welcome re-route только на явные СЛОВА направления.
+        # Плюс skip если недавно (60s) был dept-menu — даже без active-флага.
         try:
             _tok = _rtxt_low.rstrip("?!.,;: \t")
-            if _tok in {"1", "2", "3", "ип", "ооо", "ooo", "ip", "дебет", "debet"}:
+            if _tok in {"ип", "ооо", "ooo", "ip", "дебет", "debet"}:
                 _dept_waiting = False
                 try:
                     _dept_waiting = bool(
@@ -2207,17 +2249,24 @@ class UserbotService:
                     )
                 except Exception:
                     pass
+                # Дополнительный guard: недавний dept-menu (60s) — не роутим
+                # даже если is_awaiting_dept_choice False (TTL истёк или race)
+                _dept_recent = False
+                try:
+                    _ci = storage.get_chat_info(chat_id) or {}
+                    _dts = float(_ci.get("awaiting_dept_since_ts") or 0)
+                    if _dts and (time.time() - _dts) < 60:
+                        _dept_recent = True
+                except Exception:
+                    pass
                 _in_managed = bool(storage.get_chat_info(chat_id))
-                if _in_managed and not _dept_waiting:
+                if _in_managed and not _dept_waiting and not _dept_recent:
                     try:
-                        # Принудительно поднимаем флаг чтобы _handle_track_choice
-                        # обработал сообщение по своей ветке (иначе он выше по
-                        # стеку не вызывается).
                         await storage.mark_awaiting_track_choice(chat_id)
                     except Exception:
                         pass
                     logger.info(
-                        "[welcome] re-route standalone track token %r → _handle_track_choice (chat=%s)",
+                        "[welcome] re-route standalone track word %r → _handle_track_choice (chat=%s)",
                         _tok, chat_id,
                     )
                     handled = await self._handle_track_choice(event)
@@ -4081,6 +4130,9 @@ class UserbotService:
         # F.c) ВЫПЛАТЫ / USDT / гарант / пополнение
         # (в дополнение к HOLD_QUESTION #4 выше — там уже про «когда деньги»,
         # здесь ловим то, что не покрыто: usdt, гарант, пополнение сделки).
+        # AUDIT #4 H-2 (авг 2026): голое «пополни»/«пополнить»/«пополнение»
+        # без слова «сделку» — раньше проваливалось сквозь FAQ → тишина.
+        # Теперь: широкое \bпополн\w*\b ловит все формы.
         if re.search(
             r"\busdt\b|"
             r"\busd\s*t\b|"
@@ -4091,8 +4143,7 @@ class UserbotService:
             r"через\s+гарант|"
             r"с\s+гарантом|"
             r"без\s+гаранта|"
-            r"пополн(?:ит|ен|яйте|яю|ю|ю\s+сделк|и\s+сделк)|"
-            r"пополни(?:те|ть|ла|ли)?\s+сделк|"
+            r"\bпополн\w*\b|"
             r"докиньте\s+на\s+сделк|"
             r"доложите\s+на\s+сделк",
             low,

@@ -427,9 +427,13 @@ async def start_wizard(bot, chat_id):
     RETRY: до 3 попыток с backoff — CRM-бот мог только-что вступить в чат
     (Telegram может задержать membership) или сработать rate-limit."""
     import asyncio as _asyncio
+    # AUDIT #4 M-2: обнуляем ВСЕ msg_id — иначе после restart wizard
+    # _rerender_verification_after_upload может редактировать сообщение
+    # из старого этапа wizard'а с новым/смешанным контентом.
     await set_flow(chat_id, step="material", material="", bank="", price=0,
                    method="", uploads=[], deal_number="",
-                   verification_msg_id=0, guarantor_msg_id=0)
+                   verification_msg_id=0, guarantor_msg_id=0,
+                   wizard_msg_id=0)
     last_err = None
     for attempt in range(1, 4):
         try:
@@ -1034,6 +1038,11 @@ async def msg_upload_screenshot(message: Message, state: FSMContext):
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
         return
+    # AUDIT #4 H-1: если flow был пересоздан (MEGA-PRIORITY restart wizard),
+    # старый msg_upload_screenshot может подхватить фото по устаревшему приглашению.
+    # Проверяем step — screenshot принимаем только на verification_upload.
+    if flow.get("step") != "verification_upload":
+        return
     if not (message.photo or message.document):
         try:
             await message.reply("❌ Нужен именно скриншот (фото или картинка-документ). Попробуйте ещё раз.")
@@ -1064,6 +1073,9 @@ async def msg_upload_video(message: Message, state: FSMContext):
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
         return
+    # AUDIT #4 H-1: step guard от split-brain при MEGA-PRIORITY restart.
+    if flow.get("step") != "verification_upload":
+        return
     if not message.video:
         try:
             await message.reply("❌ Нужно видео (не фото и не текст). Попробуйте ещё раз.")
@@ -1092,6 +1104,9 @@ async def msg_upload_inn(message: Message, state: FSMContext):
         return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow):
+        return
+    # AUDIT #4 H-1: step guard.
+    if flow.get("step") != "verification_upload":
         return
     text = (message.text or "").strip()
     # ИНН = 10 или 12 цифр
