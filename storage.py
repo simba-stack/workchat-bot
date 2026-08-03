@@ -582,13 +582,30 @@ class Storage:
 
     async def load(self):
         async with _lock:
+            # AUDIT #6 CRIT-1 (авг 2026): при повреждении state.json пытаемся
+            # восстановиться из state.json.bak (ротируемый бэкап от _do_write_sync)
+            # ДО того как переходить на пустой дефолт. Иначе один битый JSON =
+            # мгновенная потеря managed_chats/drops/wallets/awaiting-флагов.
+            loaded = None
+            _load_err = None
             if os.path.exists(self.path):
                 try:
                     with open(self.path, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
-                    # Миграция V2: дропаем ключи старой схемы
-                    # (accounts_group_id, pending_accounts_posts, accounting V1,
-                    # deals_group_id — устарела, видимость теперь через Группу 1 ЛК)
+                except Exception as e:
+                    _load_err = e
+                    print(f"[storage] state.json corrupted: {e} — пробуем .bak")
+                    _bak = self.path + ".bak"
+                    if os.path.exists(_bak):
+                        try:
+                            with open(_bak, "r", encoding="utf-8") as f:
+                                loaded = json.load(f)
+                            print(f"[storage] ✅ RECOVERED from {_bak}")
+                        except Exception as _be:
+                            print(f"[storage] .bak тоже битый: {_be} — идём в дефолт")
+                            loaded = None
+            if loaded is not None:
+                try:
                     for legacy_key in (
                         "accounts_group_id",
                         "pending_accounts_posts",
@@ -596,7 +613,6 @@ class Storage:
                         "deals_group_id",
                     ):
                         loaded.pop(legacy_key, None)
-                    # Из каждой сделки убираем поля устаревших публикаций.
                     for d in (loaded.get("deals") or {}).values():
                         if isinstance(d, dict):
                             d.pop("accounts_group_msg_id", None)
@@ -607,7 +623,9 @@ class Storage:
                             loaded[k] = v
                     self.state = loaded
                 except Exception as e:
-                    print(f"[storage] load failed, using defaults: {e}")
+                    print(f"[storage] post-load migration failed: {e}")
+            elif _load_err:
+                print(f"[storage] ⚠️ ПОТЕРЯ СОСТОЯНИЯ: и state.json и .bak битые — используем defaults")
             if not self.state.get("admin_secret_command"):
                 self.state["admin_secret_command"] = _gen_secret_command()
             if config.ADMIN_ID and config.ADMIN_ID not in self.state["admins"]:

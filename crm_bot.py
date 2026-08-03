@@ -2345,6 +2345,167 @@ async def cb_banklk(call: CallbackQuery, state: FSMContext):
         pass
 
 
+# SIMBA #83 (авг 2026): МУЛЬТИСЛОТ — клиент выбирает добавить ЛК в
+# существующую анкету или создать новую при повторной сдаче РС.
+# callback_data: newlkchoice:{reuse|new}:{existing_drop_id}
+@router.callback_query(F.data.startswith("newlkchoice:"))
+async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split(":", 2)
+    if len(parts) < 3:
+        await call.answer("Bad data", show_alert=True)
+        return
+    action, existing_drop_id = parts[1], parts[2]
+    chat_id = call.message.chat.id
+    _pending_map = getattr(crm_storage, "_pending_new_lk_method", None) or {}
+    pending = _pending_map.get(int(chat_id))
+    if not pending:
+        await call.answer("Сессия истекла — повторите оформление РС", show_alert=True)
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+    # Проверяем свежесть (5 мин TTL)
+    if time.time() - float(pending.get("ts") or 0) > 300:
+        _pending_map.pop(int(chat_id), None)
+        await call.answer("Сессия истекла — повторите оформление РС", show_alert=True)
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+    bank_title = pending.get("bank_title", "")
+    price = float(pending.get("price") or 0)
+    method = pending.get("method", "")
+    deal = pending.get("deal", "")
+
+    if action == "reuse":
+        # Используем существующий drop — просто идём в _open_lk_form_for_client
+        # заново, но с флагом "force" чтобы обойти мультислот-check.
+        # Простейший путь: снимаем блокировку временно (mark drop reusable),
+        # снова вызываем open_lk_form_for_client — теперь existing lookup даст
+        # тот же drop, но проверка bank_dup сработает нормально.
+        # Для чистоты: удаляем existing из блокировки на этот вызов.
+        # Проще: сразу отправляем финальное сообщение с banklk-кнопкой.
+        drop = crm_storage.get_crm_drop(existing_drop_id) or {}
+        if not drop:
+            await call.answer("Анкета не найдена", show_alert=True)
+            _pending_map.pop(int(chat_id), None)
+            return
+        # SNAPSHOT method в drop (audit #3 CRIT-1)
+        if method:
+            try:
+                _mlabel = _PAYMENT_METHOD_LABELS.get(method.upper(), method)
+                await crm_storage.update_drop_any(
+                    existing_drop_id, method=method, method_label=_mlabel,
+                )
+            except Exception:
+                pass
+        method_label = "USDT TRC20 (после работы)" if method == "USDT_TRC20" else "Гарант в Continental"
+        deal_line = f"\n📄 Сделка: <b>№{deal}</b>" if deal else ""
+        text = (
+            f"🏦 <b>Заполните данные ЛК {bank_title}</b>\n\n"
+            f"➕ Добавляется к анкете <code>#{existing_drop_id}</code>\n"
+            f"💰 Цена: <b>{int(price)}$</b>\n"
+            f"💳 Оплата: <b>{method_label}</b>{deal_line}\n\n"
+            f"Нажмите кнопку ниже и по шагам введите:\n"
+            f"1) логин, 2) пароль, 3) номер карты/счёта, 4) кодовое слово, 5) e-mail."
+        )
+        try:
+            await call.message.edit_text(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text=f"🏦 Заполнить данные {bank_title}",
+                        callback_data=f"newlk:{existing_drop_id}:{bank_title}",
+                    ),
+                ]]),
+            )
+        except Exception:
+            await call.message.answer(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text=f"🏦 Заполнить данные {bank_title}",
+                        callback_data=f"newlk:{existing_drop_id}:{bank_title}",
+                    ),
+                ]]),
+            )
+        _pending_map.pop(int(chat_id), None)
+        await call.answer("➊ Добавляем в анкету")
+        logger.info(
+            "[multislot] REUSE drop=%s bank=%s chat=%s",
+            existing_drop_id, bank_title, chat_id,
+        )
+        return
+
+    if action == "new":
+        # Создаём НОВЫЙ drop с тем же owner (партнёр), новый ФИО — заполнит СУС
+        # позже через FillForm. Пока используем placeholder-ФИО.
+        existing_drop = crm_storage.get_crm_drop(existing_drop_id) or {}
+        owner_id = existing_drop.get("owner_id") or ""
+        if not owner_id:
+            await call.answer("Не могу определить партнёра", show_alert=True)
+            return
+        try:
+            new_drop_id = await crm_storage.add_crm_drop(
+                owner_id=owner_id,
+                fio=f"новый клиент партнёра (chat {chat_id})",
+                work_chat_id=chat_id,
+            )
+        except Exception as _ce:
+            await call.answer(f"Ошибка создания анкеты: {_ce}", show_alert=True)
+            return
+        # SNAPSHOT method в новый drop
+        if method:
+            try:
+                _mlabel = _PAYMENT_METHOD_LABELS.get(method.upper(), method)
+                await crm_storage.update_drop_any(
+                    new_drop_id, method=method, method_label=_mlabel,
+                )
+            except Exception:
+                pass
+        method_label = "USDT TRC20 (после работы)" if method == "USDT_TRC20" else "Гарант в Continental"
+        deal_line = f"\n📄 Сделка: <b>№{deal}</b>" if deal else ""
+        text = (
+            f"🏦 <b>Заполните данные ЛК {bank_title}</b>\n\n"
+            f"🆕 Создана новая анкета <code>#{new_drop_id}</code>\n"
+            f"💰 Цена: <b>{int(price)}$</b>\n"
+            f"💳 Оплата: <b>{method_label}</b>{deal_line}\n\n"
+            f"Нажмите кнопку ниже и по шагам введите:\n"
+            f"1) логин, 2) пароль, 3) номер карты/счёта, 4) кодовое слово, 5) e-mail."
+        )
+        try:
+            await call.message.edit_text(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text=f"🏦 Заполнить данные {bank_title}",
+                        callback_data=f"newlk:{new_drop_id}:{bank_title}",
+                    ),
+                ]]),
+            )
+        except Exception:
+            await call.message.answer(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text=f"🏦 Заполнить данные {bank_title}",
+                        callback_data=f"newlk:{new_drop_id}:{bank_title}",
+                    ),
+                ]]),
+            )
+        _pending_map.pop(int(chat_id), None)
+        await call.answer("➋ Новая анкета создана")
+        logger.info(
+            "[multislot] NEW drop=%s owner=%s bank=%s chat=%s",
+            new_drop_id, owner_id, bank_title, chat_id,
+        )
+        return
+
+    await call.answer("Bad action", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("newlk:"))
 async def cb_newlk(call: CallbackQuery, state: FSMContext):
     parts = call.data.split(":", 2)
@@ -4328,22 +4489,79 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
         drop["drop_id"] = drop_id
     drop_id = drop.get("drop_id") or ""
 
-    # 3) 1-слот restriction: если у дропа УЖЕ есть LK — не даём новый
-    # AUDIT #4 C-1 (авг 2026): 1-слот проверка ПЕРЕД snapshot метода.
-    # Раньше update_drop_any(method=...) писался безусловно ДО этой проверки —
-    # РС#2 блокировался, но drop.method уже перезаписан → карточка#1 при
-    # перевязе получала неверный метод.
+    # 3) МУЛЬТИСЛОТ (SIMBA #83, авг 2026): если у drop уже есть LK,
+    # предлагаем клиенту выбор:
+    #   [🏦 Добавить в анкету #NNN] — используем существующий drop, добавляем
+    #                                  новый LK (другой банк). Так партнёр
+    #                                  собирает несколько РС одного клиента.
+    #   [➕ Новая анкета]           — создаём новый drop (другой ФИО клиента).
+    # Проверка «тот же банк уже есть» блокируется отдельно (нельзя два ОЗОН'а).
+    # AUDIT #4 C-1: проверка ПЕРЕД snapshot method.
+    # AUDIT #6 H-H1: перенести проверку в start_wizard будет отдельным батчем.
     existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
     if existing:
+        # Проверка: тот же банк уже есть в drop?
+        _bank_upper = bank_title.upper().strip()
+        _same_bank_lk = None
+        for _lkid, _lkrec in (existing or {}).items():
+            if (_lkrec.get("bank") or "").upper().strip() == _bank_upper:
+                _same_bank_lk = _lkid
+                break
+        if _same_bank_lk:
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"⚠️ ЛК банка <b>{bank_title}</b> уже есть в анкете "
+                    f"(<code>#{drop_id}</code>). Один банк — один слот на анкету.\n\n"
+                    f"Выберите другой банк или дождитесь завершения текущего ЛК.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return f"ℹ️ open_lk_form: bank duplicate drop={drop_id} bank={_bank_upper}"
+
+        # Другой банк → показываем выбор мультислот
+        _banks_summary = ", ".join(
+            sorted({(l.get("bank") or "").upper() for l in existing.values() if l.get("bank")})
+        ) or "—"
+        _menu_text = (
+            f"🏦 В вашей анкете <code>#{drop_id}</code> уже есть ЛК: <b>{_banks_summary}</b>\n\n"
+            f"Что делать с новым РС <b>{bank_title}</b>?\n\n"
+            f"➊ <b>Добавить в эту же анкету</b> — если это тот же клиент "
+            f"(тогда все ЛК будут в одной сделке).\n\n"
+            f"➋ <b>Новая анкета</b> — если это другой клиент "
+            f"(создаётся отдельная сделка)."
+        )
+        # SNAPSHOT method — сохраняем в drop (используется мультислот-choice callback)
+        _pending_method_map = getattr(crm_storage, "_pending_new_lk_method", None)
+        if _pending_method_map is None:
+            crm_storage._pending_new_lk_method = {}
+            _pending_method_map = crm_storage._pending_new_lk_method
+        _pending_method_map[int(chat_id)] = {
+            "bank_title": bank_title,
+            "price": price,
+            "method": method,
+            "deal": deal,
+            "drop_id_existing": drop_id,
+            "ts": time.time(),
+        }
         try:
             await bot.send_message(
-                chat_id,
-                f"ℹ️ По вашему клиенту уже создан ЛК. "
-                f"Один банк — один слот. Продолжайте с текущим заполнением или свяжитесь с оператором.",
+                chat_id, _menu_text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"➊ Добавить в анкету #{drop_id}",
+                        callback_data=f"newlkchoice:reuse:{drop_id}",
+                    )],
+                    [InlineKeyboardButton(
+                        text="➋ Новая анкета (другой клиент)",
+                        callback_data=f"newlkchoice:new:{drop_id}",
+                    )],
+                ]),
             )
-        except Exception:
-            pass
-        return f"ℹ️ open_lk_form: slot taken drop={drop_id}"
+        except Exception as _me:
+            logger.warning("[multislot] menu send failed: %s", _me)
+        return f"🏦 multislot menu shown chat={chat_id} existing_drop={drop_id}"
 
     # AUDIT #3 CRIT-1 + #4 C-1 (авг 2026): SNAPSHOT метода оплаты в drop
     # ТОЛЬКО ЕСЛИ проверка 1-слот прошла (иначе перезаписывали чужой метод).

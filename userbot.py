@@ -1005,18 +1005,25 @@ class UserbotService:
           • Возвращает True если выбор обработан (текущее сообщение не AI-кейс).
         """
         chat_id = event.chat_id
-        text = (event.message.text or event.message.message or "").strip().lower()
+        # AUDIT #6 H-A1: используем raw_text (без markdown-разметки от Telethon)
+        # для устойчивости к bold/italic/mention-форматированию клиента.
+        try:
+            _rt = getattr(event, "raw_text", None)
+            text = (_rt or event.message.text or event.message.message or "").strip().lower()
+        except Exception:
+            text = (event.message.text or event.message.message or "").strip().lower()
         if not text:
             return False
 
         # ═══ SIMBA CRITICAL: WIZARD-TRIGGER имеет ПРИОРИТЕТ над всем ═══
-        # Если клиент пишет «Ассистент, хочу сдать РС» — снимаем track-guard,
-        # ставим track=ip, enqueue __start_sell_wizard и выходим с handled=True.
-        # Иначе WIZARD не срабатывал когда welcome-фаза активна.
-        # AUDIT #2 HIGH-7 (авг 2026): разрешаем 0-3 слова после «РС».
+        # AUDIT #2 HIGH-7: 0-3 слова после «РС».
         # AUDIT #3 HIGH-7: «готов/могу» как синонимы «хочу».
+        # AUDIT #6 H-A2: смягчили анкор — пропускаем ведущие эмодзи, пунктуацию,
+        # markdown-символы (*, [, _), чтобы «👋 Ассистент, хочу сдать РС» и
+        # «*Ассистент* хочу сдать РС» триггерили визард.
         _wizard_re = re.compile(
-            r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
+            r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*"
+            r"(?:\S+\s+){0,4}"
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
             r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)"
@@ -1441,12 +1448,27 @@ class UserbotService:
             return
         sent = 0
         failed = 0
+        skipped_silent = 0
+        skipped_welcome = 0
         failed_chats = []  # для детального отчёта
         for cid_raw, info in chats.items():
             try:
                 cid = int(cid_raw)
             except Exception:
                 continue
+            # AUDIT #6 H-F1/M-4 (авг 2026): broadcast НЕ шлём в чаты где:
+            # (а) активный silent-mode от оператора / AI-mute
+            # (б) welcome-фаза (клиент ещё не выбрал направление) — иначе
+            #     broadcast влезает поверх меню.
+            try:
+                if hasattr(storage, "is_chat_ai_muted") and storage.is_chat_ai_muted(cid):
+                    skipped_silent += 1
+                    continue
+                if hasattr(storage, "is_awaiting_track_choice") and storage.is_awaiting_track_choice(cid):
+                    skipped_welcome += 1
+                    continue
+            except Exception:
+                pass
             try:
                 await self.client.send_message(cid, text[:3900])
                 sent += 1
@@ -1888,6 +1910,15 @@ class UserbotService:
         except Exception:
             pass
 
+        # AUDIT #6 H-G1 (авг 2026): чистим зависший sell_flow — иначе если
+        # клиент вернётся в тот же chat_id, wizard «продолжится» со старого
+        # шага с чужими остатками state (bank/uploads/method).
+        try:
+            await storage.clear_sell_flow(chat_id)
+            logger.info("[client_left] sell_flow cleared for chat=%s", chat_id)
+        except Exception as _cfe:
+            logger.warning("[client_left] clear_sell_flow failed: %s", _cfe)
+
         # Уведомление в JARVIS для owner
         try:
             await storage.add_notification(
@@ -2165,8 +2196,9 @@ class UserbotService:
             # как синонимы «хочу». Раньше «Ассистент, готов сдать РС»
             # зацикливался — F.a regex «готов сдать» отвечал шаблоном
             # «напишите: Ассистент, хочу сдать РС» вместо запуска визарда.
+            # AUDIT #6 H-A2: смягчённый анкор (эмодзи/markdown в начале).
             _wiz_mega = re.search(
-                r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
+                r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*(?:\S+\s+){0,4}"
                 r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
                 r"сда(?:ть|вать|м|[её]м)\s+"
                 r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)"
@@ -2219,12 +2251,27 @@ class UserbotService:
         try:
             _sf = storage.get_sell_flow(chat_id) or {}
             _sf_step = (_sf.get("step") or "").lower()
-            if _sf_step and _sf_step not in ("done", "cancelled", ""):
+            # AUDIT #6 CRIT-2 (авг 2026): TTL guard — если wizard брошен более
+            # часа назад, НЕ глушим Асика (иначе клиент, вернувшийся через день,
+            # получает молчание навсегда до точной фразы «Ассистент, хочу сдать РС»).
+            _sf_ts = float(_sf.get("updated_ts") or 0)
+            _sf_stale = _sf_ts and (time.time() - _sf_ts) > 3600  # 1 час
+            if _sf_step and _sf_step not in ("done", "cancelled", "") and not _sf_stale:
                 logger.info(
                     "[wizard] active FSM step=%r → skip AI/dept/FAQ handlers (chat=%s)",
                     _sf_step, chat_id,
                 )
                 return
+            if _sf_stale and _sf_step and _sf_step not in ("done", "cancelled", ""):
+                # Авто-сброс шага у brошенного wizard'а — освобождает Асика
+                try:
+                    await storage.set_sell_flow(chat_id, step="cancelled")
+                    logger.info(
+                        "[wizard] AUTO-CANCEL stale wizard (>1h) chat=%s step=%r",
+                        chat_id, _sf_step,
+                    )
+                except Exception:
+                    pass
         except Exception as _sfe:
             logger.warning("wizard-active check failed: %s", _sfe)
 
@@ -3855,10 +3902,10 @@ class UserbotService:
         # AUDIT #2 HIGH-7 (авг 2026): разрешаем 0-3 слова после «РС».
         # AUDIT #3 HIGH-7: «готов/могу» как синонимы «хочу» — иначе
         # «Ассистент, готов сдать РС» ловил F.a regex и зацикливал клиента.
+        # AUDIT #6 H-A2: смягчённый анкор.
         _WIZARD_TRIGGER = re.compile(
-            # «ассистент [.,!:\s пожалуйста я мы] хочу/хотим/готов/могу сдать [рс/счёт/…]»
-            r"^\s*ассистент\b[\s,.:!?]*"
-            r"(?:\S+\s+){0,4}"  # 0-4 слова-связки (я / мы / пожалуйста / можно / …)
+            r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*"
+            r"(?:\S+\s+){0,4}"
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
             r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|"
