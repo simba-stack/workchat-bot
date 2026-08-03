@@ -143,27 +143,30 @@ def _kb_debet_stub():
 
 def _kb_verification(uploads: list, bank_key: str = ""):
     """SIMBA (авг 2026): разделённые кнопки для каждого типа пруфа.
-    Не-АЛЬФА: 📷 Скриншот · ✏️ ИНН · 📤 Отправить
-    АЛЬФА:    🎥 Видео · 📷 Скриншот · ✏️ ИНН · 📤 Отправить
-    Каждая кнопка показывает ✅ если этот тип уже загружен.
-    Отправить — активна если есть все обязательные типы.
+    Требование ВИДЕО берётся из verification_config.allow_video для банка —
+    (по дефолту True для АЛЬФА, False для остальных).
     """
     types_present = {u.get("type") for u in (uploads or []) if u.get("type")}
-    is_alfa = bank_key.upper() == "АЛЬФА"
+    # bank_key = "ALFA"/"OZON"/"RAIF" (латиница!) — не путать с BANK_TITLES ("АЛЬФА"/...)
+    bank_title = BANK_TITLES.get((bank_key or "").upper(), (bank_key or "").upper())
+    # Читаем конфиг (allow_video) — SIMBA настраивает через админку
+    _cfg = _storage.get_verification_config(bank_title) or {}
+    # Требуем видео если явно allow_video=True для этого банка (по дефолту — только для АЛЬФА)
+    require_video = bool(_cfg.get("allow_video", (bank_key or "").upper() == "ALFA"))
 
     def _btn(icon, label, present_key, cb):
         prefix = "✅ " if present_key in types_present else ""
         return InlineKeyboardButton(text=f"{prefix}{icon} {label}", callback_data=cb)
 
     rows = []
-    if is_alfa:
+    if require_video:
         rows.append([_btn("🎥", "Загрузить видео", "video", "sw:up:video")])
     rows.append([_btn("📷", "Загрузить скриншот", "screenshot", "sw:up:screen")])
     rows.append([_btn("✏️", "Вписать ИНН", "inn", "sw:up:inn")])
 
     # Обязательные типы для отправки:
     required = {"screenshot", "inn"}
-    if is_alfa:
+    if require_video:
         required.add("video")
     ready = required.issubset(types_present)
     send_lbl = (
@@ -260,19 +263,21 @@ async def _render_verification(bot, chat_id, edit_call: Optional[CallbackQuery] 
         text = f"🛡 Проверка ЛК {bank_title}\n\nПришлите пруф в чат и жмите «📤 На проверку»."
 
     header = f"💰 Цена: <b>{int(price)}$</b>\n\n" if price > 0 else ""
-    # SIMBA (авг 2026): считаем по типам пруфов, показываем чекбоксы
+    # SIMBA (авг 2026): считаем по типам пруфов, показываем чекбоксы.
+    # bank_key = "ALFA"/"OZON"/"RAIF" (латиница). Требование видео берётся
+    # из verification_config.allow_video (админка) — дефолт True для ALFA.
     types_present = {u.get("type") for u in (uploads or []) if u.get("type")}
-    is_alfa = bank_key == "АЛЬФА"
+    require_video = bool((cfg or {}).get("allow_video", bank_key == "ALFA"))
     footer_lines = ["", "📋 <b>Что нужно предоставить:</b>"]
-    if is_alfa:
+    if require_video:
         footer_lines.append(
-            f"{'✅' if 'video' in types_present else '⬜'} Видео (для АЛЬФА)"
+            f"{'✅' if 'video' in types_present else '⬜'} 🎥 Видео"
         )
     footer_lines.append(
-        f"{'✅' if 'screenshot' in types_present else '⬜'} Скриншот"
+        f"{'✅' if 'screenshot' in types_present else '⬜'} 📷 Скриншот"
     )
     footer_lines.append(
-        f"{'✅' if 'inn' in types_present else '⬜'} ИНН"
+        f"{'✅' if 'inn' in types_present else '⬜'} ✏️ ИНН"
     )
     footer_lines.append(
         "\n👉 Жмите кнопку под нужным типом, затем присылайте одним сообщением. "
@@ -1011,12 +1016,12 @@ async def _rerender_verification_after_upload(bot, chat_id):
         text = f"🛡 Проверка ЛК {bank_title}"
     header = f"💰 Цена: <b>{int(price)}$</b>\n\n" if price > 0 else ""
     types_present = {u.get("type") for u in uploads if u.get("type")}
-    is_alfa = bank_key == "АЛЬФА"
+    require_video = bool((cfg or {}).get("allow_video", bank_key == "ALFA"))
     footer_lines = ["", "📋 <b>Что нужно предоставить:</b>"]
-    if is_alfa:
-        footer_lines.append(f"{'✅' if 'video' in types_present else '⬜'} Видео (для АЛЬФА)")
-    footer_lines.append(f"{'✅' if 'screenshot' in types_present else '⬜'} Скриншот")
-    footer_lines.append(f"{'✅' if 'inn' in types_present else '⬜'} ИНН")
+    if require_video:
+        footer_lines.append(f"{'✅' if 'video' in types_present else '⬜'} 🎥 Видео")
+    footer_lines.append(f"{'✅' if 'screenshot' in types_present else '⬜'} 📷 Скриншот")
+    footer_lines.append(f"{'✅' if 'inn' in types_present else '⬜'} ✏️ ИНН")
     footer_lines.append("\n👉 Жмите кнопку, затем присылайте одним сообщением.")
     full = header + text + "\n".join(footer_lines)
     kb = _kb_verification(uploads, bank_key)
