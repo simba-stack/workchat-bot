@@ -871,32 +871,59 @@ async def cb_guar_deposited(call: CallbackQuery, state: FSMContext):
 
 @router.message(SellWizardForm.waiting_upload)
 async def msg_upload(message: Message, state: FSMContext):
+    """AUDIT #2 HIGH-10 (авг 2026): legacy waiting_upload — если клиент шлёт
+    файл ДО нажатия кнопки screenshot/video/inn, мы больше не молча пишем
+    type='photo'/'document' (это не проходит checklist). Вместо этого:
+
+      * фото/документ → авто-мапим в 'screenshot' если ещё не загружено
+      * видео → авто-мапим в 'video'
+      * текст 10-12 цифр → авто-мапим в 'inn'
+      * иначе → мягкий reply «нажмите кнопку выше» + ре-рендер меню.
+    """
     data = await state.get_data()
     if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
         return
     flow = get_flow(message.chat.id)
     if not flow or _is_stale(flow) or flow.get("step") != "verification_upload":
         return
+    existing_types = {(u.get("type") or "").lower() for u in (flow.get("uploads") or [])}
     upload = None
-    if message.photo:
-        upload = {"type": "photo", "msg_id": int(message.message_id),
+    if message.photo or message.document:
+        # первый скриншот/пруф → screenshot; повторный — тоже screenshot
+        # (можно бесконечно догружать; checklist проверяет ПО ТИПАМ, не по кол-ву)
+        upload = {"type": "screenshot", "msg_id": int(message.message_id),
                   "caption": (message.caption or "")[:200]}
     elif message.video:
         upload = {"type": "video", "msg_id": int(message.message_id),
                   "caption": (message.caption or "")[:200]}
-    elif message.document:
-        upload = {"type": "document", "msg_id": int(message.message_id),
-                  "caption": (message.caption or "")[:200]}
     elif (message.text or "").strip():
-        upload = {"type": "text", "msg_id": int(message.message_id),
-                  "caption": message.text.strip()[:1000]}
+        _t = message.text.strip()
+        # Если похоже на ИНН (10-12 цифр) и inn ещё не сдан — мапим в inn
+        if _t.isdigit() and 10 <= len(_t) <= 12 and "inn" not in existing_types:
+            upload = {"type": "inn", "msg_id": int(message.message_id),
+                      "caption": _t[:20]}
+        else:
+            # Подсказка — не молчим
+            try:
+                await message.reply(
+                    "ℹ️ Пожалуйста, нажмите кнопку в меню выше "
+                    "(📷 Скриншот / 🎥 Видео / ✏️ ИНН) перед загрузкой."
+                )
+            except Exception:
+                pass
+            return
     if not upload:
         return
     new_flow = await _storage.sell_flow_append_upload(message.chat.id, upload)
-    logger.info("[sell_wizard_crm] upload+ chat=%s type=%s total=%d",
+    logger.info("[sell_wizard_crm] legacy upload+ mapped chat=%s type=%s total=%d",
                 message.chat.id, upload["type"], len(new_flow.get("uploads") or []))
     try:
         await message.react([{"type": "emoji", "emoji": "👍"}])
+    except Exception:
+        pass
+    # Ре-рендерим checklist сразу — клиент видит новую галочку
+    try:
+        await _rerender_verification_after_upload(message.bot, message.chat.id)
     except Exception:
         pass
 
