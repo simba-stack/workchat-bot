@@ -626,6 +626,21 @@ class Storage:
                     print(f"[storage] post-load migration failed: {e}")
             elif _load_err:
                 print(f"[storage] ⚠️ ПОТЕРЯ СОСТОЯНИЯ: и state.json и .bak битые — используем defaults")
+            # AUDIT #7 C-1 (авг 2026): если восстановились из .bak — НЕ
+            # разрешаем следующему save() ротировать .bak (иначе битый
+            # state.json на диске перезапишет наш хороший бэкап).
+            # Пишем восстановленный state прямо в .path без rotation.
+            if _load_err and loaded is not None:
+                try:
+                    _snap = json.dumps(self.state, ensure_ascii=False, indent=2)
+                    with open(self.path, "w", encoding="utf-8") as f:
+                        f.write(_snap)
+                    self._last_reload_mtime = os.path.getmtime(self.path)
+                    print(f"[storage] ✅ .bak-recovered state перезаписан в {self.path} (без rotation)")
+                    # Флаг: следующий _do_write_sync НЕ ротирует .bak на этой сессии
+                    self._skip_next_bak_rotation = True
+                except Exception as _we:
+                    print(f"[storage] write-after-recovery failed: {_we}")
             if not self.state.get("admin_secret_command"):
                 self.state["admin_secret_command"] = _gen_secret_command()
             if config.ADMIN_ID and config.ADMIN_ID not in self.state["admins"]:
@@ -659,16 +674,30 @@ class Storage:
 
     def _do_write_sync(self, snapshot_str: str):
         """Sync atomic write. Выполняется в thread executor — НЕ блокирует
-        event loop. Атомарно: .tmp → os.replace + .bak от предыдущего state."""
+        event loop. Атомарно: .tmp → os.replace + .bak от предыдущего state.
+
+        AUDIT #7 C-1: если только что recovery из .bak — не ротируем .bak
+        на этом write (иначе битый state.json перезапишет хороший бэкап).
+        Флаг сбрасывается после первой ротации, чтобы .bak начал обновляться.
+        """
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(snapshot_str)
             if os.path.exists(self.path):
-                try:
-                    os.replace(self.path, self.path + ".bak")
-                except Exception:
-                    pass
+                if getattr(self, "_skip_next_bak_rotation", False):
+                    # После recovery: удаляем текущий (перезаписанный) state.json
+                    # без ротации в .bak. .bak остаётся целым.
+                    try:
+                        os.remove(self.path)
+                    except Exception:
+                        pass
+                    self._skip_next_bak_rotation = False
+                else:
+                    try:
+                        os.replace(self.path, self.path + ".bak")
+                    except Exception:
+                        pass
             os.replace(tmp, self.path)
         except Exception as e:
             print(f"[storage] sync write failed: {e}")

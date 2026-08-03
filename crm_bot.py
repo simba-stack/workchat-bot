@@ -2357,7 +2357,11 @@ async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
     action, existing_drop_id = parts[1], parts[2]
     chat_id = call.message.chat.id
     _pending_map = getattr(crm_storage, "_pending_new_lk_method", None) or {}
-    pending = _pending_map.get(int(chat_id))
+    # AUDIT #7 C-2 (авг 2026): race-guard — pop() ДО первого await.
+    # Двойной клик по кнопкам «reuse»/«new» иначе мог создать 2 drop'а
+    # или дважды перезаписать method. Атомарный pop = только один клик
+    # обработает, второй увидит «Сессия истекла».
+    pending = _pending_map.pop(int(chat_id), None)
     if not pending:
         await call.answer("Сессия истекла — повторите оформление РС", show_alert=True)
         try:
@@ -2367,7 +2371,6 @@ async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
         return
     # Проверяем свежесть (5 мин TTL)
     if time.time() - float(pending.get("ts") or 0) > 300:
-        _pending_map.pop(int(chat_id), None)
         await call.answer("Сессия истекла — повторите оформление РС", show_alert=True)
         try:
             await call.message.edit_reply_markup(reply_markup=None)
@@ -2549,6 +2552,17 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
             await call.answer("Клиент не найден. Попробуйте начать заново.", show_alert=True)
             return
     await call.answer()
+    # AUDIT #7 H-3 (авг 2026): пометить bank как pending в drop, чтобы
+    # параллельный wizard тем же банком получил «Уже в процессе заполнения».
+    try:
+        _drop_state = crm_storage.get_crm_drop(drop_id) or {}
+        _pending = list(_drop_state.get("pending_bank_fills") or [])
+        _bu = (bank or "").upper().strip()
+        if _bu and _bu not in [b.upper() for b in _pending]:
+            _pending.append(_bu)
+            await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
+    except Exception:
+        pass
     await state.set_state(LKForm.waiting_login)
     await state.update_data(
         drop_id=drop_id, bank=bank, menu_msg_id=call.message.message_id,
@@ -2764,6 +2778,17 @@ async def handle_lk_mail(message: Message, state: FSMContext):
     )
     logger.info("[LKForm] saved droplk %s (status=%s) client_data=%s",
                 droplk_id, saved, {k: _clean(nlk.get(k)) for k in ("login","password","number","code_word","mail")})
+
+    # AUDIT #7 H-3: снимаем bank из pending_bank_fills — LK создан,
+    # dup-check теперь основной путь (list_drop_lks_any).
+    try:
+        _drop_state = crm_storage.get_crm_drop(drop_id) or {}
+        _pending = list(_drop_state.get("pending_bank_fills") or [])
+        _bu = (bank or "").upper().strip()
+        _pending = [b for b in _pending if b.upper() != _bu]
+        await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
+    except Exception:
+        pass
 
     # Удалить ответ user'а + меню
     await _safe_delete(message.bot, message.chat.id, message.message_id)
@@ -4499,19 +4524,34 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
     # AUDIT #4 C-1: проверка ПЕРЕД snapshot method.
     # AUDIT #6 H-H1: перенести проверку в start_wizard будет отдельным батчем.
     existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
-    if existing:
-        # Проверка: тот же банк уже есть в drop?
+    # AUDIT #7 H-3 (авг 2026): dup-bank check дополнительно ловит и
+    # PENDING-состояние (партнёр в середине 5-шагового FSM тем же банком).
+    # LK-запись реально создаётся только на последнем шаге mail — раньше
+    # было окно, когда второй wizard на тот же банк проходил проверку.
+    # Флаг pending_bank_fills хранится в drop.pending_bank_fills = ["ALFA", ...]
+    _pending_banks = set()
+    try:
+        _drop_state = crm_storage.get_crm_drop(drop_id) or {}
+        _pending_banks = set(
+            (b or "").upper().strip()
+            for b in (_drop_state.get("pending_bank_fills") or [])
+        )
+    except Exception:
+        pass
+    if existing or _pending_banks:
+        # Проверка: тот же банк уже есть в drop? (либо готовый LK, либо в pending)
         _bank_upper = bank_title.upper().strip()
         _same_bank_lk = None
         for _lkid, _lkrec in (existing or {}).items():
             if (_lkrec.get("bank") or "").upper().strip() == _bank_upper:
                 _same_bank_lk = _lkid
                 break
-        if _same_bank_lk:
+        if _same_bank_lk or _bank_upper in _pending_banks:
+            _reason = "уже завершается" if _same_bank_lk else "в процессе заполнения"
             try:
                 await bot.send_message(
                     chat_id,
-                    f"⚠️ ЛК банка <b>{bank_title}</b> уже есть в анкете "
+                    f"⚠️ ЛК банка <b>{bank_title}</b> {_reason} в анкете "
                     f"(<code>#{drop_id}</code>). Один банк — один слот на анкету.\n\n"
                     f"Выберите другой банк или дождитесь завершения текущего ЛК.",
                     parse_mode="HTML",
