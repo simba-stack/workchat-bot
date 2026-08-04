@@ -2475,6 +2475,7 @@ async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
     if action == "new":
         # Создаём НОВЫЙ drop с тем же owner (партнёр), новый ФИО — заполнит СУС
         # позже через FillForm. Пока используем placeholder-ФИО.
+        # AUDIT #7 M-3: pop уже сделан выше — здесь только error paths.
         existing_drop = crm_storage.get_crm_drop(existing_drop_id) or {}
         owner_id = existing_drop.get("owner_id") or ""
         if not owner_id:
@@ -4671,6 +4672,26 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
             )
         except Exception as _me:
             logger.warning("[perevyaz CRIT-1] snapshot method failed: %s", _me)
+
+    # AUDIT #8 M8-2 (авг 2026): pending_bank_fills ставится РАНЬШЕ,
+    # прямо при показе banklk-кнопки — не только внутри cb_newlk. Иначе
+    # быстрый второй triggеr того же банка между показом и кликом
+    # пропускал проверку.
+    try:
+        _drop_state = crm_storage.get_crm_drop(drop_id) or {}
+        _raw = _drop_state.get("pending_bank_fills") or {}
+        if isinstance(_raw, list):
+            _pending = {(b or "").upper().strip(): time.time() for b in _raw if b}
+        elif isinstance(_raw, dict):
+            _pending = dict(_raw)
+        else:
+            _pending = {}
+        _bu = bank_title.upper().strip()
+        if _bu:
+            _pending[_bu] = time.time()
+        await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
+    except Exception:
+        pass
 
     # 4) Показать клиенту в managed_chat меню заполнения — одна кнопка,
     #    banklk → newlk использует существующий FSM (waiting_login → ...)

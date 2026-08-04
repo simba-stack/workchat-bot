@@ -1219,8 +1219,82 @@ async def msg_deal_number(message: Message, state: FSMContext):
         return
     m = re.match(r"^\s*#?\s*(\d{3,10})\s*$", message.text or "")
     if not m:
+        try:
+            await message.reply(
+                "❌ Нужен только номер сделки цифрами (3-10 цифр), например: <code>12345</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
         return
     deal_number = m.group(1)
     await set_flow(message.chat.id, deal_number=deal_number)
     await state.clear()
     await _forward_deal_to_guarantor(message.bot, message.chat.id, deal_number)
+
+
+# AUDIT #6 H-B1 (авг 2026): non-text (voice/sticker/photo/video) в
+# waiting_deal_number — раньше молча игнорировалось (F.text filter),
+# HIGH-8 глушил fallback → полная тишина. Теперь мягкий reply.
+@router.message(SellWizardForm.waiting_deal_number)
+async def msg_deal_number_non_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if int(data.get("sw_chat_id") or 0) != int(message.chat.id):
+        return
+    try:
+        await message.reply(
+            "ℹ️ Нужен только <b>номер сделки цифрами</b> (например <code>12345</code>).\n\n"
+            "Голосовые / стикеры / фото не подходят.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+# AUDIT #6 H-C1 (авг 2026): пруф после cb_sendcheck (step=verification_pending).
+# Раньше state.clear() → все msg_upload_* handlers require state → тишина.
+# Теперь: message handler БЕЗ state — если chat в managed_chat + step
+# verification_pending и клиент шлёт файл — форвардим в verification group
+# как late-uploaded proof + уведомляем клиента.
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def msg_late_proof(message: Message):
+    """H-C1: пруф, дошедший ПОСЛЕ cb_sendcheck (step=verification_pending)."""
+    # Не text — фото/видео/документ. Text пропускаем в другие handlers.
+    if message.text or message.caption is None and not (
+        message.photo or message.video or message.document
+    ):
+        return
+    if not (message.photo or message.video or message.document):
+        return
+    flow = get_flow(message.chat.id)
+    if not flow:
+        return
+    step = (flow.get("step") or "").lower()
+    if step != "verification_pending":
+        return
+    # 5 минут TTL после cb_sendcheck (за это время клиент может докинуть)
+    if time.time() - float(flow.get("updated_ts") or 0) > 300:
+        return
+    # Форвардим в verification-группу
+    try:
+        vgroup = _storage.get_verification_group_id()
+    except Exception:
+        vgroup = 0
+    if not vgroup:
+        return
+    try:
+        await message.bot.forward_message(
+            chat_id=vgroup,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+        await message.reply(
+            "ℹ️ Ваш дополнительный пруф передан на проверку.\n"
+            "Оператор его увидит вместе с уже отправленными файлами."
+        )
+        logger.info(
+            "[H-C1] late proof forwarded chat=%s msg=%s → vgroup=%s",
+            message.chat.id, message.message_id, vgroup,
+        )
+    except Exception as _le:
+        logger.warning("[H-C1] late proof forward failed: %s", _le)
