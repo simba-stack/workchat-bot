@@ -64,7 +64,32 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton as _OrigInlineKeyboardButton,
+    WebAppInfo,
 )
+
+
+# ════════════════════════════════════════════════════════════════
+# TELEGRAM MINI-APP LAUNCHER
+# ════════════════════════════════════════════════════════════════
+# SIMBA (авг 2026): mini-app хостится на stroy-crm-bot (Railway) под
+# префиксом /miniapp/*. Кнопка «📱 Mini-App» появляется в /start, /profile
+# и /clients при условии, что MINIAPP_URL задан в env И это ПРИВАТНЫЙ чат
+# (Telegram WebApp кнопки НЕ работают в inline-клавиатурах групповых чатов).
+def _miniapp_url() -> str:
+    """URL Mini-App. Пусто = кнопка скрыта."""
+    return (os.getenv("MINIAPP_URL", "") or "").strip()
+
+
+def _miniapp_button(text: str = "📱 Открыть Mini-App"):
+    """Возвращает InlineKeyboardButton с web_app или None если URL не задан."""
+    url = _miniapp_url()
+    if not url:
+        return None
+    try:
+        return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))
+    except Exception as e:
+        logger.warning("[miniapp] cant build web_app button: %s", e)
+        return None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -682,6 +707,28 @@ async def cmd_profile(message: Message):
     await _show_profile(message, owner, in_group=in_group)
 
 
+# ─── /miniapp — прямой лончер Mini-App ─────────────────────────
+@router.message(Command("miniapp"))
+async def cmd_miniapp(message: Message):
+    """Прямая кнопка для запуска Mini-App (без прохода через профиль)."""
+    if message.chat.type != "private":
+        await message.reply(
+            "📱 Открой Mini-App в личке со мной — кнопки WebApp работают только в приват-чатах.",
+        )
+        return
+    btn = _miniapp_button("📱 Открыть Mini-App")
+    if btn is None:
+        await message.reply("⚠️ Mini-App не настроен (env MINIAPP_URL пуст).")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[btn]])
+    await message.reply(
+        "📱 <b>PRIDE Mini-App</b>\n\n"
+        "Твои ЛК, статусы, остатки — прямо в Telegram.\n"
+        "Нажми кнопку ниже:",
+        reply_markup=kb,
+    )
+
+
 async def _show_profile(message: Message, owner: dict, in_group: bool = False):
     joined = time.strftime("%d.%m.%Y", time.localtime(owner.get("joined_at") or 0))
     drops_total = int(owner.get("total_drops") or 0)
@@ -739,6 +786,11 @@ async def _show_profile(message: Message, owner: dict, in_group: bool = False):
         [InlineKeyboardButton(text="💼 Кошелёк TRC20", callback_data="wallet")],
         [InlineKeyboardButton(text="❓ Помощь / FAQ", callback_data="help")],
     ]
+    # 📱 Mini-App — только в приват-чате (web_app buttons в группах не работают)
+    if not in_group:
+        _ma_btn = _miniapp_button("📱 Открыть Mini-App")
+        if _ma_btn is not None:
+            kb.insert(0, [_ma_btn])
     if in_group:
         kb.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
     await _send(message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
@@ -1610,6 +1662,11 @@ async def _show_clients(message: Message, owner: dict, edit_msg_id: Optional[int
     if not kb_rows:
         kb_rows.append([InlineKeyboardButton(text="⚠️ Клиентов пока нет", callback_data="noop")])
     kb_rows.append([InlineKeyboardButton(text="➕ Добавить клиента", callback_data=f"newdrop:{owner['owner_id']}")])
+    # 📱 Mini-App — только в приват-чате
+    if message.chat.type == "private":
+        _ma_btn = _miniapp_button("📱 Открыть Mini-App")
+        if _ma_btn is not None:
+            kb_rows.append([_ma_btn])
     kb_rows.append([InlineKeyboardButton(text="◀️ Профиль", callback_data="profile")])
     kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
 
