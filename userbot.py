@@ -1022,7 +1022,7 @@ class UserbotService:
         # markdown-символы (*, [, _), чтобы «👋 Ассистент, хочу сдать РС» и
         # «*Ассистент* хочу сдать РС» триггерили визард.
         _wizard_re = re.compile(
-            r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*"
+            r"(?:^|[^а-яёА-ЯЁa-zA-Z0-9])ассистент(?:[^а-яёА-ЯЁa-zA-Z0-9]|$)[\s,.:!?*_\[\]()~`]*"
             r"(?:\S+\s+){0,4}"
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
@@ -1486,14 +1486,18 @@ class UserbotService:
                     cid, (info or {}).get("client_name") or "—", err_short,
                 )
         logger.info(
-            "[asik_broadcast] slot=%s sent=%d failed=%d total_chats=%d",
-            slot, sent, failed, len(chats),
+            "[asik_broadcast] slot=%s sent=%d failed=%d skipped_silent=%d "
+            "skipped_welcome=%d total_chats=%d",
+            slot, sent, failed, skipped_silent, skipped_welcome, len(chats),
         )
-        # Сохраняем результат рассылки в storage (для JARVIS просмотра)
+        # Сохраняем результат рассылки в storage (для JARVIS просмотра).
+        # AUDIT #7 M-1: skipped_silent + skipped_welcome теперь в лог.
         try:
             log_entry = {
                 "slot": slot, "ts": __import__("time").time(),
                 "sent": sent, "failed": failed, "total": len(chats),
+                "skipped_silent": skipped_silent,
+                "skipped_welcome": skipped_welcome,
                 "failed_chats": failed_chats[:50],  # cap to не разнести state
             }
             broadcasts_log = storage.state.setdefault("asik_broadcast_log", [])
@@ -1866,6 +1870,15 @@ class UserbotService:
                 chat_id, left_uid, client_id,
             )
             return
+        # AUDIT #7 H-2 (авг 2026): clear_sell_flow ДО anti_churn early return.
+        # Иначе на повторный leave (клиент вошёл-вышел-вошёл-вышел) sell_flow
+        # НЕ чистился — anti_churn_sent=True из первого leave, второй leave
+        # уходил в early-return до H-G1 cleanup внизу функции.
+        try:
+            await storage.clear_sell_flow(chat_id)
+            logger.info("[client_left] sell_flow cleared (early) chat=%s", chat_id)
+        except Exception as _cfe:
+            logger.warning("[client_left] early clear_sell_flow failed: %s", _cfe)
         # Анти-спам: запоминаем что уже слали anti-churn в этот чат
         if info.get("anti_churn_sent"):
             return
@@ -1910,14 +1923,8 @@ class UserbotService:
         except Exception:
             pass
 
-        # AUDIT #6 H-G1 (авг 2026): чистим зависший sell_flow — иначе если
-        # клиент вернётся в тот же chat_id, wizard «продолжится» со старого
-        # шага с чужими остатками state (bank/uploads/method).
-        try:
-            await storage.clear_sell_flow(chat_id)
-            logger.info("[client_left] sell_flow cleared for chat=%s", chat_id)
-        except Exception as _cfe:
-            logger.warning("[client_left] clear_sell_flow failed: %s", _cfe)
+        # AUDIT #6 H-G1 + #7 H-2: sell_flow уже очищен выше (до anti_churn
+        # early return) — здесь дубликат-cleanup удалён.
 
         # Уведомление в JARVIS для owner
         try:
@@ -2198,7 +2205,7 @@ class UserbotService:
             # «напишите: Ассистент, хочу сдать РС» вместо запуска визарда.
             # AUDIT #6 H-A2: смягчённый анкор (эмодзи/markdown в начале).
             _wiz_mega = re.search(
-                r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*(?:\S+\s+){0,4}"
+                r"(?:^|[^а-яёА-ЯЁa-zA-Z0-9])ассистент(?:[^а-яёА-ЯЁa-zA-Z0-9]|$)[\s,.:!?*_\[\]()~`]*(?:\S+\s+){0,4}"
                 r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
                 r"сда(?:ть|вать|м|[её]м)\s+"
                 r"(?:рс|расч[её]тн\w+\s+сч[её]т\w*|сч[её]т\w*|счета|рабочий\s+сч[её]т\w*)"
@@ -3703,9 +3710,12 @@ class UserbotService:
         # проверка bypass'а флага.
         try:
             if storage.is_awaiting_dept_choice(chat_id):
+                # AUDIT #7 H-1 (авг 2026): смягчённый анкор — эмодзи/markdown
+                # в начале не ломают bypass. Синхронно с MEGA-PRIORITY/main
+                # wizard-regex (batch G H-A2). Также добавил готов/могу.
                 _bypass = bool(re.search(
-                    r"^\s*ассистент\b[\s,.:!?]*(?:\S+\s+){0,4}"
-                    r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?))\s+"
+                    r"(?:^|[^а-яёА-ЯЁa-zA-Z0-9])ассистент(?:[^а-яёА-ЯЁa-zA-Z0-9]|$)[\s,.:!?*_\[\]()~`]*(?:\S+\s+){0,4}"
+                    r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
                     r"сда(?:ть|вать|м|[её]м)\s+",
                     low, re.IGNORECASE,
                 )) or bool(re.search(
@@ -3732,17 +3742,20 @@ class UserbotService:
                 # Мапим ответ на dept
                 dept_key = None
                 dept_name = ""
-                # AUDIT #2 MED-5 (авг 2026): «менеджер»/«сус» без \w* — «менеджеру»,
-                # «к менеджеру», «сусу» не ловилось, шло в reask. Добавили \w*.
-                if re.match(r"^\s*1\s*[!.?)]*\s*$", low) or re.search(
+                # AUDIT #2 MED-5: «менеджеру»/«сусу» с \w*.
+                # AUDIT #8 H8-2: keycap-эмодзи 1️⃣ 2️⃣ 3️⃣ = U+003X U+FE0F U+20E3.
+                # Убираем variation-selector (️) и combining keycap (⃣)
+                # перед матчингом — иначе бот просит цифру, а сам keycap не ловит.
+                _low_stripped = low.replace("️", "").replace("⃣", "")
+                if re.match(r"^\s*1\s*[!.?)]*\s*$", _low_stripped) or re.search(
                     r"\b(?:менеджер\w*|мендж\w*|мнж|manager\w*)\b", low
                 ):
                     dept_key, dept_name = "manager", "Менеджеры"
-                elif re.match(r"^\s*2\s*[!.?)]*\s*$", low) or re.search(
+                elif re.match(r"^\s*2\s*[!.?)]*\s*$", _low_stripped) or re.search(
                     r"\b(?:сус\w*|перевяз\w*|system\w*)\b", low
                 ):
                     dept_key, dept_name = "system", "СУС"
-                elif re.match(r"^\s*3\s*[!.?)]*\s*$", low) or re.search(
+                elif re.match(r"^\s*3\s*[!.?)]*\s*$", _low_stripped) or re.search(
                     r"\b(?:бух\w*|бухгалт\w*|accounting\w*)\b", low
                 ):
                     dept_key, dept_name = "accounting", "Бухгалтерия"
@@ -3904,7 +3917,7 @@ class UserbotService:
         # «Ассистент, готов сдать РС» ловил F.a regex и зацикливал клиента.
         # AUDIT #6 H-A2: смягчённый анкор.
         _WIZARD_TRIGGER = re.compile(
-            r"^[^\wа-яёА-ЯЁ]*ассистент\b[\s,.:!?*_\[\]()~`]*"
+            r"(?:^|[^а-яёА-ЯЁa-zA-Z0-9])ассистент(?:[^а-яёА-ЯЁa-zA-Z0-9]|$)[\s,.:!?*_\[\]()~`]*"
             r"(?:\S+\s+){0,4}"
             r"(?:хоч[уеё]м?|хот(?:им|ите|ел[иа]?)|готов[аы]?|могу|можем)\s+"
             r"сда(?:ть|вать|м|[её]м)\s+"
