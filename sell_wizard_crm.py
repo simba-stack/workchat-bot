@@ -1275,6 +1275,17 @@ async def msg_late_proof(message: Message):
     # 5 минут TTL после cb_sendcheck (за это время клиент может докинуть)
     if time.time() - float(flow.get("updated_ts") or 0) > 300:
         return
+    # AUDIT #9 M9-1 (авг 2026): проверяем что отправитель — сам клиент
+    # (не админ/оператор из managed_chat). Иначе случайное фото оператора
+    # уйдёт в verification-группу как «пруф клиента».
+    try:
+        _ci = _storage.get_chat_info(message.chat.id) or {}
+        _client_id = int(_ci.get("client_id") or 0)
+        _from_id = int((message.from_user.id if message.from_user else 0) or 0)
+        if _client_id and _from_id and _from_id != _client_id:
+            return
+    except Exception:
+        return
     # Форвардим в verification-группу
     try:
         vgroup = _storage.get_verification_group_id()
