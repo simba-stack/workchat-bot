@@ -2271,12 +2271,42 @@ async def cb_showdoc(call: CallbackQuery):
 # ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("droplk:"))
-async def cb_droplk(call: CallbackQuery):
+async def cb_droplk(call: CallbackQuery, state: FSMContext):
+    """AUDIT #8 C8-2 (авг 2026): кнопка «◀️ Отмена» в LKForm-шагах
+    (waiting_login/password/number/code_word/mail) шлёт этот callback.
+    Раньше state не clear'ился → следующие сообщения клиента молча
+    собирались как login/password/etc в мусорный ЛК.
+    Fix: чистим FSMContext + снимаем bank из pending_bank_fills.
+    """
     drop_id = call.data.split(":", 1)[1]
     drop = crm_storage.get_drop_any(drop_id)
     if not drop:
         await call.answer("Клиент не найден", show_alert=True)
         return
+    # Cancel-guard: снимаем FSM + pending bank
+    try:
+        _state_data = await state.get_data()
+        _cancel_bank = (_state_data or {}).get("bank") or ""
+        await state.clear()
+        if _cancel_bank:
+            try:
+                _raw = drop.get("pending_bank_fills") or {}
+                if isinstance(_raw, list):
+                    _pending = {(b or "").upper().strip(): time.time() for b in _raw if b}
+                elif isinstance(_raw, dict):
+                    _pending = dict(_raw)
+                else:
+                    _pending = {}
+                _pending.pop((_cancel_bank or "").upper().strip(), None)
+                await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
+                logger.info(
+                    "[cb_droplk C8-2] cancel: cleared FSM + pending bank=%s drop=%s",
+                    _cancel_bank, drop_id,
+                )
+            except Exception as _pe:
+                logger.warning("[cb_droplk C8-2] pending cleanup failed: %s", _pe)
+    except Exception as _se:
+        logger.warning("[cb_droplk C8-2] state clear failed: %s", _se)
     await call.answer()
     await _show_drop_lks(call.message, drop)
 
@@ -2552,15 +2582,21 @@ async def cb_newlk(call: CallbackQuery, state: FSMContext):
             await call.answer("Клиент не найден. Попробуйте начать заново.", show_alert=True)
             return
     await call.answer()
-    # AUDIT #7 H-3 (авг 2026): пометить bank как pending в drop, чтобы
-    # параллельный wizard тем же банком получил «Уже в процессе заполнения».
+    # AUDIT #7 H-3 + #8 C8-1: dict {bank: ts} + TTL 1h.
     try:
         _drop_state = crm_storage.get_crm_drop(drop_id) or {}
-        _pending = list(_drop_state.get("pending_bank_fills") or [])
+        _raw = _drop_state.get("pending_bank_fills") or {}
+        # Миграция из старого list-формата
+        if isinstance(_raw, list):
+            _pending = {(b or "").upper().strip(): time.time() for b in _raw if b}
+        elif isinstance(_raw, dict):
+            _pending = dict(_raw)
+        else:
+            _pending = {}
         _bu = (bank or "").upper().strip()
-        if _bu and _bu not in [b.upper() for b in _pending]:
-            _pending.append(_bu)
-            await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
+        if _bu:
+            _pending[_bu] = time.time()
+        await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
     except Exception:
         pass
     await state.set_state(LKForm.waiting_login)
@@ -2779,13 +2815,18 @@ async def handle_lk_mail(message: Message, state: FSMContext):
     logger.info("[LKForm] saved droplk %s (status=%s) client_data=%s",
                 droplk_id, saved, {k: _clean(nlk.get(k)) for k in ("login","password","number","code_word","mail")})
 
-    # AUDIT #7 H-3: снимаем bank из pending_bank_fills — LK создан,
-    # dup-check теперь основной путь (list_drop_lks_any).
+    # AUDIT #7 H-3 + #8 C8-1: снимаем bank из pending_bank_fills — LK создан.
     try:
         _drop_state = crm_storage.get_crm_drop(drop_id) or {}
-        _pending = list(_drop_state.get("pending_bank_fills") or [])
+        _raw = _drop_state.get("pending_bank_fills") or {}
+        if isinstance(_raw, list):
+            _pending = {(b or "").upper().strip(): time.time() for b in _raw if b}
+        elif isinstance(_raw, dict):
+            _pending = dict(_raw)
+        else:
+            _pending = {}
         _bu = (bank or "").upper().strip()
-        _pending = [b for b in _pending if b.upper() != _bu]
+        _pending.pop(_bu, None)
         await crm_storage.update_drop_any(drop_id, pending_bank_fills=_pending)
     except Exception:
         pass
@@ -4526,16 +4567,24 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
     existing = crm_storage.list_drop_lks_any(drop_id=drop_id) or {}
     # AUDIT #7 H-3 (авг 2026): dup-bank check дополнительно ловит и
     # PENDING-состояние (партнёр в середине 5-шагового FSM тем же банком).
-    # LK-запись реально создаётся только на последнем шаге mail — раньше
-    # было окно, когда второй wizard на тот же банк проходил проверку.
-    # Флаг pending_bank_fills хранится в drop.pending_bank_fills = ["ALFA", ...]
+    # AUDIT #8 C8-1 (авг 2026): pending_bank_fills теперь dict {bank: ts},
+    # с TTL 1h — иначе брошенный fill навсегда блокировал банк.
     _pending_banks = set()
     try:
         _drop_state = crm_storage.get_crm_drop(drop_id) or {}
-        _pending_banks = set(
-            (b or "").upper().strip()
-            for b in (_drop_state.get("pending_bank_fills") or [])
-        )
+        _raw_pending = _drop_state.get("pending_bank_fills") or {}
+        _now_ts = time.time()
+        _TTL = 3600  # 1 час
+        # Обратная совместимость: старый формат — list of str
+        if isinstance(_raw_pending, list):
+            _pending_banks = set((b or "").upper().strip() for b in _raw_pending)
+        elif isinstance(_raw_pending, dict):
+            for _b, _ts in _raw_pending.items():
+                try:
+                    if (_now_ts - float(_ts)) < _TTL:
+                        _pending_banks.add((_b or "").upper().strip())
+                except Exception:
+                    _pending_banks.add((_b or "").upper().strip())
     except Exception:
         pass
     if existing or _pending_banks:
@@ -4573,11 +4622,14 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
             f"(создаётся отдельная сделка)."
         )
         # SNAPSHOT method — сохраняем в drop (используется мультислот-choice callback)
+        # AUDIT #8 M8-1 (авг 2026): key = (chat_id, drop_id, bank) — иначе
+        # быстрый второй trigger разных банков перезатирает первый snapshot.
         _pending_method_map = getattr(crm_storage, "_pending_new_lk_method", None)
         if _pending_method_map is None:
             crm_storage._pending_new_lk_method = {}
             _pending_method_map = crm_storage._pending_new_lk_method
-        _pending_method_map[int(chat_id)] = {
+        _pending_key = f"{int(chat_id)}:{drop_id}:{bank_title.upper()}"
+        _pending_method_map[_pending_key] = {
             "bank_title": bank_title,
             "price": price,
             "method": method,
@@ -4585,6 +4637,8 @@ async def _open_lk_form_for_client(bot, params: dict) -> str:
             "drop_id_existing": drop_id,
             "ts": time.time(),
         }
+        # Также храним по chat_id для backwards-compat в старых кнопках
+        _pending_method_map[int(chat_id)] = dict(_pending_method_map[_pending_key])
         try:
             await bot.send_message(
                 chat_id, _menu_text, parse_mode="HTML",
