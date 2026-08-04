@@ -1312,8 +1312,8 @@ async def cb_help_inline(call: CallbackQuery):
         "<b>1) Как добавить нового клиента?</b>\n"
         "/clients → «➕ Добавить клиента» → введи ФИО → выбери банк → данные.\n\n"
         "<b>2) Когда оплата?</b>\n"
-        "По умолчанию — гарант ПОСЛЕ отработки. Хотите USDT TRC20 или деньги вперёд — "
-        "напишите ассистенту в work-чате.\n\n"
+        "Два варианта: <b>Гарант</b> (через Continental) или <b>USDT TRC20</b>. "
+        "Выбирается в визарде.\n\n"
         "<b>3) Что значит «ожидает приёмки»?</b>\n"
         "Вы заполнили анкету и нажали «Отдать в работу» — ждём пока SIMBA подтвердит.\n\n"
         "<b>4) Где статус ЛК?</b>\n"
@@ -5469,6 +5469,8 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             # CRIT-2: structured payment method
             payment_method=method_code,
             payment_label=method_label,
+            # AUDIT #10 H10-1 (авг 2026): total_price_usdt для advance-payments/остатков
+            total_price_usdt=float(price),
         )
         if not card:
             logger.warning(

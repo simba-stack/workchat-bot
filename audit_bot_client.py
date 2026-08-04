@@ -64,6 +64,8 @@ async def create_lk_card(
     # trc | deal | guarantor_before | guarantor_after | cash | card | usdt | ...
     payment_method: str = "",
     payment_label: str = "",  # человекочитаемая метка для отображения
+    # Волна G (авг 2026): полная цена ЛК для advance-payments/remaining.
+    total_price_usdt: Optional[float] = None,
 ) -> Optional[dict]:
     """POST /api/v1/lk-cards. Возвращает card dict или None при ошибке.
     autopost=True — audit-bot сразу постит карточку в Группу 1 (В РАБОТЕ)."""
@@ -88,6 +90,11 @@ async def create_lk_card(
         payload["payment_method"] = str(payment_method)
     if payment_label:
         payload["payment_label"] = str(payment_label)
+    if total_price_usdt is not None:
+        try:
+            payload["total_price_usdt"] = float(total_price_usdt)
+        except Exception:
+            pass
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.post(
