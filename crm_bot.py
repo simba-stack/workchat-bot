@@ -2434,7 +2434,7 @@ async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
                 )
             except Exception:
                 pass
-        method_label = "USDT TRC20 (после работы)" if method == "USDT_TRC20" else "Гарант в Continental"
+        method_label = "USDT TRC20" if method == "USDT_TRC20" else "Гарант"
         deal_line = f"\n📄 Сделка: <b>№{deal}</b>" if deal else ""
         text = (
             f"🏦 <b>Заполните данные ЛК {bank_title}</b>\n\n"
@@ -2499,7 +2499,7 @@ async def cb_newlk_choice(call: CallbackQuery, state: FSMContext):
                 )
             except Exception:
                 pass
-        method_label = "USDT TRC20 (после работы)" if method == "USDT_TRC20" else "Гарант в Continental"
+        method_label = "USDT TRC20" if method == "USDT_TRC20" else "Гарант"
         deal_line = f"\n📄 Сделка: <b>№{deal}</b>" if deal else ""
         text = (
             f"🏦 <b>Заполните данные ЛК {bank_title}</b>\n\n"
@@ -3384,19 +3384,16 @@ async def _cb_acceptdrop_inner(call: CallbackQuery, drop_id: str, drop: dict):
         pass
 
 
-# Маппинг кодов метода → русские лейблы для отображения
-# AUDIT #2 MEDIUM-1 (авг 2026): визард пишет GUARANTOR_BEFORE_WORK, а лейбл был
-# только для GUARANTOR_BEFORE — уходил сырой код. Держим оба ключа.
+# SIMBA (авг 2026 — batch M): ТОЛЬКО 2 метода оплаты по бизнес-правилу.
+# Больше никаких «— деньги вперёд» / «после отработки» / карты / СБП / кэша.
+# Всё остальное — либо Гарант, либо USDT TRC20.
 _PAYMENT_METHOD_LABELS = {
-    "USDT_TRC20": "USDT TRC20 (на кошелёк)",
-    "USDT_BEP20": "USDT BEP20 (на кошелёк)",
-    "USDT_ERC20": "USDT ERC20 (на кошелёк)",
-    "GUARANTOR_BEFORE": "Гарант — деньги вперёд",
-    "GUARANTOR_BEFORE_WORK": "Гарант — деньги вперёд",  # из sell_wizard_crm.py
-    "GUARANTOR_AFTER_WORK": "Гарант — после отработки",
-    "SBP": "СБП (по номеру телефона)",
-    "CARD": "На карту",
-    "CASH": "Наличными",
+    "USDT_TRC20": "USDT TRC20",
+    "GUARANTOR_BEFORE": "Гарант",
+    "GUARANTOR_BEFORE_WORK": "Гарант",
+    "GUARANTOR_AFTER_WORK": "Гарант",
+    "GUARANTOR": "Гарант",
+    "GUAR": "Гарант",
 }
 
 
@@ -5366,12 +5363,12 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
     #   вписал левое значение в JARVIS).
     PRICE_MIN_USDT = 400.0
     PRICE_MAX_USDT = 650.0
-    needs_price_negotiation = False
+    # Batch M (авг 2026): убрал needs_price_negotiation — флаг никогда не использовался
+    # downstream. Если понадобится тег клиента при пустой цене — сделаем через явный call.
     if price <= 0:
         price = PRICE_MIN_USDT
-        needs_price_negotiation = True
         logger.info(
-            "post-perevyaz lk_card: pricing[%s] empty → старт с минималки %.0f$, тегаем клиента",
+            "post-perevyaz lk_card: pricing[%s] empty → старт с минималки %.0f$",
             bank, PRICE_MIN_USDT,
         )
     # Clamp к жёсткому диапазону 400-650
@@ -5406,48 +5403,32 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         supplier_raw = (owner.get("username") or "").lstrip("@")
         work_chat_id = owner.get("work_chat_id") or 0
         client_id = int(owner.get("tg_user_id") or 0)
-        # SIMBA (авг 2026): подтягиваем метод оплаты из sell_flow (свежий
-        # выбор клиента в визарде) — передаём в АУДИТ для отображения.
-        # AUDIT #2 CRIT-2: теперь method — структурное поле.
-        # AUDIT #3 CRIT-1 (авг 2026): FIRST читаем snapshot из lk-record
-        # (записан в момент создания ЛК). Иначе при параллельных визардах
-        # метод плыл — sell_flow[chat_id] один слот, перезаписывается.
-        # Fallback к sell_flow — только для legacy-записей БЕЗ lk.method.
+        # AUDIT #3 CRIT-1 + #4 C-1 + #M cosmetic (авг 2026):
+        # Приоритет чтения метода оплаты:
+        #   1) drop.method (snapshot из _open_lk_form_for_client — точный)
+        #   2) sell_flow[chat_id].method (legacy fallback для старых дропов)
+        # ФАЛЛБЭК lk.method УДАЛЁН — он никогда не писался (мёртвый код).
+        # Если нужен per-LK метод в будущем — добавить field в add_crm_drop_lk
+        # + передавать method из cb_newlk_choice reuse/new.
         method_code = ""
         method_label = ""
         try:
-            method_code = (lk.get("method") or "").upper()
-            if method_code:
-                method_label = lk.get("method_label") or _PAYMENT_METHOD_LABELS.get(method_code, method_code)
+            _dmethod = (drop.get("method") or "").upper()
+            if _dmethod:
+                method_code = _dmethod
+                method_label = drop.get("method_label") or _PAYMENT_METHOD_LABELS.get(method_code, method_code)
         except Exception:
             pass
-        # AUDIT #3 CRIT-1: fallback 2 — snapshot из drop (сохранён при
-        # _open_lk_form_for_client). Защита от «плывущего» метода при
-        # параллельных визардах: drop зафиксирован в момент подачи РС.
-        if not method_code:
-            try:
-                _dmethod = (drop.get("method") or "").upper()
-                if _dmethod:
-                    method_code = _dmethod
-                    method_label = drop.get("method_label") or _PAYMENT_METHOD_LABELS.get(method_code, method_code)
-                    logger.info(
-                        "[perevyaz CRIT-1] fallback-2: lk.method пуст, snapshot из drop=%s method=%s",
-                        drop.get("drop_id"), method_code,
-                    )
-            except Exception:
-                pass
-        # Fallback 3 — «на живую» из sell_flow (legacy, для дропов созданных
-        # до этого фикса). ЗАПИСЬ В drop-snapshot больше не делаем — иначе
-        # можно переписать зафиксированный метод более свежим.
         if not method_code:
             try:
                 sf = crm_storage.get_sell_flow(int(work_chat_id)) or {}
                 method_code = (sf.get("method") or "").upper()
                 method_label = _PAYMENT_METHOD_LABELS.get(method_code, method_code)
-                logger.info(
-                    "[perevyaz CRIT-1] fallback-3 (legacy): sell_flow chat=%s method=%s",
-                    work_chat_id, method_code,
-                )
+                if method_code:
+                    logger.info(
+                        "[perevyaz] fallback (legacy): sell_flow chat=%s method=%s",
+                        work_chat_id, method_code,
+                    )
             except Exception:
                 pass
         # Дополним material меткой метода оплаты чтобы оператор в АУДИТ видел
