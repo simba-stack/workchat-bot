@@ -2264,34 +2264,39 @@ class UserbotService:
             _sf_ts = float(_sf.get("updated_ts") or 0)
             _sf_stale = _sf_ts and (time.time() - _sf_ts) > 3600  # 1 час
             if _sf_step and _sf_step not in ("done", "cancelled", "") and not _sf_stale:
-                # AUDIT #6 H-B2 (авг 2026): текстовая «отмена» на кнопочных
-                # экранах (material/bank/payment — нет FSM state, HIGH-8 глушит).
-                # Ловим здесь и делаем cancel через dashboard-команду.
-                _cancel_re = re.compile(
-                    r"^\s*(?:отмена|отмен(?:и|ить|яю)|стоп|выход|выйти|назад|"
-                    r"передумал\w*|не\s+буд[уу])\s*[!.?]*\s*$",
-                    re.IGNORECASE,
-                )
-                if raw_text and _cancel_re.match(raw_text.strip()):
-                    try:
-                        await storage.set_sell_flow(chat_id, step="cancelled")
-                        logger.info(
-                            "[wizard H-B2] text-cancel on button-screen chat=%s step=%r",
-                            chat_id, _sf_step,
-                        )
-                        # Уведомляем клиента + подсказка как рестартовать
+                # AUDIT #6 H-B2 + #9 H9-1 (авг 2026): текстовая «отмена» на
+                # КНОПОЧНЫХ экранах (material/bank/payment/verification_pending —
+                # нет FSM state, HIGH-8 глушит). ИСКЛЮЧАЕМ степы где уже есть
+                # свой FSM-cancel в sell_wizard_crm.py — иначе клиент получает
+                # 2× «Оформление отменено» от userbot + crm_bot.
+                # FSM-owned степы: verification_upload (waiting_screenshot/
+                # video/inn/upload), guarantor_wait_deal_number.
+                _FSM_OWNED_STEPS = {"verification_upload", "guarantor_wait_deal_number"}
+                if _sf_step not in _FSM_OWNED_STEPS:
+                    _cancel_re = re.compile(
+                        r"^\s*(?:отмена|отмен(?:и|ить|яю)|стоп|выход|выйти|назад|"
+                        r"передумал\w*|не\s+буд[уу])\s*[!.?]*\s*$",
+                        re.IGNORECASE,
+                    )
+                    if raw_text and _cancel_re.match(raw_text.strip()):
                         try:
-                            await self.client.send_message(
-                                chat_id,
-                                "❌ Оформление отменено.\n\n"
-                                "Когда снова захотите — напишите:\n"
-                                "Ассистент, хочу сдать РС",
+                            await storage.set_sell_flow(chat_id, step="cancelled")
+                            logger.info(
+                                "[wizard H-B2] text-cancel on button-screen chat=%s step=%r",
+                                chat_id, _sf_step,
                             )
-                        except Exception:
-                            pass
-                    except Exception as _cxe:
-                        logger.warning("[wizard H-B2] cancel failed: %s", _cxe)
-                    return
+                            try:
+                                await self.client.send_message(
+                                    chat_id,
+                                    "❌ Оформление отменено.\n\n"
+                                    "Когда снова захотите — напишите:\n"
+                                    "Ассистент, хочу сдать РС",
+                                )
+                            except Exception:
+                                pass
+                        except Exception as _cxe:
+                            logger.warning("[wizard H-B2] cancel failed: %s", _cxe)
+                        return
                 logger.info(
                     "[wizard] active FSM step=%r → skip AI/dept/FAQ handlers (chat=%s)",
                     _sf_step, chat_id,
