@@ -123,17 +123,27 @@ def _resolve_role_snapshot(tg_user_id: int, username: str) -> dict:
         snap["is_owner"] = True
         snap["effective_role"] = "owner"
 
-    # 2) worker (по username)
+    # 2) worker — сначала storage.worker_roles, потом hardcoded fallback
     if uname:
         wr = (storage.state.get("worker_roles") or {}).get(uname)
+        role = None
+        is_admin = False
         if wr and isinstance(wr, dict):
-            role = (wr.get("role") or "").strip().lower()
-            if role:
-                snap["is_worker"] = True
-                snap["worker_role"] = role
-                snap["worker_is_admin"] = bool(wr.get("is_admin"))
-                if not snap["is_owner"]:
-                    snap["effective_role"] = role
+            role = (wr.get("role") or "").strip().lower() or None
+            is_admin = bool(wr.get("is_admin"))
+        elif isinstance(wr, str) and wr.strip():
+            role = wr.strip().lower()
+        # Hardcoded fallback для дефолт-команды
+        if not role:
+            hc = DEFAULT_TEAM_HARDCODED.get(uname)
+            if hc:
+                role = hc["role"]
+        if role:
+            snap["is_worker"] = True
+            snap["worker_role"] = role
+            snap["worker_is_admin"] = is_admin
+            if not snap["is_owner"]:
+                snap["effective_role"] = role
 
     # 3) partner (CRM-owner)
     partner = storage.find_crm_owner_by_tg(int(tg_user_id))
@@ -878,16 +888,30 @@ def _ma_chats() -> dict:
 
 
 # ═════════════════════════════════════════════════════════
-# Default members — команда которая должна быть в КАЖДОМ рабочем чате.
-# Настраиваются через env DEFAULT_WORK_CHAT_MEMBERS='timon,m1,simba,sus01,sus02'.
-# Резолвим username → tg_user_id через worker_roles + crm_owners.
+# Default team — команда PRIDE которая автоматически в каждом рабочем чате.
+# Захардкожена по данным SIMBA (авг 2026) — реальные username, tg_id и роли.
+# Через env DEFAULT_WORK_CHAT_MEMBERS можно переопределить список username'ов.
+DEFAULT_TEAM_HARDCODED = {
+    "simba_pride_adm":  {"tg_user_id": 8151738775, "role": "owner",        "display_name": "SIMBA"},
+    "timonskup":        {"tg_user_id": 397572312,  "role": "manager",      "display_name": "Тимон"},
+    "pride_manager1":   {"tg_user_id": 8232753590, "role": "manager",      "display_name": "М1"},
+    "pride_sys01":      {"tg_user_id": 8548697416, "role": "system_dept",  "display_name": "СУС01"},
+    "pride_sys02":      {"tg_user_id": 7552445074, "role": "system_dept",  "display_name": "СУС02"},
+}
+
+
 def _default_team_usernames() -> list[str]:
-    src = os.getenv("DEFAULT_WORK_CHAT_MEMBERS", "timon,m1,simba,sus01,sus02")
+    src = os.getenv(
+        "DEFAULT_WORK_CHAT_MEMBERS",
+        "simba_pride_adm,timonskup,pride_manager1,pride_sys01,pride_sys02",
+    )
     return [u.strip().lstrip("@").lower() for u in src.split(",") if u.strip()]
 
 
 def _resolve_team_member(uname: str) -> dict | None:
-    """Ищет юзера по username в worker_roles и в crm_owners."""
+    """Резолвит username → {tg_user_id, role, display_name}.
+    Порядок: storage.worker_roles → storage.crm_owners → DEFAULT_TEAM_HARDCODED.
+    """
     uname_low = (uname or "").lstrip("@").lower().strip()
     if not uname_low:
         return None
@@ -899,7 +923,7 @@ def _resolve_team_member(uname: str) -> dict | None:
             role = wr.get("role")
         else:
             role = str(wr)
-    # 2. crm_owners
+    # 2. crm_owners → tg_id, name
     tg_id = None
     display = uname_low
     for _oid, o in (storage.state.get("crm_owners") or {}).items():
@@ -907,7 +931,15 @@ def _resolve_team_member(uname: str) -> dict | None:
             tg_id = int(o.get("tg_user_id") or 0)
             display = o.get("name") or uname_low
             break
-    # 3. если не нашли — вернём хотя бы username
+    # 3. Hardcoded fallback — если не нашли ни tg_id ни роль
+    hc = DEFAULT_TEAM_HARDCODED.get(uname_low)
+    if hc:
+        if not tg_id:
+            tg_id = int(hc["tg_user_id"])
+        if not role:
+            role = hc["role"]
+        if display == uname_low:
+            display = hc["display_name"]
     return {
         "username": uname_low,
         "tg_user_id": tg_id or 0,
@@ -1014,6 +1046,7 @@ async def ma_chat_list(
     request: Request,
     owner_id: Optional[str] = None,
     for_tg_user_id: Optional[int] = None,
+    for_username: Optional[str] = None,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
@@ -1028,15 +1061,18 @@ async def ma_chat_list(
     for cid, c in chats.items():
         if owner_id and c.get("owner_id") != owner_id:
             continue
-        if for_tg_user_id is not None:
+        if for_tg_user_id is not None or for_username:
             # Юзер видит чат если он есть в members (по tg_id или username)
             members = c.get("members") or []
-            found = any(
-                int(m.get("tg_user_id") or 0) == int(for_tg_user_id)
-                for m in members
-            )
+            uname_low = (for_username or "").lstrip("@").lower().strip()
+            found = False
+            for m in members:
+                if for_tg_user_id is not None and int(m.get("tg_user_id") or 0) == int(for_tg_user_id):
+                    found = True; break
+                if uname_low and (m.get("username") or "").lower() == uname_low:
+                    found = True; break
             # Legacy fallback: client_tg_user_id или owner
-            if not found:
+            if not found and for_tg_user_id is not None:
                 if int(c.get("client_tg_user_id") or 0) == int(for_tg_user_id):
                     found = True
                 else:
