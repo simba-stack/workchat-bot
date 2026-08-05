@@ -625,6 +625,249 @@ async def list_partners(
     return {"items": items, "count": len(items)}
 
 
+# ═══════════════════════════════════════════════════════════════
+# SELL-WIZARD state viewer (клиент видит прогресс сдачи РС)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/sell-flow")
+async def sell_flow_state(
+    request: Request,
+    chat_id: str,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Возвращает текущее состояние sell_wizard для клиента.
+    Клиент видит: какой шаг, какой банк, какой метод оплаты,
+    сколько uploads уже отправлено, статус верификации.
+    """
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    flow = storage.get_sell_flow(chat_id) if hasattr(storage, "get_sell_flow") else {}
+    if not flow:
+        return {"state": None, "step": "not_started"}
+    return {
+        "state": {
+            "step": flow.get("step") or "start",
+            "material": flow.get("material") or "",
+            "bank": flow.get("bank") or "",
+            "price": flow.get("price") or 0,
+            "method": flow.get("method") or "",
+            "uploads_count": len(flow.get("uploads") or []),
+            "uploads_types": list({(u.get("type") or "").lower() for u in (flow.get("uploads") or [])}),
+            "deal_number": flow.get("deal_number") or "",
+            "opened_ts": flow.get("opened_ts") or 0,
+            "updated_ts": flow.get("updated_ts") or 0,
+        },
+        "step": flow.get("step") or "start",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# DROP delete + additional actions
+# ═══════════════════════════════════════════════════════════════
+
+@router.delete("/drops/{drop_id}")
+async def delete_drop(
+    drop_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Удалить дроп (только draft)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    d = (storage.state.get("crm_drops") or {}).get(drop_id)
+    if not d:
+        raise HTTPException(404, "drop not found")
+    if d.get("status") not in ("draft", "brak"):
+        raise HTTPException(400, "can only delete draft or brak drops")
+    ok = await storage.delete_crm_drop(drop_id)
+    return {"ok": bool(ok)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# WALLET operations — deposit request + withdraw request
+# ═══════════════════════════════════════════════════════════════
+
+class WalletDepositReq(BaseModel):
+    txid: str
+    amount_hint: Optional[float] = None
+
+
+@router.post("/wallet/{owner_id}/deposit")
+async def wallet_deposit(
+    owner_id: str,
+    body: WalletDepositReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Регистрирует уведомление о депозите от партнёра.
+    НЕ начисляет баланс — это делает TRON-monitor автоматически или owner вручную.
+    Просто добавляет запись в history для контекста."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "owner not found")
+    uname = (owner.get("username") or "").lstrip("@").lower()
+    if not uname:
+        raise HTTPException(400, "owner has no username")
+    if not hasattr(storage, "_ensure_partner_wallet"):
+        raise HTTPException(503, "wallet subsystem not available")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        w = await storage._ensure_partner_wallet(uname)
+        w.setdefault("history", []).append({
+            "ts": time.time(),
+            "type": "deposit_notification",
+            "txid": body.txid.strip(),
+            "amount_hint": float(body.amount_hint or 0),
+            "note": "Партнёр сообщил о депозите через mini-app",
+        })
+        await storage._save_unlocked()
+    return {"ok": True, "note": "Ждём подтверждения от owner или TRON-monitor"}
+
+
+class WalletWithdrawReq(BaseModel):
+    amount_usdt: float
+    trc20_address: str
+
+
+@router.post("/wallet/{owner_id}/withdraw")
+async def wallet_withdraw(
+    owner_id: str,
+    body: WalletWithdrawReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Создаёт заявку на вывод. Не списывает баланс — только резервирует.
+    Owner подтверждает через /payout в TG."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "owner not found")
+    uname = (owner.get("username") or "").lstrip("@").lower()
+    payout_id = await storage.wallet_create_payout_request(
+        username=uname,
+        amount_usdt=body.amount_usdt,
+        trc20_address=body.trc20_address,
+    )
+    if not payout_id:
+        raise HTTPException(400, "insufficient balance or invalid input")
+    return {"ok": True, "payout_id": payout_id}
+
+
+# ═══════════════════════════════════════════════════════════════
+# OWNER: set worker role
+# ═══════════════════════════════════════════════════════════════
+
+class SetRoleReq(BaseModel):
+    role: str
+    is_admin: Optional[bool] = None
+    usdt_address: Optional[str] = None
+
+
+@router.post("/admin/workers/{username}/role")
+async def set_worker_role(
+    username: str,
+    body: SetRoleReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Устанавливает/меняет роль работника. Owner-only гвард на стороне stroy."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    uname = (username or "").lstrip("@").lower().strip()
+    if not uname:
+        raise HTTPException(400, "username required")
+    valid_roles = {
+        "owner", "manager", "system_dept", "accounting",
+        "operationist", "outkup_specialist",
+    }
+    if body.role not in valid_roles:
+        raise HTTPException(400, f"role must be one of {valid_roles}")
+    # Прямая запись в storage.state["worker_roles"]
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        roles = storage.state.setdefault("worker_roles", {})
+        cur = roles.get(uname)
+        if isinstance(cur, str):
+            cur = {"role": cur, "is_admin": False}
+        elif not isinstance(cur, dict):
+            cur = {}
+        cur["role"] = body.role
+        if body.is_admin is not None:
+            cur["is_admin"] = bool(body.is_admin)
+        if body.usdt_address is not None:
+            cur["usdt_address"] = str(body.usdt_address).strip()
+        roles[uname] = cur
+        await storage._save_unlocked()
+    return {"ok": True, "role": cur}
+
+
+@router.delete("/admin/workers/{username}")
+async def remove_worker(
+    username: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    uname = (username or "").lstrip("@").lower().strip()
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        roles = storage.state.setdefault("worker_roles", {})
+        cur = roles.get(uname)
+        if isinstance(cur, dict) and cur.get("role") == "owner":
+            raise HTTPException(400, "cannot remove owner role via API")
+        removed = roles.pop(uname, None)
+        if removed is not None:
+            await storage._save_unlocked()
+    return {"ok": True, "removed": bool(removed)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# OWNER: partner actions (warn / ban / unban)
+# ═══════════════════════════════════════════════════════════════
+
+class PartnerActionReq(BaseModel):
+    action: str  # 'warn' | 'ban' | 'unban' | 'reset_rating'
+    duration_hours: Optional[int] = None
+    reason: Optional[str] = None
+
+
+@router.post("/admin/partners/{owner_id}/action")
+async def partner_action(
+    owner_id: str,
+    body: PartnerActionReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "owner not found")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        o = storage.state.setdefault("crm_owners", {}).get(owner_id)
+        if not o:
+            raise HTTPException(404, "owner not found")
+        if body.action == "warn":
+            o["warnings"] = int(o.get("warnings") or 0) + 1
+        elif body.action == "ban":
+            hours = int(body.duration_hours or 24)
+            o["banned_until"] = time.time() + hours * 3600
+        elif body.action == "unban":
+            o["banned_until"] = 0
+            o["warnings"] = 0
+        elif body.action == "reset_rating":
+            o["rating"] = 5.0
+        else:
+            raise HTTPException(400, f"unknown action: {body.action}")
+        await storage._save_unlocked()
+    return {"ok": True, "owner": o}
+
+
 @router.get("/healthz")
 async def healthz():
     """Публичный health-check без auth — чтобы stroy-crm-bot мог пинговать."""
