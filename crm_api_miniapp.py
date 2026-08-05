@@ -868,6 +868,359 @@ async def partner_action(
     return {"ok": True, "owner": o}
 
 
+# ═══════════════════════════════════════════════════════════════
+# MINI-APP CHAT — свои messages внутри mini-app (не TG-чат)
+# Хранятся в storage.state["miniapp_chats"] = { chat_id: { messages: [], meta: {} } }
+# ═══════════════════════════════════════════════════════════════
+
+def _ma_chats() -> dict:
+    return storage.state.setdefault("miniapp_chats", {})
+
+
+# ═════════════════════════════════════════════════════════
+# Default members — команда которая должна быть в КАЖДОМ рабочем чате.
+# Настраиваются через env DEFAULT_WORK_CHAT_MEMBERS='timon,m1,simba,sus01,sus02'.
+# Резолвим username → tg_user_id через worker_roles + crm_owners.
+def _default_team_usernames() -> list[str]:
+    src = os.getenv("DEFAULT_WORK_CHAT_MEMBERS", "timon,m1,simba,sus01,sus02")
+    return [u.strip().lstrip("@").lower() for u in src.split(",") if u.strip()]
+
+
+def _resolve_team_member(uname: str) -> dict | None:
+    """Ищет юзера по username в worker_roles и в crm_owners."""
+    uname_low = (uname or "").lstrip("@").lower().strip()
+    if not uname_low:
+        return None
+    # 1. worker_roles
+    wr = (storage.state.get("worker_roles") or {}).get(uname_low)
+    role = None
+    if wr:
+        if isinstance(wr, dict):
+            role = wr.get("role")
+        else:
+            role = str(wr)
+    # 2. crm_owners
+    tg_id = None
+    display = uname_low
+    for _oid, o in (storage.state.get("crm_owners") or {}).items():
+        if (o.get("username") or "").lstrip("@").lower() == uname_low:
+            tg_id = int(o.get("tg_user_id") or 0)
+            display = o.get("name") or uname_low
+            break
+    # 3. если не нашли — вернём хотя бы username
+    return {
+        "username": uname_low,
+        "tg_user_id": tg_id or 0,
+        "role": role or "unknown",
+        "display_name": display,
+    }
+
+
+def _hydrate_default_members(owner_id: str) -> list[dict]:
+    """Собирает список members = дефолт-команда + партнёр (owner)."""
+    members: list[dict] = []
+    seen = set()
+    for uname in _default_team_usernames():
+        m = _resolve_team_member(uname)
+        if not m: continue
+        key = m["username"]
+        if key in seen: continue
+        seen.add(key)
+        members.append(m)
+    # Добавляем партнёра-owner
+    o = storage.get_crm_owner(owner_id)
+    if o:
+        u = (o.get("username") or "").lstrip("@").lower()
+        if u and u not in seen:
+            members.append({
+                "username": u,
+                "tg_user_id": int(o.get("tg_user_id") or 0),
+                "role": "partner",
+                "display_name": o.get("name") or u,
+            })
+    return members
+
+
+class MaChatCreateReq(BaseModel):
+    owner_id: str
+    client_username: str = ""     # если известен @username клиента
+    client_tg_user_id: Optional[int] = None
+    client_name: str = ""
+    topic: str = "general"        # general | sell_rs | support
+
+
+@router.post("/ma-chats")
+async def ma_chat_create(
+    body: MaChatCreateReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Партнёр создаёт новый рабочий чат в mini-app.
+    Возвращает chat_id (в формате mac_XXXX)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        chats = _ma_chats()
+        seq = int(storage.state.get("miniapp_chats_seq", 0)) + 1
+        storage.state["miniapp_chats_seq"] = seq
+        chat_id = f"mac_{seq:04d}"
+
+        # Members: дефолт-команда + партнёр + клиент
+        members = _hydrate_default_members(body.owner_id)
+        client_uname = (body.client_username or "").lstrip("@").lower()
+        if client_uname or body.client_tg_user_id:
+            members.append({
+                "username": client_uname,
+                "tg_user_id": int(body.client_tg_user_id or 0),
+                "role": "client",
+                "display_name": body.client_name or (client_uname or f"client_{body.client_tg_user_id}"),
+            })
+
+        # Приветственное системное сообщение
+        greeting = {
+            "msg_id": 1, "author_tg_user_id": 0, "author_role": "system",
+            "text": (
+                f"🎯 Новый рабочий чат создан.\n"
+                f"Участники: {', '.join('@' + m['username'] for m in members if m['username'])}.\n"
+                f"Клиент, нажми «+» ниже чтобы начать сдачу РС."
+            ),
+            "attachments": [], "kind": "system", "ts": time.time(),
+        }
+
+        chats[chat_id] = {
+            "chat_id": chat_id,
+            "owner_id": body.owner_id,
+            "client_username": client_uname,
+            "client_tg_user_id": body.client_tg_user_id,
+            "client_name": body.client_name or "",
+            "topic": body.topic,
+            "created_at": time.time(),
+            "last_msg_ts": time.time(),
+            "members": members,
+            "messages": [greeting],
+            "msg_seq": 1,
+            "sell_state": {
+                "step": "start", "material": "", "bank": "", "price": 0,
+                "method": "", "uploads": [], "deal_number": "",
+            },
+        }
+        await storage._save_unlocked()
+    return {"chat_id": chat_id, "members": members}
+
+
+@router.get("/ma-chats")
+async def ma_chat_list(
+    request: Request,
+    owner_id: Optional[str] = None,
+    for_tg_user_id: Optional[int] = None,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Список mini-app чатов.
+    - owner_id — все чаты партнёра
+    - for_tg_user_id — все чаты где юзер является клиентом или партнёром
+    - без фильтров — все (для owner)
+    """
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    chats = _ma_chats()
+    items = []
+    for cid, c in chats.items():
+        if owner_id and c.get("owner_id") != owner_id:
+            continue
+        if for_tg_user_id is not None:
+            # Юзер видит чат если он есть в members (по tg_id или username)
+            members = c.get("members") or []
+            found = any(
+                int(m.get("tg_user_id") or 0) == int(for_tg_user_id)
+                for m in members
+            )
+            # Legacy fallback: client_tg_user_id или owner
+            if not found:
+                if int(c.get("client_tg_user_id") or 0) == int(for_tg_user_id):
+                    found = True
+                else:
+                    o = storage.get_crm_owner(c.get("owner_id") or "")
+                    if o and int(o.get("tg_user_id") or 0) == int(for_tg_user_id):
+                        found = True
+            if not found:
+                continue
+        _all = c.get("messages") or []
+        last_msg = _all[-1] if _all else None
+        items.append({
+            "chat_id": cid,
+            "owner_id": c.get("owner_id"),
+            "client_username": c.get("client_username") or "",
+            "client_tg_user_id": c.get("client_tg_user_id"),
+            "client_name": c.get("client_name") or "",
+            "topic": c.get("topic") or "general",
+            "created_at": c.get("created_at") or 0,
+            "last_msg_ts": c.get("last_msg_ts") or 0,
+            "msg_count": len(c.get("messages") or []),
+            "last_preview": ((last_msg or {}).get("text") or "")[:60] if last_msg else "",
+        })
+    items.sort(key=lambda x: -float(x["last_msg_ts"] or 0))
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/ma-chats/{chat_id}")
+async def ma_chat_get(
+    chat_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Полные данные чата: meta + sell_state (без messages — их через /messages)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    c = _ma_chats().get(chat_id)
+    if not c:
+        raise HTTPException(404, "chat not found")
+    return {
+        "chat_id": chat_id,
+        "owner_id": c.get("owner_id"),
+        "client_username": c.get("client_username") or "",
+        "client_tg_user_id": c.get("client_tg_user_id"),
+        "client_name": c.get("client_name") or "",
+        "topic": c.get("topic") or "general",
+        "created_at": c.get("created_at") or 0,
+        "members": c.get("members") or [],
+        "sell_state": c.get("sell_state") or {},
+    }
+
+
+@router.get("/ma-chats/{chat_id}/messages")
+async def ma_chat_messages(
+    chat_id: str,
+    request: Request,
+    since: float = 0,
+    limit: int = 100,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Long-polling friendly. Возвращает messages с ts > since."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    c = _ma_chats().get(chat_id)
+    if not c:
+        raise HTTPException(404, "chat not found")
+    msgs = c.get("messages") or []
+    if since > 0:
+        msgs = [m for m in msgs if float(m.get("ts") or 0) > float(since)]
+    return {"items": msgs[-limit:], "count": len(msgs), "server_ts": time.time()}
+
+
+class MaMessageReq(BaseModel):
+    text: str
+    author_tg_user_id: int
+    author_role: str = "client"  # client | partner | manager | system_dept | owner
+    attachments: Optional[list] = None
+    kind: str = "text"           # text | system | action | sell_event
+
+
+@router.post("/ma-chats/{chat_id}/messages")
+async def ma_chat_post(
+    chat_id: str,
+    body: MaMessageReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Отправить сообщение в чат."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        c = _ma_chats().get(chat_id)
+        if not c:
+            raise HTTPException(404, "chat not found")
+        msgs = c.setdefault("messages", [])
+        seq = int(c.get("msg_seq", 0)) + 1
+        c["msg_seq"] = seq
+        msg = {
+            "msg_id": seq,
+            "author_tg_user_id": int(body.author_tg_user_id),
+            "author_role": body.author_role or "client",
+            "text": (body.text or "").strip(),
+            "attachments": body.attachments or [],
+            "kind": body.kind or "text",
+            "ts": time.time(),
+        }
+        msgs.append(msg)
+        c["last_msg_ts"] = msg["ts"]
+        # Ограничиваем: 1000 сообщений в чате
+        if len(msgs) > 1000:
+            c["messages"] = msgs[-1000:]
+        await storage._save_unlocked()
+    return {"message": msg}
+
+
+# ═══════════════════════════════════════════════════════════════
+# SELL-WIZARD внутри mini-app чата (клиент нажимает "+" → выбирает)
+# ═══════════════════════════════════════════════════════════════
+
+class MaSellStepReq(BaseModel):
+    step: str            # material | bank | payment | deal | done
+    value: str = ""
+    author_tg_user_id: int
+    price: Optional[float] = None
+
+
+@router.post("/ma-chats/{chat_id}/sell-step")
+async def ma_sell_step(
+    chat_id: str,
+    body: MaSellStepReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Обновляет sell-state чата + добавляет системное сообщение о шаге.
+    Логика упрощена: sell_state.step двигается вперёд, каждый шаг записывается
+    как system-message в чат.
+    """
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        c = _ma_chats().get(chat_id)
+        if not c:
+            raise HTTPException(404, "chat not found")
+        ss = c.setdefault("sell_state", {})
+        step_map = {
+            "material": ("material", "🧾 Материал: {v}"),
+            "bank": ("bank", "🏦 Банк: {v}"),
+            "payment": ("method", "💳 Метод оплаты: {v}"),
+            "deal": ("deal_number", "📃 Номер сделки: {v}"),
+            "done": ("step", "✅ Отправлено на верификацию"),
+        }
+        if body.step not in step_map:
+            raise HTTPException(400, f"unknown step: {body.step}")
+        field, text_tpl = step_map[body.step]
+        if body.step != "done":
+            ss[field] = body.value
+        if body.price is not None:
+            ss["price"] = float(body.price)
+        # Автоматический next-step
+        step_order = {"material": "bank", "bank": "payment", "payment": "deal", "deal": "done"}
+        if body.step in step_order:
+            ss["step"] = step_order[body.step]
+        else:
+            ss["step"] = "done"
+
+        # Системное сообщение
+        msgs = c.setdefault("messages", [])
+        seq = int(c.get("msg_seq", 0)) + 1
+        c["msg_seq"] = seq
+        msgs.append({
+            "msg_id": seq,
+            "author_tg_user_id": int(body.author_tg_user_id),
+            "author_role": "system",
+            "text": text_tpl.format(v=body.value or ""),
+            "attachments": [],
+            "kind": "sell_event",
+            "ts": time.time(),
+        })
+        c["last_msg_ts"] = time.time()
+        await storage._save_unlocked()
+    return {"sell_state": ss}
+
+
 @router.get("/healthz")
 async def healthz():
     """Публичный health-check без auth — чтобы stroy-crm-bot мог пинговать."""
