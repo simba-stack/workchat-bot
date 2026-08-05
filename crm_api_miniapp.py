@@ -1056,6 +1056,11 @@ async def ma_chat_list(
     - без фильтров — все (для owner)
     """
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    # Убедимся что team-чат существует и обновим его members
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        _ensure_team_chat()
+        await storage._save_unlocked()
     chats = _ma_chats()
     items = []
     for cid, c in chats.items():
@@ -1105,7 +1110,12 @@ async def ma_chat_list(
             "last_preview": ((last_msg or {}).get("text") or "")[:60] if last_msg else "",
             "unread": unread,
         })
-    items.sort(key=lambda x: -float(x["last_msg_ts"] or 0))
+    # Team-чат всегда первым если юзер в нём
+    def _sort_key(x):
+        if x["chat_id"] == TEAM_CHAT_ID:
+            return (0, 0)
+        return (1, -float(x["last_msg_ts"] or 0))
+    items.sort(key=_sort_key)
     return {"items": items, "count": len(items)}
 
 
@@ -1402,6 +1412,281 @@ async def feed_delete(
         storage.state["pride_feed"] = [p for p in feed if int(p.get("id") or 0) != int(post_id)]
         await storage._save_unlocked()
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# PRIDE TEAM CHAT — общий чат команды (все worker_roles + owner)
+# Special chat_id: "team". Автосоздаётся при первом обращении.
+# ═══════════════════════════════════════════════════════════════
+
+TEAM_CHAT_ID = "team"
+
+def _ensure_team_chat() -> dict:
+    """Создаёт или возвращает общий team-чат.
+    Members = все worker_roles + owner + hardcoded default team.
+    """
+    chats = _ma_chats()
+    c = chats.get(TEAM_CHAT_ID)
+    # Собираем актуальный список members каждый раз (роли могут меняться)
+    members: list[dict] = []
+    seen = set()
+    # 1. Owner (hardcoded по CRM_OWNER_IDS + SIMBA)
+    for oid in _resolve_owner_ids():
+        # Ищем этого owner в crm_owners/hardcoded
+        found = None
+        for _u, hc in DEFAULT_TEAM_HARDCODED.items():
+            if hc["tg_user_id"] == oid:
+                found = {"username": _u, "tg_user_id": oid, "role": hc["role"], "display_name": hc["display_name"]}
+                break
+        if not found:
+            for _oid, o in (storage.state.get("crm_owners") or {}).items():
+                if int(o.get("tg_user_id") or 0) == oid:
+                    found = {"username": (o.get("username") or "").lower(), "tg_user_id": oid, "role": "owner", "display_name": o.get("name") or ""}
+                    break
+        if found and found["username"] not in seen:
+            members.append(found)
+            seen.add(found["username"])
+    # 2. worker_roles
+    for uname, wr in (storage.state.get("worker_roles") or {}).items():
+        if uname in seen: continue
+        m = _resolve_team_member(uname)
+        if m:
+            members.append(m)
+            seen.add(uname)
+    # 3. hardcoded default team
+    for uname in DEFAULT_TEAM_HARDCODED:
+        if uname in seen: continue
+        m = _resolve_team_member(uname)
+        if m:
+            members.append(m)
+            seen.add(uname)
+
+    if not c:
+        c = {
+            "chat_id": TEAM_CHAT_ID,
+            "owner_id": "",
+            "client_username": "",
+            "client_tg_user_id": None,
+            "client_name": "PRIDE Team",
+            "topic": "team",
+            "created_at": time.time(),
+            "last_msg_ts": time.time(),
+            "members": members,
+            "messages": [{
+                "msg_id": 1, "author_tg_user_id": 0, "author_role": "system",
+                "text": "🎯 Общий чат команды PRIDE. Здесь все свои.",
+                "attachments": [], "kind": "system", "ts": time.time(),
+            }],
+            "msg_seq": 1,
+            "sell_state": {},
+            "pinned_msg_ids": [],
+            "reads": {},
+        }
+        chats[TEAM_CHAT_ID] = c
+    else:
+        # Обновляем members актуально
+        c["members"] = members
+    return c
+
+
+@router.get("/ma-chats/team")
+async def ma_team_chat(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Возвращает team-чат (автосоздаётся)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        c = _ensure_team_chat()
+        await storage._save_unlocked()
+    return {
+        "chat_id": c["chat_id"],
+        "owner_id": "",
+        "client_username": "",
+        "client_tg_user_id": None,
+        "client_name": c["client_name"],
+        "topic": c["topic"],
+        "created_at": c["created_at"],
+        "members": c.get("members") or [],
+        "sell_state": {},
+        "pinned_msg_ids": c.get("pinned_msg_ids") or [],
+        "reads": c.get("reads") or {},
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# СУС ГРУППЫ — эмуляция TG-групп: Доступы, Пароли, Аудит-1, Аудит-2
+# Хранятся в state["sus_groups"][group_key] = [entries]
+# Каждая entry: {id, text, author_tg_user_id, ts, kind, attachments}
+# ═══════════════════════════════════════════════════════════════
+
+SUS_GROUPS = {
+    "access":    {"title": "🔑 Доступы",    "desc": "IP-адреса, RDP, служебные креды"},
+    "passwords": {"title": "🔐 Пароли",     "desc": "Пароли от банков, ЛК"},
+    "audit_1":   {"title": "📋 Аудит-1",   "desc": "Основная группа аудита"},
+    "audit_2":   {"title": "📋 Аудит-2",   "desc": "Резервная группа аудита"},
+}
+
+
+def _sus_groups_data() -> dict:
+    return storage.state.setdefault("sus_groups", {})
+
+
+@router.get("/sus-groups")
+async def sus_groups_list(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Список групп + количество записей в каждой."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    data = _sus_groups_data()
+    groups = []
+    for key, meta in SUS_GROUPS.items():
+        entries = data.get(key) or []
+        last = entries[-1] if entries else None
+        groups.append({
+            "key": key,
+            "title": meta["title"],
+            "desc": meta["desc"],
+            "count": len(entries),
+            "last_ts": (last or {}).get("ts", 0),
+            "last_preview": ((last or {}).get("text") or "")[:80],
+        })
+    return {"items": groups}
+
+
+@router.get("/sus-groups/{group_key}")
+async def sus_group_entries(
+    group_key: str,
+    request: Request,
+    limit: int = 100,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Записи внутри группы."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if group_key not in SUS_GROUPS:
+        raise HTTPException(404, "group not found")
+    entries = (_sus_groups_data().get(group_key) or [])[-limit:]
+    return {
+        "key": group_key,
+        "title": SUS_GROUPS[group_key]["title"],
+        "desc": SUS_GROUPS[group_key]["desc"],
+        "items": entries,
+        "count": len(entries),
+    }
+
+
+class SusEntryReq(BaseModel):
+    text: str
+    author_tg_user_id: int
+    kind: str = "note"     # note | access | password | audit
+
+
+@router.post("/sus-groups/{group_key}")
+async def sus_group_add(
+    group_key: str,
+    body: SusEntryReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if group_key not in SUS_GROUPS:
+        raise HTTPException(404, "group not found")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        data = _sus_groups_data()
+        entries = data.setdefault(group_key, [])
+        seq = int(storage.state.get(f"sus_groups_seq_{group_key}", 0)) + 1
+        storage.state[f"sus_groups_seq_{group_key}"] = seq
+        entry = {
+            "id": seq,
+            "text": (body.text or "").strip()[:2000],
+            "author_tg_user_id": int(body.author_tg_user_id),
+            "ts": time.time(),
+            "kind": body.kind or "note",
+        }
+        entries.append(entry)
+        if len(entries) > 500:
+            data[group_key] = entries[-500:]
+        await storage._save_unlocked()
+    return {"entry": entry}
+
+
+@router.delete("/sus-groups/{group_key}/{entry_id}")
+async def sus_group_delete(
+    group_key: str,
+    entry_id: int,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        data = _sus_groups_data()
+        entries = data.get(group_key) or []
+        data[group_key] = [e for e in entries if int(e.get("id") or 0) != int(entry_id)]
+        await storage._save_unlocked()
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# NEW-CLIENT FULL FLOW — полная проверка + следующие шаги
+# Создаёт drop сразу в статусе draft со всеми полями pre-verification.
+# ═══════════════════════════════════════════════════════════════
+
+class NewClientFlowReq(BaseModel):
+    owner_id: str
+    fio: str
+    phone: str = ""
+    material: str = ""       # IP | DEBET
+    bank: str = ""           # ALFA | OZON | RAIF | ...
+    verification_screenshot_uploaded: bool = False
+    verification_video_uploaded: bool = False
+    inn: str = ""
+    payment_method: str = "" # GUARANTOR | USDT_TRC20
+    deal_number: str = ""
+
+
+@router.post("/new-client-flow")
+async def new_client_flow(
+    body: NewClientFlowReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Один-endpoint для создания клиента с полными данными флоу.
+    Меньше туда-сюда — фронт собирает всё и отправляет одним запросом.
+    Дроп создаётся сразу draft с записанными полями pre-check."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if not storage.get_crm_owner(body.owner_id):
+        raise HTTPException(404, "owner not found")
+    drop_id = await storage.add_crm_drop(
+        owner_id=body.owner_id,
+        fio=body.fio.strip(),
+        work_chat_id=None,
+    )
+    # Записываем всё что собрали
+    updates = {}
+    if body.phone: updates["phone"] = body.phone.strip()
+    if body.material: updates["material"] = body.material
+    if body.bank: updates["bank_preferred"] = body.bank
+    if body.inn: updates["inn"] = body.inn
+    if body.payment_method: updates["payment_method"] = body.payment_method
+    if body.deal_number: updates["deal_number"] = body.deal_number
+    updates["verification"] = {
+        "screenshot_uploaded": body.verification_screenshot_uploaded,
+        "video_uploaded": body.verification_video_uploaded,
+        "inn_provided": bool(body.inn),
+    }
+    if updates:
+        await storage.update_crm_drop(drop_id, **updates)
+    return {"drop_id": drop_id}
 
 
 @router.get("/healthz")
