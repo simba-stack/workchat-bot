@@ -65,11 +65,17 @@ async def _check_hmac(request: Request, sig: str, ts: str) -> None:
         raise HTTPException(401, "signature expired")
     body_bytes = await request.body()
     body_str = body_bytes.decode("utf-8") if body_bytes else ""
-    expected = _sign(request.method, request.url.path, ts, body_str)
+    # Full path with query string — JS-клиент подписывает всё что после base URL,
+    # включая ?owner_id=X. Раньше здесь был только request.url.path без query →
+    # всегда 401 на GET-запросах с параметрами.
+    path_with_query = request.url.path
+    if request.url.query:
+        path_with_query += "?" + request.url.query
+    expected = _sign(request.method, path_with_query, ts, body_str)
     if not hmac.compare_digest(sig, expected):
         logger.warning(
             "[miniapp-api] HMAC mismatch: path=%s ts=%s calc=%s got=%s body=%r",
-            request.url.path, ts, expected[:16], sig[:16], body_str[:200],
+            path_with_query, ts, expected[:16], sig[:16], body_str[:200],
         )
         raise HTTPException(401, "bad signature")
 
