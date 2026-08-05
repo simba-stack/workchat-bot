@@ -254,6 +254,377 @@ async def list_drops(
     return {"items": items, "count": len(items)}
 
 
+# ═══════════════════════════════════════════════════════════════
+# WORK-CHATS (рабочие беседы)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/work-chats")
+async def list_work_chats(
+    request: Request,
+    owner_id: Optional[str] = None,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Список managed_chats. Для owner_id — только чаты этого партнёра.
+    Для owner (без фильтра) — все managed_chats."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    all_chats = storage.state.get("managed_chats") or {}
+    # Партнёр видит только work_chat_id из своих дропов
+    if owner_id:
+        drops = storage.list_crm_drops(owner_id=owner_id) or {}
+        allowed = {str(d.get("work_chat_id")) for d in drops.values() if d.get("work_chat_id")}
+        # Плюс attached через crm_chats (регистрация партнёра в чате)
+        crm_chats = storage.state.get("crm_chats") or {}
+        for cid, info in crm_chats.items():
+            if info.get("owner_id") == owner_id:
+                allowed.add(str(cid))
+    else:
+        allowed = None
+    items = []
+    for cid, info in all_chats.items():
+        if allowed is not None and str(cid) not in allowed:
+            continue
+        items.append({
+            "chat_id": cid,
+            "client_id": info.get("client_id"),
+            "client_name": info.get("client_name") or "",
+            "client_username": info.get("client_username") or "",
+            "payment_method": info.get("payment_method") or "",
+            "created_at": info.get("created_at") or 0,
+            "welcome_sent": bool(info.get("welcome_sent")),
+        })
+    items.sort(key=lambda x: -float(x["created_at"] or 0))
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/work-chats/{chat_id}")
+async def work_chat_details(
+    chat_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Детали work-чата + связанные дропы."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    info = storage.get_chat_info(chat_id)
+    if not info:
+        raise HTTPException(404, "chat not found")
+    drops = storage.state.get("crm_drops") or {}
+    related_drops = [
+        {"drop_id": did, "fio": d.get("fio"), "status": d.get("status")}
+        for did, d in drops.items() if str(d.get("work_chat_id") or "") == str(chat_id)
+    ]
+    return {
+        "chat": {**info, "chat_id": chat_id},
+        "drops": related_drops,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# DROPS CRUD
+# ═══════════════════════════════════════════════════════════════
+
+class DropCreateReq(BaseModel):
+    owner_id: str
+    fio: str
+    work_chat_id: Optional[int] = None
+
+
+@router.post("/drops")
+async def create_drop(
+    body: DropCreateReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if not storage.get_crm_owner(body.owner_id):
+        raise HTTPException(404, "owner not found")
+    drop_id = await storage.add_crm_drop(
+        owner_id=body.owner_id,
+        fio=body.fio.strip(),
+        work_chat_id=body.work_chat_id,
+    )
+    return {"drop_id": drop_id}
+
+
+class DropUpdateReq(BaseModel):
+    fio: Optional[str] = None
+    phone: Optional[str] = None
+    about: Optional[str] = None
+    status: Optional[str] = None
+    price_usdt: Optional[float] = None
+    work_chat_id: Optional[int] = None
+
+
+@router.patch("/drops/{drop_id}")
+async def update_drop(
+    drop_id: str,
+    body: DropUpdateReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if not fields:
+        return {"ok": True, "updated": []}
+    ok = await storage.update_crm_drop(drop_id, **fields)
+    if not ok:
+        raise HTTPException(404, "drop not found")
+    return {"ok": True, "updated": list(fields.keys())}
+
+
+@router.get("/drops/{drop_id}")
+async def get_drop(
+    drop_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Детали дропа + чек-лист (соц/прописка/скан/ЛК) + связанные ЛК."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    d = (storage.state.get("crm_drops") or {}).get(drop_id)
+    if not d:
+        raise HTTPException(404, "drop not found")
+    # Все ЛК этого дропа
+    all_lks = storage.state.get("crm_drop_lks") or {}
+    lks = [
+        {
+            "droplk_id": lkid,
+            "bank": lk.get("bank"),
+            "value": lk.get("value"),
+            "status": lk.get("status"),
+            "sms_stage": lk.get("sms_stage") or "",
+            "created_at": lk.get("created_at") or 0,
+        }
+        for lkid, lk in all_lks.items()
+        if lk.get("drop_id") == drop_id
+    ]
+    # Чек-лист прогресс
+    checklist = {
+        "fio_done": bool(d.get("fio")),
+        "phone_done": bool(d.get("phone")),
+        "about_done": bool(d.get("about")),
+        "scan_done": bool(d.get("scan_file_ids")),
+        "lks_count": len(lks),
+        "ready_to_submit": bool(d.get("fio")) and bool(d.get("phone")) and len(lks) > 0,
+    }
+    return {"drop": d, "lks": lks, "checklist": checklist}
+
+
+class DropLKAddReq(BaseModel):
+    bank: str
+    value: str = ""
+
+
+@router.post("/drops/{drop_id}/lk")
+async def add_drop_lk(
+    drop_id: str,
+    body: DropLKAddReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    d = (storage.state.get("crm_drops") or {}).get(drop_id)
+    if not d:
+        raise HTTPException(404, "drop not found")
+    lkid = await storage.add_crm_drop_lk(
+        drop_id=drop_id,
+        owner_id=d.get("owner_id") or "",
+        bank=body.bank,
+        value=body.value,
+    )
+    return {"droplk_id": lkid}
+
+
+@router.post("/drops/{drop_id}/submit")
+async def submit_drop(
+    drop_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Отправить дроп в работу (status draft → pending)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    ok = await storage.update_crm_drop(drop_id, status="pending", send_ts=time.time())
+    if not ok:
+        raise HTTPException(404, "drop not found")
+    return {"ok": True, "new_status": "pending"}
+
+
+# ═══════════════════════════════════════════════════════════════
+# SYSTEM QUEUE (для СУС/manager)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/system/queue")
+async def system_queue(
+    request: Request,
+    stage: Optional[str] = None,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Очередь ЛК ожидающих действия СУС.
+    stage: 'new' | 'pending' | 'login_asked' | 'perevyaz_asked' | 'perevyaz_received' | None (все)
+    """
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    all_lks = storage.state.get("crm_drop_lks") or {}
+    drops = storage.state.get("crm_drops") or {}
+    items = []
+    for lkid, lk in all_lks.items():
+        st = (lk.get("sms_stage") or lk.get("status") or "").lower()
+        if stage and st != stage.lower():
+            continue
+        # skip finalized
+        if lk.get("status") == "done" and not stage:
+            continue
+        d = drops.get(lk.get("drop_id"), {})
+        items.append({
+            "droplk_id": lkid,
+            "drop_id": lk.get("drop_id"),
+            "bank": lk.get("bank"),
+            "status": lk.get("status"),
+            "sms_stage": lk.get("sms_stage") or "",
+            "drop_fio": d.get("fio") or "",
+            "drop_phone": d.get("phone") or "",
+            "owner_id": lk.get("owner_id"),
+            "created_at": lk.get("created_at") or 0,
+        })
+    items.sort(key=lambda x: -float(x["created_at"] or 0))
+    return {"items": items, "count": len(items)}
+
+
+class LKActionReq(BaseModel):
+    action: str  # 'ask_login' | 'ask_perevyaz' | 'mark_done' | 'mark_brak' | 'retry'
+    payload: Optional[dict] = None
+
+
+@router.post("/system/lk/{droplk_id}/action")
+async def lk_action(
+    droplk_id: str,
+    body: LKActionReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Универсальный action-endpoint для СУС. Меняет sms_stage/status."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    lk = (storage.state.get("crm_drop_lks") or {}).get(droplk_id)
+    if not lk:
+        raise HTTPException(404, "lk not found")
+
+    updates = {}
+    action = body.action
+    if action == "ask_login":
+        updates = {"sms_stage": "login_asked", "status": "pending"}
+    elif action == "ask_perevyaz":
+        updates = {"sms_stage": "perevyaz_asked", "status": "pending"}
+    elif action == "mark_done":
+        updates = {"sms_stage": "done", "status": "done"}
+    elif action == "mark_brak":
+        updates = {"status": "brak"}
+    elif action == "retry":
+        updates = {"sms_stage": "", "status": "new"}
+    else:
+        raise HTTPException(400, f"unknown action: {action}")
+
+    # Merge payload if provided (e.g. code, comment)
+    if body.payload:
+        for k in ("new_login", "new_password", "new_mail", "new_number", "code_word"):
+            if k in body.payload:
+                updates[k] = str(body.payload[k])
+
+    await storage.update_crm_drop_lk(droplk_id, **updates)
+    return {"ok": True, "updates": updates}
+
+
+# ═══════════════════════════════════════════════════════════════
+# WALLET (партнёрский кошелёк TRC20)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/wallet/{owner_id}")
+async def get_wallet(
+    owner_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    owner = storage.get_crm_owner(owner_id)
+    if not owner:
+        raise HTTPException(404, "owner not found")
+    uname = (owner.get("username") or "").lstrip("@").lower()
+    wallet_fn = getattr(storage, "get_partner_wallet", None)
+    if wallet_fn is None:
+        return {"balance_usdt": 0, "pending_payouts": [], "history": []}
+    w = wallet_fn(uname) or {}
+    return {
+        "balance_usdt": float(w.get("balance_usdt") or 0),
+        "pending_payouts": w.get("pending_payouts") or [],
+        "history": (w.get("history") or [])[-50:],
+        "deposit_address": os.getenv("TRC20_DEPOSIT_ADDRESS", ""),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# OWNER-ONLY: список работников/партнёров
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/admin/workers")
+async def list_workers(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Все worker_roles + owners (для owner-панели)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    roles = storage.list_worker_roles() if hasattr(storage, "list_worker_roles") else (
+        storage.state.get("worker_roles") or {}
+    )
+    items = []
+    for uname, meta in roles.items():
+        if isinstance(meta, str):
+            items.append({"username": uname, "role": meta, "is_admin": False})
+        else:
+            items.append({
+                "username": uname,
+                "role": meta.get("role") or "",
+                "is_admin": bool(meta.get("is_admin")),
+                "usdt_address": meta.get("usdt_address") or "",
+            })
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/admin/partners")
+async def list_partners(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Все CRM-owners (партнёры) с базовой статистикой."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    owners = storage.state.get("crm_owners") or {}
+    drops_all = storage.state.get("crm_drops") or {}
+    # Считаем total_drops fresh
+    items = []
+    for oid, o in owners.items():
+        my_drops = [d for d in drops_all.values() if d.get("owner_id") == oid]
+        items.append({
+            "owner_id": oid,
+            "tg_user_id": o.get("tg_user_id"),
+            "username": o.get("username"),
+            "name": o.get("name"),
+            "rating": o.get("rating") or 5.0,
+            "warnings": o.get("warnings") or 0,
+            "banned_until": o.get("banned_until") or 0,
+            "drops_total": len(my_drops),
+            "drops_done": sum(1 for d in my_drops if d.get("status") == "done"),
+        })
+    items.sort(key=lambda x: -x["drops_done"])
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/healthz")
 async def healthz():
     """Публичный health-check без auth — чтобы stroy-crm-bot мог пинговать."""
