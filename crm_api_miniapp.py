@@ -1083,6 +1083,15 @@ async def ma_chat_list(
                 continue
         _all = c.get("messages") or []
         last_msg = _all[-1] if _all else None
+        # Unread — сколько сообщений после моего last_read_msg_id (по tg_user_id)
+        unread = 0
+        if for_tg_user_id is not None and _all:
+            my_last_read = int((c.get("reads") or {}).get(str(for_tg_user_id)) or 0)
+            unread = sum(
+                1 for m in _all
+                if int(m.get("msg_id") or 0) > my_last_read
+                and int(m.get("author_tg_user_id") or 0) != int(for_tg_user_id)
+            )
         items.append({
             "chat_id": cid,
             "owner_id": c.get("owner_id"),
@@ -1092,8 +1101,9 @@ async def ma_chat_list(
             "topic": c.get("topic") or "general",
             "created_at": c.get("created_at") or 0,
             "last_msg_ts": c.get("last_msg_ts") or 0,
-            "msg_count": len(c.get("messages") or []),
+            "msg_count": len(_all),
             "last_preview": ((last_msg or {}).get("text") or "")[:60] if last_msg else "",
+            "unread": unread,
         })
     items.sort(key=lambda x: -float(x["last_msg_ts"] or 0))
     return {"items": items, "count": len(items)}
@@ -1121,6 +1131,8 @@ async def ma_chat_get(
         "created_at": c.get("created_at") or 0,
         "members": c.get("members") or [],
         "sell_state": c.get("sell_state") or {},
+        "pinned_msg_ids": c.get("pinned_msg_ids") or [],
+        "reads": c.get("reads") or {},
     }
 
 
@@ -1255,6 +1267,141 @@ async def ma_sell_step(
         c["last_msg_ts"] = time.time()
         await storage._save_unlocked()
     return {"sell_state": ss}
+
+
+# ═══════════════════════════════════════════════════════════════
+# CHAT read/unread + pins
+# ═══════════════════════════════════════════════════════════════
+
+class ChatReadReq(BaseModel):
+    tg_user_id: int
+    last_read_msg_id: int
+
+
+@router.post("/ma-chats/{chat_id}/read")
+async def ma_chat_mark_read(
+    chat_id: str,
+    body: ChatReadReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Отметить сообщения как прочитанные до N."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        c = _ma_chats().get(chat_id)
+        if not c:
+            raise HTTPException(404, "chat not found")
+        reads = c.setdefault("reads", {})
+        cur = int(reads.get(str(body.tg_user_id)) or 0)
+        if body.last_read_msg_id > cur:
+            reads[str(body.tg_user_id)] = int(body.last_read_msg_id)
+            await storage._save_unlocked()
+    return {"ok": True}
+
+
+class ChatPinReq(BaseModel):
+    msg_id: int
+    pinned: bool = True
+
+
+@router.post("/ma-chats/{chat_id}/pin")
+async def ma_chat_pin(
+    chat_id: str,
+    body: ChatPinReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Закрепить/открепить сообщение."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        c = _ma_chats().get(chat_id)
+        if not c:
+            raise HTTPException(404, "chat not found")
+        pins = c.setdefault("pinned_msg_ids", [])
+        if body.pinned and body.msg_id not in pins:
+            pins.append(int(body.msg_id))
+        elif not body.pinned and body.msg_id in pins:
+            pins.remove(int(body.msg_id))
+        # max 5 pins
+        if len(pins) > 5:
+            c["pinned_msg_ids"] = pins[-5:]
+        await storage._save_unlocked()
+    return {"ok": True, "pins": c.get("pinned_msg_ids") or []}
+
+
+# ═══════════════════════════════════════════════════════════════
+# PRIDE FEED — общий канал новостей для всех mini-app юзеров
+# Хранится в state["pride_feed"] = [posts]
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/feed")
+async def feed_list(
+    request: Request,
+    limit: int = 50,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Возвращает posts из PRIDE Feed (новости для всех)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    posts = (storage.state.get("pride_feed") or [])[-limit:]
+    return {"items": posts, "count": len(posts)}
+
+
+class FeedPostReq(BaseModel):
+    title: str
+    text: str
+    kind: str = "news"   # news | update | announcement
+    author_tg_user_id: int
+
+
+@router.post("/feed")
+async def feed_post(
+    body: FeedPostReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Создать post в feed. Только owner (проверка на стороне stroy-crm-bot)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        feed = storage.state.setdefault("pride_feed", [])
+        seq = int(storage.state.get("pride_feed_seq", 0)) + 1
+        storage.state["pride_feed_seq"] = seq
+        post = {
+            "id": seq,
+            "title": (body.title or "").strip()[:200],
+            "text": (body.text or "").strip()[:5000],
+            "kind": body.kind or "news",
+            "author_tg_user_id": int(body.author_tg_user_id),
+            "ts": time.time(),
+            "likes": 0,
+        }
+        feed.append(post)
+        if len(feed) > 200:
+            storage.state["pride_feed"] = feed[-200:]
+        await storage._save_unlocked()
+    return {"post": post}
+
+
+@router.delete("/feed/{post_id}")
+async def feed_delete(
+    post_id: int,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        feed = storage.state.setdefault("pride_feed", [])
+        storage.state["pride_feed"] = [p for p in feed if int(p.get("id") or 0) != int(post_id)]
+        await storage._save_unlocked()
+    return {"ok": True}
 
 
 @router.get("/healthz")
