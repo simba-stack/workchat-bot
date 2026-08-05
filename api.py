@@ -128,6 +128,15 @@ app = FastAPI(
 )
 security = HTTPBasic(auto_error=False)
 
+# Mini-App bridge — эндпоинты для stroy-crm-bot's Telegram Mini-App.
+# Регистрируется здесь чтобы использовать один FastAPI-инстанс.
+try:
+    from crm_api_miniapp import router as _miniapp_router
+    app.include_router(_miniapp_router)
+    logger.info("[miniapp-bridge] router registered at /api/v1/miniapp/*")
+except Exception as _e:
+    logger.warning("[miniapp-bridge] failed to register router: %s", _e)
+
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "")
 
