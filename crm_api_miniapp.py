@@ -1418,6 +1418,45 @@ async def feed_delete(
     return {"ok": True}
 
 
+class FeedPatchReq(BaseModel):
+    title: Optional[str] = None
+    text: Optional[str] = None
+    kind: Optional[str] = None
+    image_url: Optional[str] = None  # "" чтобы убрать
+    image_name: Optional[str] = None
+
+
+@router.patch("/feed/{post_id}")
+async def feed_patch(
+    post_id: int,
+    body: FeedPatchReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Редактировать пост (owner-only гвард на стороне stroy)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        feed = storage.state.setdefault("pride_feed", [])
+        target = None
+        for p in feed:
+            if int(p.get("id") or 0) == int(post_id):
+                target = p
+                break
+        if not target:
+            raise HTTPException(404, "post not found")
+        if body.title is not None:      target["title"] = body.title.strip()[:200]
+        if body.text is not None:       target["text"] = body.text.strip()[:5000]
+        if body.kind is not None:       target["kind"] = body.kind
+        if body.image_url is not None:
+            target["image_url"] = body.image_url.strip() or None
+            target["image_name"] = (body.image_name or "").strip() or None
+        target["edited_ts"] = time.time()
+        await storage._save_unlocked()
+    return {"post": target}
+
+
 # ═══════════════════════════════════════════════════════════════
 # PRIDE TEAM CHAT — общий чат команды (все worker_roles + owner)
 # Special chat_id: "team". Автосоздаётся при первом обращении.
