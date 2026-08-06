@@ -2080,6 +2080,178 @@ async def account_rotate_secret(
 
 
 # ═══════════════════════════════════════════════════════════════
+# USER PROFILES — avatar + bio, привязано к account_id
+# storage: state["ma_profiles"][account_id] = { avatar_url, bio, ts }
+# ═══════════════════════════════════════════════════════════════
+
+def _profiles_dict() -> dict:
+    return storage.state.setdefault("ma_profiles", {})
+
+
+class ProfilePatchReq(BaseModel):
+    account_id: str
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+
+
+@router.get("/profiles/{account_id}")
+async def get_profile(
+    account_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    acc = _accounts_dict().get(account_id)
+    if not acc:
+        raise HTTPException(404, "account not found")
+    prof = _profiles_dict().get(account_id) or {}
+    return {
+        "account_id": account_id,
+        "login": acc.get("login"),
+        "linked_tg_username": acc.get("linked_tg_username"),
+        "linked_tg_id": acc.get("linked_tg_id"),
+        "avatar_url": prof.get("avatar_url") or "",
+        "bio": prof.get("bio") or "",
+        "updated_ts": prof.get("ts") or 0,
+    }
+
+
+@router.patch("/profiles")
+async def patch_profile(
+    body: ProfilePatchReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Обновить свой профиль. Гвард (только своё) на стороне stroy."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        profs = _profiles_dict()
+        p = profs.setdefault(body.account_id, {})
+        if body.avatar_url is not None:
+            p["avatar_url"] = body.avatar_url.strip()[:500] or ""
+        if body.bio is not None:
+            p["bio"] = body.bio.strip()[:500]
+        p["ts"] = time.time()
+        await storage._save_unlocked()
+    return {"ok": True, "profile": p}
+
+
+# ═══════════════════════════════════════════════════════════════
+# SUPPORT TICKETS
+# storage: state["support_tickets"] = [ { id, from_tg_id, from_tg_username,
+#                                          subject, text, ts, status, replies[] } ]
+# ═══════════════════════════════════════════════════════════════
+
+def _support_tickets() -> list:
+    return storage.state.setdefault("support_tickets", [])
+
+
+class SupportTicketReq(BaseModel):
+    from_tg_id: int
+    from_tg_username: str = ""
+    subject: str = ""
+    text: str
+
+
+@router.post("/support/tickets")
+async def support_create(
+    body: SupportTicketReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    text = (body.text or "").strip()[:5000]
+    if not text:
+        raise HTTPException(400, "text required")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        tickets = _support_tickets()
+        seq = int(storage.state.get("support_tickets_seq", 0)) + 1
+        storage.state["support_tickets_seq"] = seq
+        ticket = {
+            "id": seq,
+            "from_tg_id": int(body.from_tg_id),
+            "from_tg_username": (body.from_tg_username or "").lstrip("@").lower(),
+            "subject": (body.subject or "").strip()[:200],
+            "text": text,
+            "ts": time.time(),
+            "status": "open",  # open | answered | closed
+            "replies": [],
+        }
+        tickets.append(ticket)
+        if len(tickets) > 1000:
+            storage.state["support_tickets"] = tickets[-1000:]
+        await storage._save_unlocked()
+    return {"ticket_id": ticket["id"]}
+
+
+@router.get("/support/tickets")
+async def support_list(
+    request: Request,
+    status: Optional[str] = None,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    items = list(_support_tickets())
+    if status:
+        items = [t for t in items if t.get("status") == status]
+    items.sort(key=lambda t: -float(t.get("ts") or 0))
+    return {"items": items[:100]}
+
+
+class SupportReplyReq(BaseModel):
+    text: str
+    author_tg_username: str = ""
+
+
+@router.post("/support/tickets/{ticket_id}/reply")
+async def support_reply(
+    ticket_id: int,
+    body: SupportReplyReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        for t in _support_tickets():
+            if int(t.get("id") or 0) == int(ticket_id):
+                t.setdefault("replies", []).append({
+                    "text": (body.text or "").strip()[:5000],
+                    "author": (body.author_tg_username or "admin").lstrip("@").lower(),
+                    "ts": time.time(),
+                })
+                t["status"] = "answered"
+                await storage._save_unlocked()
+                return {"ok": True}
+        raise HTTPException(404, "ticket not found")
+
+
+@router.post("/support/tickets/{ticket_id}/close")
+async def support_close(
+    ticket_id: int,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        for t in _support_tickets():
+            if int(t.get("id") or 0) == int(ticket_id):
+                t["status"] = "closed"
+                await storage._save_unlocked()
+                return {"ok": True}
+        raise HTTPException(404, "ticket not found")
+
+
+# ═══════════════════════════════════════════════════════════════
 # MAINTENANCE — purge всех не-team чатов (owner-only гвард на stroy)
 # ═══════════════════════════════════════════════════════════════
 
