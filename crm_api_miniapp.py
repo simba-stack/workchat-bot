@@ -1752,6 +1752,264 @@ async def new_client_flow(
     return {"drop_id": drop_id}
 
 
+# ═══════════════════════════════════════════════════════════════
+# ACCOUNTS — свой account-слой поверх TG initData.
+# Логин/пароль + secret_key для переноса на новый TG-аккаунт.
+# Storage: state["ma_accounts"] = { acc_id: {...} }
+#          state["ma_accounts_by_tgid"] = { tg_id: acc_id }
+#          state["ma_accounts_by_login"] = { login: acc_id }
+# ═══════════════════════════════════════════════════════════════
+
+def _accounts_dict() -> dict:
+    return storage.state.setdefault("ma_accounts", {})
+
+def _accounts_by_tgid() -> dict:
+    return storage.state.setdefault("ma_accounts_by_tgid", {})
+
+def _accounts_by_login() -> dict:
+    return storage.state.setdefault("ma_accounts_by_login", {})
+
+
+def _hash_pw(login: str, password: str) -> str:
+    """SHA-256(login:password + PEPPER)."""
+    pepper = os.getenv("MINIAPP_PEPPER", "pride-2026")
+    return hashlib.sha256(f"{login.lower()}:{password}:{pepper}".encode()).hexdigest()
+
+
+def _hash_secret(secret: str) -> str:
+    pepper = os.getenv("MINIAPP_PEPPER", "pride-2026")
+    return hashlib.sha256(f"secret:{secret}:{pepper}".encode()).hexdigest()
+
+
+def _gen_secret_key() -> str:
+    """Формат: XXXX-XXXX-XXXX-XXXX (16 hex-групп по 4). Читаемо."""
+    import secrets as _secrets
+    raw = _secrets.token_hex(8).upper()  # 16 hex chars
+    return "-".join(raw[i:i+4] for i in range(0, 16, 4))
+
+
+def _public_account(acc: dict) -> dict:
+    """Без hash'ей."""
+    return {
+        "account_id": acc.get("account_id"),
+        "login": acc.get("login"),
+        "linked_tg_id": acc.get("linked_tg_id"),
+        "linked_tg_username": acc.get("linked_tg_username"),
+        "created_at": acc.get("created_at"),
+        "secret_last4": acc.get("secret_last4"),
+    }
+
+
+class AccountRegisterReq(BaseModel):
+    login: str
+    password: str
+    tg_id: int
+    tg_username: str = ""
+
+
+@router.post("/accounts/register")
+async def account_register(
+    body: AccountRegisterReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Регистрация: логин+пароль, генерируется secret_key (показывается 1 раз),
+    аккаунт привязывается к текущему tg_id."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    login = (body.login or "").strip().lower()
+    if len(login) < 3 or len(login) > 32:
+        raise HTTPException(400, "login length 3..32")
+    if not login.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "login must be alphanumeric (+ _ -)")
+    if len(body.password) < 4:
+        raise HTTPException(400, "password too short (min 4)")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        by_login = _accounts_by_login()
+        by_tgid = _accounts_by_tgid()
+        if login in by_login:
+            raise HTTPException(409, "login taken")
+        if str(body.tg_id) in by_tgid:
+            raise HTTPException(409, "this tg_id already has account — login instead")
+        accounts = _accounts_dict()
+        seq = int(storage.state.get("ma_accounts_seq", 0)) + 1
+        storage.state["ma_accounts_seq"] = seq
+        acc_id = f"acc_{seq:05d}"
+        secret_key = _gen_secret_key()
+        acc = {
+            "account_id": acc_id,
+            "login": login,
+            "password_hash": _hash_pw(login, body.password),
+            "secret_hash": _hash_secret(secret_key),
+            "secret_last4": secret_key[-4:],  # для показа
+            "linked_tg_id": int(body.tg_id),
+            "linked_tg_username": (body.tg_username or "").lstrip("@").lower(),
+            "created_at": time.time(),
+        }
+        accounts[acc_id] = acc
+        by_login[login] = acc_id
+        by_tgid[str(body.tg_id)] = acc_id
+        await storage._save_unlocked()
+    return {
+        "account_id": acc_id,
+        "login": login,
+        "secret_key": secret_key,  # ⚠️ показать 1 раз юзеру!
+    }
+
+
+class AccountLoginReq(BaseModel):
+    login: str
+    password: str
+    tg_id: int
+    tg_username: str = ""
+
+
+@router.post("/accounts/login")
+async def account_login(
+    body: AccountLoginReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Логин по логину/паролю. Обновляет привязку к текущему tg_id."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    login = (body.login or "").strip().lower()
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        by_login = _accounts_by_login()
+        acc_id = by_login.get(login)
+        if not acc_id:
+            raise HTTPException(404, "account not found")
+        acc = _accounts_dict().get(acc_id)
+        if not acc or acc.get("password_hash") != _hash_pw(login, body.password):
+            raise HTTPException(401, "bad credentials")
+        # Обновляем привязку tg_id
+        old_tgid = str(acc.get("linked_tg_id") or "")
+        new_tgid = str(body.tg_id)
+        by_tgid = _accounts_by_tgid()
+        if old_tgid and old_tgid != new_tgid and by_tgid.get(old_tgid) == acc_id:
+            del by_tgid[old_tgid]
+        by_tgid[new_tgid] = acc_id
+        acc["linked_tg_id"] = int(body.tg_id)
+        acc["linked_tg_username"] = (body.tg_username or "").lstrip("@").lower()
+        await storage._save_unlocked()
+    return _public_account(acc)
+
+
+class AccountMigrateReq(BaseModel):
+    secret_key: str
+    tg_id: int
+    tg_username: str = ""
+
+
+@router.post("/accounts/migrate")
+async def account_migrate(
+    body: AccountMigrateReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Перенос аккаунта на новый TG по secret_key. Ищем аккаунт с матчащим
+    secret_hash и перепривязываем к новому tg_id."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    sk = (body.secret_key or "").strip().upper()
+    if not sk:
+        raise HTTPException(400, "secret_key required")
+    target_hash = _hash_secret(sk)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        accounts = _accounts_dict()
+        acc = None
+        for a in accounts.values():
+            if a.get("secret_hash") == target_hash:
+                acc = a
+                break
+        if not acc:
+            raise HTTPException(404, "no account with this secret key")
+        # Перепривязываем
+        by_tgid = _accounts_by_tgid()
+        old_tgid = str(acc.get("linked_tg_id") or "")
+        new_tgid = str(body.tg_id)
+        if old_tgid and old_tgid != new_tgid and by_tgid.get(old_tgid) == acc["account_id"]:
+            del by_tgid[old_tgid]
+        by_tgid[new_tgid] = acc["account_id"]
+        acc["linked_tg_id"] = int(body.tg_id)
+        acc["linked_tg_username"] = (body.tg_username or "").lstrip("@").lower()
+        acc["migrated_at"] = time.time()
+        await storage._save_unlocked()
+    return _public_account(acc)
+
+
+@router.get("/accounts/by-tgid/{tg_id}")
+async def account_by_tgid(
+    tg_id: int,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Есть ли у этого tg_id привязанный аккаунт?"""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    acc_id = _accounts_by_tgid().get(str(tg_id))
+    if not acc_id:
+        return {"account": None}
+    acc = _accounts_dict().get(acc_id)
+    return {"account": _public_account(acc) if acc else None}
+
+
+class AccountRotateReq(BaseModel):
+    account_id: str
+    password: str  # подтверждение
+
+
+@router.post("/accounts/rotate-secret")
+async def account_rotate_secret(
+    body: AccountRotateReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Обновить secret_key. Требует пароль для подтверждения."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        acc = _accounts_dict().get(body.account_id)
+        if not acc:
+            raise HTTPException(404, "account not found")
+        if acc.get("password_hash") != _hash_pw(acc.get("login") or "", body.password):
+            raise HTTPException(401, "bad password")
+        new_secret = _gen_secret_key()
+        acc["secret_hash"] = _hash_secret(new_secret)
+        acc["secret_last4"] = new_secret[-4:]
+        acc["secret_rotated_at"] = time.time()
+        await storage._save_unlocked()
+    return {"secret_key": new_secret}
+
+
+# ═══════════════════════════════════════════════════════════════
+# MAINTENANCE — purge всех не-team чатов (owner-only гвард на stroy)
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/maintenance/purge-workchats")
+async def purge_workchats(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Удаляет ВСЕ mini-app чаты кроме team-чата."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        chats = _ma_chats()
+        removed = 0
+        for cid in list(chats.keys()):
+            if cid != TEAM_CHAT_ID:
+                del chats[cid]
+                removed += 1
+        await storage._save_unlocked()
+    return {"ok": True, "removed": removed}
+
+
 @router.get("/healthz")
 async def healthz():
     """Публичный health-check без auth — чтобы stroy-crm-bot мог пинговать."""
