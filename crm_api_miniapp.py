@@ -1366,6 +1366,8 @@ class FeedPostReq(BaseModel):
     text: str
     kind: str = "news"   # news | update | announcement
     author_tg_user_id: int
+    image_url: Optional[str] = None
+    image_name: Optional[str] = None
 
 
 @router.post("/feed")
@@ -1390,6 +1392,8 @@ async def feed_post(
             "author_tg_user_id": int(body.author_tg_user_id),
             "ts": time.time(),
             "likes": 0,
+            "image_url": (body.image_url or "").strip() or None,
+            "image_name": (body.image_name or "").strip() or None,
         }
         feed.append(post)
         if len(feed) > 200:
