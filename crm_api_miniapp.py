@@ -1388,6 +1388,9 @@ class FeedPostReq(BaseModel):
     author_tg_user_id: int
     image_url: Optional[str] = None
     image_name: Optional[str] = None
+    comments_enabled: bool = True
+    author_display: str = "self"  # "self" | "community"
+    author_name: Optional[str] = None  # если self — тут имя, для community игнор
 
 
 @router.post("/feed")
@@ -1414,6 +1417,12 @@ async def feed_post(
             "likes": 0,
             "image_url": (body.image_url or "").strip() or None,
             "image_name": (body.image_name or "").strip() or None,
+            "comments_enabled": bool(body.comments_enabled),
+            "author_display": body.author_display if body.author_display in ("self", "community") else "self",
+            "author_name": (body.author_name or "").strip()[:64] or None,
+            "pinned": False,
+            "comments": [],
+            "comments_seq": 0,
         }
         feed.append(post)
         if len(feed) > 200:
@@ -1444,6 +1453,10 @@ class FeedPatchReq(BaseModel):
     kind: Optional[str] = None
     image_url: Optional[str] = None  # "" чтобы убрать
     image_name: Optional[str] = None
+    comments_enabled: Optional[bool] = None
+    author_display: Optional[str] = None
+    author_name: Optional[str] = None
+    pinned: Optional[bool] = None
 
 
 @router.patch("/feed/{post_id}")
@@ -1472,9 +1485,89 @@ async def feed_patch(
         if body.image_url is not None:
             target["image_url"] = body.image_url.strip() or None
             target["image_name"] = (body.image_name or "").strip() or None
+        if body.comments_enabled is not None:
+            target["comments_enabled"] = bool(body.comments_enabled)
+        if body.author_display in ("self", "community"):
+            target["author_display"] = body.author_display
+        if body.author_name is not None:
+            target["author_name"] = body.author_name.strip()[:64] or None
+        if body.pinned is not None:
+            target["pinned"] = bool(body.pinned)
         target["edited_ts"] = time.time()
         await storage._save_unlocked()
     return {"post": target}
+
+
+# ═════════════════════════════════════════════════════════
+# COMMENTS
+# ═════════════════════════════════════════════════════════
+
+class FeedCommentReq(BaseModel):
+    text: str
+    author_tg_user_id: int
+    author_name: str = ""
+
+
+@router.post("/feed/{post_id}/comments")
+async def feed_comment_add(
+    post_id: int,
+    body: FeedCommentReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        feed = storage.state.setdefault("pride_feed", [])
+        target = None
+        for p in feed:
+            if int(p.get("id") or 0) == int(post_id):
+                target = p; break
+        if not target:
+            raise HTTPException(404, "post not found")
+        if target.get("comments_enabled") is False:
+            raise HTTPException(403, "comments disabled")
+        text = (body.text or "").strip()[:1000]
+        if not text:
+            raise HTTPException(400, "empty text")
+        seq = int(target.get("comments_seq", 0)) + 1
+        target["comments_seq"] = seq
+        comment = {
+            "id": seq,
+            "text": text,
+            "author_tg_user_id": int(body.author_tg_user_id),
+            "author_name": (body.author_name or "").strip()[:64] or "user",
+            "ts": time.time(),
+        }
+        comments = target.setdefault("comments", [])
+        comments.append(comment)
+        if len(comments) > 500:
+            target["comments"] = comments[-500:]
+        await storage._save_unlocked()
+    return {"comment": comment}
+
+
+@router.delete("/feed/{post_id}/comments/{comment_id}")
+async def feed_comment_delete(
+    post_id: int,
+    comment_id: int,
+    request: Request,
+    by_tg_user_id: int = 0,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Удалить комментарий. Может автор или owner (проверка на стороне stroy)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        feed = storage.state.setdefault("pride_feed", [])
+        for p in feed:
+            if int(p.get("id") or 0) == int(post_id):
+                p["comments"] = [c for c in (p.get("comments") or []) if int(c.get("id") or 0) != int(comment_id)]
+                break
+        await storage._save_unlocked()
+    return {"ok": True}
 
 
 # ═══════════════════════════════════════════════════════════════
