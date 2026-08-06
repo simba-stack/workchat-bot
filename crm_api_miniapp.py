@@ -1146,6 +1146,26 @@ async def ma_chat_get(
     }
 
 
+@router.delete("/ma-chats/{chat_id}")
+async def ma_chat_delete(
+    chat_id: str,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Удалить mini-app чат. Team-чат удалять нельзя."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if chat_id == TEAM_CHAT_ID:
+        raise HTTPException(400, "cannot delete team chat")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        chats = _ma_chats()
+        if chat_id in chats:
+            del chats[chat_id]
+            await storage._save_unlocked()
+    return {"ok": True}
+
+
 @router.get("/ma-chats/{chat_id}/messages")
 async def ma_chat_messages(
     chat_id: str,
