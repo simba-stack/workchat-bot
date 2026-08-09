@@ -1104,17 +1104,20 @@ async def ma_chat_list(
             "client_tg_user_id": c.get("client_tg_user_id"),
             "client_name": c.get("client_name") or "",
             "topic": c.get("topic") or "general",
-            "created_at": c.get("created_at") or 0,
-            "last_msg_ts": c.get("last_msg_ts") or 0,
+            "created_at": float(c.get("created_at") or 0),
+            "last_msg_ts": float(c.get("last_msg_ts") or 0),
             "msg_count": len(_all),
             "last_preview": ((last_msg or {}).get("text") or "")[:60] if last_msg else "",
             "unread": unread,
         })
     # Team-чат всегда первым если юзер в нём
+    # L6 fix — свежие чаты без сообщений (last_msg_ts=0) шли в конец. Теперь
+    # fallback на created_at, чтобы новый чат всегда наверху.
     def _sort_key(x):
         if x["chat_id"] == TEAM_CHAT_ID:
             return (0, 0)
-        return (1, -float(x["last_msg_ts"] or 0))
+        ts = float(x["last_msg_ts"] or 0) or float(x.get("created_at") or 0)
+        return (1, -ts)
     items.sort(key=_sort_key)
     return {"items": items, "count": len(items)}
 
@@ -1126,8 +1129,14 @@ async def ma_chat_get(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Полные данные чата: meta + sell_state (без messages — их через /messages)."""
+    """Полные данные чата: meta + sell_state (без messages — их через /messages).
+    H1 fix — если запрошен team-чат но его ещё нет, автосоздаём."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if chat_id == TEAM_CHAT_ID:
+        from storage import _lock as _st_lock
+        async with _st_lock:
+            _ensure_team_chat()
+            await storage._save_unlocked()
     c = _ma_chats().get(chat_id)
     if not c:
         raise HTTPException(404, "chat not found")
@@ -1150,19 +1159,32 @@ async def ma_chat_get(
 async def ma_chat_delete(
     chat_id: str,
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Удалить mini-app чат. Team-чат удалять нельзя."""
+    """Удалить mini-app чат. Team-чат удалять нельзя.
+    Owner-check: только owner системы ИЛИ партнёр-владелец чата."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     if chat_id == TEAM_CHAT_ID:
         raise HTTPException(400, "cannot delete team chat")
     from storage import _lock as _st_lock
     async with _st_lock:
         chats = _ma_chats()
-        if chat_id in chats:
-            del chats[chat_id]
-            await storage._save_unlocked()
+        c = chats.get(chat_id)
+        if not c:
+            return {"ok": True}
+        # C2 fix — проверка владельца
+        is_owner = int(by_tg_user_id) in _resolve_owner_ids()
+        is_chat_owner = False
+        if c.get("owner_id"):
+            o = storage.get_crm_owner(c["owner_id"])
+            if o and int(o.get("tg_user_id") or 0) == int(by_tg_user_id):
+                is_chat_owner = True
+        if not (is_owner or is_chat_owner):
+            raise HTTPException(403, "only chat owner or system owner can delete")
+        del chats[chat_id]
+        await storage._save_unlocked()
     return {"ok": True}
 
 
@@ -1557,14 +1579,23 @@ async def feed_comment_delete(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Удалить комментарий. Может автор или owner (проверка на стороне stroy)."""
+    """Удалить комментарий. Только автор комментария ИЛИ owner системы.
+    C4 fix — раньше проверка была на словах, теперь реально."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    is_system_owner = int(by_tg_user_id) in _resolve_owner_ids()
     from storage import _lock as _st_lock
     async with _st_lock:
         feed = storage.state.setdefault("pride_feed", [])
         for p in feed:
             if int(p.get("id") or 0) == int(post_id):
-                p["comments"] = [c for c in (p.get("comments") or []) if int(c.get("id") or 0) != int(comment_id)]
+                comments = p.get("comments") or []
+                target = next((c for c in comments if int(c.get("id") or 0) == int(comment_id)), None)
+                if not target:
+                    return {"ok": True}
+                is_author = int(target.get("author_tg_user_id") or 0) == int(by_tg_user_id)
+                if not (is_author or is_system_owner):
+                    raise HTTPException(403, "only comment author or system owner can delete")
+                p["comments"] = [c for c in comments if int(c.get("id") or 0) != int(comment_id)]
                 break
         await storage._save_unlocked()
     return {"ok": True}
@@ -2092,6 +2123,7 @@ class ProfilePatchReq(BaseModel):
     account_id: str
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
+    by_tg_user_id: int = 0  # C3 fix — кто редактирует
 
 
 @router.get("/profiles/{account_id}")
@@ -2124,8 +2156,18 @@ async def patch_profile(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Обновить свой профиль. Гвард (только своё) на стороне stroy."""
+    """Обновить свой профиль. Гвард: только владелец аккаунта ИЛИ owner системы.
+    C3 fix — раньше был TODO, теперь реально проверяем."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    # Owner-check
+    acc = _accounts_dict().get(body.account_id)
+    if not acc:
+        raise HTTPException(404, "account not found")
+    is_system_owner = int(body.by_tg_user_id) in _resolve_owner_ids()
+    is_account_owner = int(acc.get("linked_tg_id") or 0) == int(body.by_tg_user_id)
+    if not (is_system_owner or is_account_owner):
+        raise HTTPException(403, "can only edit own profile")
+
     from storage import _lock as _st_lock
     async with _st_lock:
         profs = _profiles_dict()
