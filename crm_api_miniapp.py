@@ -1245,9 +1245,20 @@ async def ma_chat_post(
         }
         msgs.append(msg)
         c["last_msg_ts"] = msg["ts"]
-        # Ограничиваем: 1000 сообщений в чате
+        # Ограничиваем: 1000 сообщений в чате.
+        # H5 fix — bump reads/pins чтобы старые ссылки не сломались.
         if len(msgs) > 1000:
-            c["messages"] = msgs[-1000:]
+            trimmed = msgs[-1000:]
+            c["messages"] = trimmed
+            min_id = min(int(m.get("msg_id") or 0) for m in trimmed) if trimmed else 0
+            # Reads: если last_read юзера < min_id — bump до min_id-1 (не помечать удалённые как unread)
+            reads = c.get("reads") or {}
+            for uid, last_read in list(reads.items()):
+                if int(last_read or 0) < min_id:
+                    reads[uid] = min_id - 1
+            c["reads"] = reads
+            # Pins: удаляем ссылки на удалённые
+            c["pinned_msg_ids"] = [x for x in (c.get("pinned_msg_ids") or []) if int(x) >= min_id]
         await storage._save_unlocked()
     return {"message": msg}
 
@@ -1378,9 +1389,9 @@ async def ma_chat_pin(
             pins.append(int(body.msg_id))
         elif not body.pinned and body.msg_id in pins:
             pins.remove(int(body.msg_id))
-        # max 5 pins
-        if len(pins) > 5:
-            c["pinned_msg_ids"] = pins[-5:]
+        # M7 fix: max 3 pinned (было 5, теперь строже)
+        if len(pins) > 3:
+            c["pinned_msg_ids"] = pins[-3:]
         await storage._save_unlocked()
     return {"ok": True, "pins": c.get("pinned_msg_ids") or []}
 
@@ -1514,7 +1525,15 @@ async def feed_patch(
         if body.author_name is not None:
             target["author_name"] = body.author_name.strip()[:64] or None
         if body.pinned is not None:
-            target["pinned"] = bool(body.pinned)
+            new_pinned = bool(body.pinned)
+            # M7 fix — max 3 закреплённых постов. Если делаем pinned=True
+            # и уже 3 закреплено — открепляем самый старый (по ts).
+            if new_pinned and not target.get("pinned"):
+                pinned_now = [p for p in feed if p.get("pinned")]
+                if len(pinned_now) >= 3:
+                    oldest = min(pinned_now, key=lambda p: float(p.get("ts") or 0))
+                    oldest["pinned"] = False
+            target["pinned"] = new_pinned
         target["edited_ts"] = time.time()
         await storage._save_unlocked()
     return {"post": target}
@@ -1894,15 +1913,51 @@ def _accounts_by_login() -> dict:
     return storage.state.setdefault("ma_accounts_by_login", {})
 
 
+def _pepper() -> str:
+    return os.getenv("MINIAPP_PEPPER", "pride-2026")
+
+
+def _hash_pw_scrypt(login: str, password: str) -> str:
+    """H2 fix — scrypt(N=16384, r=8, p=1) вместо голого SHA-256.
+    Формат: 'scrypt$<salt_hex>$<hash_hex>'. Соль per-пароль."""
+    import secrets as _secrets
+    salt = _secrets.token_bytes(16)
+    key = hashlib.scrypt(
+        password=f"{login.lower()}:{password}:{_pepper()}".encode(),
+        salt=salt, n=16384, r=8, p=1, dklen=32,
+    )
+    return f"scrypt${salt.hex()}${key.hex()}"
+
+
+def _verify_pw(login: str, password: str, stored: str) -> bool:
+    """Проверяет пароль. Поддерживает legacy SHA-256 (для миграции)."""
+    if not stored:
+        return False
+    if stored.startswith("scrypt$"):
+        try:
+            _, salt_hex, hash_hex = stored.split("$", 2)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(hash_hex)
+            got = hashlib.scrypt(
+                password=f"{login.lower()}:{password}:{_pepper()}".encode(),
+                salt=salt, n=16384, r=8, p=1, dklen=32,
+            )
+            return hmac.compare_digest(expected, got)
+        except Exception:
+            return False
+    # Legacy SHA-256 (для аккаунтов до H2)
+    legacy = hashlib.sha256(f"{login.lower()}:{password}:{_pepper()}".encode()).hexdigest()
+    return hmac.compare_digest(stored, legacy)
+
+
 def _hash_pw(login: str, password: str) -> str:
-    """SHA-256(login:password + PEPPER)."""
-    pepper = os.getenv("MINIAPP_PEPPER", "pride-2026")
-    return hashlib.sha256(f"{login.lower()}:{password}:{pepper}".encode()).hexdigest()
+    """Alias для новых хешей — теперь scrypt."""
+    return _hash_pw_scrypt(login, password)
 
 
 def _hash_secret(secret: str) -> str:
-    pepper = os.getenv("MINIAPP_PEPPER", "pride-2026")
-    return hashlib.sha256(f"secret:{secret}:{pepper}".encode()).hexdigest()
+    """Secret-ключ — оставляем SHA-256 (уже 64-bit entropy, не brute-force)."""
+    return hashlib.sha256(f"secret:{secret}:{_pepper()}".encode()).hexdigest()
 
 
 def _gen_secret_key() -> str:
@@ -2006,8 +2061,12 @@ async def account_login(
         if not acc_id:
             raise HTTPException(404, "account not found")
         acc = _accounts_dict().get(acc_id)
-        if not acc or acc.get("password_hash") != _hash_pw(login, body.password):
+        if not acc or not _verify_pw(login, body.password, acc.get("password_hash") or ""):
             raise HTTPException(401, "bad credentials")
+        # H2: миграция — если старый SHA-256 хеш, пересчитываем на scrypt при успешном login
+        old_hash = acc.get("password_hash") or ""
+        if not old_hash.startswith("scrypt$"):
+            acc["password_hash"] = _hash_pw_scrypt(login, body.password)
         # Обновляем привязку tg_id
         old_tgid = str(acc.get("linked_tg_id") or "")
         new_tgid = str(body.tg_id)
@@ -2035,11 +2094,25 @@ async def account_migrate(
     x_miniapp_ts: str = Header(default=""),
 ):
     """Перенос аккаунта на новый TG по secret_key. Ищем аккаунт с матчащим
-    secret_hash и перепривязываем к новому tg_id."""
+    secret_hash и перепривязываем к новому tg_id.
+    H3 fix — rate-limit: max 3 неудачные попытки за 10 мин с одного tg_id.
+    После 3 неудач — 429 на 30 мин."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     sk = (body.secret_key or "").strip().upper()
     if not sk:
         raise HTTPException(400, "secret_key required")
+
+    # Rate-limit check
+    now = time.time()
+    attempts_map = storage.state.setdefault("migrate_attempts", {})
+    tg_key = str(body.tg_id)
+    old_attempts = [t for t in (attempts_map.get(tg_key) or []) if now - t < 1800]
+    fails_10min = [t for t in old_attempts if now - t < 600]
+    if len(fails_10min) >= 3:
+        oldest_in_lock = min(old_attempts) if old_attempts else now
+        wait_left = int(1800 - (now - oldest_in_lock))
+        raise HTTPException(429, f"too many migrate attempts. wait {max(60, wait_left)}s")
+
     target_hash = _hash_secret(sk)
     from storage import _lock as _st_lock
     async with _st_lock:
@@ -2050,7 +2123,14 @@ async def account_migrate(
                 acc = a
                 break
         if not acc:
-            raise HTTPException(404, "no account with this secret key")
+            # Записываем неудачу
+            old_attempts.append(now)
+            attempts_map[tg_key] = old_attempts
+            await storage._save_unlocked()
+            remaining = 3 - len(fails_10min) - 1
+            raise HTTPException(404, f"no account with this secret key. attempts left: {max(0, remaining)}")
+        # Успех — очищаем attempts
+        attempts_map.pop(tg_key, None)
         # Перепривязываем
         by_tgid = _accounts_by_tgid()
         old_tgid = str(acc.get("linked_tg_id") or "")
@@ -2061,6 +2141,11 @@ async def account_migrate(
         acc["linked_tg_id"] = int(body.tg_id)
         acc["linked_tg_username"] = (body.tg_username or "").lstrip("@").lower()
         acc["migrated_at"] = time.time()
+        # Записываем историю миграций
+        migrations = acc.setdefault("migration_history", [])
+        migrations.append({"from_tg": old_tgid, "to_tg": new_tgid, "ts": time.time()})
+        if len(migrations) > 20:
+            acc["migration_history"] = migrations[-20:]
         await storage._save_unlocked()
     return _public_account(acc)
 
@@ -2100,7 +2185,7 @@ async def account_rotate_secret(
         acc = _accounts_dict().get(body.account_id)
         if not acc:
             raise HTTPException(404, "account not found")
-        if acc.get("password_hash") != _hash_pw(acc.get("login") or "", body.password):
+        if not _verify_pw(acc.get("login") or "", body.password, acc.get("password_hash") or ""):
             raise HTTPException(401, "bad password")
         new_secret = _gen_secret_key()
         acc["secret_hash"] = _hash_secret(new_secret)
