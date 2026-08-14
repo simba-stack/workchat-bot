@@ -46,6 +46,36 @@ def _hmac_secret() -> str:
     return (os.getenv("MINIAPP_HMAC_SECRET", "") or "").strip()
 
 
+def _validate_url(url: str) -> str:
+    """AUDIT#15 — валидация URL: только http(s):// или относительный /uploads/*.
+    Отвергает javascript:, data:, file: и прочие опасные схемы."""
+    if not url:
+        return ""
+    u = url.strip()
+    if not u:
+        return ""
+    if u.startswith("/uploads/") or u.startswith("/miniapp/"):
+        return u  # относительный на своём сервере — ОК
+    if u.startswith(("http://", "https://")):
+        return u
+    raise HTTPException(400, "url must be http(s):// or /uploads/*")
+
+
+def _validate_trc20(address: str) -> str:
+    """AUDIT#16 — валидация TRC20-адреса.
+    Формат: T + 33 alphanumeric (base58), всего 34 символа."""
+    if not address:
+        return ""
+    a = address.strip()
+    if len(a) != 34 or not a.startswith("T"):
+        raise HTTPException(400, "invalid TRC20 address (must start with T, 34 chars)")
+    # Base58 alphabet (no 0, O, I, l)
+    allowed = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+    if not all(c in allowed for c in a):
+        raise HTTPException(400, "invalid TRC20 address (bad chars)")
+    return a
+
+
 def _sign(method: str, path: str, ts: str, body: str) -> str:
     """Строим подпись: HMAC-SHA256(secret, f'{METHOD}|{PATH}|{TS}|{BODY}')."""
     secret = _hmac_secret().encode()
@@ -363,7 +393,8 @@ async def work_chat_details(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Детали work-чата + связанные дропы."""
+    """Детали work-чата + связанные дропы.
+    AUDIT#19 — whitelist полей, не отдаём весь info (мог содержать internal-поля)."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     info = storage.get_chat_info(chat_id)
     if not info:
@@ -373,8 +404,14 @@ async def work_chat_details(
         {"drop_id": did, "fio": d.get("fio"), "status": d.get("status")}
         for did, d in drops.items() if str(d.get("work_chat_id") or "") == str(chat_id)
     ]
+    # Whitelist — только эти поля отдаём наружу
+    SAFE_FIELDS = {"client_id", "client_name", "client_username",
+                   "created_at", "payment_method", "usdt_address",
+                   "welcome_sent"}
+    safe_chat = {k: v for k, v in info.items() if k in SAFE_FIELDS}
+    safe_chat["chat_id"] = chat_id
     return {
-        "chat": {**info, "chat_id": chat_id},
+        "chat": safe_chat,
         "drops": related_drops,
     }
 
@@ -866,8 +903,10 @@ async def wallet_withdraw(
     x_miniapp_ts: str = Header(default=""),
 ):
     """Создаёт заявку на вывод. Не списывает баланс — только резервирует.
-    Owner подтверждает через /payout в TG."""
+    Owner подтверждает через /payout в TG.
+    AUDIT#16 — валидация TRC20-адреса."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    validated_addr = _validate_trc20(body.trc20_address)
     owner = storage.get_crm_owner(owner_id)
     if not owner:
         raise HTTPException(404, "owner not found")
@@ -875,7 +914,7 @@ async def wallet_withdraw(
     payout_id = await storage.wallet_create_payout_request(
         username=uname,
         amount_usdt=body.amount_usdt,
-        trc20_address=body.trc20_address,
+        trc20_address=validated_addr,
     )
     if not payout_id:
         raise HTTPException(400, "insufficient balance or invalid input")
@@ -1573,8 +1612,8 @@ async def feed_post(
             "author_tg_user_id": int(body.author_tg_user_id),
             "ts": time.time(),
             "likes": 0,
-            "image_url": (body.image_url or "").strip() or None,
-            "image_name": (body.image_name or "").strip() or None,
+            "image_url": _validate_url((body.image_url or "").strip()) or None,
+            "image_name": (body.image_name or "").strip()[:200] or None,
             "comments_enabled": bool(body.comments_enabled),
             "author_display": body.author_display if body.author_display in ("self", "community") else "self",
             "author_name": (body.author_name or "").strip()[:64] or None,
@@ -1646,8 +1685,8 @@ async def feed_patch(
         if body.text is not None:       target["text"] = body.text.strip()[:5000]
         if body.kind is not None:       target["kind"] = body.kind
         if body.image_url is not None:
-            target["image_url"] = body.image_url.strip() or None
-            target["image_name"] = (body.image_name or "").strip() or None
+            target["image_url"] = _validate_url(body.image_url.strip()) or None
+            target["image_name"] = (body.image_name or "").strip()[:200] or None
         if body.comments_enabled is not None:
             target["comments_enabled"] = bool(body.comments_enabled)
         if body.author_display in ("self", "community"):
@@ -2422,7 +2461,7 @@ async def patch_profile(
         profs = _profiles_dict()
         p = profs.setdefault(body.account_id, {})
         if body.avatar_url is not None:
-            p["avatar_url"] = body.avatar_url.strip()[:500] or ""
+            p["avatar_url"] = _validate_url(body.avatar_url.strip()[:500]) or ""
         if body.bio is not None:
             p["bio"] = body.bio.strip()[:500]
         p["ts"] = time.time()
