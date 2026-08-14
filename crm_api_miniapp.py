@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/miniapp", tags=["miniapp"])
 
+# AUDIT#13 — replay-nonce store для HMAC. sig → timestamp. Auto-clean в _check_hmac.
+_seen_sigs: dict = {}
+
 
 # ─── HMAC auth ────────────────────────────────────────────────────
 def _hmac_secret() -> str:
@@ -66,18 +69,64 @@ async def _check_hmac(request: Request, sig: str, ts: str) -> None:
     body_bytes = await request.body()
     body_str = body_bytes.decode("utf-8") if body_bytes else ""
     # Full path with query string — JS-клиент подписывает всё что после base URL,
-    # включая ?owner_id=X. Раньше здесь был только request.url.path без query →
-    # всегда 401 на GET-запросах с параметрами.
+    # включая ?owner_id=X.
     path_with_query = request.url.path
     if request.url.query:
         path_with_query += "?" + request.url.query
     expected = _sign(request.method, path_with_query, ts, body_str)
     if not hmac.compare_digest(sig, expected):
+        # AUDIT#12 — redact чувствительные поля в body перед логированием.
+        # Пароли/secret'ы плейнтекстом попадали в Railway logs.
+        safe_body = body_str[:200]
+        for sensitive in ("password", "secret_key"):
+            if sensitive in safe_body.lower():
+                safe_body = "<redacted: contains sensitive field>"
+                break
         logger.warning(
             "[miniapp-api] HMAC mismatch: path=%s ts=%s calc=%s got=%s body=%r",
-            path_with_query, ts, expected[:16], sig[:16], body_str[:200],
+            path_with_query, ts, expected[:16], sig[:16], safe_body,
         )
         raise HTTPException(401, "bad signature")
+
+    # AUDIT#13 — replay protection: nonce store с TTL 60s.
+    # Ключ: подпись. Если уже видели за последнюю минуту → отклоняем.
+    global _seen_sigs
+    now = time.time()
+    # cleanup старых
+    if len(_seen_sigs) > 1000:
+        _seen_sigs = {s: t for s, t in _seen_sigs.items() if now - t < 60}
+    if sig in _seen_sigs:
+        raise HTTPException(401, "replay detected")
+    _seen_sigs[sig] = now
+
+
+# ─── AUDIT#1-8 — server-side owner-check ──────────────────────────
+# HMAC-подписи достаточно чтобы принять запрос, НО для admin-роутов
+# нужна дополнительная проверка что by_tg_user_id действительно owner.
+# Клиент mini-app всегда даёт свой tg_id (из initData), но если
+# HMAC secret утечёт — атакующий подделает by_tg_user_id.
+# Это defense-in-depth: даже если stroy-crm-bot скомпрометирован,
+# owner-only endpoints нельзя дёрнуть под чужим tg_id ≠ owner.
+def _require_owner(by_tg_user_id: int):
+    if not by_tg_user_id or int(by_tg_user_id) not in _resolve_owner_ids():
+        raise HTTPException(403, "owner only")
+
+
+def _require_role(by_tg_user_id: int, username: str, allowed_roles: set):
+    """Проверка что by_tg_user_id имеет одну из allowed_roles."""
+    if int(by_tg_user_id) in _resolve_owner_ids():
+        return  # owner может всё
+    uname = (username or "").lstrip("@").lower().strip()
+    wr = (storage.state.get("worker_roles") or {}).get(uname)
+    role = None
+    if wr:
+        role = wr.get("role") if isinstance(wr, dict) else str(wr)
+    if not role:
+        hc = DEFAULT_TEAM_HARDCODED.get(uname)
+        if hc:
+            role = hc.get("role")
+    if role not in allowed_roles:
+        raise HTTPException(403, f"role '{role}' not in {allowed_roles}")
 
 
 # ─── Роль-резолвер ────────────────────────────────────────────────
@@ -553,6 +602,73 @@ async def lk_action(
 # WALLET (партнёрский кошелёк TRC20)
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+# PAYOUTS APPROVAL (accountant + owner)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/payouts/pending")
+async def payouts_pending(
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Все pending payouts всех партнёров (для accountant/owner UI)."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    if hasattr(storage, "list_pending_payouts"):
+        items = storage.list_pending_payouts() or []
+    else:
+        items = []
+    return {"items": items, "count": len(items)}
+
+
+class PayoutApproveReq(BaseModel):
+    payout_id: str
+    txid: str = ""
+    by_tg_user_id: int = 0
+    by_tg_username: str = ""
+
+
+@router.post("/payouts/approve")
+async def payouts_approve(
+    body: PayoutApproveReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Подтвердить выплату (списывает баланс, перемещает в history).
+    AUDIT#4 — server-side check: только accounting или owner."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(body.by_tg_user_id, body.by_tg_username, {"accounting", "owner"})
+    result = await storage.wallet_confirm_payout(body.payout_id, body.txid)
+    if not result:
+        raise HTTPException(404, "payout not found or insufficient balance")
+    return {"ok": True, "payout": result}
+
+
+class PayoutRejectReq(BaseModel):
+    payout_id: str
+    reason: str = ""
+    by_tg_user_id: int = 0
+    by_tg_username: str = ""
+
+
+@router.post("/payouts/reject")
+async def payouts_reject(
+    body: PayoutRejectReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Отклонить payout — удаляет из pending, баланс не трогает.
+    AUDIT#4 — server-side check."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(body.by_tg_user_id, body.by_tg_username, {"accounting", "owner"})
+    result = await storage.wallet_reject_payout(body.payout_id, body.reason)
+    if not result:
+        raise HTTPException(404, "payout not found")
+    return {"ok": True, "payout": result}
+
+
 @router.get("/wallet/{owner_id}")
 async def get_wallet(
     owner_id: str,
@@ -774,6 +890,7 @@ class SetRoleReq(BaseModel):
     role: str
     is_admin: Optional[bool] = None
     usdt_address: Optional[str] = None
+    by_tg_user_id: int = 0
 
 
 @router.post("/admin/workers/{username}/role")
@@ -784,8 +901,9 @@ async def set_worker_role(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Устанавливает/меняет роль работника. Owner-only гвард на стороне stroy."""
+    """Устанавливает/меняет роль работника. AUDIT#1 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(body.by_tg_user_id)
     uname = (username or "").lstrip("@").lower().strip()
     if not uname:
         raise HTTPException(400, "username required")
@@ -818,10 +936,13 @@ async def set_worker_role(
 async def remove_worker(
     username: str,
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """AUDIT#2 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(by_tg_user_id)
     uname = (username or "").lstrip("@").lower().strip()
     from storage import _lock as _st_lock
     async with _st_lock:
@@ -843,6 +964,7 @@ class PartnerActionReq(BaseModel):
     action: str  # 'warn' | 'ban' | 'unban' | 'reset_rating'
     duration_hours: Optional[int] = None
     reason: Optional[str] = None
+    by_tg_user_id: int = 0
 
 
 @router.post("/admin/partners/{owner_id}/action")
@@ -853,7 +975,9 @@ async def partner_action(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """AUDIT#3 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(body.by_tg_user_id)
     owner = storage.get_crm_owner(owner_id)
     if not owner:
         raise HTTPException(404, "owner not found")
@@ -1433,8 +1557,9 @@ async def feed_post(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Создать post в feed. Только owner (проверка на стороне stroy-crm-bot)."""
+    """Создать post в feed. AUDIT#8 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(body.author_tg_user_id)
     from storage import _lock as _st_lock
     async with _st_lock:
         feed = storage.state.setdefault("pride_feed", [])
@@ -1468,10 +1593,13 @@ async def feed_post(
 async def feed_delete(
     post_id: int,
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """AUDIT#8 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(by_tg_user_id)
     from storage import _lock as _st_lock
     async with _st_lock:
         feed = storage.state.setdefault("pride_feed", [])
@@ -1490,6 +1618,7 @@ class FeedPatchReq(BaseModel):
     author_display: Optional[str] = None
     author_name: Optional[str] = None
     pinned: Optional[bool] = None
+    by_tg_user_id: int = 0
 
 
 @router.patch("/feed/{post_id}")
@@ -1500,8 +1629,9 @@ async def feed_patch(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Редактировать пост (owner-only гвард на стороне stroy)."""
+    """Редактировать пост. AUDIT#8 — server-side owner check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(body.by_tg_user_id)
     from storage import _lock as _st_lock
     async with _st_lock:
         feed = storage.state.setdefault("pride_feed", [])
@@ -1743,11 +1873,15 @@ def _sus_groups_data() -> dict:
 @router.get("/sus-groups")
 async def sus_groups_list(
     request: Request,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Список групп + количество записей в каждой."""
+    """Список групп + количество записей в каждой.
+    AUDIT#6 — только system_dept/manager/owner (sus_groups содержат пароли)."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(by_tg_user_id, by_tg_username, {"system_dept", "manager", "owner"})
     data = _sus_groups_data()
     groups = []
     for key, meta in SUS_GROUPS.items():
@@ -1769,11 +1903,14 @@ async def sus_group_entries(
     group_key: str,
     request: Request,
     limit: int = 100,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Записи внутри группы."""
+    """Записи внутри группы. AUDIT#6 — role check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(by_tg_user_id, by_tg_username, {"system_dept", "manager", "owner"})
     if group_key not in SUS_GROUPS:
         raise HTTPException(404, "group not found")
     entries = (_sus_groups_data().get(group_key) or [])[-limit:]
@@ -1789,6 +1926,7 @@ async def sus_group_entries(
 class SusEntryReq(BaseModel):
     text: str
     author_tg_user_id: int
+    author_tg_username: str = ""
     kind: str = "note"     # note | access | password | audit
 
 
@@ -1800,7 +1938,9 @@ async def sus_group_add(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """AUDIT#6 — role check."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(body.author_tg_user_id, body.author_tg_username, {"system_dept", "manager", "owner"})
     if group_key not in SUS_GROUPS:
         raise HTTPException(404, "group not found")
     from storage import _lock as _st_lock
@@ -1828,10 +1968,16 @@ async def sus_group_delete(
     group_key: str,
     entry_id: int,
     request: Request,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """AUDIT#6 + #17 — role check + validate group_key (was arbitrary state key)."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(by_tg_user_id, by_tg_username, {"system_dept", "manager", "owner"})
+    if group_key not in SUS_GROUPS:
+        raise HTTPException(404, "group not found")
     from storage import _lock as _st_lock
     async with _st_lock:
         data = _sus_groups_data()
@@ -2051,18 +2197,36 @@ async def account_login(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Логин по логину/паролю. Обновляет привязку к текущему tg_id."""
+    """Логин по логину/паролю. Обновляет привязку к текущему tg_id.
+    AUDIT#14 — rate-limit: 5 неудач за 5 мин по логину → 429."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     login = (body.login or "").strip().lower()
     from storage import _lock as _st_lock
     async with _st_lock:
+        # Rate-limit
+        now = time.time()
+        login_attempts = storage.state.setdefault("login_attempts", {})
+        old = [t for t in (login_attempts.get(login) or []) if now - t < 900]
+        recent_fails = [t for t in old if now - t < 300]
+        if len(recent_fails) >= 5:
+            raise HTTPException(429, "too many login attempts. wait 5 min")
+
         by_login = _accounts_by_login()
         acc_id = by_login.get(login)
         if not acc_id:
-            raise HTTPException(404, "account not found")
+            # Не раскрываем "account not found" (enumeration) — считаем как fail
+            old.append(now)
+            login_attempts[login] = old
+            await storage._save_unlocked()
+            raise HTTPException(401, "bad credentials")
         acc = _accounts_dict().get(acc_id)
         if not acc or not _verify_pw(login, body.password, acc.get("password_hash") or ""):
+            old.append(now)
+            login_attempts[login] = old
+            await storage._save_unlocked()
             raise HTTPException(401, "bad credentials")
+        # Успех — чистим счётчик
+        login_attempts.pop(login, None)
         # H2: миграция — если старый SHA-256 хеш, пересчитываем на scrypt при успешном login
         old_hash = acc.get("password_hash") or ""
         if not old_hash.startswith("scrypt$"):
@@ -2385,11 +2549,13 @@ async def support_close(
 @router.post("/maintenance/purge-workchats")
 async def purge_workchats(
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Удаляет ВСЕ mini-app чаты кроме team-чата."""
+    """AUDIT#7 — server-side owner check. Удаляет ВСЕ mini-app чаты кроме team."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(by_tg_user_id)
     from storage import _lock as _st_lock
     async with _st_lock:
         chats = _ma_chats()
