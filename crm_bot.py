@@ -1174,6 +1174,10 @@ class WalletAdminForm(StatesGroup):
 @router.callback_query(F.data.startswith("wadm:cpay:"))
 async def cb_wallet_admin_confirm_payout(call: CallbackQuery, state: FSMContext):
     """Admin: подтверждаю выплату — далее введу TXID."""
+    # SEC AUDIT 2026-08: без is_owner любой знающий callback_data может
+    # подтвердить payout → произвольное списание баланса партнёра.
+    if not is_owner(call.from_user.id):
+        return await call.answer("Только для админа", show_alert=True)
     payout_id = call.data.split(":", 2)[2]
     await call.answer()
     await state.set_state(WalletAdminForm.waiting_payout_txid)
@@ -1220,6 +1224,8 @@ async def handle_wadm_payout_txid(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("wadm:rpay:"))
 async def cb_wallet_admin_reject_payout(call: CallbackQuery):
     """Admin: отклонить выплату."""
+    if not is_owner(call.from_user.id):
+        return await call.answer("Только для админа", show_alert=True)
     payout_id = call.data.split(":", 2)[2]
     await call.answer()
     result = await crm_storage.wallet_reject_payout(payout_id, reason="rejected by admin")
@@ -1251,6 +1257,8 @@ async def cb_wallet_admin_reject_payout(call: CallbackQuery):
 @router.callback_query(F.data.startswith("wadm:cdep:"))
 async def cb_wallet_admin_confirm_deposit(call: CallbackQuery, state: FSMContext):
     """Admin подтверждает пополнение — следующий шаг ввести сумму."""
+    if not is_owner(call.from_user.id):
+        return await call.answer("Только для админа", show_alert=True)
     parts = call.data.split(":", 3)
     if len(parts) < 4:
         await call.answer("Bad callback", show_alert=True)
@@ -1315,6 +1323,8 @@ async def handle_wadm_deposit_amount(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("wadm:rdep:"))
 async def cb_wallet_admin_reject_deposit(call: CallbackQuery):
     """Admin отклоняет пополнение (например невалидный TXID)."""
+    if not is_owner(call.from_user.id):
+        return await call.answer("Только для админа", show_alert=True)
     parts = call.data.split(":", 3)
     owner_id = parts[2] if len(parts) > 2 else ""
     txid = parts[3] if len(parts) > 3 else ""

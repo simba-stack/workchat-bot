@@ -646,11 +646,16 @@ async def lk_action(
 @router.get("/payouts/pending")
 async def payouts_pending(
     request: Request,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Все pending payouts всех партнёров (для accountant/owner UI)."""
+    """Все pending payouts всех партнёров (для accountant/owner UI).
+    SEC AUDIT 2026-08: без owner/accounting-check раскрывал pending payouts
+    (username, суммы, TRC20-адреса) любому клиенту с валидным HMAC."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_role(by_tg_user_id, by_tg_username, {"accounting", "owner"})
     if hasattr(storage, "list_pending_payouts"):
         items = storage.list_pending_payouts() or []
     else:
@@ -710,13 +715,25 @@ async def payouts_reject(
 async def get_wallet(
     owner_id: str,
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
+    """SEC AUDIT 2026-08: любой валидный HMAC мог смотреть balance/history
+    /pending_payouts чужого партнёра. Теперь caller == owner OR accounting/owner."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     owner = storage.get_crm_owner(owner_id)
     if not owner:
         raise HTTPException(404, "owner not found")
+    caller = int(by_tg_user_id or 0)
+    owner_tg = int(owner.get("tg_user_id") or 0)
+    # Разрешаем: (1) сам owner кошелька, (2) accounting/owner-роль
+    is_self = caller and caller == owner_tg
+    if not is_self:
+        try:
+            _require_role(caller, "", {"accounting", "owner"})
+        except HTTPException:
+            raise HTTPException(403, "not your wallet")
     uname = (owner.get("username") or "").lstrip("@").lower()
     wallet_fn = getattr(storage, "get_partner_wallet", None)
     if wallet_fn is None:
@@ -737,11 +754,14 @@ async def get_wallet(
 @router.get("/admin/workers")
 async def list_workers(
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Все worker_roles + owners (для owner-панели)."""
+    """Все worker_roles + owners (для owner-панели).
+    SEC AUDIT 2026-08: без owner-check раскрывался список ролей+usdt_address."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(by_tg_user_id)
     roles = storage.list_worker_roles() if hasattr(storage, "list_worker_roles") else (
         storage.state.get("worker_roles") or {}
     )
@@ -762,11 +782,14 @@ async def list_workers(
 @router.get("/admin/partners")
 async def list_partners(
     request: Request,
+    by_tg_user_id: int = 0,
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Все CRM-owners (партнёры) с базовой статистикой."""
+    """Все CRM-owners (партнёры) с базовой статистикой.
+    SEC AUDIT 2026-08: owner-only, чтобы не раскрывать tg_id/warnings."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_owner(by_tg_user_id)
     owners = storage.state.get("crm_owners") or {}
     drops_all = storage.state.get("crm_drops") or {}
     # Считаем total_drops fresh
@@ -892,6 +915,7 @@ async def wallet_deposit(
 class WalletWithdrawReq(BaseModel):
     amount_usdt: float
     trc20_address: str
+    by_tg_user_id: int = 0  # SEC AUDIT 2026-08: caller должен быть owner-ом кошелька
 
 
 @router.post("/wallet/{owner_id}/withdraw")
@@ -904,12 +928,20 @@ async def wallet_withdraw(
 ):
     """Создаёт заявку на вывод. Не списывает баланс — только резервирует.
     Owner подтверждает через /payout в TG.
-    AUDIT#16 — валидация TRC20-адреса."""
+    AUDIT#16 — валидация TRC20-адреса.
+    SEC AUDIT 2026-08 — caller обязан быть тем же owner-ом, иначе любой
+    валидный HMAC-вызов мог создать заявку с чужого owner_id на СВОЙ
+    TRC20-адрес и потом дожать SIMBA до /payout confirm."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
     validated_addr = _validate_trc20(body.trc20_address)
     owner = storage.get_crm_owner(owner_id)
     if not owner:
         raise HTTPException(404, "owner not found")
+    # Проверка что caller — этот же owner
+    caller = int(body.by_tg_user_id or 0)
+    owner_tg = int(owner.get("tg_user_id") or 0)
+    if not caller or caller != owner_tg:
+        raise HTTPException(403, "only wallet owner can withdraw")
     uname = (owner.get("username") or "").lstrip("@").lower()
     payout_id = await storage.wallet_create_payout_request(
         username=uname,
@@ -1387,8 +1419,19 @@ async def ma_chat_post(
     x_miniapp_signature: str = Header(default=""),
     x_miniapp_ts: str = Header(default=""),
 ):
-    """Отправить сообщение в чат."""
+    """Отправить сообщение в чат.
+    SEC AUDIT 2026-08: author_role раньше брался из тела — импостор мог
+    представиться owner-ом. Теперь резолвим на сервере по author_tg_user_id.
+    Также лимит text=4000 chars — раньше можно было раздуть JSON."""
     await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    # Резолвим роль на сервере — клиент НЕ выбирает свою роль
+    author_tg_id = int(body.author_tg_user_id or 0)
+    if not author_tg_id:
+        raise HTTPException(400, "author_tg_user_id required")
+    snapshot = _resolve_role_snapshot(author_tg_id, "")
+    resolved_role = snapshot.get("effective_role") or "client"
+    # Truncate text (был unlimited)
+    safe_text = (body.text or "").strip()[:4000]
     from storage import _lock as _st_lock
     async with _st_lock:
         c = _ma_chats().get(chat_id)
@@ -1399,9 +1442,9 @@ async def ma_chat_post(
         c["msg_seq"] = seq
         msg = {
             "msg_id": seq,
-            "author_tg_user_id": int(body.author_tg_user_id),
-            "author_role": body.author_role or "client",
-            "text": (body.text or "").strip(),
+            "author_tg_user_id": author_tg_id,
+            "author_role": resolved_role,
+            "text": safe_text,
             "attachments": body.attachments or [],
             "kind": body.kind or "text",
             "ts": time.time(),

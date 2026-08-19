@@ -595,10 +595,29 @@ async def _cb_material(userbot, storage, event, mat: str):
         await event.answer("Сессия истекла.", alert=True)
         await clear_flow(storage, event.chat_id)
         return
+    # SEC AUDIT 2026-08: replay `sw:mat:*` из старой клавы после старта
+    # проверки/оплаты — сбрасывал uploads, стирал прогресс. Разрешаем
+    # только на шагах material/start.
+    if flow.get("step") not in ("material", "start", None, ""):
+        await event.answer("Уже поздно менять материал — используйте «Отмена».", alert=True)
+        return
     await set_flow(storage, event.chat_id, material=mat)
     if mat == "DEBET":
+        # SIMBA 2026-08: старый stub «дорабатывается» больше не показываем.
+        # Отправляем актуальный reply_debet (ручной режим, менеджер свяжется),
+        # тот же ключ что при выборе «2» в welcome-меню. И завершаем flow.
         await set_flow(storage, event.chat_id, step="debet_stub")
-        await _render_debet_stub(userbot, storage, event.chat_id, edit_event=event)
+        try:
+            await userbot._send_scripted(
+                event.chat_id, "reply_debet",
+                default_text=(
+                    "Понял, направление Дебет.\n\n"
+                    "🔹 По дебету работаем в ручном режиме — цены и условия "
+                    "уточняет менеджер лично."
+                ),
+            )
+        except Exception:
+            await _render_debet_stub(userbot, storage, event.chat_id, edit_event=event)
         await event.answer()
         return
     if mat == "IP":
@@ -614,6 +633,11 @@ async def _cb_bank(userbot, storage, event, bank_key: str):
     if not flow or _is_stale(flow):
         await event.answer("Сессия истекла.", alert=True)
         await clear_flow(storage, event.chat_id)
+        return
+    # SEC AUDIT 2026-08: replay `sw:b:*` после старта верификации сбрасывал
+    # uploads=[] — стёр пруфы. Разрешаем только на шагах material/bank.
+    if flow.get("step") not in ("material", "bank"):
+        await event.answer("Уже поздно менять банк — используйте «Отмена».", alert=True)
         return
     if bank_key not in ALLOWED_BANKS_IP:
         await event.answer("Банк недоступен.", alert=True)

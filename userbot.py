@@ -1183,9 +1183,11 @@ class UserbotService:
             self._last_track_prompt_ts[chat_id] = now
             # Заскриптованный fallback (без Claude API). Админ редактирует через
             # /admin → «📝 Скрипты сообщений». Дефолт в config.SCRIPTED_TEXTS_DEFAULTS.
+            # AUDIT 2026-08: default_text рассинхронизирован с config —
+            # там «1 или 2», здесь было «1 или 3» (наследие VoIP). Приводим.
             await self._send_scripted(
                 chat_id, "fallback_not_understood",
-                default_text="Не понял выбор. Напишите цифру 1 (ИП/ООО) или 3 (Дебет).",
+                default_text="Не понял выбор. Напишите цифру 1 (ИП/ООО) или 2 (Дебет).",
             )
             return True  # обработано (не AI)
 
@@ -1246,9 +1248,16 @@ class UserbotService:
                 except Exception as _se:
                     logger.warning("[sell_wizard_crm] enqueue send_sell_button failed: %s", _se)
             elif "debet" in tracks:
+                # AUDIT 2026-08: default_text синхронизирован с config
+                # (ручной режим, менеджер свяжется). Если storage сброшен,
+                # клиент увидит правильный текст, а не старый «оператор подключится».
                 await self._send_scripted(
                     chat_id, "reply_debet",
-                    default_text="Понял, направление Дебет. Оператор скоро подключится.",
+                    default_text=(
+                        "Понял, направление Дебет.\n\n"
+                        "🔹 По дебету работаем в ручном режиме — цены и условия "
+                        "уточняет менеджер лично."
+                    ),
                 )
         except Exception as e:
             logger.warning("Welcome v2 track msg send failed: %s", e)
