@@ -676,12 +676,11 @@ async def cmd_add_partner_command(message: Message):
     except Exception as e:
         logger.warning("register_crm_chat failed: %s", e)
 
+    # SIMBA 2026-08: убрал дубль welcome-текста — инструкцию как сдать РС
+    # клиенту уже присылает Асик через scripted_text «welcome». Дублировать
+    # здесь → две одинаковых по смыслу простыни в группе.
     sent_partner = await message.reply(
-        f"✅ <b>Партнёр @{username} добавлен.</b>\n\n"
-        f"@{username}, чтобы оформить продажу счёта — напишите в этот чат:\n\n"
-        f"<b><code>Ассистент, хочу сдать РС</code></b>\n\n"
-        f"Дальше система по шагам проведёт вас через inline-кнопки: "
-        f"выбор материала → банк → проверка → способ оплаты → данные ЛК.",
+        f"✅ <b>Партнёр @{username} добавлен.</b>",
     )
     # SIMBA: закрепляем сразу — клиент видит инструкцию как pinned сообщение,
     # не потеряется в чате. disable_notification чтобы не пуш-нотификация.
