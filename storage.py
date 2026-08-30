@@ -965,6 +965,99 @@ class Storage:
             roles.pop(key, None)
             await self._save_unlocked()
 
+    # ═══════════════════════════════════════════════════════════════
+    # ALT-АККАУНТЫ (2026-08): TG-лимит ~1000 групп на аккаунт с Premium.
+    # Когда primary упирается в лимит, InviteToChannelRequest возвращает
+    # USER_CHANNELS_TOO_MUCH. Тогда автоматически переключаемся на alt.
+    # storage.state["alt_accounts"] = {
+    #   "primary_username": {
+    #     "alt_username": "pride_manager1_2",
+    #     "alt_tg_user_id": 12345,
+    #     "primary_full_ts": 0.0,   # когда primary словил too_much (0 = ok)
+    #   }
+    # }
+    # ═══════════════════════════════════════════════════════════════
+
+    def _alt_accounts(self) -> dict:
+        return self.state.setdefault("alt_accounts", {})
+
+    async def set_alt_account(self, primary_username: str,
+                              alt_username: str,
+                              alt_tg_user_id: int = 0) -> dict:
+        """Регистрирует alt-аккаунт для primary_username.
+        Оба username сохраняются в lowercase без @."""
+        key = (primary_username or "").lstrip("@").lower().strip()
+        alt = (alt_username or "").lstrip("@").lower().strip()
+        if not key or not alt:
+            raise ValueError("primary and alt usernames required")
+        if key == alt:
+            raise ValueError("primary and alt must differ")
+        async with _lock:
+            reg = self._alt_accounts()
+            entry = reg.get(key) or {}
+            entry.update({
+                "alt_username": alt,
+                "alt_tg_user_id": int(alt_tg_user_id or 0),
+                "primary_full_ts": entry.get("primary_full_ts", 0.0),
+            })
+            reg[key] = entry
+            await self._save_unlocked()
+        return dict(entry)
+
+    async def remove_alt_account(self, primary_username: str) -> bool:
+        key = (primary_username or "").lstrip("@").lower().strip()
+        async with _lock:
+            reg = self._alt_accounts()
+            if key in reg:
+                del reg[key]
+                await self._save_unlocked()
+                return True
+        return False
+
+    def get_alt_account(self, primary_username: str) -> dict:
+        """Возвращает {alt_username, alt_tg_user_id, primary_full_ts} или {}."""
+        key = (primary_username or "").lstrip("@").lower().strip()
+        return dict(self._alt_accounts().get(key) or {})
+
+    def list_alt_accounts(self) -> dict:
+        """Копия реестра для отображения /alts."""
+        return {k: dict(v) for k, v in self._alt_accounts().items()}
+
+    async def mark_primary_full(self, primary_username: str) -> None:
+        """Помечает что primary упёрся в USER_CHANNELS_TOO_MUCH.
+        Дальше get_effective_username вернёт alt (если зарегистрирован)."""
+        import time as _t
+        key = (primary_username or "").lstrip("@").lower().strip()
+        if not key:
+            return
+        async with _lock:
+            reg = self._alt_accounts()
+            entry = reg.setdefault(key, {})
+            entry["primary_full_ts"] = _t.time()
+            await self._save_unlocked()
+
+    async def clear_primary_full(self, primary_username: str) -> None:
+        """Сброс флага (например при удалении старых чатов, чтобы снова
+        пробовать primary)."""
+        key = (primary_username or "").lstrip("@").lower().strip()
+        async with _lock:
+            reg = self._alt_accounts()
+            if key in reg:
+                reg[key]["primary_full_ts"] = 0.0
+                await self._save_unlocked()
+
+    def get_effective_username(self, primary_username: str) -> str:
+        """Возвращает какой username использовать для нового invite.
+        Если primary помечен как full и есть alt — вернёт alt.
+        Иначе — primary."""
+        key = (primary_username or "").lstrip("@").lower().strip()
+        if not key:
+            return primary_username or ""
+        entry = self._alt_accounts().get(key) or {}
+        if entry.get("primary_full_ts") and entry.get("alt_username"):
+            return entry["alt_username"]
+        return key
+
     def get_welcome(self) -> str:
         return self.state["welcome_message"]
 

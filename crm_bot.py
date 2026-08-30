@@ -690,6 +690,133 @@ async def cmd_add_partner_command(message: Message):
         logger.warning("pin partner-added failed chat=%s: %s", chat_id, _pe)
 
 
+# ─── /setalt /rmalt /alts (SIMBA 2026-08 — reactive alt-fallback) ───
+
+def _parse_setalt_args(text: str):
+    """Парсит /setalt @primary @alt [tg_id] или /setalt @alt [tg_id]
+    (второй вариант — считаем что primary = отправитель)."""
+    parts = (text or "").split()
+    if len(parts) < 2:
+        return None
+    args = parts[1:]
+    # Убираем @
+    clean = [a.lstrip("@") for a in args]
+    primary = None
+    alt = None
+    tg_id = 0
+    if len(clean) >= 2 and not clean[1].isdigit():
+        # /setalt @primary @alt [tg_id]
+        primary, alt = clean[0], clean[1]
+        if len(clean) >= 3 and clean[2].isdigit():
+            tg_id = int(clean[2])
+    elif len(clean) >= 1:
+        # /setalt @alt [tg_id]
+        alt = clean[0]
+        if len(clean) >= 2 and clean[1].isdigit():
+            tg_id = int(clean[1])
+    return {"primary": primary, "alt": alt, "tg_id": tg_id}
+
+
+@router.message(Command("setalt"))
+async def cmd_setalt(message: Message):
+    """/setalt @alt [tg_id] — привязать себе alt-аккаунт.
+    /setalt @primary @alt [tg_id] — owner привязывает для другого менеджера.
+
+    Alt используется автоматически при USER_CHANNELS_TOO_MUCH (лимит групп).
+    """
+    from_uname = (message.from_user.username or "").lower()
+    is_own = is_owner(message.from_user.id)
+    args = _parse_setalt_args(message.text or "")
+    if not args or not args.get("alt"):
+        await message.reply(
+            "Формат:\n"
+            "<code>/setalt @alt_username</code> — привязать себе\n"
+            "<code>/setalt @primary @alt [tg_id]</code> — owner для другого\n\n"
+            "Alt-аккаунт нужен когда primary упрётся в лимит групп TG."
+        )
+        return
+    primary = args.get("primary")
+    if primary and not is_own:
+        await message.reply("Только owner может ставить alt другому менеджеру.")
+        return
+    if not primary:
+        if not from_uname:
+            await message.reply("У тебя не задан username в TG — не могу привязать.")
+            return
+        primary = from_uname
+    try:
+        entry = await crm_storage.set_alt_account(primary, args["alt"], args.get("tg_id", 0))
+    except ValueError as ve:
+        await message.reply(f"❌ {ve}")
+        return
+    await message.reply(
+        f"✅ Alt-аккаунт для @{primary} сохранён:\n"
+        f"• alt username: @{entry['alt_username']}\n"
+        f"• alt tg_id: <code>{entry.get('alt_tg_user_id') or '—'}</code>\n\n"
+        f"При исчерпании лимита primary — invite пойдёт на alt автоматически."
+    )
+
+
+@router.message(Command("rmalt"))
+async def cmd_rmalt(message: Message):
+    """/rmalt [@primary] — удалить alt-привязку.
+    Без аргумента — удаляет свою. С @primary — owner-only."""
+    from_uname = (message.from_user.username or "").lower()
+    parts = (message.text or "").split()
+    target = None
+    if len(parts) >= 2:
+        target = parts[1].lstrip("@").lower()
+        if target != from_uname and not is_owner(message.from_user.id):
+            await message.reply("Только owner может удалять чужие alt.")
+            return
+    else:
+        target = from_uname
+    if not target:
+        await message.reply("Не понял для кого удалять.")
+        return
+    ok = await crm_storage.remove_alt_account(target)
+    if ok:
+        await message.reply(f"✅ Alt-привязка @{target} удалена.")
+    else:
+        await message.reply(f"У @{target} не было alt-привязки.")
+
+
+@router.message(Command("alts"))
+async def cmd_alts(message: Message):
+    """/alts — owner видит весь реестр alt-аккаунтов."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    reg = crm_storage.list_alt_accounts()
+    if not reg:
+        await message.reply("Реестр alt-аккаунтов пуст.\n\n"
+                            "Используй <code>/setalt @primary @alt [tg_id]</code>.")
+        return
+    lines = ["<b>Реестр alt-аккаунтов:</b>", ""]
+    for primary, entry in sorted(reg.items()):
+        alt = entry.get("alt_username") or "—"
+        full = entry.get("primary_full_ts") or 0
+        flag = "🔴 primary FULL → invite идёт на alt" if full else "🟢 primary ок"
+        lines.append(f"• @{primary} → @{alt}  ({flag})")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("clearfull"))
+async def cmd_clearfull(message: Message):
+    """/clearfull @primary — owner сбрасывает флаг «primary full»
+    (если удалили старые чаты и primary снова может инвайтить)."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.reply("Формат: <code>/clearfull @username</code>")
+        return
+    target = parts[1].lstrip("@").lower()
+    await crm_storage.clear_primary_full(target)
+    await message.reply(f"✅ Флаг «full» для @{target} сброшен. Следующий invite попробует primary.")
+
+
 # ─── /profile ───────────────────────────────────────────────────
 
 @router.message(Command("profile"))

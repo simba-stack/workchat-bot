@@ -407,6 +407,9 @@ class UserbotService:
                 statuses[uname] = f"ошибка резолва: {e}"
 
         # 3) Добавляем по одному
+        # SIMBA 2026-08: fallback на alt-аккаунт при USER_CHANNELS_TOO_MUCH.
+        # Если у менеджера зарегистрирован alt через /setalt в CRM — при
+        # ошибке "too many channels" пробуем alt автоматически.
         for uname, user in users_to_invite:
             try:
                 await self.client(InviteToChannelRequest(channel, [user]))
@@ -422,6 +425,32 @@ class UserbotService:
             except UserAlreadyParticipantError:
                 statuses[uname] = "уже в чате"
             except Exception as e:
+                # Проверяем — TOO_MUCH → пробуем alt
+                if "USER_CHANNELS_TOO_MUCH" in str(e) or "too many channels" in str(e).lower():
+                    try:
+                        alt_entry = storage.get_alt_account(uname)
+                        alt_uname = (alt_entry.get("alt_username") or "").strip()
+                    except Exception:
+                        alt_uname = ""
+                    if alt_uname:
+                        try:
+                            await storage.mark_primary_full(uname)
+                        except Exception:
+                            pass
+                        try:
+                            alt_entity = await self.client.get_entity(f"@{alt_uname}")
+                            await self.client(InviteToChannelRequest(channel, [alt_entity]))
+                            statuses[uname] = f"добавлен через alt @{alt_uname}"
+                            continue
+                        except UserAlreadyParticipantError:
+                            statuses[uname] = f"alt @{alt_uname} уже в чате"
+                            continue
+                        except Exception as _ae:
+                            statuses[uname] = f"alt @{alt_uname} тоже ошибка: {_ae}"
+                            continue
+                    else:
+                        statuses[uname] = "TOO_MUCH (лимит групп), alt не задан — /setalt в CRM"
+                        continue
                 statuses[uname] = f"ошибка: {e}"
 
         # 4) Делаем userbot админом (нужно для welcome / kick / pin / call)
@@ -1266,20 +1295,74 @@ class UserbotService:
 
     async def _invite_operator_to_chat(self, chat_id, username: str) -> bool:
         """Пытается пригласить оператора (по username) в work_chat.
-        Возвращает True/False. Все ошибки логируются."""
+        Возвращает True/False. Все ошибки логируются.
+
+        SIMBA 2026-08: если primary словил USER_CHANNELS_TOO_MUCH
+        (лимит ~1000 групп для Premium), автоматически переключаемся
+        на alt-аккаунт (если зарегистрирован через /setalt в CRM)."""
+        return await self._invite_with_alt_fallback(chat_id, username)
+
+    async def _invite_with_alt_fallback(self, chat_id, username: str) -> bool:
+        """Reactive alt-fallback инвайт.
+        1. Резолвим effective username через storage (учитывает
+           mark_primary_full → alt).
+        2. Пробуем invite.
+        3. На USER_CHANNELS_TOO_MUCH — mark_primary_full и retry с alt.
+        Возвращает True если invite (primary или alt) удался."""
         if not username:
             return False
-        try:
-            entity = await self.client.get_entity(username if username.startswith("@") else f"@{username}")
-        except Exception as e:
-            logger.warning("get_entity(@%s) failed: %s", username, e)
+        primary = username.lstrip("@").lower().strip()
+        if not primary:
             return False
+        # 1) Резолвим effective (может уже быть alt если primary_full раньше)
         try:
-            await self.client(InviteToChannelRequest(chat_id, [entity]))
+            effective = storage.get_effective_username(primary)
+        except Exception:
+            effective = primary
+
+        async def _try(uname: str) -> str:
+            """Возвращает: '' если успех, иначе описание ошибки."""
+            try:
+                entity = await self.client.get_entity(f"@{uname}")
+            except Exception as e:
+                return f"resolve_fail:{e}"
+            try:
+                await self.client(InviteToChannelRequest(chat_id, [entity]))
+                return ""
+            except Exception as e:
+                return f"invite_fail:{e}"
+
+        err = await _try(effective)
+        if not err:
+            logger.info("[invite] @%s -> chat=%s ok (effective)", effective, chat_id)
             return True
-        except Exception as e:
-            logger.warning("InviteToChannelRequest @%s -> chat=%s failed: %s", username, chat_id, e)
-            return False
+
+        # 2) Проверяем — это TOO_MUCH? Если да и есть alt (и effective ещё primary) — retry.
+        too_much = ("USER_CHANNELS_TOO_MUCH" in err or "too many channels" in err.lower())
+        if too_much and effective == primary:
+            try:
+                alt_entry = storage.get_alt_account(primary)
+                alt_uname = (alt_entry.get("alt_username") or "").strip()
+            except Exception:
+                alt_uname = ""
+            if alt_uname:
+                logger.warning("[invite] primary @%s hit TOO_MUCH → mark full, retry via alt @%s",
+                               primary, alt_uname)
+                try:
+                    await storage.mark_primary_full(primary)
+                except Exception as _me:
+                    logger.warning("mark_primary_full failed: %s", _me)
+                err2 = await _try(alt_uname)
+                if not err2:
+                    logger.info("[invite] alt @%s -> chat=%s ok (fallback)", alt_uname, chat_id)
+                    return True
+                logger.warning("[invite] alt @%s also failed: %s", alt_uname, err2)
+                return False
+            logger.warning("[invite] primary @%s TOO_MUCH и alt не зарегистрирован. "
+                           "Owner: `/setalt @%s @alt_username <alt_tg_id>` в CRM.", primary, primary)
+
+        logger.warning("InviteToChannelRequest @%s -> chat=%s failed: %s", effective, chat_id, err)
+        return False
 
     async def stop(self):
         """Аккуратный shutdown — отключаем Telethon клиент.
