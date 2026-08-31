@@ -46,8 +46,18 @@ CB_PREFIX = b"sw"
 WIZARD_TIMEOUT_SEC = 60 * 60  # 1 час на весь визард
 
 # Разрешённые банки для ИП (SIMBA — только 3):
-ALLOWED_BANKS_IP = ("ALFA", "OZON", "RAIF")
-BANK_TITLES = {"ALFA": "АЛЬФА", "OZON": "ОЗОН", "RAIF": "РАЙФ"}
+# SIMBA 2026-08: расширил список банков.
+# Убрали Тинькофф (не берём тинь-бизнес), добавили СБЕР, ВТБ, ББР, Газпром.
+ALLOWED_BANKS_IP = ("ALFA", "OZON", "RAIF", "SBER", "VTB", "BBR", "GAZ")
+BANK_TITLES = {
+    "ALFA": "АЛЬФА",
+    "OZON": "ОЗОН",
+    "RAIF": "РАЙФ",
+    "SBER": "СБЕР",
+    "VTB":  "ВТБ",
+    "BBR":  "ББР",
+    "GAZ":  "ГАЗПРОМ",
+}
 # Соответствие sw:b:XXX → scripted key дефолтной инструкции проверки
 VERIFICATION_SCRIPTED_KEY = {
     "ALFA": "verification_alfa",

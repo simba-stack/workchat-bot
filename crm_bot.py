@@ -690,6 +690,187 @@ async def cmd_add_partner_command(message: Message):
         logger.warning("pin partner-added failed chat=%s: %s", chat_id, _pe)
 
 
+# ═══════════════════════════════════════════════════════════════
+# SIMBA 2026-08: PAM (Post-perevyaz Agreement Messages).
+# /pamalfa /pamozon /pamraif /pamsber /pamvtb /pambbr /pamgaz
+# — шлют условия работы по банку + inline «Согласен».
+# «Согласен» → лог в LEGAL_CONSENT_LOG_CHAT_ID (env).
+# Тексты хранятся в scripted_texts (config.py) → правятся через
+# /edit pam_<bank> в группе «Асик Админка» (-1004377257144).
+# ═══════════════════════════════════════════════════════════════
+
+PAM_BANKS = {
+    "pamalfa": ("alfa", "АЛЬФА"),
+    "pamozon": ("ozon", "ОЗОН"),
+    "pamraif": ("raif", "РАЙФ"),
+    "pamsber": ("sber", "СБЕР"),
+    "pamvtb":  ("vtb",  "ВТБ"),
+    "pambbr":  ("bbr",  "ББР"),
+    "pamgaz":  ("gaz",  "ГАЗПРОМ"),
+}
+
+
+# Bank aliases → pam_key. Учитываем и латиницу и кириллицу, регистр-нечувствительно.
+_BANK_TO_PAM_KEY = {
+    "alfa": "alfa", "альфа": "alfa", "alpha": "alfa",
+    "ozon": "ozon", "озон": "ozon",
+    "raif": "raif", "райф": "raif", "raiffeisen": "raif",
+    "sber": "sber", "сбер": "sber", "sberbank": "sber",
+    "vtb":  "vtb",  "втб": "vtb",
+    "bbr":  "bbr",  "ббр": "bbr",
+    "gaz":  "gaz",  "газ": "gaz", "газпром": "gaz", "gazprom": "gaz",
+    "gazprombank": "gaz",
+}
+
+
+def _resolve_pam_bank_key(bank: str) -> str:
+    """Возвращает pam-ключ (alfa/ozon/...) по любому написанию банка.
+    Пустая строка если банк не в белом списке PAM."""
+    if not bank:
+        return ""
+    normalized = str(bank).strip().lower()
+    # Убираем HTML-теги если пришло с разметкой
+    import re as _re
+    normalized = _re.sub(r"<[^>]+>", "", normalized).strip()
+    return _BANK_TO_PAM_KEY.get(normalized, "")
+
+
+def _get_pam_text(bank_key: str) -> str:
+    """bank_key: alfa/ozon/... — возвращает текст условий."""
+    try:
+        entry = crm_storage.get_scripted_text(f"pam_{bank_key}")
+        if isinstance(entry, dict):
+            return str(entry.get("text") or "")
+        if isinstance(entry, str):
+            return entry
+    except Exception:
+        pass
+    # fallback на config default
+    try:
+        import config as _cfg
+        return _cfg.SCRIPTED_TEXTS_DEFAULTS.get(f"pam_{bank_key}", {}).get("text", "")
+    except Exception:
+        return f"Условия работы по {bank_key.upper()} (текст не задан)."
+
+
+def _pam_keyboard(bank_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        _OrigInlineKeyboardButton(
+            text="✅ Согласен",
+            callback_data=f"pam_ag:{bank_key}",
+        ),
+    ]])
+
+
+async def send_pam_message(chat_id: int, bank_key: str, bot: Bot) -> bool:
+    """Публичная точка входа — можно вызывать из sell_wizard/userbot после перевяза.
+    Возвращает True если отправили, False на ошибке."""
+    bank_key = (bank_key or "").lower().strip()
+    if bank_key not in {v[0] for v in PAM_BANKS.values()}:
+        logger.warning("send_pam_message: unknown bank_key=%r", bank_key)
+        return False
+    text = _get_pam_text(bank_key)
+    try:
+        await bot.send_message(
+            chat_id, text,
+            reply_markup=_pam_keyboard(bank_key),
+        )
+        return True
+    except Exception as e:
+        logger.warning("send_pam_message chat=%s bank=%s failed: %s", chat_id, bank_key, e)
+        return False
+
+
+def _register_pam_commands():
+    """Регистрирует /pam<bank> команды. Вызывается на импорте модуля."""
+    for cmd, (bank_key, bank_title) in PAM_BANKS.items():
+        async def _handler(message: Message, _bk=bank_key, _bt=bank_title):
+            # Разрешаем только owner + worker roles (не клиенту)
+            uname = (message.from_user.username or "").lower()
+            if not is_owner(message.from_user.id):
+                role_info = crm_storage.get_worker_role(uname) or {}
+                allowed_roles = {"manager", "system_dept", "accounting", "operationist", "outkup_specialist"}
+                if (role_info.get("role") or "") not in allowed_roles:
+                    await message.reply("Только для менеджеров/owner.")
+                    return
+            ok = await send_pam_message(message.chat.id, _bk, message.bot)
+            if not ok:
+                await message.reply("❌ Ошибка отправки PAM.")
+        router.message.register(_handler, Command(cmd))
+
+
+_register_pam_commands()
+
+
+@router.callback_query(F.data.startswith("pam_ag:"))
+async def cb_pam_agree(call: CallbackQuery):
+    """Клиент нажал «Согласен» → логируем в LEGAL_CONSENT_LOG_CHAT_ID."""
+    bank_key = call.data.split(":", 1)[1] if ":" in call.data else ""
+    bank_title = next((t for k, (bk, t) in PAM_BANKS.items() if bk == bank_key), bank_key.upper())
+    user = call.from_user
+    user_id = user.id
+    uname = user.username or ""
+    user_link = f"tg://user?id={user_id}"
+    if uname:
+        user_link = f"https://t.me/{uname}"
+    chat_id = call.message.chat.id
+    chat_title = getattr(call.message.chat, "title", "") or ""
+    accepted_text = _get_pam_text(bank_key)
+    ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Отвечаем клиенту сразу — уберём кнопку и подставим подпись
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    try:
+        await call.answer("✅ Согласие зафиксировано.", show_alert=False)
+    except Exception:
+        pass
+    try:
+        await call.message.reply(
+            f"✅ Согласие принято ({bank_title}).\n"
+            f"Юзер: @{uname or '—'} (id <code>{user_id}</code>) · {ts_str}"
+        )
+    except Exception:
+        pass
+
+    # Лог в отдельную группу
+    log_chat_env = (os.getenv("LEGAL_CONSENT_LOG_CHAT_ID") or "").strip()
+    if not log_chat_env:
+        logger.warning("[pam_ag] LEGAL_CONSENT_LOG_CHAT_ID не задан — согласие не логируется в отдельную группу. "
+                       "Bank=%s user=%s chat=%s", bank_title, user_id, chat_id)
+        return
+    try:
+        log_chat_id = int(log_chat_env)
+    except ValueError:
+        logger.warning("[pam_ag] LEGAL_CONSENT_LOG_CHAT_ID имеет невалидное значение: %r", log_chat_env)
+        return
+
+    # Формируем лог. Экранирование HTML на пользовательском вводе.
+    import html as _html
+    safe_uname = _html.escape(uname or "—")
+    safe_title = _html.escape(chat_title or "—")
+    safe_text = _html.escape(accepted_text or "")[:3500]
+
+    log_msg = (
+        f"📥 <b>СОГЛАСИЕ ПРИНЯТО</b>\n\n"
+        f"🏦 Банк: <b>{bank_title}</b>\n"
+        f"👤 Юзер: @{safe_uname}\n"
+        f"🆔 TG ID: <code>{user_id}</code>\n"
+        f"🔗 Профиль: {user_link}\n"
+        f"💬 Чат: {safe_title} (<code>{chat_id}</code>)\n"
+        f"🕒 Время: {ts_str}\n\n"
+        f"📋 <b>Текст условий:</b>\n"
+        f"<blockquote>{safe_text}</blockquote>"
+    )
+    try:
+        await call.bot.send_message(log_chat_id, log_msg)
+        logger.info("[pam_ag] logged bank=%s user=%s → chat=%s", bank_title, user_id, log_chat_id)
+    except Exception as e:
+        logger.warning("[pam_ag] send to LEGAL log failed: %s", e)
+
+
 # ─── /setalt /rmalt /alts (SIMBA 2026-08 — reactive alt-fallback) ───
 
 def _parse_setalt_args(text: str):
@@ -4497,6 +4678,15 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
             bot, drop, owner,
             f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
         )
+        # SIMBA 2026-08: auto-trigger PAM (условия работы по банку) с inline
+        # «Согласен». Клик логируется в LEGAL_CONSENT_LOG_CHAT_ID.
+        try:
+            _pam_key = _resolve_pam_bank_key(bank)
+            _client_chat = int(owner.get("work_chat_id") or 0)
+            if _pam_key and _client_chat:
+                await send_pam_message(_client_chat, _pam_key, bot)
+        except Exception as _pe:
+            logger.warning("[perevyaz] auto PAM failed: %s", _pe)
         # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
         # SIMBA (авг 2026): пиним handoff — клиент видит итог в закрепе.
         try:
@@ -5013,6 +5203,14 @@ async def _sms_advance_flow(bot, droplk_id: str) -> str:
                 bot, drop, owner,
                 f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
             )
+            # SIMBA 2026-08: auto-PAM после перевяза (см. _perevyaz_finalize).
+            try:
+                _pam_key = _resolve_pam_bank_key(bank)
+                _client_chat = int(owner.get("work_chat_id") or 0)
+                if _pam_key and _client_chat:
+                    await send_pam_message(_client_chat, _pam_key, bot)
+            except Exception as _pe:
+                logger.warning("[sms_advance_flow] auto PAM failed: %s", _pe)
             try:
                 pay_line = _resolve_payment_method_line(owner, drop)
                 # ЦРМ не касается цены выкупа — цену/торг ведёт Асик по прайсу
