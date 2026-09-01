@@ -49,6 +49,15 @@ import os
 import time
 from typing import Optional
 
+# SIMBA 2026-08: все time.strftime(...) в бот-логах, /admin, сменах и слотах
+# должны показывать МСК. Railway хостится в UTC — форсируем zone до
+# любых импортов и вызовов time.*.
+os.environ.setdefault("TZ", "Europe/Moscow")
+try:
+    time.tzset()  # только на Linux/macOS — Windows игнорит
+except Exception:
+    pass
+
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode

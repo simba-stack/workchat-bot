@@ -4,6 +4,15 @@ import logging
 import html
 import os
 import random
+import time as _time_boot
+
+# SIMBA 2026-08: форсируем МСК (Railway=UTC). Ставим ДО импортов остальных
+# модулей, чтобы logging и все time.strftime показывали Москву.
+os.environ.setdefault("TZ", "Europe/Moscow")
+try:
+    _time_boot.tzset()
+except Exception:
+    pass
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
