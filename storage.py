@@ -1046,6 +1046,129 @@ class Storage:
                 reg[key]["primary_full_ts"] = 0.0
                 await self._save_unlocked()
 
+    # ═══════════════════════════════════════════════════════════════
+    # CHAT MIRROR (2026-08): CRM-бот копирует все сообщения из work_chats
+    # в state["chat_mirror"] чтобы веб-панель менеджеров могла показать
+    # переписку без переключений в TG. Менеджер отвечает через веб →
+    # crm_bot шлёт от своего имени с префиксом «👤 @manager: <text>».
+    #
+    # ⚠️ Требуется Privacy Mode = OFF у @PrideCONTROLE_bot в BotFather,
+    # иначе бот получает только команды/reply-ему, а не все сообщения.
+    #
+    # state["chat_mirror"] = {
+    #   "<chat_id>": {
+    #     "title": "Рабочая беседа — Иван",
+    #     "owner_id": "o012",         # к какому партнёру привязан
+    #     "last_ts": 1700000000.0,
+    #     "last_preview": "текст",
+    #     "unread_by": { "@manager1": 3 },   # непрочитанное у менеджера
+    #     "messages": [
+    #        {msg_id, ts, sender_id, sender_uname, sender_name,
+    #         text, is_bot, is_manager_reply, via_manager_uname}
+    #     ]
+    #   }
+    # }
+    # Cap: последние 500 сообщений на чат.
+    # ═══════════════════════════════════════════════════════════════
+
+    def _mirror(self) -> dict:
+        return self.state.setdefault("chat_mirror", {})
+
+    async def mirror_add_message(self, chat_id: int, msg: dict,
+                                 title: str = "",
+                                 owner_id: str = "") -> None:
+        """Добавляет сообщение в mirror. msg: {msg_id, ts, sender_id,
+        sender_uname, sender_name, text, is_bot, is_manager_reply,
+        via_manager_uname}."""
+        cid = str(chat_id)
+        async with _lock:
+            m = self._mirror()
+            entry = m.setdefault(cid, {
+                "title": title or "",
+                "owner_id": owner_id or "",
+                "last_ts": 0.0,
+                "last_preview": "",
+                "unread_by": {},
+                "messages": [],
+            })
+            if title and not entry.get("title"):
+                entry["title"] = title
+            if owner_id and not entry.get("owner_id"):
+                entry["owner_id"] = owner_id
+            msgs = entry.setdefault("messages", [])
+            # Дедуп по msg_id (если уже есть — не дублируем)
+            _mid = int(msg.get("msg_id") or 0)
+            if _mid and any(int(x.get("msg_id") or 0) == _mid for x in msgs[-30:]):
+                return
+            msgs.append(msg)
+            # Cap 500
+            if len(msgs) > 500:
+                del msgs[: len(msgs) - 500]
+            entry["last_ts"] = float(msg.get("ts") or time.time())
+            entry["last_preview"] = (msg.get("text") or "")[:200]
+            # Bump unread для всех менеджеров (кроме автора)
+            author_uname = (msg.get("sender_uname") or "").lower()
+            unread = entry.setdefault("unread_by", {})
+            for uname in list(unread.keys()):
+                if uname != author_uname:
+                    unread[uname] = int(unread.get(uname) or 0) + 1
+            await self._save_unlocked()
+
+    def mirror_list_chats(self, manager_uname: str = "") -> list:
+        """Список чатов с превью и unread-счётчиком для менеджера."""
+        uname = (manager_uname or "").lower().lstrip("@")
+        out = []
+        for cid, entry in self._mirror().items():
+            out.append({
+                "chat_id": cid,
+                "title": entry.get("title") or "",
+                "owner_id": entry.get("owner_id") or "",
+                "last_ts": float(entry.get("last_ts") or 0),
+                "last_preview": entry.get("last_preview") or "",
+                "unread": int((entry.get("unread_by") or {}).get(uname, 0)) if uname else 0,
+                "msg_count": len(entry.get("messages") or []),
+            })
+        out.sort(key=lambda x: x["last_ts"], reverse=True)
+        return out
+
+    def mirror_get_messages(self, chat_id: int, since_ts: float = 0.0,
+                            limit: int = 100) -> list:
+        """История сообщений чата. since_ts > 0 — только новее since_ts."""
+        cid = str(chat_id)
+        entry = self._mirror().get(cid) or {}
+        msgs = entry.get("messages") or []
+        if since_ts > 0:
+            msgs = [m for m in msgs if float(m.get("ts") or 0) > float(since_ts)]
+        return msgs[-limit:]
+
+    async def mirror_mark_read(self, chat_id: int, manager_uname: str) -> None:
+        """Сбрасывает unread для менеджера."""
+        uname = (manager_uname or "").lower().lstrip("@")
+        if not uname:
+            return
+        cid = str(chat_id)
+        async with _lock:
+            entry = self._mirror().get(cid)
+            if not entry:
+                return
+            unread = entry.setdefault("unread_by", {})
+            if unread.get(uname):
+                unread[uname] = 0
+                await self._save_unlocked()
+
+    async def mirror_ensure_manager(self, chat_id: int, manager_uname: str) -> None:
+        """Регистрирует менеджера как «слушателя» этого чата (для unread-count)."""
+        uname = (manager_uname or "").lower().lstrip("@")
+        if not uname:
+            return
+        cid = str(chat_id)
+        async with _lock:
+            entry = self._mirror().get(cid)
+            if not entry:
+                return
+            entry.setdefault("unread_by", {}).setdefault(uname, 0)
+            await self._save_unlocked()
+
     def get_effective_username(self, primary_username: str) -> str:
         """Возвращает какой username использовать для нового invite.
         Если primary помечен как full и есть alt — вернёт alt.

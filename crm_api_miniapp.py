@@ -2625,6 +2625,174 @@ async def support_close(
 
 
 # ═══════════════════════════════════════════════════════════════
+# WEB PANEL FOR MANAGERS (SIMBA 2026-08)
+# ---------------------------------------------------------------
+# Endpoints, обслуживающие «панель общения» — менеджер видит все
+# work_chats и отвечает через веб; CRM-бот шлёт в чат от своего
+# имени с настраиваемой персоной.
+#
+# ⚠️ Требует: (1) Privacy Mode = OFF у @PrideCONTROLE_bot чтобы
+# mirror middleware в crm_bot.py видел все сообщения. (2) роль
+# manager/owner у вызывающего.
+# ═══════════════════════════════════════════════════════════════
+
+_MANAGER_ROLES = {"manager", "system_dept", "accounting", "operationist",
+                  "outkup_specialist", "owner"}
+
+
+def _require_manager(tg_user_id: int, username: str = ""):
+    """Разрешает всех у кого есть управленческая роль. Клиент/партнёр — нет."""
+    try:
+        _require_role(int(tg_user_id or 0), username or "", _MANAGER_ROLES)
+    except HTTPException:
+        raise HTTPException(403, "manager role required")
+
+
+@router.get("/panel/chats")
+async def panel_list_chats(
+    request: Request,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Список work_chats с превью и unread-счётчиком для конкретного менеджера."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_manager(by_tg_user_id, by_tg_username)
+    uname = (by_tg_username or "").lower().lstrip("@")
+    items = storage.mirror_list_chats(uname) if hasattr(storage, "mirror_list_chats") else []
+    return {"items": items, "count": len(items), "server_ts": time.time()}
+
+
+@router.get("/panel/chats/{chat_id}/messages")
+async def panel_chat_messages(
+    chat_id: str,
+    request: Request,
+    by_tg_user_id: int = 0,
+    by_tg_username: str = "",
+    since: float = 0.0,
+    limit: int = 200,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """История сообщений чата. since>0 — только новые."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_manager(by_tg_user_id, by_tg_username)
+    try:
+        cid_int = int(chat_id)
+    except ValueError:
+        raise HTTPException(400, "bad chat_id")
+    msgs = storage.mirror_get_messages(cid_int, since_ts=since, limit=limit) \
+        if hasattr(storage, "mirror_get_messages") else []
+    # Регистрируем менеджера как слушателя (для unread-счётчика на будущих сообщениях)
+    if hasattr(storage, "mirror_ensure_manager"):
+        try:
+            await storage.mirror_ensure_manager(cid_int, by_tg_username or "")
+        except Exception:
+            pass
+    return {"items": msgs, "count": len(msgs), "server_ts": time.time()}
+
+
+class PanelReadReq(BaseModel):
+    by_tg_user_id: int = 0
+    by_tg_username: str = ""
+
+
+@router.post("/panel/chats/{chat_id}/read")
+async def panel_chat_read(
+    chat_id: str,
+    body: PanelReadReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Сбрасывает unread-счётчик у менеджера."""
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_manager(body.by_tg_user_id, body.by_tg_username)
+    try:
+        cid_int = int(chat_id)
+    except ValueError:
+        raise HTTPException(400, "bad chat_id")
+    if hasattr(storage, "mirror_mark_read"):
+        await storage.mirror_mark_read(cid_int, body.by_tg_username or "")
+    return {"ok": True}
+
+
+class PanelReplyReq(BaseModel):
+    text: str
+    by_tg_user_id: int = 0
+    by_tg_username: str = ""
+    persona: str = ""  # "" | "manager_name" | "as_bot"
+
+
+@router.post("/panel/chats/{chat_id}/reply")
+async def panel_chat_reply(
+    chat_id: str,
+    body: PanelReplyReq,
+    request: Request,
+    x_miniapp_signature: str = Header(default=""),
+    x_miniapp_ts: str = Header(default=""),
+):
+    """Менеджер отправляет ответ в TG-чат через CRM-бота.
+    persona:
+      - "" (default) → «👤 @manager: <text>»
+      - "manager_name" → «👤 Иван (менеджер): <text>»  (если знаем имя)
+      - "as_bot" → просто <text> без подписи (от лица PRIDE)
+    """
+    await _check_hmac(request, x_miniapp_signature, x_miniapp_ts)
+    _require_manager(body.by_tg_user_id, body.by_tg_username)
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "empty text")
+    if len(text) > 3800:
+        raise HTTPException(400, "text too long (>3800)")
+    try:
+        cid_int = int(chat_id)
+    except ValueError:
+        raise HTTPException(400, "bad chat_id")
+    # Формируем подпись согласно persona
+    uname = (body.by_tg_username or "").lstrip("@")
+    persona = (body.persona or "").lower().strip()
+    if persona == "as_bot":
+        payload = text
+    elif persona == "manager_name":
+        # Пытаемся резолвить имя из worker_roles
+        role_info = (storage.state.get("worker_roles") or {}).get(uname.lower(), {}) \
+            if uname else {}
+        display = role_info.get("name") if isinstance(role_info, dict) else ""
+        display = display or uname or "менеджер"
+        payload = f"👤 <b>{display}</b>\n{text}"
+    else:
+        payload = f"👤 <b>@{uname or 'менеджер'}</b>\n{text}"
+    # Реально шлём через CRM-бота
+    try:
+        from crm_bot import _get_crm_bot  # экспортируем ниже
+        bot = _get_crm_bot()
+        sent = await bot.send_message(cid_int, payload)
+        sent_msg_id = int(getattr(sent, "message_id", 0) or 0)
+    except Exception as e:
+        logger.warning("[panel_reply] send failed chat=%s: %s", cid_int, e)
+        raise HTTPException(500, f"send failed: {e}")
+    # Мирроим сами (наш собственный ответ) — чтобы веб-панель сразу увидела
+    if hasattr(storage, "mirror_add_message"):
+        try:
+            await storage.mirror_add_message(cid_int, {
+                "msg_id": sent_msg_id,
+                "ts": time.time(),
+                "sender_id": int(body.by_tg_user_id or 0),
+                "sender_uname": uname.lower(),
+                "sender_name": uname or "менеджер",
+                "text": text[:4000],
+                "is_bot": True,
+                "is_manager_reply": True,
+                "via_manager_uname": uname.lower(),
+            })
+        except Exception as _me:
+            logger.warning("[panel_reply] self-mirror failed: %s", _me)
+    return {"ok": True, "msg_id": sent_msg_id}
+
+
+# ═══════════════════════════════════════════════════════════════
 # MAINTENANCE — purge всех не-team чатов (owner-only гвард на stroy)
 # ═══════════════════════════════════════════════════════════════
 

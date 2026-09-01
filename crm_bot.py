@@ -397,6 +397,17 @@ def is_owner(user_id: int) -> bool:
     return int(user_id) in CRM_OWNER_IDS
 
 
+# SIMBA 2026-08: глобальный ref на инстанс бота для веб-панели
+# (crm_api_miniapp.py импортит _get_crm_bot чтобы слать сообщения от менеджера).
+_CRM_BOT_INSTANCE: Optional["Bot"] = None
+
+
+def _get_crm_bot() -> "Bot":
+    if _CRM_BOT_INSTANCE is None:
+        raise RuntimeError("CRM bot not initialized yet")
+    return _CRM_BOT_INSTANCE
+
+
 def _lk_slot_tag(lk: dict, drop: dict) -> str:
     """Возвращает «#N/total» где N = порядок ЛК в анкете. Пустая строка если нет данных.
     Универсально работает и для crm_drops, и для credit_drops."""
@@ -7239,6 +7250,9 @@ async def run_crm_bot():
         token=CRM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # SIMBA 2026-08: экспорт для веб-панели (см. panel_chat_reply в crm_api_miniapp.py).
+    global _CRM_BOT_INSTANCE
+    _CRM_BOT_INSTANCE = bot
     _fsm_storage = AsyncPersistentFSMStorage(
         os.path.join(
             os.path.dirname(os.environ.get('STORAGE_PATH', '/app/data/state.json')),
@@ -7306,6 +7320,64 @@ async def run_crm_bot():
         except Exception as e:
             logger.warning("[crm-middleware] FSM check failed: %s", e)
         # FSM пуст или недоступен → пропускаем юзербота
+        return await handler(event, data)
+
+    # SIMBA 2026-08: web-panel mirror.
+    # Копируем все сообщения из зарегистрированных work_chats в
+    # storage["chat_mirror"] чтобы менеджеры видели переписку в веб-панели
+    # без переключений между тысячами TG-групп.
+    #
+    # ⚠️ Требуется Privacy Mode = OFF у @PrideCONTROLE_bot в BotFather
+    # (иначе бот получает только команды/reply-ему, а не все сообщения группы).
+    @dp.message.middleware()
+    async def _mirror_middleware(handler, event, data):
+        try:
+            chat = getattr(event, "chat", None)
+            if chat and chat.type in ("group", "supergroup"):
+                chat_id = int(chat.id)
+                # Определяем — это work_chat какого-то партнёра?
+                owner_id = ""
+                title = getattr(chat, "title", "") or ""
+                for oid, o in (crm_storage.list_crm_owners() or {}).items():
+                    if int(o.get("work_chat_id") or 0) == chat_id:
+                        owner_id = oid
+                        if not title:
+                            title = f"WC {(o.get('username') or o.get('name') or oid)}"
+                        break
+                # Мирроим только work_chats (не team, не админ-группы)
+                if owner_id:
+                    author = event.from_user
+                    _uname = (author.username if author else "") or ""
+                    _name = " ".join(filter(None, [
+                        (author.first_name if author else "") or "",
+                        (author.last_name if author else "") or "",
+                    ])) or _uname or "—"
+                    _text = event.text or event.caption or ""
+                    if _text or (event.photo or event.document or event.video or event.voice):
+                        # Помечаем attachment если текста нет
+                        if not _text:
+                            if event.photo: _text = "[фото]"
+                            elif event.video: _text = "[видео]"
+                            elif event.voice: _text = "[голосовое]"
+                            elif event.document: _text = "[документ]"
+                        msg = {
+                            "msg_id": int(event.message_id or 0),
+                            "ts": time.time(),
+                            "sender_id": int(author.id) if author else 0,
+                            "sender_uname": _uname,
+                            "sender_name": _name[:80],
+                            "text": _text[:4000],
+                            "is_bot": bool(author.is_bot) if author else False,
+                            "is_manager_reply": False,
+                        }
+                        try:
+                            await crm_storage.mirror_add_message(
+                                chat_id, msg, title=title, owner_id=owner_id,
+                            )
+                        except Exception as _me:
+                            logger.warning("[mirror] add_message chat=%s failed: %s", chat_id, _me)
+        except Exception as _e:
+            logger.warning("[mirror-middleware] failed: %s", _e)
         return await handler(event, data)
 
 
