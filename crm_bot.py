@@ -966,6 +966,94 @@ def _admin_home_text(user_uname: str) -> str:
     )
 
 
+_ROLE_ALIASES = {
+    "mgr": "manager", "manager": "manager", "m": "manager",
+    "sus": "outkup_specialist", "outkup": "outkup_specialist",
+    "outkup_specialist": "outkup_specialist",
+    "ops": "operationist", "op": "operationist", "operationist": "operationist",
+    "acc": "accounting", "accounting": "accounting", "buh": "accounting",
+    "sys": "system_dept", "sysdept": "system_dept", "system_dept": "system_dept",
+}
+
+
+@router.message(Command("setworker"))
+async def cmd_setworker(message: Message):
+    """/setworker @uname role Display Name — сразу и роль и display-имя.
+    role: mgr|sus|ops|acc|sys (полные формы тоже работают).
+    Пример: /setworker @pride_manager1 mgr M1
+             /setworker @pride_sys02 sus СУС01
+    Owner-only."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    parts = (message.text or "").split(maxsplit=3)
+    if len(parts) < 4:
+        await message.reply(
+            "Формат: <code>/setworker @username role Display Name</code>\n\n"
+            "Роли:\n"
+            "• <code>mgr</code> — менеджер рабочих групп\n"
+            "• <code>sus</code> — специалист по перевязам (СУС)\n"
+            "• <code>ops</code> — операционист\n"
+            "• <code>acc</code> — бухгалтерия\n"
+            "• <code>sys</code> — system_dept\n\n"
+            "Примеры:\n"
+            "<code>/setworker @pride_manager1 mgr M1</code>\n"
+            "<code>/setworker @pumba_pride ops Пумба</code>\n"
+            "<code>/setworker @pride_sys02 sus СУС01</code>"
+        )
+        return
+    uname = parts[1].lstrip("@")
+    role_alias = parts[2].lower()
+    display_name = parts[3].strip()
+    role = _ROLE_ALIASES.get(role_alias)
+    if not role:
+        await message.reply(
+            f"❌ Неизвестная роль: <code>{role_alias}</code>\n"
+            f"Доступно: mgr, sus, ops, acc, sys"
+        )
+        return
+    await crm_storage.set_worker_role(uname, role, is_admin=False)
+    await crm_storage.set_worker_display_name(uname, display_name)
+    await message.reply(
+        f"✅ Работник настроен:\n"
+        f"• @{uname}\n"
+        f"• роль: <b>{role}</b>\n"
+        f"• display-имя для клиентов: <b>{display_name}</b>\n\n"
+        f"Теперь при <code>/admin → 🟢 Заступить на смену</code> клиенты увидят "
+        f"role-based текст с этим именем."
+    )
+
+
+@router.message(Command("setname"))
+async def cmd_setname(message: Message):
+    """/setname @uname Display Name — задать имя работника для клиентских
+    объявлений (SYS01, Пумба, M1 и т.п.). Owner-only."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply(
+            "Формат: <code>/setname @username Display Name</code>\n"
+            "Пример: <code>/setname @simba SYS01</code>\n"
+            "         <code>/setname @pumba Пумба</code>"
+        )
+        return
+    uname = parts[1].lstrip("@")
+    display_name = parts[2].strip()
+    ok = await crm_storage.set_worker_display_name(uname, display_name)
+    if ok:
+        role_info = crm_storage.get_worker_role(uname.lower()) or {}
+        role = role_info.get("role") or "—"
+        await message.reply(
+            f"✅ Display-имя для @{uname}: <b>{display_name}</b>\n"
+            f"Роль: <i>{role}</i>\n\n"
+            "Теперь при заступлении на смену клиенты увидят это имя."
+        )
+    else:
+        await message.reply("❌ Не удалось сохранить.")
+
+
 @router.message(Command("admin", "menu"))
 async def cmd_admin_menu(message: Message):
     if not _is_manager_user(message.from_user.id, message.from_user.username or ""):
@@ -1017,12 +1105,11 @@ async def cb_admin_menu(call: CallbackQuery):
         ts_str = time.strftime("%H:%M")
         status_msg_id = await _notify_status(
             call.bot,
-            f"🟢 <b>Заступил на смену</b>\n👤 @{uname} ({display})\n🕒 {ts_str}",
+            _shift_on_text_for_status(uname, call.from_user.id, display, ts_str),
         )
         client_msg_id = await _notify_clients(
             call.bot,
-            f"🟢 <b>Менеджер {display} на смене</b>\n"
-            f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+            _shift_on_text_for_clients(uname, call.from_user.id, display),
         )
         await crm_storage.shift_start(uname, tech_msg_id=status_msg_id, client_msg_id=client_msg_id)
         try:
@@ -1044,9 +1131,7 @@ async def cb_admin_menu(call: CallbackQuery):
         display = call.from_user.first_name or uname
         await _notify_status(
             call.bot,
-            f"🔴 <b>Ушёл со смены</b>\n👤 @{uname} ({display})\n"
-            f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
-            f"📊 всего: {total_str}",
+            _shift_off_text_for_status(uname, call.from_user.id, display, dur_str, total_str, ts_str),
         )
         # В CLIENTS про уход НЕ пишем (панику не разводим).
         try:
@@ -1224,6 +1309,109 @@ _MANAGER_ROLES_FOR_SHIFT = {"owner", "manager", "system_dept", "accounting",
                             "operationist", "outkup_specialist"}
 
 
+# SIMBA 2026-08: тексты для клиентов по роли (что пишем в CLIENTS-канал).
+# {display} подставляется — берём worker_roles[uname].name, иначе first_name, иначе @uname.
+_SHIFT_TEXTS_FOR_CLIENTS = {
+    "outkup_specialist": (
+        "🟢 <b>Специалист по перевязам {display}</b> заступил на смену.\n\n"
+        "Связаться с ним можно в Вашей рабочей группе и завязать РС."
+    ),
+    "manager": (
+        "🟢 <b>Менеджер рабочих групп {display}</b> заступил на смену.\n\n"
+        "Для решения Ваших вопросов — пишите в рабочую группу."
+    ),
+    "operationist": (
+        "🟢 <b>Операционист {display}</b> заступил на смену.\n\n"
+        "Вопросы по выводам Ваших блоков — можно задать в Вашей рабочей группе."
+    ),
+    "system_dept": (
+        "🟢 <b>Специалист СУС {display}</b> заступил на смену.\n\n"
+        "Пишите в свою рабочую группу — вопросы возьмут в работу."
+    ),
+    "accounting": (
+        "🟢 <b>Бухгалтерия {display}</b> заступила на смену.\n\n"
+        "Вопросы по оплатам — в Вашей рабочей группе."
+    ),
+    "owner": (
+        "🟢 <b>{display}</b> на связи.\n\n"
+        "Пишите в рабочую группу — вопросы возьмут в работу."
+    ),
+}
+
+# Короткая метка роли для STATUS-канала (для админов и менеджеров).
+_SHIFT_ROLE_LABEL = {
+    "outkup_specialist": "СУС/перевязы",
+    "manager":           "менеджер",
+    "operationist":      "операционист",
+    "system_dept":       "СУС",
+    "accounting":        "бухгалтерия",
+    "owner":             "owner",
+}
+
+
+def _resolve_display_name(uname: str, fallback: str = "") -> str:
+    """Возвращает читаемое имя менеджера для сообщений.
+    Приоритет: worker_roles[uname].name → fallback (обычно first_name) → uname."""
+    key = (uname or "").lstrip("@").lower()
+    if key:
+        info = crm_storage.get_worker_role(key) or {}
+        name = (info.get("name") if isinstance(info, dict) else "") or ""
+        if name:
+            return name
+    return fallback or uname or "менеджер"
+
+
+def _resolve_role(uname: str, tg_user_id: int = 0) -> str:
+    """Возвращает эффективную роль. Owner-check по tg_user_id."""
+    if tg_user_id and is_owner(int(tg_user_id)):
+        return "owner"
+    key = (uname or "").lstrip("@").lower()
+    if not key:
+        return ""
+    info = crm_storage.get_worker_role(key) or {}
+    return (info.get("role") if isinstance(info, dict) else "") or ""
+
+
+def _shift_on_text_for_clients(uname: str, tg_user_id: int, fallback_name: str = "") -> str:
+    """Собирает текст в CLIENTS для «заступил на смену»."""
+    role = _resolve_role(uname, tg_user_id)
+    display = _resolve_display_name(uname, fallback=fallback_name)
+    tpl = _SHIFT_TEXTS_FOR_CLIENTS.get(role)
+    if not tpl:
+        # Роль не известна — общий вариант
+        tpl = (
+            "🟢 <b>{display}</b> на смене.\n\n"
+            "Пишите в свою рабочую группу."
+        )
+    return tpl.format(display=display)
+
+
+def _shift_on_text_for_status(uname: str, tg_user_id: int, fallback_name: str = "", ts_str: str = "") -> str:
+    """Короткий пост в STATUS-канал (админам/менеджерам)."""
+    role = _resolve_role(uname, tg_user_id)
+    display = _resolve_display_name(uname, fallback=fallback_name)
+    role_label = _SHIFT_ROLE_LABEL.get(role, "работник")
+    return (
+        f"🟢 <b>Заступил на смену</b>\n"
+        f"👤 {display} (@{uname}) · <i>{role_label}</i>\n"
+        f"🕒 {ts_str or time.strftime('%H:%M')}"
+    )
+
+
+def _shift_off_text_for_status(uname: str, tg_user_id: int, fallback_name: str,
+                               dur_str: str, total_str: str, ts_str: str = "") -> str:
+    """STATUS-пост «ушёл со смены»."""
+    role = _resolve_role(uname, tg_user_id)
+    display = _resolve_display_name(uname, fallback=fallback_name)
+    role_label = _SHIFT_ROLE_LABEL.get(role, "работник")
+    return (
+        f"🔴 <b>Ушёл со смены</b>\n"
+        f"👤 {display} (@{uname}) · <i>{role_label}</i>\n"
+        f"🕒 {ts_str or time.strftime('%H:%M')} · ⏱ отработано: <b>{dur_str}</b>\n"
+        f"📊 всего: {total_str}"
+    )
+
+
 def _fmt_duration(sec: float) -> str:
     sec = int(max(0, sec))
     h = sec // 3600
@@ -1378,18 +1566,15 @@ async def cmd_shifton(message: Message):
         await message.reply(f"⚠️ Ты уже на смене с {started_at}.")
         return
 
-    # STATUS-канал (все кому нужно): смена началась
+    # STATUS-канал (менеджерам): короткий пост с ролью
     status_msg_id = await _notify_status(
         message.bot,
-        f"🟢 <b>Заступил на смену</b>\n"
-        f"👤 @{uname} ({display})\n"
-        f"🕒 {ts_str}",
+        _shift_on_text_for_status(uname, message.from_user.id, display, ts_str),
     )
-    # CLIENTS-чат: важное для клиентов — менеджер на связи
+    # CLIENTS-чат: role-based текст (SIMBA 2026-08).
     client_msg_id = await _notify_clients(
         message.bot,
-        f"🟢 <b>Менеджер {display} на смене</b>\n"
-        f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+        _shift_on_text_for_clients(uname, message.from_user.id, display),
     )
     await crm_storage.shift_start(uname, tech_msg_id=status_msg_id, client_msg_id=client_msg_id)
     await message.reply(f"✅ Смена начата в {ts_str}. Хорошей работы!")
@@ -1413,13 +1598,10 @@ async def cmd_shiftoff(message: Message):
     total_str = _fmt_duration(result.get("total_seconds") or 0)
     ts_str = time.strftime("%H:%M")
 
-    # STATUS-канал: смена закончена
+    # STATUS-канал: смена закончена (role-aware)
     await _notify_status(
         message.bot,
-        f"🔴 <b>Ушёл со смены</b>\n"
-        f"👤 @{uname} ({display})\n"
-        f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
-        f"📊 всего: {total_str}",
+        _shift_off_text_for_status(uname, message.from_user.id, display, dur_str, total_str, ts_str),
     )
     # В CLIENTS про уход НЕ пишем — избегаем «менеджер ушёл, теперь никого»
     # (панику разводить не надо).

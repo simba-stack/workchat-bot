@@ -816,6 +816,19 @@ class Storage:
             await self._save_unlocked()
             return True
 
+    async def set_worker_display_name(self, username: str, display_name: str) -> bool:
+        """SIMBA 2026-08: display-имя работника для сообщений клиентам
+        (например «SYS01», «Пумба»). Хранится в worker_roles[uname]['name']."""
+        clean = (username or "").lstrip("@").strip().lower()
+        if not clean:
+            return False
+        async with _lock:
+            roles = self.state.setdefault("worker_roles", {})
+            entry = roles.setdefault(clean, {"role": "Сотрудник", "is_admin": False})
+            entry["name"] = (display_name or "").strip()[:80]
+            await self._save_unlocked()
+        return True
+
     # === COMPENSATION RULES: как и сколько платим работнику ===
     # Структура: state.worker_compensation = {
     #   "vasya": {
