@@ -1015,29 +1015,16 @@ async def cb_admin_menu(call: CallbackQuery):
             return await call.answer(f"Ты уже на смене с {started_at}.", show_alert=True)
         display = call.from_user.first_name or uname
         ts_str = time.strftime("%H:%M")
-        tech_id = _tech_group_id()
-        client_id = _client_announce_chat_id()
-        tech_msg_id = client_msg_id = 0
-        if tech_id:
-            try:
-                sent = await call.bot.send_message(
-                    tech_id,
-                    f"🟢 <b>Заступил на смену</b>\n👤 @{uname} ({display})\n🕒 {ts_str}",
-                )
-                tech_msg_id = int(getattr(sent, "message_id", 0) or 0)
-            except Exception as e:
-                logger.warning("[am:shift_on] tech: %s", e)
-        if client_id:
-            try:
-                sent = await call.bot.send_message(
-                    client_id,
-                    f"🟢 <b>Менеджер {display} на смене</b>\n"
-                    f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
-                )
-                client_msg_id = int(getattr(sent, "message_id", 0) or 0)
-            except Exception as e:
-                logger.warning("[am:shift_on] client: %s", e)
-        await crm_storage.shift_start(uname, tech_msg_id=tech_msg_id, client_msg_id=client_msg_id)
+        status_msg_id = await _notify_status(
+            call.bot,
+            f"🟢 <b>Заступил на смену</b>\n👤 @{uname} ({display})\n🕒 {ts_str}",
+        )
+        client_msg_id = await _notify_clients(
+            call.bot,
+            f"🟢 <b>Менеджер {display} на смене</b>\n"
+            f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+        )
+        await crm_storage.shift_start(uname, tech_msg_id=status_msg_id, client_msg_id=client_msg_id)
         try:
             await call.message.edit_text(_admin_home_text(uname_raw),
                                          reply_markup=_admin_kb_home(is_own))
@@ -1055,25 +1042,13 @@ async def cb_admin_menu(call: CallbackQuery):
         total_str = _fmt_duration(result.get("total_seconds") or 0)
         ts_str = time.strftime("%H:%M")
         display = call.from_user.first_name or uname
-        tech_id = _tech_group_id()
-        if tech_id:
-            try:
-                await call.bot.send_message(
-                    tech_id,
-                    f"🔴 <b>Ушёл со смены</b>\n👤 @{uname} ({display})\n"
-                    f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
-                    f"📊 всего: {total_str}",
-                )
-            except Exception as e:
-                logger.warning("[am:shift_off] tech: %s", e)
-        client_id = _client_announce_chat_id()
-        if client_id:
-            try:
-                await call.bot.send_message(
-                    client_id, f"🔴 Менеджер <b>{display}</b> закончил смену.",
-                )
-            except Exception:
-                pass
+        await _notify_status(
+            call.bot,
+            f"🔴 <b>Ушёл со смены</b>\n👤 @{uname} ({display})\n"
+            f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
+            f"📊 всего: {total_str}",
+        )
+        # В CLIENTS про уход НЕ пишем (панику не разводим).
         try:
             await call.message.edit_text(_admin_home_text(uname_raw),
                                          reply_markup=_admin_kb_home(is_own))
@@ -1268,19 +1243,77 @@ def _is_manager_user(user_id: int, username: str = "") -> bool:
     return (info.get("role") or "").lower() in _MANAGER_ROLES_FOR_SHIFT
 
 
-def _tech_group_id() -> int:
-    raw = (os.getenv("TECH_GROUP_CHAT_ID") or "").strip()
+# SIMBA 2026-08: три канала, все захардкожены (env перекрывает).
+#   TECH_GROUP    — только админам (опоздания, тех-логи)
+#   STATUS_CHAT   — статусный канал (смены, железо) — все кому нужно
+#   CLIENTS_CHAT  — общий чат клиентов (важные объявления чтобы бежали)
+# Полные chat_id = -100 + short_id.
+_HARDCODED_TECH_GROUP_ID   = -1005013041241
+_HARDCODED_STATUS_CHAT_ID  = -1004409173458
+_HARDCODED_CLIENTS_CHAT_ID = -1003599967391
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
     try:
-        return int(raw) if raw else 0
+        return int(raw) if raw else default
     except ValueError:
+        return default
+
+
+def _tech_group_id() -> int:
+    return _env_int("TECH_GROUP_CHAT_ID", _HARDCODED_TECH_GROUP_ID)
+
+
+def _status_chat_id() -> int:
+    return _env_int("STATUS_CHAT_ID", _HARDCODED_STATUS_CHAT_ID)
+
+
+def _clients_chat_id() -> int:
+    return _env_int("CLIENTS_CHAT_ID", _HARDCODED_CLIENTS_CHAT_ID)
+
+
+# Legacy alias — старые вызовы _client_announce_chat_id теперь идут в STATUS.
+def _client_announce_chat_id() -> int:
+    return _status_chat_id()
+
+
+async def _notify_tech(bot, text: str) -> int:
+    """Пост в тех-группу (только админы). Возвращает msg_id или 0."""
+    cid = _tech_group_id()
+    if not cid:
+        return 0
+    try:
+        sent = await bot.send_message(cid, text)
+        return int(getattr(sent, "message_id", 0) or 0)
+    except Exception as e:
+        logger.warning("[notify_tech] failed: %s", e)
         return 0
 
 
-def _client_announce_chat_id() -> int:
-    raw = (os.getenv("CLIENT_ANNOUNCE_CHAT_ID") or "").strip()
+async def _notify_status(bot, text: str) -> int:
+    """Пост в статус-канал (смены+железо, для всех кому нужно)."""
+    cid = _status_chat_id()
+    if not cid:
+        return 0
     try:
-        return int(raw) if raw else 0
-    except ValueError:
+        sent = await bot.send_message(cid, text)
+        return int(getattr(sent, "message_id", 0) or 0)
+    except Exception as e:
+        logger.warning("[notify_status] failed: %s", e)
+        return 0
+
+
+async def _notify_clients(bot, text: str) -> int:
+    """Пост в общий чат клиентов (важные объявления чтобы бежали)."""
+    cid = _clients_chat_id()
+    if not cid:
+        return 0
+    try:
+        sent = await bot.send_message(cid, text)
+        return int(getattr(sent, "message_id", 0) or 0)
+    except Exception as e:
+        logger.warning("[notify_clients] failed: %s", e)
         return 0
 
 
@@ -1345,36 +1378,20 @@ async def cmd_shifton(message: Message):
         await message.reply(f"⚠️ Ты уже на смене с {started_at}.")
         return
 
-    # 1) Пост в тех-группу
-    tech_msg_id = 0
-    tech_id = _tech_group_id()
-    if tech_id:
-        try:
-            sent = await message.bot.send_message(
-                tech_id,
-                f"🟢 <b>Заступил на смену</b>\n"
-                f"👤 @{uname} ({display})\n"
-                f"🕒 {ts_str}",
-            )
-            tech_msg_id = int(getattr(sent, "message_id", 0) or 0)
-        except Exception as e:
-            logger.warning("[shift] tech announce failed: %s", e)
-
-    # 2) Пост клиентам
-    client_msg_id = 0
-    client_id = _client_announce_chat_id()
-    if client_id:
-        try:
-            sent = await message.bot.send_message(
-                client_id,
-                f"🟢 <b>Менеджер {display} на смене</b>\n"
-                f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
-            )
-            client_msg_id = int(getattr(sent, "message_id", 0) or 0)
-        except Exception as e:
-            logger.warning("[shift] client announce failed: %s", e)
-
-    await crm_storage.shift_start(uname, tech_msg_id=tech_msg_id, client_msg_id=client_msg_id)
+    # STATUS-канал (все кому нужно): смена началась
+    status_msg_id = await _notify_status(
+        message.bot,
+        f"🟢 <b>Заступил на смену</b>\n"
+        f"👤 @{uname} ({display})\n"
+        f"🕒 {ts_str}",
+    )
+    # CLIENTS-чат: важное для клиентов — менеджер на связи
+    client_msg_id = await _notify_clients(
+        message.bot,
+        f"🟢 <b>Менеджер {display} на смене</b>\n"
+        f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+    )
+    await crm_storage.shift_start(uname, tech_msg_id=status_msg_id, client_msg_id=client_msg_id)
     await message.reply(f"✅ Смена начата в {ts_str}. Хорошей работы!")
 
 
@@ -1396,27 +1413,16 @@ async def cmd_shiftoff(message: Message):
     total_str = _fmt_duration(result.get("total_seconds") or 0)
     ts_str = time.strftime("%H:%M")
 
-    tech_id = _tech_group_id()
-    if tech_id:
-        try:
-            await message.bot.send_message(
-                tech_id,
-                f"🔴 <b>Ушёл со смены</b>\n"
-                f"👤 @{uname} ({display})\n"
-                f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
-                f"📊 всего за всё время: {total_str}",
-            )
-        except Exception as e:
-            logger.warning("[shift] tech end announce failed: %s", e)
-    client_id = _client_announce_chat_id()
-    if client_id:
-        try:
-            await message.bot.send_message(
-                client_id,
-                f"🔴 Менеджер <b>{display}</b> закончил смену.",
-            )
-        except Exception as e:
-            logger.warning("[shift] client end announce failed: %s", e)
+    # STATUS-канал: смена закончена
+    await _notify_status(
+        message.bot,
+        f"🔴 <b>Ушёл со смены</b>\n"
+        f"👤 @{uname} ({display})\n"
+        f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
+        f"📊 всего: {total_str}",
+    )
+    # В CLIENTS про уход НЕ пишем — избегаем «менеджер ушёл, теперь никого»
+    # (панику разводить не надо).
 
     await message.reply(f"✅ Смена завершена. Отработано: <b>{dur_str}</b>. Всего: {total_str}.")
 
@@ -1483,17 +1489,19 @@ async def cmd_setslots(message: Message):
         f"✅ Слоты <b>{bank_norm.upper()}</b>: {result['free']}\n"
         f"<i>обновлено @{message.from_user.username or '—'}</i>"
     )
-    # Публичный анонс клиентам
-    client_id = _client_announce_chat_id()
-    if client_id:
-        try:
-            await message.bot.send_message(
-                client_id,
-                f"🎯 <b>Свободно {result['free']} слотов {bank_norm.upper()}</b>\n"
-                f"Пишите менеджеру: <b>Ассистент, хочу сдать РС</b>"
-            )
-        except Exception as e:
-            logger.warning("[slots] client announce failed: %s", e)
+    # STATUS-канал: сразу постим (всегда, даже когда 0 — статус видно)
+    await _notify_status(
+        message.bot,
+        f"🎯 Свободно <b>{result['free']}</b> слотов <b>{bank_norm.upper()}</b>\n"
+        f"<i>обновил @{message.from_user.username or '—'}</i>"
+    )
+    # CLIENTS-чат: только если >0 (клиентам про «0 слотов» шлём — плохо).
+    if result['free'] > 0:
+        await _notify_clients(
+            message.bot,
+            f"🎯 <b>Свободно {result['free']} слотов {bank_norm.upper()}</b>\n"
+            f"Пишите менеджеру: <b>Ассистент, хочу сдать РС</b>"
+        )
 
 
 @router.callback_query(F.data.startswith("slot_add:"))
@@ -1514,6 +1522,20 @@ async def cb_slot_add(call: CallbackQuery):
     except ValueError as ve:
         return await call.answer(str(ve), show_alert=True)
     await call.answer(f"{bank.upper()}: {result['free']}", show_alert=False)
+    # STATUS: постим только при значимом изменении (0 → >0, или прибавили).
+    # Иначе можем спамить STATUS-канал на каждый клик ➕/➖.
+    if delta > 0 and result['free'] > 0:
+        await _notify_status(
+            call.bot,
+            f"🎯 <b>{bank.upper()}</b>: свободно <b>{result['free']}</b> слотов "
+            f"(+{delta} от @{call.from_user.username or '—'})"
+        )
+        # CLIENTS — только если стало >0 (т.е. появились слоты).
+        await _notify_clients(
+            call.bot,
+            f"🎯 <b>Свободно {result['free']} слотов {bank.upper()}</b>\n"
+            f"Пишите: <b>Ассистент, хочу сдать РС</b>"
+        )
     # Обновляем сообщение с текущими слотами
     try:
         await call.message.edit_text(_fmt_slots_status(), reply_markup=_slots_kb_admin())
