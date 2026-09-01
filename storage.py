@@ -1782,11 +1782,15 @@ class Storage:
         return dict(self.state.get("worker_sessions") or {})
 
     async def mark_welcome_sent(self, chat_id):
+        # SIMBA 2026-09: пишем welcome_last_ts вместе с welcome_sent —
+        # даёт cooldown-защиту от «двойного инстанса» Асика (см. userbot.py
+        # _send_welcome).
         key = _norm_chat_id(chat_id)
         async with _lock:
             info = self.state["managed_chats"].get(key)
             if info:
                 info["welcome_sent"] = True
+                info["welcome_last_ts"] = time.time()
             await self._save_unlocked()
 
     # === Welcome v2: track choice + AI mute by operator ===

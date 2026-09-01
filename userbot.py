@@ -2038,9 +2038,23 @@ class UserbotService:
             info = storage.get_chat_info(chat_id)
             if not info or info.get("welcome_sent"):
                 return False
+            # SIMBA 2026-09: cooldown 60s против «двойного инстанса» Асика
+            # на Railway (при redeploy старый процесс может не завершиться
+            # мгновенно, оба Telethon-клиента на одной сессии получают
+            # события — оба видят welcome_sent=False, оба отправляют).
+            import time as _t
+            _last_ts = float(info.get("welcome_last_ts") or 0)
+            if _last_ts and (_t.time() - _last_ts) < 60:
+                logger.warning("[welcome] cooldown block chat=%s source=%s "
+                               "(last %.1fs ago)", chat_id, source, _t.time() - _last_ts)
+                return False
+            # РАННЯЯ пометка — до send (медленный ~2-3с). Race-window до 0.
+            # mark_welcome_sent теперь пишет welcome_sent + welcome_last_ts
+            # атомарно (см. storage.py).
+            await storage.mark_welcome_sent(chat_id)
             await asyncio.sleep(1)
             info = storage.get_chat_info(chat_id)
-            if not info or info.get("welcome_sent"):
+            if not info:
                 return False
 
             # Welcome: приоритетно берём из scripted_texts['welcome'] (редактируется
@@ -2092,7 +2106,8 @@ class UserbotService:
                         for chunk in _split_text(welcome, 3900):
                             await self.client.send_message(chat_id, chunk)
                             await asyncio.sleep(0.3)
-                await storage.mark_welcome_sent(chat_id)
+                # NB (SIMBA 2026-09): mark_welcome_sent теперь вызывается
+                # ДО send (в начале функции). Здесь не дублируем.
                 # SIMBA: сразу «+партнер @<клиент>» через dashboard-команду.
                 # CRM-воркер создаст crm_owner + register_crm_chat, чтобы клиент
                 # был partner-owner с самого старта — не ждать LK-form.

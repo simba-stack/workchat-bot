@@ -1377,14 +1377,23 @@ def _resolve_display_name(uname: str, fallback: str = "") -> str:
 
 
 def _resolve_role(uname: str, tg_user_id: int = 0) -> str:
-    """Возвращает эффективную роль. Owner-check по tg_user_id."""
+    """Возвращает эффективную роль для ОТОБРАЖЕНИЯ клиентам.
+
+    SIMBA 2026-09: worker_roles[uname].role приоритетнее чем owner-check.
+    Раньше Тимон (в CRM_OWNER_IDS для полных прав) отображался клиентам
+    как «owner», хотя реально это Бухгалтерия. Теперь:
+      1. worker_roles[uname].role — если задана (accounting, manager, ...)
+      2. иначе owner-check
+    Права/permissions по-прежнему через is_owner() отдельно."""
+    key = (uname or "").lstrip("@").lower()
+    if key:
+        info = crm_storage.get_worker_role(key) or {}
+        role = (info.get("role") if isinstance(info, dict) else "") or ""
+        if role:
+            return role
     if tg_user_id and is_owner(int(tg_user_id)):
         return "owner"
-    key = (uname or "").lstrip("@").lower()
-    if not key:
-        return ""
-    info = crm_storage.get_worker_role(key) or {}
-    return (info.get("role") if isinstance(info, dict) else "") or ""
+    return ""
 
 
 def _shift_on_text_for_clients(uname: str, tg_user_id: int, fallback_name: str = "") -> str:
