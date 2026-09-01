@@ -915,6 +915,10 @@ def _admin_kb_home(is_owner_user: bool) -> InlineKeyboardMarkup:
     ]
     if is_owner_user:
         kb.append([
+            _OrigInlineKeyboardButton(text="📈 История смен всех",  callback_data="am:shift_all"),
+            _OrigInlineKeyboardButton(text="🏆 Суммарно по менеджерам", callback_data="am:shift_totals"),
+        ])
+        kb.append([
             _OrigInlineKeyboardButton(text="🔗 Alt-аккаунты",       callback_data="am:alts"),
             _OrigInlineKeyboardButton(text="🖥 Веб-панель",        url="https://t.me/PrideCONTROLE_bot?start=panel"),
         ])
@@ -1151,6 +1155,55 @@ async def cb_admin_menu(call: CallbackQuery):
             "✅ Отправлено" if ok else "❌ Ошибка отправки",
             show_alert=not ok,
         )
+
+    # ─── История смен всех (owner) ───
+    if action == "shift_all":
+        if not is_own:
+            return await call.answer("Только для owner.", show_alert=True)
+        hist = crm_storage.shifts_history_all(limit=30)
+        lines = ["<b>📈 История смен (последние 30):</b>", ""]
+        if not hist:
+            lines.append("<i>Пусто.</i>")
+        else:
+            for h in hist:
+                s = time.strftime("%d.%m %H:%M", time.localtime(h["start_ts"]))
+                e = time.strftime("%H:%M", time.localtime(h["end_ts"]))
+                d = _fmt_duration(h["duration_sec"])
+                lines.append(f"• @{h['username']} · {s} → {e} · {d}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            _OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home"),
+        ]])
+        try:
+            await call.message.edit_text("\n".join(lines), reply_markup=kb)
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action == "shift_totals":
+        if not is_own:
+            return await call.answer("Только для owner.", show_alert=True)
+        totals = crm_storage.shifts_totals_by_manager()
+        lines = ["<b>🏆 Суммарно по менеджерам:</b>", ""]
+        if not totals:
+            lines.append("<i>Нет данных.</i>")
+        else:
+            for t in totals:
+                flag = "🟢" if t["on_shift_now"] else "⚪️"
+                last = "—"
+                if t["last_ts"]:
+                    last = time.strftime("%d.%m %H:%M", time.localtime(t["last_ts"]))
+                lines.append(
+                    f"{flag} @{t['username']} · {_fmt_duration(t['total_seconds'])} "
+                    f"· смен: {t['sessions_count']} · последняя: {last}"
+                )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            _OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home"),
+        ]])
+        try:
+            await call.message.edit_text("\n".join(lines), reply_markup=kb)
+        except Exception:
+            pass
+        return await call.answer()
 
     # ─── Alt-аккаунты (owner) ───
     if action == "alts":

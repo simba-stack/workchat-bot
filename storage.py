@@ -1260,6 +1260,42 @@ class Storage:
         e = self._shifts().get((uname or "").lstrip("@").lower()) or {}
         return (e.get("history") or [])[-limit:]
 
+    def shifts_history_all(self, limit: int = 50) -> list:
+        """Все смены всех менеджеров, самые свежие первыми.
+        Возвращает [{username, start_ts, end_ts, duration_sec}]."""
+        combined = []
+        for uname, entry in self._shifts().items():
+            for h in (entry.get("history") or []):
+                combined.append({
+                    "username": uname,
+                    "start_ts": float(h.get("start_ts") or 0),
+                    "end_ts": float(h.get("end_ts") or 0),
+                    "duration_sec": float(h.get("duration_sec") or 0),
+                })
+        combined.sort(key=lambda x: x["start_ts"], reverse=True)
+        return combined[:limit]
+
+    def shifts_totals_by_manager(self) -> list:
+        """Сводка по каждому менеджеру: total_seconds, sessions_count, last_ts.
+        Отсортировано по total_seconds убыв."""
+        out = []
+        for uname, entry in self._shifts().items():
+            hist = entry.get("history") or []
+            last_ts = 0.0
+            for h in hist:
+                _end = float(h.get("end_ts") or 0)
+                if _end > last_ts:
+                    last_ts = _end
+            out.append({
+                "username": uname,
+                "total_seconds": float(entry.get("total_seconds") or 0),
+                "sessions_count": len(hist),
+                "last_ts": last_ts,
+                "on_shift_now": bool(entry.get("current")),
+            })
+        out.sort(key=lambda x: x["total_seconds"], reverse=True)
+        return out
+
     # ═══════════════════════════════════════════════════════════════
     # SLOTS (SIMBA 2026-08): свободные слоты железа для установки
     # материалов (для клиентов — «сколько сейчас Альф можно взять»).
