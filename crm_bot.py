@@ -882,6 +882,601 @@ async def cb_pam_agree(call: CallbackQuery):
         logger.warning("[pam_ag] send to LEGAL log failed: %s", e)
 
 
+# ═══════════════════════════════════════════════════════════════
+# ADMIN MENU (SIMBA 2026-08): единое инлайн-меню.
+# Вызов: /admin или /menu (в ЛС боту или в любом рабочем чате).
+# callback_data prefix: "am:"
+#
+# Разделы:
+#   am:home         — главная
+#   am:shift        — смены
+#   am:slots        — слоты железа (переиспользует _slots_kb_admin)
+#   am:pam          — PAM-меню (7 банков)
+#   am:alts         — alt-аккаунты (owner)
+#   am:panel        — быстрая ссылка на веб-панель
+# ═══════════════════════════════════════════════════════════════
+
+def _admin_kb_home(is_owner_user: bool) -> InlineKeyboardMarkup:
+    kb = [
+        [
+            _OrigInlineKeyboardButton(text="🟢 Заступить на смену", callback_data="am:shift_on"),
+            _OrigInlineKeyboardButton(text="🔴 Уйти со смены",     callback_data="am:shift_off"),
+        ],
+        [
+            _OrigInlineKeyboardButton(text="📊 Кто на смене",       callback_data="am:shift_who"),
+            _OrigInlineKeyboardButton(text="📅 Моя история",        callback_data="am:shift_me"),
+        ],
+        [
+            _OrigInlineKeyboardButton(text="🎯 Слоты железа",       callback_data="am:slots"),
+        ],
+        [
+            _OrigInlineKeyboardButton(text="📋 PAM: отправить условия", callback_data="am:pam"),
+        ],
+    ]
+    if is_owner_user:
+        kb.append([
+            _OrigInlineKeyboardButton(text="🔗 Alt-аккаунты",       callback_data="am:alts"),
+            _OrigInlineKeyboardButton(text="🖥 Веб-панель",        url="https://t.me/PrideCONTROLE_bot?start=panel"),
+        ])
+    kb.append([
+        _OrigInlineKeyboardButton(text="❌ Закрыть меню", callback_data="am:close"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def _admin_kb_pam() -> InlineKeyboardMarkup:
+    row1 = [
+        _OrigInlineKeyboardButton(text="АЛЬФА",   callback_data="am:pam_send:alfa"),
+        _OrigInlineKeyboardButton(text="ОЗОН",    callback_data="am:pam_send:ozon"),
+        _OrigInlineKeyboardButton(text="РАЙФ",    callback_data="am:pam_send:raif"),
+    ]
+    row2 = [
+        _OrigInlineKeyboardButton(text="СБЕР",    callback_data="am:pam_send:sber"),
+        _OrigInlineKeyboardButton(text="ВТБ",     callback_data="am:pam_send:vtb"),
+        _OrigInlineKeyboardButton(text="ББР",     callback_data="am:pam_send:bbr"),
+    ]
+    row3 = [
+        _OrigInlineKeyboardButton(text="ГАЗПРОМ", callback_data="am:pam_send:gaz"),
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        row1, row2, row3,
+        [_OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home")],
+    ])
+
+
+def _admin_home_text(user_uname: str) -> str:
+    uname = (user_uname or "").lstrip("@").lower()
+    cur = crm_storage.shift_current_manager(uname) if uname else {}
+    if cur:
+        start_str = time.strftime("%H:%M", time.localtime(float(cur.get("start_ts") or 0)))
+        elapsed = _fmt_duration(time.time() - float(cur.get("start_ts") or 0))
+        shift_status = f"🟢 На смене с {start_str} ({elapsed})"
+    else:
+        shift_status = "⚪️ Не на смене"
+    active_now = len(crm_storage.shifts_list_active())
+    return (
+        "<b>🎛 Админ-меню PRIDE</b>\n\n"
+        f"{shift_status}\n"
+        f"👥 Сейчас на смене: <b>{active_now}</b>\n\n"
+        "Выбери действие:"
+    )
+
+
+@router.message(Command("admin", "menu"))
+async def cmd_admin_menu(message: Message):
+    if not _is_manager_user(message.from_user.id, message.from_user.username or ""):
+        await message.reply("Только для менеджеров.")
+        return
+    uname = (message.from_user.username or "")
+    await message.reply(
+        _admin_home_text(uname),
+        reply_markup=_admin_kb_home(is_owner(message.from_user.id)),
+    )
+
+
+@router.callback_query(F.data.startswith("am:"))
+async def cb_admin_menu(call: CallbackQuery):
+    if not _is_manager_user(call.from_user.id, call.from_user.username or ""):
+        return await call.answer("Только для менеджеров", show_alert=True)
+    action = call.data.split(":", 1)[1] if ":" in call.data else ""
+    uname_raw = call.from_user.username or ""
+    uname = uname_raw.lower()
+    is_own = is_owner(call.from_user.id)
+
+    if action == "home":
+        try:
+            await call.message.edit_text(_admin_home_text(uname_raw),
+                                         reply_markup=_admin_kb_home(is_own))
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action == "close":
+        try:
+            await call.message.delete()
+        except Exception:
+            try:
+                await call.message.edit_text("Меню закрыто.")
+            except Exception:
+                pass
+        return await call.answer()
+
+    # ─── Смены ───
+    if action == "shift_on":
+        if not uname:
+            return await call.answer("Задай username в TG.", show_alert=True)
+        cur = crm_storage.shift_current_manager(uname)
+        if cur:
+            started_at = time.strftime("%H:%M", time.localtime(float(cur.get("start_ts") or 0)))
+            return await call.answer(f"Ты уже на смене с {started_at}.", show_alert=True)
+        display = call.from_user.first_name or uname
+        ts_str = time.strftime("%H:%M")
+        tech_id = _tech_group_id()
+        client_id = _client_announce_chat_id()
+        tech_msg_id = client_msg_id = 0
+        if tech_id:
+            try:
+                sent = await call.bot.send_message(
+                    tech_id,
+                    f"🟢 <b>Заступил на смену</b>\n👤 @{uname} ({display})\n🕒 {ts_str}",
+                )
+                tech_msg_id = int(getattr(sent, "message_id", 0) or 0)
+            except Exception as e:
+                logger.warning("[am:shift_on] tech: %s", e)
+        if client_id:
+            try:
+                sent = await call.bot.send_message(
+                    client_id,
+                    f"🟢 <b>Менеджер {display} на смене</b>\n"
+                    f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+                )
+                client_msg_id = int(getattr(sent, "message_id", 0) or 0)
+            except Exception as e:
+                logger.warning("[am:shift_on] client: %s", e)
+        await crm_storage.shift_start(uname, tech_msg_id=tech_msg_id, client_msg_id=client_msg_id)
+        try:
+            await call.message.edit_text(_admin_home_text(uname_raw),
+                                         reply_markup=_admin_kb_home(is_own))
+        except Exception:
+            pass
+        return await call.answer(f"✅ Смена начата в {ts_str}", show_alert=False)
+
+    if action == "shift_off":
+        if not uname:
+            return await call.answer("Задай username.", show_alert=True)
+        result = await crm_storage.shift_end(uname)
+        if result.get("not_on_shift"):
+            return await call.answer("Ты не на смене.", show_alert=True)
+        dur_str = _fmt_duration(result.get("duration_sec") or 0)
+        total_str = _fmt_duration(result.get("total_seconds") or 0)
+        ts_str = time.strftime("%H:%M")
+        display = call.from_user.first_name or uname
+        tech_id = _tech_group_id()
+        if tech_id:
+            try:
+                await call.bot.send_message(
+                    tech_id,
+                    f"🔴 <b>Ушёл со смены</b>\n👤 @{uname} ({display})\n"
+                    f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
+                    f"📊 всего: {total_str}",
+                )
+            except Exception as e:
+                logger.warning("[am:shift_off] tech: %s", e)
+        client_id = _client_announce_chat_id()
+        if client_id:
+            try:
+                await call.bot.send_message(
+                    client_id, f"🔴 Менеджер <b>{display}</b> закончил смену.",
+                )
+            except Exception:
+                pass
+        try:
+            await call.message.edit_text(_admin_home_text(uname_raw),
+                                         reply_markup=_admin_kb_home(is_own))
+        except Exception:
+            pass
+        return await call.answer(f"✅ Отработано: {dur_str}", show_alert=False)
+
+    if action == "shift_who":
+        active = crm_storage.shifts_list_active()
+        if not active:
+            return await call.answer("Никого нет на смене.", show_alert=True)
+        now = time.time()
+        lines = ["<b>🟢 На смене сейчас:</b>", ""]
+        for it in active:
+            elapsed = _fmt_duration(now - float(it["start_ts"]))
+            start_str = time.strftime("%H:%M", time.localtime(float(it["start_ts"])))
+            lines.append(f"• @{it['username']} — с {start_str} ({elapsed})")
+        lines.append("")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            _OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home"),
+        ]])
+        try:
+            await call.message.edit_text("\n".join(lines), reply_markup=kb)
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action == "shift_me":
+        if not uname:
+            return await call.answer("Задай username.", show_alert=True)
+        hist = crm_storage.shift_history(uname, limit=10)
+        total = crm_storage.shift_total_seconds(uname)
+        lines = [f"<b>📅 Твоя история смен (@{uname})</b>", ""]
+        lines.append(f"Всего отработано: <b>{_fmt_duration(total)}</b>")
+        lines.append("")
+        if not hist:
+            lines.append("<i>История пустая.</i>")
+        else:
+            lines.append("<b>Последние 10:</b>")
+            for h in reversed(hist):
+                s = time.strftime("%d.%m %H:%M", time.localtime(float(h.get("start_ts") or 0)))
+                e = time.strftime("%H:%M", time.localtime(float(h.get("end_ts") or 0)))
+                d = _fmt_duration(h.get("duration_sec") or 0)
+                lines.append(f"• {s} — {e} · {d}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            _OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home"),
+        ]])
+        try:
+            await call.message.edit_text("\n".join(lines), reply_markup=kb)
+        except Exception:
+            pass
+        return await call.answer()
+
+    # ─── Слоты ───
+    if action == "slots":
+        try:
+            await call.message.edit_text(_fmt_slots_status(), reply_markup=_slots_kb_admin())
+        except Exception:
+            pass
+        return await call.answer()
+
+    # ─── PAM ───
+    if action == "pam":
+        try:
+            await call.message.edit_text(
+                "<b>📋 PAM — отправить условия банка</b>\n\n"
+                "Выбери банк — сообщение с кнопкой «Согласен» уйдёт в <b>текущий чат</b>.\n"
+                "Клик клиента залогируется в LEGAL_CONSENT_LOG_CHAT_ID.",
+                reply_markup=_admin_kb_pam(),
+            )
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action.startswith("pam_send:"):
+        bank = action.split(":", 1)[1]
+        ok = await send_pam_message(call.message.chat.id, bank, call.bot)
+        return await call.answer(
+            "✅ Отправлено" if ok else "❌ Ошибка отправки",
+            show_alert=not ok,
+        )
+
+    # ─── Alt-аккаунты (owner) ───
+    if action == "alts":
+        if not is_own:
+            return await call.answer("Только для owner.", show_alert=True)
+        reg = crm_storage.list_alt_accounts()
+        if not reg:
+            body = ("Реестр alt-аккаунтов пуст.\n\n"
+                    "Используй: <code>/setalt @primary @alt [tg_id]</code>")
+        else:
+            lines = ["<b>🔗 Alt-аккаунты:</b>", ""]
+            for primary, entry in sorted(reg.items()):
+                alt = entry.get("alt_username") or "—"
+                full = entry.get("primary_full_ts") or 0
+                flag = "🔴 primary FULL → alt активен" if full else "🟢 primary ок"
+                lines.append(f"• @{primary} → @{alt}\n  {flag}")
+            body = "\n".join(lines)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            _OrigInlineKeyboardButton(text="‹ Назад", callback_data="am:home"),
+        ]])
+        try:
+            await call.message.edit_text(body, reply_markup=kb)
+        except Exception:
+            pass
+        return await call.answer()
+
+    await call.answer("Неизвестное действие", show_alert=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# SHIFTS + SLOTS (SIMBA 2026-08)
+# ---------------------------------------------------------------
+# Смены: менеджеры прожимают «🟢 На смене / 🔴 Ухожу», система
+# логирует в тех-группу (env TECH_GROUP_CHAT_ID) и оповещает клиентов
+# (env CLIENT_ANNOUNCE_CHAT_ID). Часы работы считаются.
+#
+# Слоты железа: менеджер выставляет свободные слоты для установки
+# (`/setslots alfa 5`) — клиенты видят публично сколько сейчас можно
+# сдать (пост в CLIENT_ANNOUNCE_CHAT_ID + команда /slots в любом чате).
+# ═══════════════════════════════════════════════════════════════
+
+_MANAGER_ROLES_FOR_SHIFT = {"owner", "manager", "system_dept", "accounting",
+                            "operationist", "outkup_specialist"}
+
+
+def _fmt_duration(sec: float) -> str:
+    sec = int(max(0, sec))
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    if h == 0:
+        return f"{m} мин"
+    return f"{h}ч {m}мин"
+
+
+def _is_manager_user(user_id: int, username: str = "") -> bool:
+    if is_owner(user_id):
+        return True
+    uname = (username or "").lstrip("@").lower()
+    if not uname:
+        return False
+    info = crm_storage.get_worker_role(uname) or {}
+    return (info.get("role") or "").lower() in _MANAGER_ROLES_FOR_SHIFT
+
+
+def _tech_group_id() -> int:
+    raw = (os.getenv("TECH_GROUP_CHAT_ID") or "").strip()
+    try:
+        return int(raw) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _client_announce_chat_id() -> int:
+    raw = (os.getenv("CLIENT_ANNOUNCE_CHAT_ID") or "").strip()
+    try:
+        return int(raw) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _slots_kb_admin() -> InlineKeyboardMarkup:
+    """Клавиатура для менеджера — быстрое обновление слотов."""
+    kb = []
+    row = []
+    for bank in ("ALFA", "SBER", "VTB", "RAIF", "OZON", "BBR", "GAZ"):
+        row.append(_OrigInlineKeyboardButton(
+            text=f"➕ {bank}", callback_data=f"slot_add:{bank.lower()}:1",
+        ))
+        if len(row) == 3:
+            kb.append(row); row = []
+    if row:
+        kb.append(row)
+    # Ряд "убавить"
+    row = []
+    for bank in ("ALFA", "SBER", "VTB"):
+        row.append(_OrigInlineKeyboardButton(
+            text=f"➖ {bank}", callback_data=f"slot_add:{bank.lower()}:-1",
+        ))
+    kb.append(row)
+    kb.append([_OrigInlineKeyboardButton(text="🔄 Обновить", callback_data="slots_refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def _fmt_slots_status() -> str:
+    s = crm_storage.slots_all()
+    order = ("alfa", "sber", "vtb", "raif", "ozon", "bbr", "gaz")
+    titles = {"alfa": "АЛЬФА", "sber": "СБЕР", "vtb": "ВТБ", "raif": "РАЙФ",
+              "ozon": "ОЗОН", "bbr": "ББР", "gaz": "ГАЗПРОМ"}
+    lines = ["<b>🎯 Свободные слоты для установки:</b>", ""]
+    total = 0
+    for k in order:
+        v = s.get(k) or {"free": 0}
+        cnt = int(v.get("free") or 0)
+        total += cnt
+        emoji = "🟢" if cnt > 0 else "⚪️"
+        lines.append(f"{emoji} <b>{titles[k]}</b>: {cnt}")
+    lines.append("")
+    lines.append(f"<i>Всего: {total}</i>")
+    return "\n".join(lines)
+
+
+@router.message(Command("shifton"))
+async def cmd_shifton(message: Message):
+    """Заступить на смену."""
+    if not _is_manager_user(message.from_user.id, message.from_user.username or ""):
+        await message.reply("Только для менеджеров.")
+        return
+    uname = (message.from_user.username or "").lower()
+    if not uname:
+        await message.reply("У тебя не задан username в TG. Установи и повтори.")
+        return
+    display = message.from_user.first_name or uname
+    ts_str = time.strftime("%H:%M")
+
+    # Проверка уже в смене
+    cur = crm_storage.shift_current_manager(uname)
+    if cur:
+        started_at = time.strftime("%H:%M", time.localtime(float(cur.get("start_ts") or 0)))
+        await message.reply(f"⚠️ Ты уже на смене с {started_at}.")
+        return
+
+    # 1) Пост в тех-группу
+    tech_msg_id = 0
+    tech_id = _tech_group_id()
+    if tech_id:
+        try:
+            sent = await message.bot.send_message(
+                tech_id,
+                f"🟢 <b>Заступил на смену</b>\n"
+                f"👤 @{uname} ({display})\n"
+                f"🕒 {ts_str}",
+            )
+            tech_msg_id = int(getattr(sent, "message_id", 0) or 0)
+        except Exception as e:
+            logger.warning("[shift] tech announce failed: %s", e)
+
+    # 2) Пост клиентам
+    client_msg_id = 0
+    client_id = _client_announce_chat_id()
+    if client_id:
+        try:
+            sent = await message.bot.send_message(
+                client_id,
+                f"🟢 <b>Менеджер {display} на смене</b>\n"
+                f"Готов принимать заявки. Пишите: <b>Ассистент, хочу сдать РС</b>",
+            )
+            client_msg_id = int(getattr(sent, "message_id", 0) or 0)
+        except Exception as e:
+            logger.warning("[shift] client announce failed: %s", e)
+
+    await crm_storage.shift_start(uname, tech_msg_id=tech_msg_id, client_msg_id=client_msg_id)
+    await message.reply(f"✅ Смена начата в {ts_str}. Хорошей работы!")
+
+
+@router.message(Command("shiftoff"))
+async def cmd_shiftoff(message: Message):
+    """Уйти со смены."""
+    if not _is_manager_user(message.from_user.id, message.from_user.username or ""):
+        await message.reply("Только для менеджеров.")
+        return
+    uname = (message.from_user.username or "").lower()
+    if not uname:
+        return
+    display = message.from_user.first_name or uname
+    result = await crm_storage.shift_end(uname)
+    if result.get("not_on_shift"):
+        await message.reply("Ты сейчас не на смене.")
+        return
+    dur_str = _fmt_duration(result.get("duration_sec") or 0)
+    total_str = _fmt_duration(result.get("total_seconds") or 0)
+    ts_str = time.strftime("%H:%M")
+
+    tech_id = _tech_group_id()
+    if tech_id:
+        try:
+            await message.bot.send_message(
+                tech_id,
+                f"🔴 <b>Ушёл со смены</b>\n"
+                f"👤 @{uname} ({display})\n"
+                f"🕒 {ts_str} · ⏱ отработано: <b>{dur_str}</b>\n"
+                f"📊 всего за всё время: {total_str}",
+            )
+        except Exception as e:
+            logger.warning("[shift] tech end announce failed: %s", e)
+    client_id = _client_announce_chat_id()
+    if client_id:
+        try:
+            await message.bot.send_message(
+                client_id,
+                f"🔴 Менеджер <b>{display}</b> закончил смену.",
+            )
+        except Exception as e:
+            logger.warning("[shift] client end announce failed: %s", e)
+
+    await message.reply(f"✅ Смена завершена. Отработано: <b>{dur_str}</b>. Всего: {total_str}.")
+
+
+@router.message(Command("shifts"))
+async def cmd_shifts(message: Message):
+    """Owner видит кто сейчас на смене."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    active = crm_storage.shifts_list_active()
+    if not active:
+        await message.reply("Никого нет на смене.")
+        return
+    lines = ["<b>🟢 На смене сейчас:</b>", ""]
+    now = time.time()
+    for item in active:
+        elapsed = _fmt_duration(now - float(item["start_ts"]))
+        start_str = time.strftime("%H:%M", time.localtime(float(item["start_ts"])))
+        lines.append(f"• @{item['username']} — с {start_str} ({elapsed})")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("slots"))
+async def cmd_slots(message: Message):
+    """Показать свободные слоты. Доступно всем."""
+    # Менеджеру — с клавиатурой, всем остальным — только текст
+    is_mgr = _is_manager_user(message.from_user.id, message.from_user.username or "")
+    if is_mgr:
+        await message.reply(_fmt_slots_status(), reply_markup=_slots_kb_admin())
+    else:
+        await message.reply(_fmt_slots_status())
+
+
+@router.message(Command("setslots"))
+async def cmd_setslots(message: Message):
+    """Установить количество слотов. /setslots alfa 5"""
+    if not _is_manager_user(message.from_user.id, message.from_user.username or ""):
+        await message.reply("Только для менеджеров.")
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.reply(
+            "Формат: <code>/setslots bank count</code>\n"
+            "Пример: <code>/setslots alfa 5</code>"
+        )
+        return
+    bank = parts[1]
+    try:
+        count = int(parts[2])
+    except ValueError:
+        await message.reply("count должен быть числом.")
+        return
+    try:
+        result = await crm_storage.slot_set(
+            bank, count,
+            by_uname=(message.from_user.username or ""),
+        )
+    except ValueError as ve:
+        await message.reply(f"❌ {ve}")
+        return
+    bank_norm = crm_storage.slot_normalize_bank(bank)
+    await message.reply(
+        f"✅ Слоты <b>{bank_norm.upper()}</b>: {result['free']}\n"
+        f"<i>обновлено @{message.from_user.username or '—'}</i>"
+    )
+    # Публичный анонс клиентам
+    client_id = _client_announce_chat_id()
+    if client_id:
+        try:
+            await message.bot.send_message(
+                client_id,
+                f"🎯 <b>Свободно {result['free']} слотов {bank_norm.upper()}</b>\n"
+                f"Пишите менеджеру: <b>Ассистент, хочу сдать РС</b>"
+            )
+        except Exception as e:
+            logger.warning("[slots] client announce failed: %s", e)
+
+
+@router.callback_query(F.data.startswith("slot_add:"))
+async def cb_slot_add(call: CallbackQuery):
+    """Инлайн-кнопки ➕/➖ слот."""
+    if not _is_manager_user(call.from_user.id, call.from_user.username or ""):
+        return await call.answer("Только для менеджеров", show_alert=True)
+    parts = call.data.split(":")
+    if len(parts) < 3:
+        return await call.answer("Bad callback", show_alert=True)
+    bank = parts[1]
+    try:
+        delta = int(parts[2])
+    except ValueError:
+        return await call.answer("Bad delta", show_alert=True)
+    try:
+        result = await crm_storage.slot_delta(bank, delta, by_uname=(call.from_user.username or ""))
+    except ValueError as ve:
+        return await call.answer(str(ve), show_alert=True)
+    await call.answer(f"{bank.upper()}: {result['free']}", show_alert=False)
+    # Обновляем сообщение с текущими слотами
+    try:
+        await call.message.edit_text(_fmt_slots_status(), reply_markup=_slots_kb_admin())
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "slots_refresh")
+async def cb_slots_refresh(call: CallbackQuery):
+    await call.answer()
+    try:
+        await call.message.edit_text(_fmt_slots_status(), reply_markup=_slots_kb_admin())
+    except Exception:
+        pass
+
+
 # ─── /setalt /rmalt /alts (SIMBA 2026-08 — reactive alt-fallback) ───
 
 def _parse_setalt_args(text: str):
