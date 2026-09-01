@@ -1169,6 +1169,170 @@ class Storage:
             entry.setdefault("unread_by", {}).setdefault(uname, 0)
             await self._save_unlocked()
 
+    # ═══════════════════════════════════════════════════════════════
+    # SHIFTS (SIMBA 2026-08): учёт заступлений менеджеров на смену.
+    # state["shifts"] = {
+    #   "<uname_lower>": {
+    #     "current": {start_ts, tech_msg_id, client_msg_id} | None,
+    #     "history": [{start_ts, end_ts, duration_sec}],   # cap 500
+    #     "total_seconds": 12345.6,
+    #   }
+    # }
+    # ═══════════════════════════════════════════════════════════════
+
+    def _shifts(self) -> dict:
+        return self.state.setdefault("shifts", {})
+
+    def _shift_entry(self, uname: str) -> dict:
+        key = (uname or "").lstrip("@").lower().strip()
+        if not key:
+            return {}
+        return self._shifts().setdefault(key, {
+            "current": None, "history": [], "total_seconds": 0.0,
+        })
+
+    async def shift_start(self, uname: str, tech_msg_id: int = 0,
+                          client_msg_id: int = 0) -> dict:
+        """Заступить на смену. Возвращает entry (может быть уже в смене)."""
+        import time as _t
+        async with _lock:
+            e = self._shift_entry(uname)
+            if e.get("current"):
+                return {"already": True, "current": dict(e["current"])}
+            e["current"] = {
+                "start_ts": _t.time(),
+                "tech_msg_id": int(tech_msg_id or 0),
+                "client_msg_id": int(client_msg_id or 0),
+            }
+            await self._save_unlocked()
+            return {"already": False, "current": dict(e["current"])}
+
+    async def shift_end(self, uname: str) -> dict:
+        """Уйти со смены. Возвращает {duration_sec, total_seconds} или {not_on_shift: True}."""
+        import time as _t
+        async with _lock:
+            e = self._shift_entry(uname)
+            cur = e.get("current")
+            if not cur:
+                return {"not_on_shift": True}
+            end_ts = _t.time()
+            duration = max(0.0, float(end_ts - float(cur.get("start_ts") or end_ts)))
+            hist = e.setdefault("history", [])
+            hist.append({
+                "start_ts": float(cur.get("start_ts") or 0),
+                "end_ts": end_ts,
+                "duration_sec": duration,
+            })
+            if len(hist) > 500:
+                del hist[: len(hist) - 500]
+            e["total_seconds"] = float(e.get("total_seconds") or 0) + duration
+            e["current"] = None
+            await self._save_unlocked()
+            return {
+                "duration_sec": duration,
+                "total_seconds": e["total_seconds"],
+                "tech_msg_id": int(cur.get("tech_msg_id") or 0),
+                "client_msg_id": int(cur.get("client_msg_id") or 0),
+            }
+
+    def shift_current_manager(self, uname: str) -> dict:
+        """Возвращает current-запись менеджера ({} если не на смене)."""
+        e = (self._shifts().get((uname or "").lstrip("@").lower()) or {}).get("current")
+        return dict(e) if e else {}
+
+    def shifts_list_active(self) -> list:
+        """Все кто сейчас на смене."""
+        out = []
+        for uname, e in self._shifts().items():
+            if e.get("current"):
+                out.append({
+                    "username": uname,
+                    "start_ts": float(e["current"].get("start_ts") or 0),
+                })
+        out.sort(key=lambda x: x["start_ts"])
+        return out
+
+    def shift_total_seconds(self, uname: str) -> float:
+        e = self._shifts().get((uname or "").lstrip("@").lower()) or {}
+        return float(e.get("total_seconds") or 0)
+
+    def shift_history(self, uname: str, limit: int = 30) -> list:
+        e = self._shifts().get((uname or "").lstrip("@").lower()) or {}
+        return (e.get("history") or [])[-limit:]
+
+    # ═══════════════════════════════════════════════════════════════
+    # SLOTS (SIMBA 2026-08): свободные слоты железа для установки
+    # материалов (для клиентов — «сколько сейчас Альф можно взять»).
+    # state["slots"] = {
+    #   "alfa": {"free": 5, "updated_by": "@simba", "updated_ts": 1700}
+    #   "sber": {...}
+    # }
+    # ═══════════════════════════════════════════════════════════════
+
+    _SLOT_KEYS = ("alfa", "ozon", "raif", "sber", "vtb", "bbr", "gaz")
+
+    def _slots(self) -> dict:
+        return self.state.setdefault("slots", {})
+
+    def slot_normalize_bank(self, bank: str) -> str:
+        """Приводит к каноническому ключу или '' если банк неизвестен."""
+        b = (bank or "").strip().lower()
+        aliases = {
+            "альфа": "alfa", "alfa": "alfa", "alpha": "alfa",
+            "озон": "ozon", "ozon": "ozon",
+            "райф": "raif", "raif": "raif", "raiffeisen": "raif",
+            "сбер": "sber", "sber": "sber", "sberbank": "sber",
+            "втб": "vtb", "vtb": "vtb",
+            "ббр": "bbr", "bbr": "bbr",
+            "газ": "gaz", "газпром": "gaz", "gaz": "gaz", "gazprom": "gaz",
+        }
+        return aliases.get(b, "")
+
+    async def slot_set(self, bank: str, count: int, by_uname: str = "") -> dict:
+        """Установить количество свободных слотов. count < 0 — сохраняем 0."""
+        import time as _t
+        key = self.slot_normalize_bank(bank)
+        if not key:
+            raise ValueError(f"unknown bank: {bank}")
+        async with _lock:
+            s = self._slots()
+            s[key] = {
+                "free": max(0, int(count)),
+                "updated_by": (by_uname or "").lstrip("@").lower(),
+                "updated_ts": _t.time(),
+            }
+            await self._save_unlocked()
+            return dict(s[key])
+
+    async def slot_delta(self, bank: str, delta: int, by_uname: str = "") -> dict:
+        """+/− к текущему количеству."""
+        import time as _t
+        key = self.slot_normalize_bank(bank)
+        if not key:
+            raise ValueError(f"unknown bank: {bank}")
+        async with _lock:
+            s = self._slots()
+            cur = s.get(key) or {"free": 0}
+            new_val = max(0, int(cur.get("free") or 0) + int(delta))
+            s[key] = {
+                "free": new_val,
+                "updated_by": (by_uname or "").lstrip("@").lower(),
+                "updated_ts": _t.time(),
+            }
+            await self._save_unlocked()
+            return dict(s[key])
+
+    def slots_all(self) -> dict:
+        """Все слоты по всем банкам. Для банков без записи — free=0."""
+        s = self._slots()
+        out = {}
+        for k in self._SLOT_KEYS:
+            v = s.get(k) or {"free": 0}
+            out[k] = {"free": int(v.get("free") or 0),
+                      "updated_by": v.get("updated_by") or "",
+                      "updated_ts": float(v.get("updated_ts") or 0)}
+        return out
+
     def get_effective_username(self, primary_username: str) -> str:
         """Возвращает какой username использовать для нового invite.
         Если primary помечен как full и есть alt — вернёт alt.
