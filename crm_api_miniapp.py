@@ -2750,20 +2750,31 @@ async def panel_chat_reply(
         cid_int = int(chat_id)
     except ValueError:
         raise HTTPException(400, "bad chat_id")
-    # Формируем подпись согласно persona
+    # SEC AUDIT 2026-09 C1: whitelist chat_id — только чаты которые есть
+    # в chat_mirror. Иначе валидный HMAC + любой int → send_message в LEGAL
+    # log-канал, STATUS/CLIENTS, DM клиентов, куда угодно.
+    _mirror_reg = storage.state.get("chat_mirror") or {}
+    if str(cid_int) not in _mirror_reg:
+        raise HTTPException(404, "chat not in mirror registry (nothing to reply to)")
+    # SEC AUDIT 2026-09 C-html: экранируем text от HTML-инъекций.
+    # У бота parse_mode=HTML по умолчанию → «<», «&» в тексте от менеджера
+    # ломали sendMessage (Can't parse entities → 400 → 500 в панель).
+    import html as _html
+    safe_text = _html.escape(text)
+    # Формируем подпись согласно persona (uname уже filter-ed proxy'ем).
     uname = (body.by_tg_username or "").lstrip("@")
+    safe_uname = _html.escape(uname or "менеджер")
     persona = (body.persona or "").lower().strip()
     if persona == "as_bot":
-        payload = text
+        payload = safe_text
     elif persona == "manager_name":
-        # Пытаемся резолвить имя из worker_roles
         role_info = (storage.state.get("worker_roles") or {}).get(uname.lower(), {}) \
             if uname else {}
         display = role_info.get("name") if isinstance(role_info, dict) else ""
-        display = display or uname or "менеджер"
-        payload = f"👤 <b>{display}</b>\n{text}"
+        display = _html.escape(display or uname or "менеджер")
+        payload = f"👤 <b>{display}</b>\n{safe_text}"
     else:
-        payload = f"👤 <b>@{uname or 'менеджер'}</b>\n{text}"
+        payload = f"👤 <b>@{safe_uname}</b>\n{safe_text}"
     # Реально шлём через CRM-бота
     try:
         from crm_bot import _get_crm_bot  # экспортируем ниже

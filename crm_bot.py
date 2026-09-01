@@ -855,17 +855,23 @@ async def cb_pam_agree(call: CallbackQuery):
     except Exception:
         pass
 
-    # Лог в отдельную группу
+    # Лог в отдельную группу. SEC AUDIT 2026-09: если LEGAL env не задан,
+    # согласие теряется — юридически плохо. Fallback в TECH-группу чтобы
+    # хотя бы админ увидел.
     log_chat_env = (os.getenv("LEGAL_CONSENT_LOG_CHAT_ID") or "").strip()
-    if not log_chat_env:
-        logger.warning("[pam_ag] LEGAL_CONSENT_LOG_CHAT_ID не задан — согласие не логируется в отдельную группу. "
-                       "Bank=%s user=%s chat=%s", bank_title, user_id, chat_id)
-        return
+    log_chat_id = 0
     try:
-        log_chat_id = int(log_chat_env)
+        log_chat_id = int(log_chat_env) if log_chat_env else 0
     except ValueError:
-        logger.warning("[pam_ag] LEGAL_CONSENT_LOG_CHAT_ID имеет невалидное значение: %r", log_chat_env)
-        return
+        log_chat_id = 0
+    if not log_chat_id:
+        log_chat_id = _tech_group_id()
+        if log_chat_id:
+            logger.warning("[pam_ag] LEGAL_CONSENT env пуст, fallback в TECH group %s", log_chat_id)
+        else:
+            logger.error("[pam_ag] нет ни LEGAL_CONSENT ни TECH_GROUP — согласие ТЕРЯЕТСЯ! "
+                         "Bank=%s user=%s chat=%s", bank_title, user_id, chat_id)
+            return
 
     # Формируем лог. Экранирование HTML на пользовательском вводе.
     import html as _html

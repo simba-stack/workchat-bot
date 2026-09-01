@@ -1092,7 +1092,12 @@ class Storage:
                                  owner_id: str = "") -> None:
         """Добавляет сообщение в mirror. msg: {msg_id, ts, sender_id,
         sender_uname, sender_name, text, is_bot, is_manager_reply,
-        via_manager_uname}."""
+        via_manager_uname}.
+
+        SEC AUDIT 2026-09 H1: раньше делали _save_unlocked() под глобальным
+        lock на КАЖДОЕ сообщение — при privacy=OFF в оживлённых группах
+        замораживало все storage-операции. Теперь батчим: сохраняем максимум
+        раз в 5 сек, между сохранениями держим изменения только в памяти."""
         cid = str(chat_id)
         async with _lock:
             m = self._mirror()
@@ -1109,23 +1114,25 @@ class Storage:
             if owner_id and not entry.get("owner_id"):
                 entry["owner_id"] = owner_id
             msgs = entry.setdefault("messages", [])
-            # Дедуп по msg_id (если уже есть — не дублируем)
             _mid = int(msg.get("msg_id") or 0)
             if _mid and any(int(x.get("msg_id") or 0) == _mid for x in msgs[-30:]):
                 return
             msgs.append(msg)
-            # Cap 500
             if len(msgs) > 500:
                 del msgs[: len(msgs) - 500]
             entry["last_ts"] = float(msg.get("ts") or time.time())
             entry["last_preview"] = (msg.get("text") or "")[:200]
-            # Bump unread для всех менеджеров (кроме автора)
             author_uname = (msg.get("sender_uname") or "").lower()
             unread = entry.setdefault("unread_by", {})
             for uname in list(unread.keys()):
                 if uname != author_uname:
                     unread[uname] = int(unread.get(uname) or 0) + 1
-            await self._save_unlocked()
+            # Debounced save: не чаще чем раз в 5 сек
+            now = time.time()
+            last_save = float(self.state.get("_mirror_last_save_ts") or 0)
+            if (now - last_save) >= 5.0:
+                self.state["_mirror_last_save_ts"] = now
+                await self._save_unlocked()
 
     def mirror_list_chats(self, manager_uname: str = "") -> list:
         """Список чатов с превью и unread-счётчиком для менеджера."""
@@ -3685,6 +3692,12 @@ class Storage:
             if up_type == "inn":
                 # replace previous inn — только последнее валидное значение
                 uploads = [u for u in uploads if (u.get("type") or "").lower() != "inn"]
+            elif up_type == "sbp_confirmed":
+                # SEC AUDIT 2026-09: dedup для СБП (LITE-flow) — двойной клик
+                # sw:sbp_yes при race у обоих проходил guard → дубль upload.
+                if any((u.get("type") or "").lower() == "sbp_confirmed" for u in uploads):
+                    # Уже подтверждено — no-op, возвращаем текущий state
+                    return dict(cur)
             uploads.append(upload)
             cur["uploads"] = uploads
             cur["updated_ts"] = time.time()
