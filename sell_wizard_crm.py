@@ -42,8 +42,20 @@ logger = logging.getLogger(__name__)
 router = Router(name="sell_wizard_crm")
 
 WIZARD_TIMEOUT_SEC = 60 * 60
-ALLOWED_BANKS_IP = ("ALFA", "OZON", "RAIF")
-BANK_TITLES = {"ALFA": "АЛЬФА", "OZON": "ОЗОН", "RAIF": "РАЙФ"}
+# SIMBA 2026-08: расширил список банков (было только ALFA/OZON/RAIF).
+# LITE_BANKS — упрощённая проверка: только ИНН + подтверждение СБП.
+# Для них НЕ требуется скриншот и видео.
+ALLOWED_BANKS_IP = ("ALFA", "OZON", "RAIF", "SBER", "VTB", "BBR", "GAZ")
+BANK_TITLES = {
+    "ALFA": "АЛЬФА",
+    "OZON": "ОЗОН",
+    "RAIF": "РАЙФ",
+    "SBER": "СБЕР",
+    "VTB":  "ВТБ",
+    "BBR":  "ББР",
+    "GAZ":  "ГАЗПРОМ",
+}
+LITE_BANKS = {"SBER", "VTB", "BBR", "GAZ"}  # только ИНН + СБП
 VERIFICATION_SCRIPTED_KEY = {
     "ALFA": "verification_alfa",
     "OZON": "verification_ozon",
@@ -188,18 +200,41 @@ def _kb_verification(uploads: list, bank_key: str = ""):
     """SIMBA (авг 2026): разделённые кнопки для каждого типа пруфа.
     Требование ВИДЕО берётся из verification_config.allow_video для банка —
     (по дефолту True для АЛЬФА, False для остальных).
+    SIMBA 2026-08: LITE-режим для SBER/VTB/BBR/GAZ — только ИНН + СБП.
     """
     types_present = {u.get("type") for u in (uploads or []) if u.get("type")}
-    # bank_key = "ALFA"/"OZON"/"RAIF" (латиница!) — не путать с BANK_TITLES ("АЛЬФА"/...)
-    bank_title = BANK_TITLES.get((bank_key or "").upper(), (bank_key or "").upper())
-    # Читаем конфиг (allow_video) — SIMBA настраивает через админку
-    _cfg = _storage.get_verification_config(bank_title) or {}
-    # Требуем видео если явно allow_video=True для этого банка (по дефолту — только для АЛЬФА)
-    require_video = bool(_cfg.get("allow_video", (bank_key or "").upper() == "ALFA"))
+    bk = (bank_key or "").upper()
+    bank_title = BANK_TITLES.get(bk, bk)
 
     def _btn(icon, label, present_key, cb):
         prefix = "✅ " if present_key in types_present else ""
         return InlineKeyboardButton(text=f"{prefix}{icon} {label}", callback_data=cb)
+
+    # LITE — для СБЕР/ВТБ/ББР/ГАЗПРОМ: только ИНН и подтверждение СБП
+    if bk in LITE_BANKS:
+        rows = [
+            [_btn("✏️", "Вписать ИНН", "inn", "sw:up:inn")],
+            [_btn("💳", "Подтвердить СБП (переводы физлицам)", "sbp_confirmed", "sw:sbp_yes")],
+        ]
+        required = {"inn", "sbp_confirmed"}
+        ready = required.issubset(types_present)
+        send_lbl = (
+            f"📤 Отправить на проверку ({len(uploads or [])})"
+            if ready else f"⏳ Заполните оба пункта ({len(types_present & required)}/2)"
+        )
+        rows.append([InlineKeyboardButton(
+            text=send_lbl,
+            callback_data="sw:sendcheck" if ready else "sw:noop",
+        )])
+        rows.append([
+            InlineKeyboardButton(text="◀️ К банкам", callback_data="sw:back:bank"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="sw:x"),
+        ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    # STANDARD — АЛЬФА/ОЗОН/РАЙФ: скриншот + ИНН + опц. видео
+    _cfg = _storage.get_verification_config(bank_title) or {}
+    require_video = bool(_cfg.get("allow_video", bk == "ALFA"))
 
     rows = []
     if require_video:
@@ -207,14 +242,13 @@ def _kb_verification(uploads: list, bank_key: str = ""):
     rows.append([_btn("📷", "Загрузить скриншот", "screenshot", "sw:up:screen")])
     rows.append([_btn("✏️", "Вписать ИНН", "inn", "sw:up:inn")])
 
-    # Обязательные типы для отправки:
     required = {"screenshot", "inn"}
     if require_video:
         required.add("video")
     ready = required.issubset(types_present)
     send_lbl = (
         f"📤 Отправить на проверку ({len(uploads or [])})"
-        if ready else f"⏳ Загрузите все пруфы ({len(types_present)}/{len(required)})"
+        if ready else f"⏳ Загрузите все пруфы ({len(types_present & required)}/{len(required)})"
     )
     rows.append([InlineKeyboardButton(
         text=send_lbl,
@@ -709,6 +743,30 @@ async def cb_upload_inn(call: CallbackQuery, state: FSMContext):
 async def cb_noop(call: CallbackQuery):
     """Заглушка для disabled кнопки «Загрузите все пруфы» — silent toast."""
     await call.answer("Сначала загрузите все обязательные пруфы", show_alert=False)
+
+
+@router.callback_query(F.data == "sw:sbp_yes")
+async def cb_sbp_confirm(call: CallbackQuery):
+    """LITE-режим (СБЕР/ВТБ/ББР/ГАЗ): клиент подтверждает что СБП подключён
+    для переводов физлицам. Никакой файл не нужен — просто галочка в uploads."""
+    flow = get_flow(call.message.chat.id)
+    if not flow or _is_stale(flow):
+        await call.answer("Сессия истекла", show_alert=True); return
+    uploads = list(flow.get("uploads") or [])
+    if any(u.get("type") == "sbp_confirmed" for u in uploads):
+        return await call.answer("Уже подтверждено", show_alert=False)
+    upload = {
+        "type": "sbp_confirmed",
+        "msg_id": 0,
+        "caption": "СБП для переводов физлицам — подтверждено клиентом",
+        "ts": int(time.time()),
+    }
+    await _storage.sell_flow_append_upload(call.message.chat.id, upload)
+    await call.answer("✅ СБП подтверждён", show_alert=False)
+    try:
+        await _rerender_verification_after_upload(call.bot, call.message.chat.id)
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("sw:mat:"))
