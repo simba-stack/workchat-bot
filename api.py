@@ -8368,6 +8368,17 @@ async def webhook_audit_bot_lk_status(request: Request):
                 return {"ok": True, "action": "payment_choice_sent"}
             except Exception as e:
                 logger.warning("[audit-webhook] payment_choice failed: %s — fallback to scripted", e)
+        # SIMBA 2026-09 (Step 4): paid — отправляем клиенту текст-чек +
+        # копируем фото-пруф через CRM-бота (crm-bot должен быть в group3).
+        if status_new == "paid":
+            try:
+                from crm_bot import send_payment_receipt_to_client
+                asyncio.create_task(send_payment_receipt_to_client(
+                    int(work_chat_id), card,
+                ))
+                return {"ok": True, "action": "payment_receipt_sent"}
+            except Exception as e:
+                logger.warning("[audit-webhook] payment_receipt failed: %s — fallback to scripted", e)
         try:
             import bot as _bot_mod
             ub = getattr(_bot_mod, "userbot", None)

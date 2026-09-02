@@ -2391,10 +2391,14 @@ class ClientPaymentForm(StatesGroup):
 
 async def send_payment_choice_to_client(chat_id: int, card_id: int, card: dict):
     """Публичная функция — вызывается из webhook api.py при status=done.
-    Отправляет клиенту сообщение с суммой + 2 inline-кнопками (Сделка/USDT).
-    Persona текста настраивается через scripted_text `client_payment_prompt`."""
+    Отправляет клиенту сообщение с суммой + 2 inline-кнопками (Сделка/USDT)."""
     import html as _html
-    bot = _get_crm_bot()
+    try:
+        bot = _get_crm_bot()
+    except RuntimeError:
+        logger.error("[client_payment] CRM bot not initialized — skip prompt chat=%s card=%s",
+                     chat_id, card_id)
+        return
     bank = str(card.get("bank") or "—")
     fio = str(card.get("fio") or "—")
     amount = float(card.get("payment_amount_usdt") or 0)
@@ -2436,6 +2440,87 @@ async def send_payment_choice_to_client(chat_id: int, card_id: int, card: dict):
         logger.warning("[client_payment] send failed chat=%s: %s", chat_id, e)
 
 
+def _cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        _OrigInlineKeyboardButton(text="❌ Отмена", callback_data="clipay:cancel"),
+    ]])
+
+
+async def send_payment_receipt_to_client(chat_id: int, card: dict):
+    """SIMBA 2026-09 (Step 4): после того как бухгалтер жмёт «Оплачено» +
+    грузит скрин/ссылку в group3 → клиенту в его work_chat уходит:
+      1. Текст-чек (сумма, банк, метод, комментарий бухгалтера)
+      2. Копия фото-пруфа (если есть) — copyMessage от crm-bot из group3
+         (crm-bot должен быть в group3 как участник)
+      3. Ссылка на транзакцию (если пруф = link)"""
+    import html as _html
+    try:
+        bot = _get_crm_bot()
+    except RuntimeError:
+        logger.error("[receipt] CRM bot not initialized — skip receipt chat=%s", chat_id)
+        return
+
+    bank = _html.escape(str(card.get("bank") or "—"))
+    fio = _html.escape(str(card.get("fio") or "—"))
+    amount = float(card.get("payment_amount_usdt") or 0)
+    method = str(card.get("pay_method") or "")
+    method_label = {
+        "deal": "Сделка Continental",
+        "guarantor": "Гарант",
+        "guarantor_before": "Гарант",
+        "guarantor_after": "Гарант",
+        "trc": "USDT TRC20",
+    }.get(method, method or "—")
+    comment = _html.escape(str(card.get("accountant_comment") or "").strip())
+    proof_type = str(card.get("proof_type") or "")
+    proof_value = str(card.get("proof_value") or "")
+    proof_chat_id = card.get("proof_chat_id") or 0
+    proof_msg_id = int(card.get("proof_msg_id") or 0)
+
+    lines = [
+        f"🎉 <b>Выплата произведена</b>",
+        f"",
+        f"🏦 ЛК: <b>{bank}</b> {fio}",
+        f"💰 Сумма: <b>{amount:g}$</b>",
+        f"💳 Метод: {method_label}",
+    ]
+    if comment:
+        lines.append(f"💬 Комментарий бухгалтера: {comment}")
+    if proof_type == "link" and proof_value:
+        # Ссылка на транзакцию
+        safe_link = _html.escape(proof_value)
+        lines.append(f"🔗 Транзакция: <a href=\"{safe_link}\">tronscan</a>")
+    lines.append("")
+    lines.append("Спасибо за работу! 🙌")
+    text = "\n".join(lines)
+
+    try:
+        await bot.send_message(chat_id, text, disable_web_page_preview=False)
+    except Exception as e:
+        logger.warning("[receipt] send text failed chat=%s: %s", chat_id, e)
+
+    # Фото-пруф — copyMessage из group3 (crm-bot должен быть в group3)
+    if proof_type == "photo" and proof_chat_id and proof_msg_id:
+        try:
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=int(proof_chat_id),
+                message_id=int(proof_msg_id),
+                caption=f"✅ Чек оплаты · {bank}",
+            )
+        except Exception as e:
+            logger.warning("[receipt] copy_message photo failed chat=%s from=%s msg=%s: %s",
+                           chat_id, proof_chat_id, proof_msg_id, e)
+            # Fallback — просто уведомляем что чек в CRM
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "📎 Чек оплаты доступен у менеджера — попросите его переслать.",
+                )
+            except Exception:
+                pass
+
+
 @router.callback_query(F.data.startswith("clipay:deal:"))
 async def cb_client_pay_deal(call: CallbackQuery, state: FSMContext):
     """Клиент выбрал «Сделка Continental»."""
@@ -2450,8 +2535,8 @@ async def cb_client_pay_deal(call: CallbackQuery, state: FSMContext):
     await call.message.reply(
         "💼 <b>Оплата через сделку Continental</b>\n\n"
         "Пришлите <b>номер сделки</b> сообщением.\n\n"
-        "Если сделки нет — откройте её у бухгалтера @PRIDE_BUHGALTERIA или "
-        "нажмите /cancel и выберите USDT TRC20."
+        "Если сделки нет — откройте её у бухгалтера @PRIDE_BUHGALTERIA.",
+        reply_markup=_cancel_kb(),
     )
 
 
@@ -2466,32 +2551,46 @@ async def cb_client_pay_trc(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await call.answer()
-    # Текст-инструкция — редактируется через /edit client_payment_trc_prompt
     scripted = crm_storage.get_scripted_text("client_payment_trc_prompt") or {}
     body = scripted.get("text") or (
         "🪙 <b>Оплата USDT TRC20</b>\n\n"
         "Пришлите ваш <b>TRC20-адрес</b> одним сообщением.\n\n"
-        "⚠️ Проверьте адрес перед отправкой — деньги отправляются на указанный "
-        "адрес. Ошибочно отправленные средства вернуть нельзя.\n\n"
+        "⚠️ Проверьте адрес перед отправкой — ошибочно отправленные средства "
+        "вернуть нельзя.\n\n"
         "Адрес должен начинаться с <b>T</b> и содержать 34 символа."
     )
-    await call.message.reply(body)
+    await call.message.reply(body, reply_markup=_cancel_kb())
+
+
+@router.callback_query(F.data == "clipay:cancel")
+async def cb_client_pay_cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("Отменено")
+    await call.message.reply(
+        "❌ Отменено. Если хотите вернуться к выбору выплаты — свяжитесь "
+        "с менеджером в этом чате."
+    )
 
 
 @router.message(ClientPaymentForm.waiting_deal_number, F.text)
 async def handle_client_deal_number(message: Message, state: FSMContext):
+    import html as _html
     text = (message.text or "").strip()
     if text.lower() in ("/cancel", "отмена"):
         await state.clear()
-        return await message.reply("Отменено. Напишите менеджеру или начните заново.")
+        return await message.reply("Отменено. Свяжитесь с менеджером если нужно вернуться.")
     if not text or len(text) < 3 or len(text) > 40:
-        return await message.reply("Введите корректный номер сделки (3-40 символов).")
+        return await message.reply("Введите корректный номер сделки (3-40 символов).",
+                                    reply_markup=_cancel_kb())
     data = await state.get_data()
     card_id = data.get("card_id")
-    await state.clear()
-    # PATCH audit-bot
     try:
         import audit_bot_client
+        # SIMBA 2026-09: idempotency-key чтобы двойной клик не дублировал PATCH
         ok = await audit_bot_client.set_payment(
             card_id=int(card_id), method="deal", deal_number=text,
         )
@@ -2499,57 +2598,60 @@ async def handle_client_deal_number(message: Message, state: FSMContext):
         logger.warning("[client_payment] set_payment deal failed: %s", e)
         ok = False
     if ok:
+        await state.clear()
         await message.reply(
-            f"✅ <b>Номер сделки принят:</b> <code>{text}</code>\n\n"
+            f"✅ <b>Номер сделки принят:</b> <code>{_html.escape(text)}</code>\n\n"
             f"Карточка передана бухгалтерии. Ожидайте подтверждения."
         )
     else:
+        # SEC AUDIT: не чистим state — клиент может повторить
         await message.reply(
-            "⚠️ Не удалось передать номер сделки в CRM. Свяжитесь с менеджером."
+            "⚠️ Не удалось передать номер сделки в CRM. Попробуйте ещё раз "
+            "или /cancel.",
+            reply_markup=_cancel_kb(),
         )
 
 
 @router.message(ClientPaymentForm.waiting_trc_address, F.text)
 async def handle_client_trc_address(message: Message, state: FSMContext):
     import re as _re
+    import html as _html
     text = (message.text or "").strip()
     if text.lower() in ("/cancel", "отмена"):
         await state.clear()
         return await message.reply("Отменено.")
-    # TRC20-адрес: начинается с T, длина 34, base58
     if not _re.match(r"^T[1-9A-HJ-NP-Za-km-z]{33}$", text):
         return await message.reply(
             "⚠️ Адрес неверный. TRC20-адрес начинается с <b>T</b> и содержит "
-            "34 символа (без «l», «I», «O», «0»).\n\nПопробуйте ещё раз или /cancel."
+            "34 символа (без «l», «I», «O», «0»).\n\nПопробуйте ещё раз или /cancel.",
+            reply_markup=_cancel_kb(),
         )
+    # SIMBA 2026-09: TRC адрес храним в state, а не в callback_data (>64 байт).
     data = await state.get_data()
     card_id = data.get("card_id")
-    # Подтверждение адреса
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        _OrigInlineKeyboardButton(
-            text="✅ Да, подтверждаю",
-            callback_data=f"clipay:trc_ok:{card_id}:{text}",
-        ),
-        _OrigInlineKeyboardButton(
-            text="✏️ Изменить",
-            callback_data=f"clipay:trc_edit:{card_id}",
-        ),
-    ]])
-    await state.clear()
+    await state.update_data(pending_trc=text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            _OrigInlineKeyboardButton(text="✅ Да, подтверждаю", callback_data="clipay:trc_ok"),
+            _OrigInlineKeyboardButton(text="✏️ Изменить",       callback_data="clipay:trc_edit"),
+        ],
+        [_OrigInlineKeyboardButton(text="❌ Отмена", callback_data="clipay:cancel")],
+    ])
     await message.reply(
-        f"🪙 Ваш адрес:\n<code>{text}</code>\n\n"
+        f"🪙 Ваш адрес:\n<code>{_html.escape(text)}</code>\n\n"
         f"Проверьте внимательно и подтвердите.",
         reply_markup=kb,
     )
 
 
-@router.callback_query(F.data.startswith("clipay:trc_ok:"))
-async def cb_client_trc_confirm(call: CallbackQuery):
-    parts = call.data.split(":", 3)
-    if len(parts) < 4:
-        return await call.answer("Bad callback", show_alert=True)
-    card_id = parts[2]
-    trc_addr = parts[3]
+@router.callback_query(F.data == "clipay:trc_ok")
+async def cb_client_trc_confirm(call: CallbackQuery, state: FSMContext):
+    import html as _html
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    trc_addr = data.get("pending_trc") or ""
+    if not card_id or not trc_addr:
+        return await call.answer("Сессия истекла. Начните с начала.", show_alert=True)
     try:
         import audit_bot_client
         ok = await audit_bot_client.set_payment(
@@ -2563,26 +2665,33 @@ async def cb_client_trc_confirm(call: CallbackQuery):
     except Exception:
         pass
     if ok:
+        await state.clear()
         await call.answer("✅ Адрес принят", show_alert=False)
         await call.message.reply(
-            f"✅ <b>Адрес USDT TRC20 подтверждён:</b>\n<code>{trc_addr}</code>\n\n"
+            f"✅ <b>Адрес USDT TRC20 подтверждён:</b>\n<code>{_html.escape(trc_addr)}</code>\n\n"
             f"Карточка передана бухгалтерии. Ожидайте выплату."
         )
     else:
+        # Не чистим state — клиент может повторить или /cancel
         await call.answer("Ошибка передачи в CRM", show_alert=True)
+        await call.message.reply(
+            "⚠️ Не удалось передать в CRM. Попробуйте ещё раз или /cancel.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                _OrigInlineKeyboardButton(text="🔁 Повторить", callback_data="clipay:trc_ok"),
+                _OrigInlineKeyboardButton(text="❌ Отмена",    callback_data="clipay:cancel"),
+            ]]),
+        )
 
 
-@router.callback_query(F.data.startswith("clipay:trc_edit:"))
+@router.callback_query(F.data == "clipay:trc_edit")
 async def cb_client_trc_edit(call: CallbackQuery, state: FSMContext):
-    card_id = call.data.split(":", 2)[2]
-    await state.set_state(ClientPaymentForm.waiting_trc_address)
-    await state.update_data(card_id=card_id, chat_id=call.message.chat.id)
+    # State остаётся waiting_trc_address, юзер просто пишет заново
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
     await call.answer()
-    await call.message.reply("✏️ Введите TRC20-адрес заново.")
+    await call.message.reply("✏️ Введите TRC20-адрес заново.", reply_markup=_cancel_kb())
 
 
 @router.callback_query(F.data.startswith("wadm:cpay:"))
