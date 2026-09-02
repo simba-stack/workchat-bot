@@ -2382,6 +2382,209 @@ class WalletAdminForm(StatesGroup):
     waiting_deposit_amount = State()  # admin вводит сумму подтверждаемого пополнения
 
 
+# SIMBA 2026-09: после «✅ Завершить работу» в group1 клиенту приходит
+# сообщение «Как получить выплату?» с 2 кнопками — сделка/USDT.
+class ClientPaymentForm(StatesGroup):
+    waiting_deal_number = State()   # клиент вводит номер сделки Continental
+    waiting_trc_address = State()   # клиент вводит TRC20-адрес
+
+
+async def send_payment_choice_to_client(chat_id: int, card_id: int, card: dict):
+    """Публичная функция — вызывается из webhook api.py при status=done.
+    Отправляет клиенту сообщение с суммой + 2 inline-кнопками (Сделка/USDT).
+    Persona текста настраивается через scripted_text `client_payment_prompt`."""
+    import html as _html
+    bot = _get_crm_bot()
+    bank = str(card.get("bank") or "—")
+    fio = str(card.get("fio") or "—")
+    amount = float(card.get("payment_amount_usdt") or 0)
+    share = str(card.get("payment_share") or "full")
+    half_reason = str(card.get("half_reason") or "").strip()
+
+    share_line = f"<b>{amount:g}$</b>" if share == "full" else f"<b>{amount:g}$</b> (половина)"
+    reason_block = (
+        f"\n\n💬 Пояснение: {_html.escape(half_reason)}"
+        if share == "half" and half_reason else ""
+    )
+    text = (
+        f"✅ Ваш ЛК <b>{_html.escape(bank)}</b> {_html.escape(fio)} — "
+        f"успешно завершил работу.\n\n"
+        f"💰 Выплата: {share_line}"
+        f"{reason_block}\n\n"
+        f"Как вы хотите получить выплату?\n"
+        f"Выберите ниже:"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            _OrigInlineKeyboardButton(
+                text="💼 Сделка (Continental)",
+                callback_data=f"clipay:deal:{card_id}",
+            ),
+        ],
+        [
+            _OrigInlineKeyboardButton(
+                text="🪙 USDT TRC20",
+                callback_data=f"clipay:trc:{card_id}",
+            ),
+        ],
+    ])
+    try:
+        await bot.send_message(chat_id, text, reply_markup=kb)
+        logger.info("[client_payment] prompt sent chat=%s card=%s amount=%s share=%s",
+                    chat_id, card_id, amount, share)
+    except Exception as e:
+        logger.warning("[client_payment] send failed chat=%s: %s", chat_id, e)
+
+
+@router.callback_query(F.data.startswith("clipay:deal:"))
+async def cb_client_pay_deal(call: CallbackQuery, state: FSMContext):
+    """Клиент выбрал «Сделка Continental»."""
+    card_id = call.data.split(":", 2)[2]
+    await state.set_state(ClientPaymentForm.waiting_deal_number)
+    await state.update_data(card_id=card_id, chat_id=call.message.chat.id)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer()
+    await call.message.reply(
+        "💼 <b>Оплата через сделку Continental</b>\n\n"
+        "Пришлите <b>номер сделки</b> сообщением.\n\n"
+        "Если сделки нет — откройте её у бухгалтера @PRIDE_BUHGALTERIA или "
+        "нажмите /cancel и выберите USDT TRC20."
+    )
+
+
+@router.callback_query(F.data.startswith("clipay:trc:"))
+async def cb_client_pay_trc(call: CallbackQuery, state: FSMContext):
+    """Клиент выбрал USDT TRC20."""
+    card_id = call.data.split(":", 2)[2]
+    await state.set_state(ClientPaymentForm.waiting_trc_address)
+    await state.update_data(card_id=card_id, chat_id=call.message.chat.id)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer()
+    # Текст-инструкция — редактируется через /edit client_payment_trc_prompt
+    scripted = crm_storage.get_scripted_text("client_payment_trc_prompt") or {}
+    body = scripted.get("text") or (
+        "🪙 <b>Оплата USDT TRC20</b>\n\n"
+        "Пришлите ваш <b>TRC20-адрес</b> одним сообщением.\n\n"
+        "⚠️ Проверьте адрес перед отправкой — деньги отправляются на указанный "
+        "адрес. Ошибочно отправленные средства вернуть нельзя.\n\n"
+        "Адрес должен начинаться с <b>T</b> и содержать 34 символа."
+    )
+    await call.message.reply(body)
+
+
+@router.message(ClientPaymentForm.waiting_deal_number, F.text)
+async def handle_client_deal_number(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text.lower() in ("/cancel", "отмена"):
+        await state.clear()
+        return await message.reply("Отменено. Напишите менеджеру или начните заново.")
+    if not text or len(text) < 3 or len(text) > 40:
+        return await message.reply("Введите корректный номер сделки (3-40 символов).")
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    await state.clear()
+    # PATCH audit-bot
+    try:
+        import audit_bot_client
+        ok = await audit_bot_client.set_payment(
+            card_id=int(card_id), method="deal", deal_number=text,
+        )
+    except Exception as e:
+        logger.warning("[client_payment] set_payment deal failed: %s", e)
+        ok = False
+    if ok:
+        await message.reply(
+            f"✅ <b>Номер сделки принят:</b> <code>{text}</code>\n\n"
+            f"Карточка передана бухгалтерии. Ожидайте подтверждения."
+        )
+    else:
+        await message.reply(
+            "⚠️ Не удалось передать номер сделки в CRM. Свяжитесь с менеджером."
+        )
+
+
+@router.message(ClientPaymentForm.waiting_trc_address, F.text)
+async def handle_client_trc_address(message: Message, state: FSMContext):
+    import re as _re
+    text = (message.text or "").strip()
+    if text.lower() in ("/cancel", "отмена"):
+        await state.clear()
+        return await message.reply("Отменено.")
+    # TRC20-адрес: начинается с T, длина 34, base58
+    if not _re.match(r"^T[1-9A-HJ-NP-Za-km-z]{33}$", text):
+        return await message.reply(
+            "⚠️ Адрес неверный. TRC20-адрес начинается с <b>T</b> и содержит "
+            "34 символа (без «l», «I», «O», «0»).\n\nПопробуйте ещё раз или /cancel."
+        )
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    # Подтверждение адреса
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        _OrigInlineKeyboardButton(
+            text="✅ Да, подтверждаю",
+            callback_data=f"clipay:trc_ok:{card_id}:{text}",
+        ),
+        _OrigInlineKeyboardButton(
+            text="✏️ Изменить",
+            callback_data=f"clipay:trc_edit:{card_id}",
+        ),
+    ]])
+    await state.clear()
+    await message.reply(
+        f"🪙 Ваш адрес:\n<code>{text}</code>\n\n"
+        f"Проверьте внимательно и подтвердите.",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("clipay:trc_ok:"))
+async def cb_client_trc_confirm(call: CallbackQuery):
+    parts = call.data.split(":", 3)
+    if len(parts) < 4:
+        return await call.answer("Bad callback", show_alert=True)
+    card_id = parts[2]
+    trc_addr = parts[3]
+    try:
+        import audit_bot_client
+        ok = await audit_bot_client.set_payment(
+            card_id=int(card_id), method="trc", usdt_address=trc_addr,
+        )
+    except Exception as e:
+        logger.warning("[client_payment] set_payment trc failed: %s", e)
+        ok = False
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    if ok:
+        await call.answer("✅ Адрес принят", show_alert=False)
+        await call.message.reply(
+            f"✅ <b>Адрес USDT TRC20 подтверждён:</b>\n<code>{trc_addr}</code>\n\n"
+            f"Карточка передана бухгалтерии. Ожидайте выплату."
+        )
+    else:
+        await call.answer("Ошибка передачи в CRM", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("clipay:trc_edit:"))
+async def cb_client_trc_edit(call: CallbackQuery, state: FSMContext):
+    card_id = call.data.split(":", 2)[2]
+    await state.set_state(ClientPaymentForm.waiting_trc_address)
+    await state.update_data(card_id=card_id, chat_id=call.message.chat.id)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer()
+    await call.message.reply("✏️ Введите TRC20-адрес заново.")
+
+
 @router.callback_query(F.data.startswith("wadm:cpay:"))
 async def cb_wallet_admin_confirm_payout(call: CallbackQuery, state: FSMContext):
     """Admin: подтверждаю выплату — далее введу TXID."""

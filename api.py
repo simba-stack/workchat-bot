@@ -8357,6 +8357,17 @@ async def webhook_audit_bot_lk_status(request: Request):
 
     # Уведомляем клиента только на смены статуса (не на card.created / payment_set)
     if event == "card.status_changed" and scripted_key:
+        # SIMBA 2026-09: специальная обработка `done` — с кнопками
+        # «Сделка / USDT» через CRM-бот (Асик кнопки не умеет).
+        if status_new == "done":
+            try:
+                from crm_bot import send_payment_choice_to_client
+                asyncio.create_task(send_payment_choice_to_client(
+                    int(work_chat_id), int(card.get("id") or 0), card,
+                ))
+                return {"ok": True, "action": "payment_choice_sent"}
+            except Exception as e:
+                logger.warning("[audit-webhook] payment_choice failed: %s — fallback to scripted", e)
         try:
             import bot as _bot_mod
             ub = getattr(_bot_mod, "userbot", None)
@@ -8365,13 +8376,9 @@ async def webhook_audit_bot_lk_status(request: Request):
                 fio = card.get("fio") or ""
                 deal_id = str(card.get("id") or "")
                 usdt_address = card.get("usdt_address") or ""
-                # SIMBA 2026-09: комментарий операциониста → в текст клиенту.
-                # Для brak — берём brak_reason. Для paid/payout — accountant_comment.
                 brak_reason = str(card.get("brak_reason") or "").strip()
                 accountant_comment = str(card.get("accountant_comment") or "").strip()
-                # Комбинированный "comment" в скрипт — для клиента: любой доступный.
                 comment = brak_reason or accountant_comment or ""
-                # Fire-and-forget через asyncio task, чтобы вебхук отдал 200 быстро
                 asyncio.create_task(ub._send_scripted(
                     int(work_chat_id), scripted_key,
                     default_text=(
