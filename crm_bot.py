@@ -5539,86 +5539,90 @@ async def cb_smsadv(call: CallbackQuery, state: FSMContext):
 
     elif stage == "perevyaz_received":
         # Шаг 4: финал — карточка ЛК создаётся ТОЛЬКО ТЕПЕРЬ (после перевязки)
-        card_id = None
+        # SIMBA 2026-09: guard от двойного клика (in-memory) + CAS на sms_stage.
+        # Плюс idempotency-key в HTTP-запросе к AUDIT-боту (см. audit_bot_client).
+        if droplk_id in _smsok_processing:
+            await call.answer("Уже обрабатывается — подожди пару секунд", show_alert=True)
+            return
+        _smsok_processing.add(droplk_id)
         try:
-            card_id = await _create_single_lk_card(drop, lk, owner)
-        except Exception as e:
-            logger.warning("create lk_card after perevyaz failed: %s", e)
-        # Запоминаем связку
-        if card_id:
+            fresh = crm_storage.get_drop_lk_any(droplk_id) or {}
+            if (fresh.get("sms_stage") or "") == "done":
+                await call.answer("Уже завершено", show_alert=False)
+                return
+            # Ставим sms_stage=done СРАЗУ (CAS) чтобы concurrent handler bailed out.
+            await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
+            card_id = None
             try:
-                existing = list(drop.get("lk_card_ids") or [])
-                if card_id not in existing:
-                    existing.append(card_id)
-                    await crm_storage.update_drop_any(
-                        drop["drop_id"], lk_card_ids=existing,
-                    )
-            except Exception:
-                pass
-            # Эмитим userbot пост анкеты в Группу 1 ЛК
-            try:
-                await _queue_anketa_post_via_userbot(drop["drop_id"])
-            except Exception:
-                pass
-        # Уведомление клиенту
-        await _send_to_client_chat(
-            bot, drop, owner,
-            f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
-        )
-        # SIMBA 2026-08: auto-trigger PAM (условия работы по банку) с inline
-        # «Согласен». Клик логируется в LEGAL_CONSENT_LOG_CHAT_ID.
-        try:
-            _pam_key = _resolve_pam_bank_key(bank)
-            _client_chat = int(owner.get("work_chat_id") or 0)
-            if _pam_key and _client_chat:
-                await send_pam_message(_client_chat, _pam_key, bot)
-        except Exception as _pe:
-            logger.warning("[perevyaz] auto PAM failed: %s", _pe)
-        # Уведомление в work_chat партнёра — карточка в работе + метод оплаты
-        # SIMBA (авг 2026): пиним handoff — клиент видит итог в закрепе.
-        try:
-            pay_line = _resolve_payment_method_line(owner, drop)
-            handoff = (
-                f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
-                f"📋 Карточка: #{card_id or '—'}\n"
-                f"💳 Метод оплаты: {pay_line}"
+                card_id = await _create_single_lk_card(drop, lk, owner)
+            except Exception as e:
+                logger.warning("create lk_card after perevyaz failed: %s", e)
+            if card_id:
+                try:
+                    existing = list(drop.get("lk_card_ids") or [])
+                    if card_id not in existing:
+                        existing.append(card_id)
+                        await crm_storage.update_drop_any(
+                            drop["drop_id"], lk_card_ids=existing,
+                        )
+                except Exception:
+                    pass
+                try:
+                    await _queue_anketa_post_via_userbot(drop["drop_id"])
+                except Exception:
+                    pass
+            await _send_to_client_chat(
+                bot, drop, owner,
+                f"✅ Перевязка ЛК <b>{bank}</b> успешно выполнена.",
             )
-            sent_handoff = await _notify_work_chat(bot, owner, handoff)
-            # Пиним handoff если удалось получить sent-объект
             try:
-                _wcid = owner.get("work_chat_id")
-                _hid = getattr(sent_handoff, "message_id", None)
-                if _wcid and _hid:
-                    await bot.pin_chat_message(int(_wcid), int(_hid), disable_notification=True)
+                _pam_key = _resolve_pam_bank_key(bank)
+                _client_chat = int(owner.get("work_chat_id") or 0)
+                if _pam_key and _client_chat:
+                    await send_pam_message(_client_chat, _pam_key, bot)
             except Exception as _pe:
-                logger.warning("[perevyaz] pin handoff failed: %s", _pe)
-        except Exception:
-            pass
-        await crm_storage.update_drop_lk_any(droplk_id, sms_stage="done")
-        # AUDIT #2 CRIT-5 (авг 2026): не врём оператору что карточка создана,
-        # если audit-bot вернул None. Логируем + алерт в чат оператора.
-        if card_id:
-            await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
-        else:
-            await call.answer(
-                "⚠️ Перевязка выполнена, но АУДИТ-бот не создал карточку. "
-                "Проверьте вручную — сохраните ФИО/банк.",
-                show_alert=True,
-            )
+                logger.warning("[perevyaz] auto PAM failed: %s", _pe)
             try:
-                await _notify_work_chat(
-                    bot, owner,
-                    f"⚠️ Перевязка ЛК <b>{bank}</b> ЗАВЕРШЕНА, но карточка в "
-                    f"АУДИТ-боте <b>не создалась</b> (audit-bot вернул пусто).\n"
-                    f"Создайте вручную: ФИО {drop.get('fio') or '—'}, "
-                    f"банк {bank}, drop={drop.get('drop_id')}.",
+                pay_line = _resolve_payment_method_line(owner, drop)
+                handoff = (
+                    f"✅ <b>ЛК {bank}</b> перевязан и в работе.\n"
+                    f"📋 Карточка: #{card_id or '—'}\n"
+                    f"💳 Метод оплаты: {pay_line}"
                 )
+                sent_handoff = await _notify_work_chat(bot, owner, handoff)
+                try:
+                    _wcid = owner.get("work_chat_id")
+                    _hid = getattr(sent_handoff, "message_id", None)
+                    if _wcid and _hid:
+                        await bot.pin_chat_message(int(_wcid), int(_hid), disable_notification=True)
+                except Exception as _pe:
+                    logger.warning("[perevyaz] pin handoff failed: %s", _pe)
             except Exception:
                 pass
-            logger.error(
-                "[perevyaz CRIT-5] audit card not created: droplk=%s drop=%s bank=%s",
-                droplk_id, drop.get("drop_id"), bank,
-            )
+            if card_id:
+                await call.answer("🏁 Карточка ЛК создана, перевязка завершена")
+            else:
+                await call.answer(
+                    "⚠️ Перевязка выполнена, но АУДИТ-бот не создал карточку. "
+                    "Проверьте вручную — сохраните ФИО/банк.",
+                    show_alert=True,
+                )
+                try:
+                    await _notify_work_chat(
+                        bot, owner,
+                        f"⚠️ Перевязка ЛК <b>{bank}</b> ЗАВЕРШЕНА, но карточка в "
+                        f"АУДИТ-боте <b>не создалась</b> (audit-bot вернул пусто).\n"
+                        f"Создайте вручную: ФИО {drop.get('fio') or '—'}, "
+                        f"банк {bank}, drop={drop.get('drop_id')}.",
+                    )
+                except Exception:
+                    pass
+                logger.error(
+                    "[perevyaz CRIT-5] audit card not created: droplk=%s drop=%s bank=%s",
+                    droplk_id, drop.get("drop_id"), bank,
+                )
+        finally:
+            _smsok_processing.discard(droplk_id)
     elif stage == "done":
         # Re-click после завершения перевязки (двойной тап оператора /
         # cached keyboard из старого сообщения). Просто отвечаем что готово
@@ -6732,6 +6736,10 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
         material_line = f"{fio_raw} — {bank}" if fio_raw else bank
         if method_label:
             material_line = f"{material_line} · 💳 {method_label}"
+        # SIMBA 2026-09: idempotency-key = perevyaz:{droplk_id}. AUDIT-бот
+        # при повторном POST с этим же ключом (retry / concurrent) вернёт
+        # ту же карточку без дубля в group1.
+        _idem = f"perevyaz:{lk.get('droplk_id') or ''}"
         card = await audit_bot_client.create_lk_card(
             work_chat_id=int(work_chat_id),
             supplier=supplier_raw,
@@ -6744,9 +6752,9 @@ async def _create_single_lk_card(drop: dict, lk: dict, owner: Optional[dict] = N
             client_username=supplier_raw,
             source="crm_bot:after_perevyaz",
             autopost=True,
-            # CRIT-2: structured payment method
             payment_method=method_code,
             payment_label=method_label,
+            idempotency_key=_idem,
         )
         if not card:
             logger.warning(
@@ -8268,6 +8276,20 @@ async def run_crm_bot():
         await _load_simba_emoji_pack(bot)
     except Exception:
         pass
+    # SIMBA 2026-09: минимизируем видимые команды до ОДНОЙ — /menu.
+    # Всё остальное (shift, slots, PAM, alt) — через inline-кнопки внутри
+    # /menu. Менеджеры не должны запоминать десяток команд.
+    # Старые команды (/shifton, /pamalfa и т.п.) продолжают работать —
+    # для тех кто уже привык — но в UI-подсказке TG видна только /menu.
+    try:
+        from aiogram.types import BotCommand, BotCommandScopeDefault
+        await bot.set_my_commands(
+            [BotCommand(command="menu", description="🎛 Меню")],
+            scope=BotCommandScopeDefault(),
+        )
+        logger.info("[commands] set_my_commands: only /menu visible")
+    except Exception as _ce:
+        logger.warning("[commands] set_my_commands failed: %s", _ce)
     reminder_task = None
     payout_task = None
     dashboard_worker_task = None

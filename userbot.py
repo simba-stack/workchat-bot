@@ -9257,6 +9257,16 @@ class UserbotService:
             _ab_method = _method_map.get(method, "")
 
             async def _push_audit_bot():
+                # SIMBA 2026-09: idempotency-key — тот же формат что и в
+                # crm_bot._create_single_lk_card. Если crm_bot путь уже
+                # создал карточку с ключом perevyaz:{droplk_id} — этот
+                # вызов вернёт ту же карточку без дубля.
+                _droplk = ""
+                try:
+                    _droplk = str(chat_info.get("current_droplk_id") or "")
+                except Exception:
+                    pass
+                _idem = f"perevyaz:{_droplk}" if _droplk else f"perevyaz:wc{wc}:{bank}"
                 _card = await audit_bot_client.create_lk_card(
                     work_chat_id=int(wc),
                     supplier=f"@{client_uname}" if client_uname else "",
@@ -9269,6 +9279,7 @@ class UserbotService:
                     client_username=client_uname or "",
                     source="jarvis-perevyaz",
                     autopost=True,
+                    idempotency_key=_idem,
                 )
                 if _card and _ab_method:
                     try:
