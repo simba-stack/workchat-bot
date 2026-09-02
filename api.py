@@ -8365,12 +8365,24 @@ async def webhook_audit_bot_lk_status(request: Request):
                 fio = card.get("fio") or ""
                 deal_id = str(card.get("id") or "")
                 usdt_address = card.get("usdt_address") or ""
+                # SIMBA 2026-09: комментарий операциониста → в текст клиенту.
+                # Для brak — берём brak_reason. Для paid/payout — accountant_comment.
+                brak_reason = str(card.get("brak_reason") or "").strip()
+                accountant_comment = str(card.get("accountant_comment") or "").strip()
+                # Комбинированный "comment" в скрипт — для клиента: любой доступный.
+                comment = brak_reason or accountant_comment or ""
                 # Fire-and-forget через asyncio task, чтобы вебхук отдал 200 быстро
                 asyncio.create_task(ub._send_scripted(
                     int(work_chat_id), scripted_key,
-                    default_text=f"Сделка #{deal_id} ({bank}) — статус: {status_new}.",
+                    default_text=(
+                        f"Сделка #{deal_id} ({bank}) — статус: {status_new}."
+                        + (f"\n\n💬 Комментарий оператора: {comment}" if comment else "")
+                    ),
                     bank=bank, fio=fio, deal_id=deal_id,
                     usdt_address=usdt_address,
+                    brak_reason=brak_reason,
+                    accountant_comment=accountant_comment,
+                    comment=comment,
                 ))
                 return {"ok": True, "action": "scripted_sent", "key": scripted_key}
             else:

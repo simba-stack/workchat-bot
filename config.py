@@ -275,12 +275,21 @@ SCRIPTED_TEXTS_DEFAULTS = {
     },
     "lk_status_zavershena": {
         "title": "🎉 Статус сделки: ЗАВЕРШЕНА",
-        "text": "Сделка #{deal_id} завершена ({bank}), всё прошло успешно.",
+        # SIMBA 2026-09: добавляем placeholder {comment} — комментарий бухгалтера
+        # приходит из card.accountant_comment. Оператор пишет — клиент видит.
+        "text": (
+            "🎉 Сделка #{deal_id} завершена ({bank}) — выплата прошла.\n\n"
+            "💬 Комментарий бухгалтера: {comment}"
+        ),
         "entities": [],
     },
     "lk_status_zablokirovan": {
-        "title": "⚠️ Статус сделки: ЗАБЛОКИРОВАН",
-        "text": "По сделке #{deal_id} ({bank}) есть нюансы — оператор разбирается.",
+        "title": "⚠️ Статус сделки: БРАК/ЗАБЛОКИРОВАН",
+        "text": (
+            "⚠️ По сделке #{deal_id} ({bank}) выставлен БРАК.\n\n"
+            "💬 Причина: {comment}\n\n"
+            "Свяжитесь с менеджером в этом чате для уточнений."
+        ),
         "entities": [],
     },
     "lk_status_otmena_sdelki": {
