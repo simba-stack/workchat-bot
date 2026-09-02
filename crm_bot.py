@@ -1530,24 +1530,16 @@ async def _notify_clients(bot, text: str) -> int:
 
 
 def _slots_kb_admin() -> InlineKeyboardMarkup:
-    """Клавиатура для менеджера — быстрое обновление слотов."""
+    """Клавиатура менеджера: 4 кнопки на банк (+5 +1 -1 -5). Итого 7 рядов."""
     kb = []
-    row = []
     for bank in ("ALFA", "SBER", "VTB", "RAIF", "OZON", "BBR", "GAZ"):
-        row.append(_OrigInlineKeyboardButton(
-            text=f"➕ {bank}", callback_data=f"slot_add:{bank.lower()}:1",
-        ))
-        if len(row) == 3:
-            kb.append(row); row = []
-    if row:
-        kb.append(row)
-    # Ряд "убавить"
-    row = []
-    for bank in ("ALFA", "SBER", "VTB"):
-        row.append(_OrigInlineKeyboardButton(
-            text=f"➖ {bank}", callback_data=f"slot_add:{bank.lower()}:-1",
-        ))
-    kb.append(row)
+        b_low = bank.lower()
+        kb.append([
+            _OrigInlineKeyboardButton(text=f"+5 {bank}", callback_data=f"slot_add:{b_low}:5"),
+            _OrigInlineKeyboardButton(text=f"+1",        callback_data=f"slot_add:{b_low}:1"),
+            _OrigInlineKeyboardButton(text=f"−1",        callback_data=f"slot_add:{b_low}:-1"),
+            _OrigInlineKeyboardButton(text=f"−5",        callback_data=f"slot_add:{b_low}:-5"),
+        ])
     kb.append([_OrigInlineKeyboardButton(text="🔄 Обновить", callback_data="slots_refresh")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -1724,24 +1716,40 @@ async def cb_slot_add(call: CallbackQuery):
     except ValueError:
         return await call.answer("Bad delta", show_alert=True)
     try:
+        # SIMBA 2026-09: получаем предыдущее значение для формирования уведа.
+        prev = int((crm_storage.slots_all().get(bank.lower()) or {}).get("free") or 0)
         result = await crm_storage.slot_delta(bank, delta, by_uname=(call.from_user.username or ""))
     except ValueError as ve:
         return await call.answer(str(ve), show_alert=True)
-    await call.answer(f"{bank.upper()}: {result['free']}", show_alert=False)
-    # STATUS: постим только при значимом изменении (0 → >0, или прибавили).
-    # Иначе можем спамить STATUS-канал на каждый клик ➕/➖.
-    if delta > 0 and result['free'] > 0:
-        await _notify_status(
-            call.bot,
-            f"🎯 <b>{bank.upper()}</b>: свободно <b>{result['free']}</b> слотов "
-            f"(+{delta} от @{call.from_user.username or '—'})"
-        )
-        # CLIENTS — только если стало >0 (т.е. появились слоты).
+    new_val = int(result['free'])
+    await call.answer(f"{bank.upper()}: {new_val}", show_alert=False)
+
+    uname_by = call.from_user.username or "—"
+    delta_str = f"+{delta}" if delta > 0 else f"{delta}"
+
+    # STATUS-канал: пишем на ЛЮБОЕ изменение (плюс и минус) — админам важно.
+    await _notify_status(
+        call.bot,
+        f"🎯 <b>{bank.upper()}</b>: свободно <b>{new_val}</b> слотов "
+        f"({delta_str} от @{uname_by}, было {prev})"
+    )
+
+    # CLIENTS-чат:
+    # + delta и стало >0  → «Свободно N слотов — бегите!»
+    # - delta и стало ==0 → «Слоты закончились» (одно уведо, не спамим)
+    # - delta и >0        → молчим (не спамим клиентов на каждый минус)
+    if delta > 0 and new_val > 0:
         await _notify_clients(
             call.bot,
-            f"🎯 <b>Свободно {result['free']} слотов {bank.upper()}</b>\n"
+            f"🎯 <b>Свободно {new_val} слотов {bank.upper()}</b>\n"
             f"Пишите: <b>Ассистент, хочу сдать РС</b>"
         )
+    elif delta < 0 and new_val == 0 and prev > 0:
+        await _notify_clients(
+            call.bot,
+            f"⚪️ Слоты <b>{bank.upper()}</b> закончились. Следите за обновлениями!"
+        )
+
     # Обновляем сообщение с текущими слотами
     try:
         await call.message.edit_text(_fmt_slots_status(), reply_markup=_slots_kb_admin())
