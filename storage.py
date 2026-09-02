@@ -725,15 +725,17 @@ class Storage:
         return list(self.state["admins"])
 
     # Whitelist ролей которые попадают в work_chat'ы клиентов.
-    # Operationist/outkup_specialist НЕ добавляются — у них
-    # своя зона (Операционная/Откупы/Доступы), в чате клиента им делать нечего.
-    # Включены: owner, manager, accounting, system (=system_dept, =Перевяз+проверка).
-    # Сравнение всегда case-insensitive (см. list_workers_for_chats).
+    # SIMBA 2026-09: outkup_specialist (СУС) добавляем — они делают перевяз
+    # ЛК напрямую в чате клиента. Раньше их фильтровали, из-за чего
+    # @pride_sys01/@pride_sys02 не попадали в work_chats при инвайте.
+    # Operationist оставляем вне — у них Операционная-группа, в чате не сидят.
     WORK_CHAT_ROLES = {
         "owner", "manager", "accounting",
         "system", "system_dept", "перевяз+проверка",
+        "outkup_specialist", "outkup",           # СУС — перевязы
         # Русские синонимы (на случай кастомных ролей):
         "руководство", "менеджер", "бухгалтер",
+        "сус", "перевязчик",
     }
 
     def get_workers(self):

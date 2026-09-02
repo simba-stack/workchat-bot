@@ -1029,13 +1029,21 @@ async def cmd_setworker(message: Message):
         return
     await crm_storage.set_worker_role(uname, role, is_admin=False)
     await crm_storage.set_worker_display_name(uname, display_name)
+    # SIMBA 2026-09: добавляем в state["workers"] тоже — иначе
+    # list_workers_for_chats их пропустит и Асик не пригласит в чаты клиентов.
+    try:
+        await crm_storage.add_worker(uname)
+    except Exception as _we:
+        logger.warning("[setworker] add_worker(%s) failed: %s", uname, _we)
     await message.reply(
         f"✅ Работник настроен:\n"
         f"• @{uname}\n"
         f"• роль: <b>{role}</b>\n"
-        f"• display-имя для клиентов: <b>{display_name}</b>\n\n"
+        f"• display-имя для клиентов: <b>{display_name}</b>\n"
+        f"• добавлен в список для инвайта в work_chats клиентов\n\n"
         f"Теперь при <code>/admin → 🟢 Заступить на смену</code> клиенты увидят "
-        f"role-based текст с этим именем."
+        f"role-based текст с этим именем. Также Асик будет приглашать "
+        f"этого работника во все новые work_chats."
     )
 
 
