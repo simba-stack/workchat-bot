@@ -82,6 +82,7 @@ WELCOME_AFTER_SURVEY = (
 WELCOME_BANNER = (
     "👋 <b>{nick}</b>, добро пожаловать в <b>ЭКО-СИСТЕМУ PRIDE</b>!\n\n"
     "🤝 Безупречная репутация и <b>120.000 $ +</b> сделок в Continental.\n\n"
+    "🇷🇺 <b>Работаем ТОЛЬКО с RU-материалом.</b> Другие страны не принимаем.\n\n"
     "👉 <b>Наши ресурсы:</b>\n"
     "🟢 @pride_projectv2\n\n"
     "👉 Чтобы начать сотрудничество с нашей Эко-Системой, просто нажмите "
@@ -416,8 +417,45 @@ async def on_source_pick(call: CallbackQuery, state: FSMContext):
 
 @main_router.callback_query(F.data == "gw:get")
 async def on_get_chat_clicked(call: CallbackQuery, state: FSMContext):
-    """Пользователь нажал «Получить рабочую беседу» → показываем капчу."""
+    """SIMBA 2026-09: перед капчей — выбор направления.
+    Клиент выбирает по какому направлению создать рабочую беседу
+    (ИП/Дебет/Телефония/GSM или другое настроенное owner-ом)."""
     await call.answer()
+    directions = storage.list_directions(only_enabled=True)
+    if not directions:
+        # Fallback — сразу капча если направления не настроены
+        return await _start_captcha_inline(call, state)
+    rows = []
+    for d in directions:
+        emoji = d.get("emoji") or "▪️"
+        rows.append([InlineKeyboardButton(
+            text=f"{emoji} {d['title']}",
+            callback_data=f"dir:{d['key']}",
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await call.message.edit_text(
+            "📩 <b>По какому направлению создать беседу?</b>\n\n"
+            "Выберите ниже:",
+            reply_markup=kb,
+        )
+    except Exception:
+        await call.message.answer(
+            "📩 <b>По какому направлению создать беседу?</b>\n\n"
+            "Выберите ниже:",
+            reply_markup=kb,
+        )
+
+
+@main_router.callback_query(F.data.startswith("dir:"))
+async def on_direction_pick(call: CallbackQuery, state: FSMContext):
+    """Клиент выбрал направление → сохраняем в FSM → капча → create."""
+    dir_key = call.data.split(":", 1)[1] if ":" in call.data else ""
+    d = storage.get_direction(dir_key)
+    if not d or not d.get("enabled", True):
+        return await call.answer("Направление недоступно.", show_alert=True)
+    await state.update_data(direction_key=dir_key)
+    await call.answer(f"{d.get('emoji','')} {d.get('title')}")
     await _start_captcha_inline(call, state)
 
 
@@ -459,13 +497,20 @@ async def on_captcha_answer(call: CallbackQuery, state: FSMContext):
         return
 
     if chosen == expected:
+        # SIMBA 2026-09: подтянуть direction ДО clear
+        direction_key = ""
+        try:
+            _data = await state.get_data()
+            direction_key = str(_data.get("direction_key") or "")
+        except Exception:
+            pass
         await state.clear()
         try:
             await call.message.edit_text("✅ Капча пройдена. Создаю рабочую беседу…")
         except Exception:
             pass
         await call.answer()
-        await _create_chat_for_user(call.message.chat.id, call.from_user)
+        await _create_chat_for_user(call.message.chat.id, call.from_user, direction_key=direction_key)
         return
 
     attempts += 1
@@ -513,8 +558,10 @@ async def _safe_send(chat_id: int, text: str, **kwargs) -> bool:
         return False
 
 
-async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
-    """Создаёт беседу. reply_chat_id — куда писать ответы клиенту."""
+async def _create_chat_for_user(reply_chat_id: int, user: TgUser, direction_key: str = ""):
+    """Создаёт беседу. reply_chat_id — куда писать ответы клиенту.
+    SIMBA 2026-09: direction_key определяет направление (ip/debet/telefonia/gsm)
+    и, соответственно, список работников которые будут приглашены."""
     if not user:
         return
 
@@ -541,6 +588,7 @@ async def _create_chat_for_user(reply_chat_id: int, user: TgUser):
         result = await userbot.create_work_chat(
             client_name=client_name,
             client_id=user.id,
+            direction_key=direction_key,
         )
     except Exception as e:
         logger.exception("Chat creation failed")
