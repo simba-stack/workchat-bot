@@ -991,6 +991,132 @@ _ROLE_ALIASES = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════
+# SIMBA 2026-09: DIRECTIONS (управление направлениями рабочих чатов).
+# Клиент в PrideInviteWork_bot выбирает направление → бот приглашает
+# в его work_chat людей из per-direction списка с их префиксами.
+# ═══════════════════════════════════════════════════════════════
+
+@router.message(Command("directions"))
+async def cmd_directions(message: Message):
+    """Показать все направления + участников."""
+    if not is_owner(message.from_user.id):
+        await message.reply("Только для owner.")
+        return
+    dirs = crm_storage.list_directions(only_enabled=False)
+    if not dirs:
+        await message.reply("Направлений нет.")
+        return
+    lines = ["<b>📋 Направления рабочих чатов:</b>", ""]
+    for d in dirs:
+        flag = "🟢" if d.get("enabled") else "⚪️"
+        users = d.get("users") or []
+        lines.append(f"{flag} {d.get('emoji','')} <b>{d.get('title')}</b> (<code>{d['key']}</code>)")
+        if users:
+            for u in users:
+                _uname = u.get("username") or "—"
+                _pref = u.get("prefix") or "—"
+                lines.append(f"    • @{_uname} — <i>{_pref}</i>")
+        else:
+            lines.append("    <i>(пусто)</i>")
+        lines.append("")
+    lines.append("Команды:")
+    lines.append("<code>/dir_add <key> <title> [emoji]</code> — новое направление")
+    lines.append("<code>/dir_del <key></code> — удалить")
+    lines.append("<code>/dir_user_add <key> @user <prefix></code> — добавить работника")
+    lines.append("<code>/dir_user_del <key> @user</code> — убрать работника")
+    lines.append("<code>/dir_toggle <key></code> — вкл/выкл")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("dir_add"))
+async def cmd_dir_add(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split(maxsplit=3)
+    if len(parts) < 3:
+        return await message.reply(
+            "Формат: <code>/dir_add key Название [эмодзи]</code>\n"
+            "Пример: <code>/dir_add sim Симки 📱</code>"
+        )
+    key = parts[1]
+    # title = остаток; эмодзи считаем последним «токеном» если это 1-2 char
+    rest = parts[2] if len(parts) < 4 else f"{parts[2]} {parts[3]}"
+    emoji = ""
+    words = rest.split()
+    if len(words) > 1 and len(words[-1]) <= 3:
+        emoji = words[-1]
+        title = " ".join(words[:-1])
+    else:
+        title = rest
+    ok = await crm_storage.add_direction(key, title, emoji)
+    if ok:
+        await message.reply(f"✅ Направление <b>{title}</b> ({key}) {emoji} создано.")
+    else:
+        await message.reply(f"❌ Направление <code>{key}</code> уже есть.")
+
+
+@router.message(Command("dir_del"))
+async def cmd_dir_del(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: <code>/dir_del key</code>")
+    ok = await crm_storage.remove_direction(parts[1])
+    await message.reply("✅ Удалено." if ok else "Не найдено.")
+
+
+@router.message(Command("dir_user_add"))
+async def cmd_dir_user_add(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split(maxsplit=3)
+    if len(parts) < 4:
+        return await message.reply(
+            "Формат: <code>/dir_user_add key @user Префикс</code>\n"
+            "Пример: <code>/dir_user_add ip @pride_sys01 СУС</code>"
+        )
+    key, uname, prefix = parts[1], parts[2].lstrip("@"), parts[3]
+    ok = await crm_storage.direction_add_user(key, uname, prefix)
+    if ok:
+        await message.reply(
+            f"✅ @{uname} добавлен в направление <code>{key}</code> "
+            f"с префиксом <b>{prefix}</b>."
+        )
+    else:
+        await message.reply(f"❌ Направление <code>{key}</code> не найдено.")
+
+
+@router.message(Command("dir_user_del"))
+async def cmd_dir_user_del(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        return await message.reply("Формат: <code>/dir_user_del key @user</code>")
+    key, uname = parts[1], parts[2].lstrip("@")
+    ok = await crm_storage.direction_remove_user(key, uname)
+    await message.reply(
+        f"✅ @{uname} убран из <code>{key}</code>." if ok else "Не найдено."
+    )
+
+
+@router.message(Command("dir_toggle"))
+async def cmd_dir_toggle(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: <code>/dir_toggle key</code>")
+    d = crm_storage.get_direction(parts[1])
+    if not d:
+        return await message.reply("Не найдено.")
+    new_enabled = not d.get("enabled", True)
+    await crm_storage.set_direction_field(parts[1], enabled=new_enabled)
+    await message.reply(f"{'🟢 Включено' if new_enabled else '⚪️ Выключено'}: {parts[1]}")
+
+
 @router.message(Command("setworker"))
 async def cmd_setworker(message: Message):
     """/setworker @uname role Display Name — сразу и роль и display-имя.
@@ -2525,18 +2651,22 @@ async def send_payment_receipt_to_client(chat_id: int, card: dict):
 async def cb_client_pay_deal(call: CallbackQuery, state: FSMContext):
     """Клиент выбрал «Сделка Continental»."""
     card_id = call.data.split(":", 2)[2]
-    await state.set_state(ClientPaymentForm.waiting_deal_number)
-    await state.update_data(card_id=card_id, chat_id=call.message.chat.id)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
     await call.answer()
-    await call.message.reply(
+    prompt = await call.message.reply(
         "💼 <b>Оплата через сделку Continental</b>\n\n"
         "Пришлите <b>номер сделки</b> сообщением.\n\n"
         "Если сделки нет — откройте её у бухгалтера @PRIDE_BUHGALTERIA.",
         reply_markup=_cancel_kb(),
+    )
+    await state.set_state(ClientPaymentForm.waiting_deal_number)
+    await state.update_data(
+        card_id=card_id,
+        chat_id=call.message.chat.id,
+        prompt_msg_id=int(prompt.message_id),
     )
 
 
@@ -2598,11 +2728,29 @@ async def handle_client_deal_number(message: Message, state: FSMContext):
         logger.warning("[client_payment] set_payment deal failed: %s", e)
         ok = False
     if ok:
+        prompt_msg_id = int(data.get("prompt_msg_id") or 0)
         await state.clear()
-        await message.reply(
-            f"✅ <b>Номер сделки принят:</b> <code>{_html.escape(text)}</code>\n\n"
-            f"Карточка передана бухгалтерии. Ожидайте подтверждения."
-        )
+        # SIMBA 2026-09: заменяем prompt-сообщение бота на «Подтверждено».
+        if prompt_msg_id:
+            try:
+                await message.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=prompt_msg_id,
+                    text=(
+                        f"✅ <b>Подтверждено.</b> Сделка: <code>{_html.escape(text)}</code>\n\n"
+                        f"Ожидайте выплату."
+                    ),
+                )
+            except Exception:
+                await message.reply(
+                    f"✅ <b>Номер сделки принят:</b> <code>{_html.escape(text)}</code>\n\n"
+                    f"Ожидайте выплату."
+                )
+        else:
+            await message.reply(
+                f"✅ <b>Номер сделки принят:</b> <code>{_html.escape(text)}</code>\n\n"
+                f"Ожидайте выплату."
+            )
     else:
         # SEC AUDIT: не чистим state — клиент может повторить
         await message.reply(
@@ -2667,10 +2815,16 @@ async def cb_client_trc_confirm(call: CallbackQuery, state: FSMContext):
     if ok:
         await state.clear()
         await call.answer("✅ Адрес принят", show_alert=False)
-        await call.message.reply(
-            f"✅ <b>Адрес USDT TRC20 подтверждён:</b>\n<code>{_html.escape(trc_addr)}</code>\n\n"
-            f"Карточка передана бухгалтерии. Ожидайте выплату."
-        )
+        # SIMBA 2026-09: заменяем сообщение (вместо reply) — чище UI.
+        try:
+            await call.message.edit_text(
+                f"✅ <b>Подтверждено.</b> Адрес: <code>{_html.escape(trc_addr)}</code>\n\n"
+                f"Ожидайте выплату."
+            )
+        except Exception:
+            await call.message.reply(
+                f"✅ Подтверждено. Ожидайте выплату."
+            )
     else:
         # Не чистим state — клиент может повторить или /cancel
         await call.answer("Ошибка передачи в CRM", show_alert=True)
@@ -2903,10 +3057,10 @@ async def cb_help_inline(call: CallbackQuery):
         "<b>4) Где статус ЛК?</b>\n"
         "В /clients → ЛК показывают статус: ✏️draft → ⏳pending → ✅accepted → 🏁done.\n\n"
         "<b>5) Что-то не работает?</b>\n"
-        "Пиши в личку SIMBA или жми «📞 Связаться с админом» ниже."
+        "Пиши в личку админу или жми «📞 Связаться с админом» ниже."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📞 Связаться с админом", url="https://t.me/SIMBA")],
+        [InlineKeyboardButton(text="📞 Связаться с админом", url="https://t.me/SIMBA_PRIDE_ADM")],
         [InlineKeyboardButton(text="◀️ Назад в профиль", callback_data="back_profile")],
     ])
     try:
