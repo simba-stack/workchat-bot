@@ -2572,6 +2572,107 @@ def _cancel_kb() -> InlineKeyboardMarkup:
     ]])
 
 
+# SIMBA 2026-09: канал PRIDE ВЫПЛАТЫ — публичный, куда после каждой
+# оплаченной сделки уходит анонс без раскрытия ника клиента.
+# Env PAY_PUBLIC_CHAT_ID перекрывает если задан.
+_HARDCODED_PAY_PUBLIC_CHAT_ID = 0  # SIMBA даст ID канала выплат — захардкодим.
+
+
+def _pay_public_chat_id() -> int:
+    return _env_int("PAY_PUBLIC_CHAT_ID", _HARDCODED_PAY_PUBLIC_CHAT_ID)
+
+
+class ClientTagForm(StatesGroup):
+    waiting_tag = State()
+
+
+async def send_public_payout_announcement(work_chat_id: int, card: dict):
+    """Публичный анонс в канал «PRIDE ВЫПЛАТЫ». Ник заменяем на TAG клиента
+    (если задан) или на chat_id (если нет)."""
+    import html as _html
+    pub_id = _pay_public_chat_id()
+    if not pub_id:
+        logger.info("[public_payout] PAY_PUBLIC_CHAT_ID не задан — пропускаю")
+        return
+    try:
+        bot = _get_crm_bot()
+    except RuntimeError:
+        return
+    bank = _html.escape(str(card.get("bank") or "—"))
+    amount = float(card.get("payment_amount_usdt") or 0)
+    method = str(card.get("pay_method") or "")
+    method_label = {
+        "deal": "Сделка",
+        "trc": "USDT TRC20",
+        "guarantor": "Гарант",
+        "guarantor_before": "Гарант",
+        "guarantor_after": "Гарант",
+    }.get(method, method or "—")
+    tag = crm_storage.get_client_tag(work_chat_id)
+    who = _html.escape(tag) if tag else f"id{int(work_chat_id)}"
+    text = (
+        f"🎉 <b>Выплата произведена</b>\n\n"
+        f"🏦 ЛК: <b>{bank}</b> {who}\n"
+        f"💰 Сумма: <b>{amount:g}$</b>\n"
+        f"💳 Метод: {method_label}\n\n"
+        f"Спасибо за работу! 🙌"
+    )
+    try:
+        await bot.send_message(pub_id, text)
+    except Exception as e:
+        logger.warning("[public_payout] send to %s failed: %s", pub_id, e)
+
+
+def _client_tag_kb(work_chat_id: int) -> InlineKeyboardMarkup:
+    """Кнопка «Указать свой тег» для показа клиенту в receipt-сообщении."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        _OrigInlineKeyboardButton(
+            text="✏️ Указать свой тег для канала выплат",
+            callback_data=f"cli_tag:set:{work_chat_id}",
+        ),
+    ]])
+
+
+@router.callback_query(F.data.startswith("cli_tag:set:"))
+async def cb_client_set_tag(call: CallbackQuery, state: FSMContext):
+    """Клиент жмёт «Указать свой тег» → просим текст."""
+    wcid = call.data.split(":", 2)[2]
+    await state.set_state(ClientTagForm.waiting_tag)
+    await state.update_data(work_chat_id=wcid)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer()
+    await call.message.reply(
+        "✏️ Введите ваш <b>тег</b> для канала PRIDE ВЫПЛАТЫ (без пробелов, буквы/цифры/_).\n\n"
+        "Пример: <code>КрутойПерец</code> → в канале будет показано как <b>#КрутойПерец</b>.\n\n"
+        "Тег сохранится и будет использоваться во всех будущих выплатах вместо вашего @username.\n\n"
+        "Или /cancel чтобы отменить."
+    )
+
+
+@router.message(ClientTagForm.waiting_tag, F.text)
+async def handle_client_tag_input(message: Message, state: FSMContext):
+    import html as _html
+    text = (message.text or "").strip()
+    if text.lower() in ("/cancel", "отмена"):
+        await state.clear()
+        return await message.reply("Отменено. Тег не сохранён.")
+    data = await state.get_data()
+    wcid = data.get("work_chat_id") or message.chat.id
+    saved = await crm_storage.set_client_tag(wcid, text)
+    await state.clear()
+    if not saved:
+        return await message.reply(
+            "❌ Не удалось сохранить — используйте буквы, цифры, _ (без пробелов и спец-символов)."
+        )
+    await message.reply(
+        f"✅ Тег сохранён: <b>{_html.escape(saved)}</b>\n\n"
+        f"Он будет использоваться в канале выплат вместо вашего @username."
+    )
+
+
 async def send_payment_receipt_to_client(chat_id: int, card: dict):
     """SIMBA 2026-09 (Step 4): после того как бухгалтер жмёт «Оплачено» +
     грузит скрин/ссылку в group3 → клиенту в его work_chat уходит:
@@ -2620,10 +2721,23 @@ async def send_payment_receipt_to_client(chat_id: int, card: dict):
     lines.append("Спасибо за работу! 🙌")
     text = "\n".join(lines)
 
+    # SIMBA 2026-09: если у клиента ещё нет tag'а для канала выплат —
+    # предлагаем сразу его установить через inline-кнопку.
+    receipt_kb = None
+    if not crm_storage.get_client_tag(chat_id):
+        receipt_kb = _client_tag_kb(chat_id)
+
     try:
-        await bot.send_message(chat_id, text, disable_web_page_preview=False)
+        await bot.send_message(chat_id, text, disable_web_page_preview=False,
+                                reply_markup=receipt_kb)
     except Exception as e:
         logger.warning("[receipt] send text failed chat=%s: %s", chat_id, e)
+
+    # SIMBA 2026-09: публичный анонс в канал PRIDE ВЫПЛАТЫ (без ника).
+    try:
+        await send_public_payout_announcement(chat_id, card)
+    except Exception as _pe:
+        logger.warning("[receipt] public announce failed: %s", _pe)
 
     # Фото-пруф — copyMessage из group3 (crm-bot должен быть в group3)
     if proof_type == "photo" and proof_chat_id and proof_msg_id:

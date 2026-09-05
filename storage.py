@@ -1391,6 +1391,154 @@ class Storage:
                       "updated_ts": float(v.get("updated_ts") or 0)}
         return out
 
+    # ═══════════════════════════════════════════════════════════════
+    # DIRECTIONS (SIMBA 2026-09): направления работы. Клиент выбирает
+    # какое ему нужно (ИП/Дебет/Телефония/GSM или owner-заданное).
+    # Каждое направление имеет свой список работников с их префиксами.
+    # state["directions"] = {
+    #   "ip": {
+    #     "title": "ИП / ООО", "emoji": "🧾", "enabled": True,
+    #     "users": [{"username": "pride_sys01", "prefix": "СУС"}]
+    #   },
+    #   ...
+    # }
+    # ═══════════════════════════════════════════════════════════════
+
+    DEFAULT_DIRECTIONS = {
+        "ip":        {"title": "ИП / ООО",  "emoji": "🧾", "enabled": True, "users": []},
+        "debet":     {"title": "Дебет",     "emoji": "💳", "enabled": True, "users": []},
+        "telefonia": {"title": "Телефония", "emoji": "📱", "enabled": True, "users": []},
+        "gsm":       {"title": "GSM",       "emoji": "📶", "enabled": True, "users": []},
+    }
+
+    def _dirs(self) -> dict:
+        d = self.state.setdefault("directions", {})
+        # Первичная инициализация из дефолтов если пусто
+        if not d:
+            for k, v in self.DEFAULT_DIRECTIONS.items():
+                d[k] = dict(v)
+        return d
+
+    def list_directions(self, only_enabled: bool = True) -> list:
+        """Список направлений. Возвращает [{key, title, emoji, enabled, users}]."""
+        out = []
+        for k, v in self._dirs().items():
+            if only_enabled and not v.get("enabled", True):
+                continue
+            out.append({
+                "key": k,
+                "title": v.get("title") or k,
+                "emoji": v.get("emoji") or "",
+                "enabled": bool(v.get("enabled", True)),
+                "users": list(v.get("users") or []),
+            })
+        return out
+
+    def get_direction(self, key: str) -> dict:
+        v = self._dirs().get((key or "").lower())
+        if not v:
+            return {}
+        return {
+            "key": key.lower(),
+            "title": v.get("title") or key,
+            "emoji": v.get("emoji") or "",
+            "enabled": bool(v.get("enabled", True)),
+            "users": list(v.get("users") or []),
+        }
+
+    async def add_direction(self, key: str, title: str, emoji: str = "") -> bool:
+        k = (key or "").lower().strip()
+        if not k:
+            return False
+        async with _lock:
+            d = self._dirs()
+            if k in d:
+                return False  # уже есть
+            d[k] = {"title": title or k, "emoji": emoji or "", "enabled": True, "users": []}
+            await self._save_unlocked()
+        return True
+
+    async def remove_direction(self, key: str) -> bool:
+        k = (key or "").lower().strip()
+        async with _lock:
+            d = self._dirs()
+            if k in d:
+                del d[k]
+                await self._save_unlocked()
+                return True
+        return False
+
+    async def set_direction_field(self, key: str, **fields) -> bool:
+        k = (key or "").lower().strip()
+        allowed = {"title", "emoji", "enabled"}
+        async with _lock:
+            d = self._dirs()
+            if k not in d:
+                return False
+            for f, v in fields.items():
+                if f in allowed:
+                    d[k][f] = v
+            await self._save_unlocked()
+        return True
+
+    async def direction_add_user(self, key: str, username: str, prefix: str = "") -> bool:
+        k = (key or "").lower().strip()
+        u = (username or "").lstrip("@").lower().strip()
+        if not k or not u:
+            return False
+        async with _lock:
+            d = self._dirs()
+            if k not in d:
+                return False
+            users = d[k].setdefault("users", [])
+            # Update if exists, else append
+            for entry in users:
+                if (entry.get("username") or "").lower() == u:
+                    entry["prefix"] = (prefix or "")[:16]
+                    await self._save_unlocked()
+                    return True
+            users.append({"username": u, "prefix": (prefix or "")[:16]})
+            await self._save_unlocked()
+        return True
+
+    async def direction_remove_user(self, key: str, username: str) -> bool:
+        k = (key or "").lower().strip()
+        u = (username or "").lstrip("@").lower().strip()
+        async with _lock:
+            d = self._dirs()
+            if k not in d:
+                return False
+            users = d[k].get("users") or []
+            filtered = [x for x in users if (x.get("username") or "").lower() != u]
+            if len(filtered) == len(users):
+                return False
+            d[k]["users"] = filtered
+            await self._save_unlocked()
+        return True
+
+    # ═══════════════════════════════════════════════════════════════
+    # CLIENT PUBLIC TAGS (SIMBA 2026-09): анонимный тег клиента для
+    # публичного канала «PRIDE ВЫПЛАТЫ». Хранится по chat_id (work_chat).
+    # state["client_tags"] = { "<chat_id>": "#КрутойПерец" }
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_client_tag(self, chat_id) -> str:
+        return str((self.state.get("client_tags") or {}).get(str(chat_id)) or "")
+
+    async def set_client_tag(self, chat_id, tag: str) -> str:
+        """Сохраняет тег (нормализует: #Тег, только буквы/цифры/_)."""
+        import re as _re
+        raw = (tag or "").strip().lstrip("#")
+        clean = _re.sub(r"[^A-Za-zА-Яа-я0-9_]", "", raw)[:24]
+        if not clean:
+            return ""
+        final = f"#{clean}"
+        async with _lock:
+            tags = self.state.setdefault("client_tags", {})
+            tags[str(chat_id)] = final
+            await self._save_unlocked()
+        return final
+
     def get_effective_username(self, primary_username: str) -> str:
         """Возвращает какой username использовать для нового invite.
         Если primary помечен как full и есть alt — вернёт alt.
