@@ -34,6 +34,13 @@ class AdminFSM(StatesGroup):
     broadcast_text = State()      # ввод текста рассылки (audience в state.data)
     scripted_edit = State()       # ожидаем пересылку нового текста скрипта
                                   # (state.data.scripted_key = ключ шаблона)
+    # SIMBA 2026-09: направления рабочих чатов
+    dir_new_key = State()         # ввод key нового направления (ip/debet/...)
+    dir_new_title = State()       # ввод title/emoji нового направления
+    dir_edit_title = State()      # редактирование title (dir_key в state.data)
+    dir_edit_emoji = State()      # редактирование эмодзи
+    dir_user_add_uname = State()  # добавить работника → username
+    dir_user_add_prefix = State() # → префикс
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -46,6 +53,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📈 Источники трафика", callback_data="adm:traffic")],
         [InlineKeyboardButton(text="🧠 AI (Claude)", callback_data="adm:ai")],
         [InlineKeyboardButton(text="📨 Invite-бот (welcome)", callback_data="adm:invite")],
+        [InlineKeyboardButton(text="🧭 Направления рабочих чатов", callback_data="adm:dirs")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="🔐 Админы", callback_data="adm:admins")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="adm:close")],
@@ -103,10 +111,16 @@ async def _broadcast_ask_text(call: CallbackQuery, state: FSMContext, audience: 
         len(storage.list_bot_users() or {}) if audience == "all"
         else len(storage.list_inactive_bot_users() or [])
     )
+    # SIMBA 2026-09: теперь принимаем любой формат — текст/фото/видео/премиум эмодзи.
     await call.message.edit_text(
         f"✍️ <b>Рассылка → {label}</b> ({count} чел.)\n\n"
-        f"Пришлите текст следующим сообщением. Поддерживается HTML "
-        f"(<b>жирный</b>, <i>курсив</i>, <a href='url'>ссылка</a>).\n\n"
+        f"Пришлите (или перешлите) сообщение — как хотите чтобы клиенты его увидели.\n\n"
+        f"Поддерживается:\n"
+        f"• текст с HTML-форматированием\n"
+        f"• фото / видео / GIF с подписью\n"
+        f"• премиум эмодзи (custom_emoji)\n"
+        f"• любые entities (bold, italic, ссылки)\n\n"
+        f"Бот запомнит сообщение и после подтверждения скопирует всем.\n\n"
         f"Для отмены — /admin",
     )
     await call.answer()
@@ -122,15 +136,28 @@ async def cb_bc_inactive(call: CallbackQuery, state: FSMContext):
     await _broadcast_ask_text(call, state, "inactive")
 
 
-@router.message(AdminFSM.broadcast_text, F.text & ~F.text.startswith("/"))
+@router.message(AdminFSM.broadcast_text)
 async def handle_broadcast_text(message: Message, state: FSMContext):
+    """SIMBA 2026-09: принимаем любой контент — текст/фото/видео/премиум-эмодзи.
+    Запоминаем (chat_id, msg_id) — потом copy_message скопирует всем."""
     data = await state.get_data()
     audience = data.get("audience", "all")
-    text = (message.text or "").strip()
-    if not text:
-        await message.reply("Пустой текст — отправьте ещё раз.")
+    # /admin — отмена
+    if message.text and message.text.startswith("/"):
         return
-    await state.update_data(text=text)
+    # Проверим — есть ли контент вообще
+    has_content = bool(
+        message.text or message.caption or message.photo or message.video
+        or message.document or message.animation or message.voice
+        or message.video_note or message.sticker
+    )
+    if not has_content:
+        await message.reply("Пустое сообщение. Пришлите что-нибудь.")
+        return
+    await state.update_data(
+        source_chat_id=int(message.chat.id),
+        source_msg_id=int(message.message_id),
+    )
     label = "ВСЕМ" if audience == "all" else "СПЯЩИМ (нет work-чата)"
     count = (
         len(storage.list_bot_users() or {}) if audience == "all"
@@ -139,7 +166,8 @@ async def handle_broadcast_text(message: Message, state: FSMContext):
     await message.reply(
         f"📋 <b>Предпросмотр рассылки</b>\n\n"
         f"<b>Аудитория:</b> {label} ({count} чел.)\n\n"
-        f"────── текст ──────\n{text}\n────────────────\n\n"
+        f"Сообщение выше (👆) будет скопировано каждому клиенту как есть — "
+        f"с фото, эмодзи, форматированием.\n\n"
         f"Отправить?",
         reply_markup=_broadcast_confirm_kb(),
     )
@@ -166,9 +194,10 @@ async def cb_bc_send(call: CallbackQuery, state: FSMContext):
         return
     data = await state.get_data()
     audience = data.get("audience", "all")
-    text = data.get("text", "")
-    if not text:
-        await call.answer("Нет текста для рассылки", show_alert=True)
+    source_chat_id = int(data.get("source_chat_id") or 0)
+    source_msg_id = int(data.get("source_msg_id") or 0)
+    if not source_chat_id or not source_msg_id:
+        await call.answer("Нет сообщения для рассылки — пришлите его заново", show_alert=True)
         return
 
     # Собираем список user_id
@@ -185,17 +214,21 @@ async def cb_bc_send(call: CallbackQuery, state: FSMContext):
         return
 
     await call.message.edit_text(
-        f"⏳ Отправляю {total} сообщений... подожди (~{total // 20 + 1} сек)",
+        f"⏳ Копирую сообщение {total} раз... подожди (~{total // 20 + 1} сек)",
     )
     await call.answer()
 
     import asyncio as _asyncio
     bot = call.message.bot
     sent, failed, blocked = 0, 0, 0
-    # Throttle: Telegram limit ~30 msg/sec в общую группу но безопасно 20 msg/sec
+    # SIMBA 2026-09: copy_message сохраняет фото/видео/премиум-эмодзи/подпись.
     for i, uid in enumerate(user_ids):
         try:
-            await bot.send_message(uid, text, disable_web_page_preview=True)
+            await bot.copy_message(
+                chat_id=uid,
+                from_chat_id=source_chat_id,
+                message_id=source_msg_id,
+            )
             sent += 1
         except Exception as e:
             es = str(e).lower()
@@ -1469,4 +1502,340 @@ async def fsm_set_invite_jobs(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Текст вакансий обновлён ({len(text)} симв.).",
         reply_markup=main_menu_kb(),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# SIMBA 2026-09: DIRECTIONS (Направления рабочих чатов)
+# Клиент в PrideInviteWork_bot выбирает направление → бот приглашает
+# в его work_chat людей из per-direction списка с их префиксами.
+# ═══════════════════════════════════════════════════════════════
+
+def _dirs_list_kb() -> InlineKeyboardMarkup:
+    """Главный экран — список всех направлений."""
+    rows = []
+    for d in storage.list_directions(only_enabled=False):
+        flag = "🟢" if d.get("enabled") else "⚪️"
+        emoji = d.get("emoji") or "▪️"
+        users_n = len(d.get("users") or [])
+        rows.append([InlineKeyboardButton(
+            text=f"{flag} {emoji} {d['title']} ({users_n} чел.)",
+            callback_data=f"adm:dirs:d:{d['key']}",
+        )])
+    rows.append([InlineKeyboardButton(text="➕ Добавить направление", callback_data="adm:dirs:new")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _dir_detail_kb(key: str) -> InlineKeyboardMarkup:
+    """Экран деталей направления — список работников + управление."""
+    d = storage.get_direction(key)
+    rows = []
+    users = d.get("users") or []
+    for i, u in enumerate(users):
+        uname = u.get("username") or "—"
+        prefix = u.get("prefix") or "—"
+        rows.append([
+            InlineKeyboardButton(text=f"@{uname} · {prefix}",
+                                 callback_data=f"adm:dirs:d:{key}:u:{i}:info"),
+            InlineKeyboardButton(text="🗑",
+                                 callback_data=f"adm:dirs:d:{key}:u:{i}:rm"),
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Добавить работника",
+                                       callback_data=f"adm:dirs:d:{key}:add")])
+    enabled = d.get("enabled", True)
+    rows.append([InlineKeyboardButton(
+        text="⚪️ Выключить" if enabled else "🟢 Включить",
+        callback_data=f"adm:dirs:d:{key}:tgl",
+    )])
+    rows.append([
+        InlineKeyboardButton(text="✏️ Название", callback_data=f"adm:dirs:d:{key}:ren"),
+        InlineKeyboardButton(text="🖼 Эмодзи",   callback_data=f"adm:dirs:d:{key}:emo"),
+    ])
+    rows.append([InlineKeyboardButton(text="🗑 Удалить направление",
+                                       callback_data=f"adm:dirs:d:{key}:del")])
+    rows.append([InlineKeyboardButton(text="◀️ К списку", callback_data="adm:dirs")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _dir_detail_text(key: str) -> str:
+    d = storage.get_direction(key)
+    if not d:
+        return "Направление не найдено."
+    users = d.get("users") or []
+    return (
+        f"🧭 <b>{d.get('emoji','')} {d.get('title')}</b>\n"
+        f"key: <code>{key}</code>\n"
+        f"Статус: {'🟢 показано клиентам' if d.get('enabled') else '⚪️ скрыто'}\n"
+        f"Работников: <b>{len(users)}</b>"
+    )
+
+
+@router.callback_query(F.data == "adm:dirs")
+async def cb_dirs_list(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.clear()
+    try:
+        await call.message.edit_text(
+            "🧭 <b>Направления рабочих чатов</b>\n\n"
+            "Клиент в @PrideInviteWork_bot видит эти пункты после «Получить рабочую беседу». "
+            "Каждое направление имеет свой список работников с префиксами — они автоматически "
+            "приглашаются в новый work_chat клиента.",
+            reply_markup=_dirs_list_kb(),
+        )
+    except Exception:
+        await call.message.answer(
+            "🧭 <b>Направления рабочих чатов</b>",
+            reply_markup=_dirs_list_kb(),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm:dirs:new")
+async def cb_dirs_new(call: CallbackQuery, state: FSMContext):
+    if not storage.is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    await state.set_state(AdminFSM.dir_new_key)
+    await call.answer()
+    await call.message.answer(
+        "🆕 Новое направление.\n\n"
+        "Введи <b>key</b> (латиница, коротко, без пробелов):\n"
+        "Пример: <code>ip</code>, <code>debet</code>, <code>sim</code>"
+    )
+
+
+@router.message(AdminFSM.dir_new_key, F.text)
+async def on_dir_new_key(message: Message, state: FSMContext):
+    import re as _re
+    if not storage.is_admin(message.from_user.id):
+        return
+    key = (message.text or "").strip().lower()
+    if not _re.match(r"^[a-z][a-z0-9_]{1,20}$", key):
+        return await message.reply(
+            "❌ Только латиница/цифры/_, 2-20 знаков, начинается с буквы. Попробуй ещё раз или /admin."
+        )
+    if storage.get_direction(key):
+        return await message.reply(
+            f"❌ Направление <code>{key}</code> уже есть. Введи другой key или /admin."
+        )
+    await state.update_data(dir_new_key=key)
+    await state.set_state(AdminFSM.dir_new_title)
+    await message.reply(
+        f"Ок, key = <code>{key}</code>.\n\n"
+        f"Теперь введи <b>название + эмодзи</b> одним сообщением.\n"
+        f"Пример: <code>Симки 📱</code> или <code>Виртуальные номера 📞</code>"
+    )
+
+
+@router.message(AdminFSM.dir_new_title, F.text)
+async def on_dir_new_title(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    key = data.get("dir_new_key") or ""
+    if not key:
+        await state.clear()
+        return await message.reply("Ошибка — key потерян. /admin для новой попытки.")
+    raw = (message.text or "").strip()
+    # Отделяем эмодзи (последний токен если он короткий)
+    parts = raw.split()
+    emoji = ""
+    if len(parts) > 1 and len(parts[-1]) <= 3:
+        emoji = parts[-1]
+        title = " ".join(parts[:-1])
+    else:
+        title = raw
+    await storage.add_direction(key, title, emoji)
+    await state.clear()
+    await message.answer(
+        f"✅ Направление создано: {emoji} <b>{title}</b> (<code>{key}</code>)",
+        reply_markup=_dirs_list_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:dirs:d:"))
+async def cb_dir_action(call: CallbackQuery, state: FSMContext):
+    """Универсальный обработчик действий над конкретным направлением."""
+    if not storage.is_admin(call.from_user.id):
+        return await call.answer("Нет доступа", show_alert=True)
+    # adm:dirs:d:<key>[:action[:extra]]
+    parts = call.data.split(":")
+    if len(parts) < 4:
+        return await call.answer("Bad callback", show_alert=True)
+    key = parts[3]
+    action = parts[4] if len(parts) > 4 else ""
+
+    if not action:
+        # Показать детали
+        try:
+            await call.message.edit_text(_dir_detail_text(key), reply_markup=_dir_detail_kb(key))
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action == "tgl":
+        d = storage.get_direction(key)
+        new_val = not d.get("enabled", True)
+        await storage.set_direction_field(key, enabled=new_val)
+        try:
+            await call.message.edit_text(_dir_detail_text(key), reply_markup=_dir_detail_kb(key))
+        except Exception:
+            pass
+        return await call.answer("🟢 Включено" if new_val else "⚪️ Выключено")
+
+    if action == "del":
+        # 2-step confirm
+        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"adm:dirs:d:{key}:delyes")],
+            [InlineKeyboardButton(text="◀️ Отмена",     callback_data=f"adm:dirs:d:{key}")],
+        ])
+        try:
+            await call.message.edit_text(
+                f"⚠️ Удалить направление <code>{key}</code>?\n\n"
+                f"Работников (все привязки внутри) → удалятся вместе с ним.",
+                reply_markup=confirm_kb,
+            )
+        except Exception:
+            pass
+        return await call.answer()
+
+    if action == "delyes":
+        await storage.remove_direction(key)
+        try:
+            await call.message.edit_text(
+                f"✅ Направление <code>{key}</code> удалено.",
+                reply_markup=_dirs_list_kb(),
+            )
+        except Exception:
+            pass
+        return await call.answer("Удалено")
+
+    if action == "add":
+        await state.set_state(AdminFSM.dir_user_add_uname)
+        await state.update_data(dir_key=key)
+        await call.answer()
+        await call.message.answer(
+            f"Направление <code>{key}</code>: <b>добавить работника</b>.\n\n"
+            f"Введи <b>username</b> (без @):"
+        )
+        return
+
+    if action == "ren":
+        await state.set_state(AdminFSM.dir_edit_title)
+        await state.update_data(dir_key=key)
+        await call.answer()
+        d = storage.get_direction(key)
+        await call.message.answer(
+            f"Текущее название: <b>{d.get('title')}</b>\n\n"
+            f"Введи новое название:"
+        )
+        return
+
+    if action == "emo":
+        await state.set_state(AdminFSM.dir_edit_emoji)
+        await state.update_data(dir_key=key)
+        await call.answer()
+        d = storage.get_direction(key)
+        await call.message.answer(
+            f"Текущий эмодзи: {d.get('emoji') or '—'}\n\n"
+            f"Введи новый эмодзи (или «-» чтобы убрать):"
+        )
+        return
+
+    if action == "u" and len(parts) >= 7:
+        # adm:dirs:d:<key>:u:<i>:rm или :info
+        try:
+            idx = int(parts[5])
+        except ValueError:
+            return await call.answer("Bad idx", show_alert=True)
+        sub = parts[6]
+        d = storage.get_direction(key)
+        users = d.get("users") or []
+        if idx < 0 or idx >= len(users):
+            return await call.answer("Нет такого работника", show_alert=True)
+        uname = (users[idx].get("username") or "")
+        if sub == "rm":
+            await storage.direction_remove_user(key, uname)
+            try:
+                await call.message.edit_text(_dir_detail_text(key), reply_markup=_dir_detail_kb(key))
+            except Exception:
+                pass
+            return await call.answer(f"@{uname} убран")
+        if sub == "info":
+            prefix = users[idx].get("prefix") or "—"
+            return await call.answer(f"@{uname} · префикс: {prefix}", show_alert=True)
+
+    return await call.answer("Не понял действие", show_alert=True)
+
+
+@router.message(AdminFSM.dir_edit_title, F.text)
+async def on_dir_edit_title(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    key = data.get("dir_key") or ""
+    title = (message.text or "").strip()[:60]
+    if not title:
+        return await message.reply("Пустое название. Ещё раз или /admin.")
+    await storage.set_direction_field(key, title=title)
+    await state.clear()
+    await message.answer(
+        f"✅ Название обновлено: <b>{title}</b>",
+        reply_markup=_dir_detail_kb(key),
+    )
+
+
+@router.message(AdminFSM.dir_edit_emoji, F.text)
+async def on_dir_edit_emoji(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    key = data.get("dir_key") or ""
+    emoji = (message.text or "").strip()
+    if emoji == "-":
+        emoji = ""
+    if len(emoji) > 3:
+        emoji = emoji[:3]
+    await storage.set_direction_field(key, emoji=emoji)
+    await state.clear()
+    await message.answer(
+        f"✅ Эмодзи: {emoji or '—'}",
+        reply_markup=_dir_detail_kb(key),
+    )
+
+
+@router.message(AdminFSM.dir_user_add_uname, F.text)
+async def on_dir_user_add_uname(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        return
+    uname = (message.text or "").strip().lstrip("@")
+    if not uname or " " in uname:
+        return await message.reply("Введи один username без пробелов и без @. Ещё раз или /admin.")
+    await state.update_data(new_user_uname=uname)
+    await state.set_state(AdminFSM.dir_user_add_prefix)
+    await message.reply(
+        f"Ок, работник: <code>@{uname}</code>\n\n"
+        f"Теперь введи <b>префикс</b> (то что будет отображаться в чате рядом с ником, "
+        f"до 16 символов):\n\n"
+        f"Пример: <code>СУС</code>, <code>Менеджер</code>, <code>Дебет-СУС</code>"
+    )
+
+
+@router.message(AdminFSM.dir_user_add_prefix, F.text)
+async def on_dir_user_add_prefix(message: Message, state: FSMContext):
+    if not storage.is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    key = data.get("dir_key") or ""
+    uname = data.get("new_user_uname") or ""
+    prefix = (message.text or "").strip()[:16]
+    if not key or not uname:
+        await state.clear()
+        return await message.reply("Ошибка контекста. /admin для новой попытки.")
+    await storage.direction_add_user(key, uname, prefix)
+    await state.clear()
+    await message.answer(
+        f"✅ @{uname} добавлен в <code>{key}</code> с префиксом <b>{prefix}</b>.",
+        reply_markup=_dir_detail_kb(key),
     )
