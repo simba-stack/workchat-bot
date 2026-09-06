@@ -1832,7 +1832,7 @@ async def cmd_setslots(message: Message):
         await _notify_clients(
             message.bot,
             f"🎯 <b>Свободно {result['free']} слотов {bank_norm.upper()}</b>\n"
-            f"Пишите менеджеру: <b>Ассистент, хочу сдать РС</b>"
+            f"Пишите в свою рабочую беседу для сдачи РС."
         )
 
 
@@ -1876,7 +1876,7 @@ async def cb_slot_add(call: CallbackQuery):
         await _notify_clients(
             call.bot,
             f"🎯 <b>Свободно {new_val} слотов {bank.upper()}</b>\n"
-            f"Пишите: <b>Ассистент, хочу сдать РС</b>"
+            f"Пишите в свою рабочую беседу для сдачи РС."
         )
     elif delta < 0 and new_val == 0 and prev > 0:
         await _notify_clients(

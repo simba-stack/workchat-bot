@@ -943,7 +943,26 @@ class UserbotService:
 
                 # Welcome v2: если чат ждёт выбор направления — обрабатываем тут,
                 # AI не вызывается на это сообщение.
-                if storage.is_awaiting_track_choice(event.chat_id):
+                # SIMBA 2026-09: расширяем — если клиент пишет "1" или "2" ПОСЛЕ
+                # welcome (даже если раньше писал что-то другое), тоже роутим
+                # в track_choice, пока чат не имеет выбранного track.
+                _should_check_track = storage.is_awaiting_track_choice(event.chat_id)
+                if not _should_check_track:
+                    try:
+                        _txt_low = (getattr(event, "raw_text", "") or event.message.text or "").strip().lower()
+                        _chat_info = storage.get_chat_info(event.chat_id) or {}
+                        _welcome_ok = bool(_chat_info.get("welcome_sent"))
+                        _chosen_track = _chat_info.get("chosen_track") or ""
+                        # Если явное «1»/«2»/«ип»/«дебет» и welcome уже был, а track не выбран
+                        _is_direction_reply = _txt_low in (
+                            "1", "2", "ип", "ип/ооо", "ооо", "дебет", "дeбет",
+                        )
+                        if _welcome_ok and not _chosen_track and _is_direction_reply:
+                            _should_check_track = True
+                            logger.info("[track_choice] late-recover chat=%s text=%r", event.chat_id, _txt_low)
+                    except Exception:
+                        pass
+                if _should_check_track:
                     handled = await self._handle_track_choice(event)
                     if handled:
                         return
