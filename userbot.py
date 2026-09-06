@@ -349,16 +349,17 @@ class UserbotService:
         # In-memory, не persist (не критично при рестарте — тогда просто без orig).
         self._last_client_msg_text: dict[int, str] = {}
 
-    async def create_work_chat(self, client_name: str, client_id: int = 0) -> dict:
+    async def create_work_chat(self, client_name: str, client_id: int = 0,
+                                direction_key: str = "") -> dict:
         """Создаёт супергруппу-беседу под клиента, инвайтит работников,
         делает userbot админом, регистрирует чат в managed_chats и возвращает
         invite-ссылку.
 
-        bot.py зовёт это после капчи в @PRIDE_INVITE_bot. Без этой функции
-        invite-flow ломается (создание не доходит до ссылки).
+        SIMBA 2026-09: direction_key определяет какой набор работников
+        приглашать. Если задан — берём users из storage.get_direction(key).
+        Fallback: старая логика через list_workers_for_chats().
 
         Returns: {chat_id, title, invite_link, statuses}
-          где statuses — словарь {worker_username: "добавлен"/"не существует"/...}
         """
         title = config.CHAT_TITLE_TEMPLATE.format(client_name=client_name)
         about = config.CHAT_DESCRIPTION_TEMPLATE.format(client_name=client_name)
@@ -368,18 +369,35 @@ class UserbotService:
             title=title, about=about, megagroup=True,
         ))
         channel = result.chats[0]
-        logger.info("Created group '%s' (id=%s) for client=%s", title, channel.id, client_id)
+        logger.info("Created group '%s' (id=%s) for client=%s direction=%s",
+                    title, channel.id, client_id, direction_key or "-")
 
-        # 2) Резолвим работников для добавления в work_chat.
-        # ВАЖНО: list_workers_for_chats() — whitelist по роли. Только
-        # owner/manager/accounting/system_dept попадают. operationist/
-        # outkup_specialist/chat_access_manager — НЕ добавляются.
+        # 2) Резолвим работников. SIMBA 2026-09:
+        # (a) если direction_key задан — берём per-direction users с их префиксами
+        # (b) иначе — старая логика list_workers_for_chats()
         statuses: dict[str, str] = {}
         users_to_invite = []
-        try:
-            workers_list = storage.list_workers_for_chats() or []
-        except Exception:
-            workers_list = []
+        # per-direction prefix map: {uname.lower() -> prefix}
+        _direction_prefixes: dict[str, str] = {}
+        workers_list: list = []
+        if direction_key:
+            try:
+                _dir = storage.get_direction(direction_key)
+            except Exception:
+                _dir = {}
+            _dir_users = (_dir.get("users") or []) if _dir else []
+            for entry in _dir_users:
+                _u = (entry.get("username") or "").lstrip("@").strip()
+                if not _u:
+                    continue
+                workers_list.append(_u)
+                _direction_prefixes[_u.lower()] = (entry.get("prefix") or "")[:16]
+            logger.info("[direction] %s → %d workers", direction_key, len(workers_list))
+        if not workers_list:
+            try:
+                workers_list = storage.list_workers_for_chats() or []
+            except Exception:
+                workers_list = []
         if not workers_list:
             workers_list = list(getattr(config, "DEFAULT_WORKERS", []) or [])
         # Дедуп по lowercase: TimonSkupCL и timonskupcl → один работник
@@ -520,22 +538,28 @@ class UserbotService:
                             pin_messages=False, add_admins=False, anonymous=False,
                             manage_call=False,
                         )
-                    # Если role_str пустой — ставим хотя бы "—" чтобы был визуальный префикс
-                    rank_to_use = (role_str or "").strip() or ("Менеджер" if not is_admin else "Admin")
-                    # SIMBA: системные роли → русские отображаемые имена.
-                    # accounting=Бухгалтер, system=Перевяз+проверка,
-                    # manager=Менеджер, owner=Руководство.
+                    # SIMBA 2026-09: если задан per-direction prefix — он побеждает.
+                    _dir_prefix = _direction_prefixes.get(uname.lower(), "")
+                    if _dir_prefix:
+                        rank_to_use = _dir_prefix
+                    else:
+                        rank_to_use = (role_str or "").strip() or ("Менеджер" if not is_admin else "Admin")
+                    # SIMBA 2026-09: СУС = ПЕРЕВЯЗ (не Откупщик).
                     _RU_RANK = {
                         "owner": "Руководство",
                         "manager": "Менеджер",
-                        "system": "Перевяз+проверка",
-                        "system_dept": "Перевяз+проверка",
+                        "system": "СУС",
+                        "system_dept": "СУС",
                         "accounting": "Бухгалтер",
                         "operationist": "Оператор",
-                        "outkup_specialist": "Откупщик",
+                        "outkup_specialist": "СУС",
+                        "outkup": "СУС",
                         "support": "Менеджер",
                     }
-                    rank_to_use = _RU_RANK.get(rank_to_use.lower(), rank_to_use)
+                    # SIMBA 2026-09: direction prefix (если есть) НЕ проходит через
+                    # _RU_RANK — SIMBA задаёт своими руками, не транслируем.
+                    if not _dir_prefix:
+                        rank_to_use = _RU_RANK.get(rank_to_use.lower(), rank_to_use)
                     # Telegram ограничивает rank 16 символов
                     rank_to_use = rank_to_use[:16]
                     await self.client(EditAdminRequest(
