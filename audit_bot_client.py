@@ -167,23 +167,51 @@ async def find_duplicate_lk_card(
         return None
 
 
+async def get_card(card_id: int) -> Optional[dict]:
+    """GET /api/v1/lk-cards/:id — возвращает карточку или None."""
+    if not _is_configured():
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(
+                f"{AUDIT_BOT_URL}/api/v1/lk-cards/{int(card_id)}",
+                headers=_auth_headers(),
+            )
+        if r.status_code >= 400:
+            logger.warning("[audit_bot] get_card %s failed: %s", card_id, r.status_code)
+            return None
+        data = r.json() or {}
+        return data.get("card")
+    except Exception as e:
+        logger.warning("[audit_bot] get_card exception: %s", e)
+        return None
+
+
 async def set_payment(
     card_id: int,
-    method: str,
+    method: str = "",
     usdt_address: str = "",
     deal_number: str = "",
     accountant_comment: str = "",
+    clean_usdt: Optional[bool] = None,
+    payment_amount_usdt: Optional[float] = None,
 ) -> Optional[dict]:
     """PATCH /api/v1/lk-cards/:id/payment. method: trc|deal|guarantor_before|guarantor_after."""
     if not _is_configured():
         return None
-    payload = {"method": method}
+    payload = {}
+    if method:
+        payload["method"] = method
     if usdt_address:
         payload["usdt_address"] = usdt_address
     if deal_number:
         payload["deal_number"] = deal_number
     if accountant_comment:
         payload["accountant_comment"] = accountant_comment
+    if clean_usdt is not None:
+        payload["clean_usdt"] = bool(clean_usdt)
+    if payment_amount_usdt is not None:
+        payload["payment_amount_usdt"] = float(payment_amount_usdt)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.patch(

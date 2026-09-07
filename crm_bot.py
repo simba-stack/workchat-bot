@@ -2972,18 +2972,34 @@ async def cb_client_trc_confirm(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     if ok:
-        await state.clear()
         await call.answer("✅ Адрес принят", show_alert=False)
-        # SIMBA 2026-09: заменяем сообщение (вместо reply) — чище UI.
+        # SIMBA 2026-09: заменяем сообщение — «Подтверждено, адрес».
         try:
             await call.message.edit_text(
-                f"✅ <b>Подтверждено.</b> Адрес: <code>{_html.escape(trc_addr)}</code>\n\n"
-                f"Ожидайте выплату."
+                f"✅ <b>Подтверждено.</b> Адрес: <code>{_html.escape(trc_addr)}</code>"
             )
         except Exception:
-            await call.message.reply(
-                f"✅ Подтверждено. Ожидайте выплату."
-            )
+            pass
+        # SIMBA 2026-09: следом задаём вопрос про чистую USDT.
+        # state НЕ чистим — храним card_id для следующего шага.
+        clean_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [_OrigInlineKeyboardButton(text="✅ Чистая (−10%)",
+                                        callback_data="clipay:clean_yes")],
+            [_OrigInlineKeyboardButton(text="🚫 Нет, не надо",
+                                        callback_data="clipay:clean_no")],
+        ])
+        clean_text = (
+            "🧊 <b>USDT: чистая или обычная?</b>\n\n"
+            "Если хотите получить выплату на <b>биржу</b>, <b>Cryptobot</b> "
+            "или любой не полу-холодный кошелёк — мы можем провести транзакцию "
+            "с <b>проверенным 0% AML</b> USDT.\n\n"
+            "⚠️ Комиссия за чистые USDT — <b>−10%</b> от заявленной суммы.\n\n"
+            "❗️ Если вы дадите адрес биржи и <b>не выберете чистую</b> — "
+            "администрация <b>не несёт ответственности</b> за возврат платежа "
+            "на наш адрес и <b>не повторяет платёж</b> второй раз."
+        )
+        await call.message.reply(clean_text, reply_markup=clean_kb)
+        return
     else:
         # Не чистим state — клиент может повторить или /cancel
         await call.answer("Ошибка передачи в CRM", show_alert=True)
@@ -2994,6 +3010,71 @@ async def cb_client_trc_confirm(call: CallbackQuery, state: FSMContext):
                 _OrigInlineKeyboardButton(text="❌ Отмена",    callback_data="clipay:cancel"),
             ]]),
         )
+
+
+@router.callback_query(F.data == "clipay:clean_yes")
+async def cb_client_clean_yes(call: CallbackQuery, state: FSMContext):
+    """Клиент выбрал ЧИСТУЮ USDT — режем 10% и ставим флаг."""
+    data = await state.get_data()
+    card_id = data.get("card_id")
+    if not card_id:
+        return await call.answer("Сессия истекла", show_alert=True)
+    # Считаем новую сумму = amount * 0.9. Нужно знать текущую сумму.
+    # Стянем через audit_bot (get_card).
+    try:
+        import audit_bot_client
+        card_info = await audit_bot_client.get_card(int(card_id))
+    except Exception as e:
+        logger.warning("[clean_yes] get_card failed: %s", e)
+        card_info = None
+    if not card_info:
+        try:
+            await call.answer("Не удалось получить сумму — сообщите менеджеру.",
+                              show_alert=True)
+        except Exception:
+            pass
+        return
+    original_amt = float(card_info.get("payment_amount_usdt") or 0)
+    new_amt = round(original_amt * 0.9, 2)
+    ok = None
+    try:
+        import audit_bot_client
+        ok = await audit_bot_client.set_payment(
+            card_id=int(card_id),
+            clean_usdt=True,
+            payment_amount_usdt=new_amt,
+        )
+    except Exception as e:
+        logger.warning("[clean_yes] set_payment failed: %s", e)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await state.clear()
+    if ok:
+        await call.answer("Чистая — принято", show_alert=False)
+        await call.message.reply(
+            f"✅ <b>Чистая USDT принята.</b>\n"
+            f"Сумма после −10%: <b>{new_amt}$</b> (было {original_amt:g}$)\n\n"
+            f"Ожидайте выплату."
+        )
+    else:
+        await call.answer("Ошибка передачи — свяжитесь с менеджером.", show_alert=True)
+
+
+@router.callback_query(F.data == "clipay:clean_no")
+async def cb_client_clean_no(call: CallbackQuery, state: FSMContext):
+    """Клиент отказался от чистой USDT — оставляем как есть."""
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await state.clear()
+    await call.answer("Ок, обычная USDT", show_alert=False)
+    await call.message.reply(
+        "🚫 Обычная USDT. Ожидайте выплату.\n\n"
+        "⚠️ Напоминание: за возврат платежа биржей ответственности нет."
+    )
 
 
 @router.callback_query(F.data == "clipay:trc_edit")
