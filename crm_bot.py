@@ -2586,18 +2586,13 @@ class ClientTagForm(StatesGroup):
     waiting_tag = State()
 
 
-async def send_public_payout_announcement(work_chat_id: int, card: dict):
-    """Публичный анонс в канал «PRIDE ВЫПЛАТЫ». Ник заменяем на TAG клиента
-    (если задан) или на chat_id (если нет)."""
+# SIMBA 2026-09: pending public posts — ждём пока клиент задаст тег
+# перед первым публичным анонсом. Без таймаута — сколько ждать, столько ждём.
+_pending_public_posts: dict = {}  # chat_id -> {"card": dict}
+
+
+def _build_public_payout_text(work_chat_id: int, card: dict) -> str:
     import html as _html
-    pub_id = _pay_public_chat_id()
-    if not pub_id:
-        logger.info("[public_payout] PAY_PUBLIC_CHAT_ID не задан — пропускаю")
-        return
-    try:
-        bot = _get_crm_bot()
-    except RuntimeError:
-        return
     bank = _html.escape(str(card.get("bank") or "—"))
     amount = float(card.get("payment_amount_usdt") or 0)
     method = str(card.get("pay_method") or "")
@@ -2610,24 +2605,67 @@ async def send_public_payout_announcement(work_chat_id: int, card: dict):
     }.get(method, method or "—")
     tag = crm_storage.get_client_tag(work_chat_id)
     who = _html.escape(tag) if tag else f"id{int(work_chat_id)}"
-    text = (
+    return (
         f"🎉 <b>Выплата произведена</b>\n\n"
         f"🏦 ЛК: <b>{bank}</b> {who}\n"
         f"💰 Сумма: <b>{amount:g}$</b>\n"
         f"💳 Метод: {method_label}\n\n"
         f"Спасибо за работу! 🙌"
     )
+
+
+async def _post_payout_to_channels(work_chat_id: int, card: dict):
+    """Постит в канал PRIDE ВЫПЛАТЫ + в общий чат клиентов."""
     try:
-        await bot.send_message(pub_id, text)
-    except Exception as e:
-        logger.warning("[public_payout] send to %s failed: %s", pub_id, e)
+        bot = _get_crm_bot()
+    except RuntimeError:
+        return
+    text = _build_public_payout_text(work_chat_id, card)
+    # 1) Публичный канал выплат
+    pub_id = _pay_public_chat_id()
+    if pub_id:
+        try:
+            await bot.send_message(pub_id, text)
+        except Exception as e:
+            logger.warning("[public_payout] channel %s failed: %s", pub_id, e)
+    # 2) Общий CLIENTS-чат (профит виден всем клиентам)
+    clients_id = _clients_chat_id()
+    if clients_id:
+        try:
+            await bot.send_message(clients_id, text)
+        except Exception as e:
+            logger.warning("[public_payout] clients-chat %s failed: %s", clients_id, e)
+
+
+async def send_public_payout_announcement(work_chat_id: int, card: dict):
+    """SIMBA 2026-09 v3:
+    - Если тег уже задан → пост в канал+общий чат СРАЗУ
+    - Если тега нет → сохраняем в pending, ждём пока клиент задаст тег.
+      Как задаст → триггерится и пост уходит."""
+    tag = crm_storage.get_client_tag(work_chat_id)
+    if tag:
+        logger.info("[public_payout] tag exists (%s) — post immediately chat=%s", tag, work_chat_id)
+        await _post_payout_to_channels(work_chat_id, card)
+        return
+    logger.info("[public_payout] no tag → pending, waiting for client to set tag chat=%s", work_chat_id)
+    _pending_public_posts[work_chat_id] = {"card": card}
+
+
+async def _trigger_pending_public_post(work_chat_id: int):
+    """Клиент задал тег — если есть pending пост, шлём сразу."""
+    pending = _pending_public_posts.pop(work_chat_id, None)
+    if not pending:
+        return
+    card = pending.get("card") or {}
+    logger.info("[public_payout] triggered by tag-set chat=%s", work_chat_id)
+    await _post_payout_to_channels(work_chat_id, card)
 
 
 def _client_tag_kb(work_chat_id: int) -> InlineKeyboardMarkup:
     """Кнопка «Указать свой тег» для показа клиенту в receipt-сообщении."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         _OrigInlineKeyboardButton(
-            text="✏️ Указать свой тег для канала выплат",
+            text="✏️ Указать тег чтобы запостить выплату",
             callback_data=f"cli_tag:set:{work_chat_id}",
         ),
     ]])
@@ -2645,10 +2683,12 @@ async def cb_client_set_tag(call: CallbackQuery, state: FSMContext):
         pass
     await call.answer()
     await call.message.reply(
-        "✏️ Введите ваш <b>тег</b> для канала PRIDE ВЫПЛАТЫ (без пробелов, буквы/цифры/_).\n\n"
+        "✏️ Введите ваш <b>тег</b> для канала PRIDE ВЫПЛАТЫ и общего чата.\n\n"
         "Пример: <code>КрутойПерец</code> → в канале будет показано как <b>#КрутойПерец</b>.\n\n"
-        "Тег сохранится и будет использоваться во всех будущих выплатах вместо вашего @username.\n\n"
-        "Или /cancel чтобы отменить."
+        "После того как введёте тег — ваша выплата <b>сразу</b> опубликуется "
+        "с этим тегом. Тег сохранится для всех будущих выплат.\n\n"
+        "Без тега публикация не отправится — @username не палится.\n\n"
+        "Или /cancel чтобы пропустить."
     )
 
 
@@ -2671,6 +2711,11 @@ async def handle_client_tag_input(message: Message, state: FSMContext):
         f"✅ Тег сохранён: <b>{_html.escape(saved)}</b>\n\n"
         f"Он будет использоваться в канале выплат вместо вашего @username."
     )
+    # SIMBA 2026-09: если есть отложенный пост в канал — публикуем СРАЗУ с тегом.
+    try:
+        await _trigger_pending_public_post(int(wcid))
+    except Exception as _pe:
+        logger.warning("[client_tag] trigger pending post failed: %s", _pe)
 
 
 async def send_payment_receipt_to_client(chat_id: int, card: dict):
