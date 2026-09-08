@@ -2645,6 +2645,59 @@ async def _post_payout_to_channels(work_chat_id: int, card: dict):
 # SIMBA 2026-09: команды /топ /я для клиентов в общем чате (CLIENTS_CHAT_ID).
 # /топ  — топ 10 клиентов по сумме выплат
 # /я    — своя стата (сумма + кол-во сделок)
+@router.message(Command("statadd"))
+async def cmd_statadd(message: Message):
+    """/statadd <тег> <сумма> [сделок=1] — owner добавляет запись в топ.
+    Формат: /statadd СанекБадай 585 1 (или без count — по умолч 1)
+    Полезно для ретро-фила клиентов до включения авто-стата."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        return await message.reply(
+            "Формат: <code>/statadd тег сумма [сделок]</code>\n"
+            "Пример: <code>/statadd СанекБадай 585 1</code>"
+        )
+    tag_raw = parts[1].lstrip("#")
+    try:
+        amount = float(parts[2].replace(",", "."))
+    except ValueError:
+        return await message.reply("Сумма должна быть числом.")
+    count = 1
+    if len(parts) >= 4:
+        try:
+            count = int(parts[3])
+        except ValueError:
+            pass
+    tag = f"#{tag_raw}"
+    # Синтетический tg_user_id для ручных записей — hash от тега (отрицательный чтобы не конфликтовать)
+    fake_tg_id = -abs(hash(tag)) % 10**10
+    fake_tg_id = -(fake_tg_id + 1)
+    import time as _t
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        stats = crm_storage.state.setdefault("client_stats", {})
+        key = str(fake_tg_id)
+        entry = stats.get(key) or {
+            "total_amount_usdt": 0.0, "deals_count": 0,
+            "tag": tag, "work_chat_id": 0, "last_payout_ts": 0.0,
+            "manual": True,
+        }
+        entry["total_amount_usdt"] = float(entry.get("total_amount_usdt") or 0) + amount
+        entry["deals_count"] = int(entry.get("deals_count") or 0) + count
+        entry["tag"] = tag
+        entry["last_payout_ts"] = _t.time()
+        entry["manual"] = True
+        stats[key] = entry
+        await crm_storage._save_unlocked()  # noqa
+    await message.reply(
+        f"✅ Добавлено в топ:\n"
+        f"🦁 <b>{tag}</b>\n"
+        f"💰 +{amount:g}$ (итого: {entry['total_amount_usdt']:g}$)\n"
+        f"📊 +{count} сделок (итого: {entry['deals_count']})"
+    )
+
+
 @router.message(Command("топ", "top"))
 async def cmd_top_clients(message: Message):
     # Только в общем чате клиентов
