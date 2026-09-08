@@ -2942,6 +2942,17 @@ async def handle_client_tag_input(message: Message, state: FSMContext):
         f"✅ Тег сохранён: <b>{_html.escape(saved)}</b>\n\n"
         f"Он будет использоваться в канале выплат вместо вашего @username."
     )
+    # SIMBA 2026-09: синк тега в client_stats (иначе /топ покажет старый id123).
+    try:
+        from storage import _lock as _st_lock
+        async with _st_lock:
+            stats = crm_storage.state.setdefault("client_stats", {})
+            key = str(message.from_user.id)
+            if key in stats:
+                stats[key]["tag"] = saved
+                await crm_storage._save_unlocked()  # noqa
+    except Exception as _se:
+        logger.warning("[client_tag] sync stats.tag failed: %s", _se)
     # SIMBA 2026-09: если есть отложенный пост в канал — публикуем СРАЗУ с тегом.
     try:
         await _trigger_pending_public_post(int(wcid))
