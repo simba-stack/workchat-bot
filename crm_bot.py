@@ -2595,46 +2595,102 @@ def _build_public_payout_text(work_chat_id: int, card: dict) -> str:
     import html as _html
     bank = _html.escape(str(card.get("bank") or "—"))
     amount = float(card.get("payment_amount_usdt") or 0)
-    method = str(card.get("pay_method") or "")
-    method_label = {
-        "deal": "Сделка",
-        "trc": "USDT TRC20",
-        "guarantor": "Гарант",
-        "guarantor_before": "Гарант",
-        "guarantor_after": "Гарант",
-    }.get(method, method or "—")
     tag = crm_storage.get_client_tag(work_chat_id)
     who = _html.escape(tag) if tag else f"id{int(work_chat_id)}"
     return (
-        f"🎉 <b>Выплата произведена</b>\n\n"
-        f"🏦 ЛК: <b>{bank}</b> {who}\n"
-        f"💰 Сумма: <b>{amount:g}$</b>\n"
-        f"💳 Метод: {method_label}\n\n"
-        f"Спасибо за работу! 🙌"
+        f"🎊 <b>Новая выплата!</b>\n"
+        f"Поздравляем!\n\n"
+        f"🦁 Лев: <b>{who}</b>\n"
+        f"🏦 Материал: <b>{bank}</b>\n"
+        f"💰 Сумма: <b>{amount:g}$</b>\n\n"
+        f"Создать рабочую беседу — @PrideInviteWork_bot"
     )
 
 
 async def _post_payout_to_channels(work_chat_id: int, card: dict):
-    """Постит в канал PRIDE ВЫПЛАТЫ + в общий чат клиентов."""
+    """Постит в канал PRIDE ВЫПЛАТЫ + в общий чат клиентов. Инкрементит stats."""
     try:
         bot = _get_crm_bot()
     except RuntimeError:
         return
     text = _build_public_payout_text(work_chat_id, card)
-    # 1) Публичный канал выплат
     pub_id = _pay_public_chat_id()
     if pub_id:
         try:
             await bot.send_message(pub_id, text)
         except Exception as e:
             logger.warning("[public_payout] channel %s failed: %s", pub_id, e)
-    # 2) Общий CLIENTS-чат (профит виден всем клиентам)
     clients_id = _clients_chat_id()
     if clients_id:
         try:
             await bot.send_message(clients_id, text)
         except Exception as e:
             logger.warning("[public_payout] clients-chat %s failed: %s", clients_id, e)
+    # SIMBA 2026-09: инкремент stats клиента (для /топ /я)
+    try:
+        client_tg_id = int(card.get("client_id") or 0)
+        amount = float(card.get("payment_amount_usdt") or 0)
+        tag = crm_storage.get_client_tag(work_chat_id) or ""
+        if client_tg_id and amount > 0:
+            await crm_storage.client_stat_add(
+                tg_user_id=client_tg_id,
+                work_chat_id=int(work_chat_id),
+                amount=amount,
+                tag=tag,
+            )
+    except Exception as e:
+        logger.warning("[public_payout] client_stat_add failed: %s", e)
+
+
+# SIMBA 2026-09: команды /топ /я для клиентов в общем чате (CLIENTS_CHAT_ID).
+# /топ  — топ 10 клиентов по сумме выплат
+# /я    — своя стата (сумма + кол-во сделок)
+@router.message(Command("топ", "top"))
+async def cmd_top_clients(message: Message):
+    # Только в общем чате клиентов
+    if message.chat.id != _clients_chat_id():
+        return
+    top = crm_storage.client_stats_top(limit=10)
+    if not top:
+        return await message.reply("🏆 Топ пока пуст. Стань первым — сдай ЛК!")
+    lines = ["🏆 <b>ТОП ЛЬВОВ PRIDE</b>\n"]
+    medals = ["🥇", "🥈", "🥉"]
+    for i, s in enumerate(top):
+        badge = medals[i] if i < 3 else f"{i+1}."
+        tag = s.get("tag") or f"id{s.get('tg_user_id')}"
+        amount = float(s.get("total_amount_usdt") or 0)
+        count = int(s.get("deals_count") or 0)
+        lines.append(f"{badge} <b>{tag}</b> — {amount:g}$ · {count} сдач")
+    lines.append("\n<i>Хочешь попасть в топ? — @PrideInviteWork_bot</i>")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("я", "me"))
+async def cmd_my_stat(message: Message):
+    # Только в общем чате клиентов
+    if message.chat.id != _clients_chat_id():
+        return
+    stat = crm_storage.client_stat_get(message.from_user.id)
+    if not stat or not stat.get("deals_count"):
+        return await message.reply(
+            f"У тебя пока нет выплат в системе PRIDE.\n\n"
+            f"Начни — @PrideInviteWork_bot"
+        )
+    tag = stat.get("tag") or f"id{message.from_user.id}"
+    amount = float(stat.get("total_amount_usdt") or 0)
+    count = int(stat.get("deals_count") or 0)
+    # Найдём позицию в топе
+    top_all = crm_storage.client_stats_top(limit=10000)
+    pos = next((i + 1 for i, s in enumerate(top_all)
+                if s.get("tg_user_id") == message.from_user.id), None)
+    pos_line = f"🏆 Место в топе: <b>#{pos}</b>" if pos else ""
+    await message.reply(
+        f"🦁 <b>Твоя стата в PRIDE</b>\n\n"
+        f"👤 Тег: <b>{tag}</b>\n"
+        f"💰 Всего выплачено: <b>{amount:g}$</b>\n"
+        f"📊 Сделок: <b>{count}</b>\n"
+        f"{pos_line}"
+    )
 
 
 async def send_public_payout_announcement(work_chat_id: int, card: dict):
@@ -2687,8 +2743,7 @@ async def cb_client_set_tag(call: CallbackQuery, state: FSMContext):
         "Пример: <code>КрутойПерец</code> → в канале будет показано как <b>#КрутойПерец</b>.\n\n"
         "После того как введёте тег — ваша выплата <b>сразу</b> опубликуется "
         "с этим тегом. Тег сохранится для всех будущих выплат.\n\n"
-        "Без тега публикация не отправится — @username не палится.\n\n"
-        "Или /cancel чтобы пропустить."
+        "Без тега публикация не отправится — @username не палится."
     )
 
 
@@ -2696,9 +2751,12 @@ async def cb_client_set_tag(call: CallbackQuery, state: FSMContext):
 async def handle_client_tag_input(message: Message, state: FSMContext):
     import html as _html
     text = (message.text or "").strip()
+    # SIMBA 2026-09: /cancel НЕ разрешён — публикация ждёт тег.
     if text.lower() in ("/cancel", "отмена"):
-        await state.clear()
-        return await message.reply("Отменено. Тег не сохранён.")
+        return await message.reply(
+            "Тег обязателен — без него выплата не будет опубликована. "
+            "Введите тег (буквы/цифры/_)."
+        )
     data = await state.get_data()
     wcid = data.get("work_chat_id") or message.chat.id
     saved = await crm_storage.set_client_tag(wcid, text)
