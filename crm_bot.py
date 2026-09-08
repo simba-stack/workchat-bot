@@ -2645,6 +2645,126 @@ async def _post_payout_to_channels(work_chat_id: int, card: dict):
 # SIMBA 2026-09: команды /топ /я для клиентов в общем чате (CLIENTS_CHAT_ID).
 # /топ  — топ 10 клиентов по сумме выплат
 # /я    — своя стата (сумма + кол-во сделок)
+@router.message(Command("rebuild_stats"))
+async def cmd_rebuild_stats(message: Message):
+    """/rebuild_stats — пересобирает статистику клиентов из paid карточек
+    audit-бота. Стирает старые card-source stats (кроме ручных /statadd).
+    Owner-only."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    import audit_bot_client
+    await message.reply("⏳ Тяну paid-карточки из audit-бота…")
+    try:
+        cards = await audit_bot_client.list_lk_cards(status="paid", use_cache=False)
+    except Exception as e:
+        return await message.reply(f"❌ Ошибка запроса: {e}")
+    if not cards:
+        return await message.reply("Пустой ответ — либо paid карточек нет, либо audit-бот недоступен.")
+
+    # 1) Сохраняем manual-записи (созданные через /statadd)
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        old = crm_storage.state.get("client_stats") or {}
+        manuals = {k: v for k, v in old.items() if v.get("manual")}
+        crm_storage.state["client_stats"] = manuals
+        await crm_storage._save_unlocked()
+
+    # 2) Группируем paid-карточки по client_id, суммируем
+    grouped = {}
+    for c in cards:
+        cid = int(c.get("client_id") or 0)
+        wcid = int(c.get("work_chat_id") or 0)
+        amt = float(c.get("payment_amount_usdt") or 0)
+        if not cid or amt <= 0:
+            continue
+        entry = grouped.setdefault(cid, {
+            "work_chat_id": wcid, "amount": 0.0, "count": 0,
+        })
+        entry["amount"] += amt
+        entry["count"] += 1
+        if wcid and not entry["work_chat_id"]:
+            entry["work_chat_id"] = wcid
+
+    # 3) Инкрементим stats для каждого
+    added = 0
+    for cid, g in grouped.items():
+        tag = crm_storage.get_client_tag(g["work_chat_id"]) or ""
+        await crm_storage.client_stat_add(
+            tg_user_id=cid,
+            work_chat_id=g["work_chat_id"],
+            amount=g["amount"],
+            tag=tag,
+        )
+        # counter только 1 внутри client_stat_add — доводим до реального
+        remain = g["count"] - 1
+        if remain > 0:
+            async with _st_lock:
+                st = crm_storage.state["client_stats"].get(str(cid))
+                if st:
+                    st["deals_count"] = int(st.get("deals_count") or 0) + remain
+                    await crm_storage._save_unlocked()  # noqa
+        added += 1
+
+    await message.reply(
+        f"✅ Готово.\n\n"
+        f"Обработано paid-карточек: <b>{len(cards)}</b>\n"
+        f"Уникальных клиентов: <b>{added}</b>\n"
+        f"Manual-записей сохранено: <b>{len(manuals)}</b>\n\n"
+        f"Проверь <code>/топ</code> в общем чате."
+    )
+
+
+@router.message(Command("tag_broadcast"))
+async def cmd_tag_broadcast(message: Message):
+    """/tag_broadcast — разослать всем work_chat'ам приглашение установить тег.
+    Пропускает тех у кого тег уже задан. Owner-only."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    import asyncio as _aio
+    owners = crm_storage.list_crm_owners() or {}
+    targets = []
+    for oid, o in owners.items():
+        wcid = int(o.get("work_chat_id") or 0)
+        if not wcid:
+            continue
+        if crm_storage.get_client_tag(wcid):
+            continue
+        targets.append(wcid)
+    if not targets:
+        return await message.reply("Некому слать — у всех уже задан тег (или нет work_chat_id).")
+    await message.reply(
+        f"⏳ Рассылаю в {len(targets)} чатов… (~{len(targets) * 0.5:.0f} сек)"
+    )
+    text = (
+        "🦁 <b>Хочешь попасть в ТОП PRIDE?</b>\n\n"
+        "Установи свой персональный <b>ТЕГ</b> — и все твои выплаты будут "
+        "публиковаться с ним:\n"
+        "🎊 В общем чате клиентов\n"
+        "🏆 В канале <b>PRIDE ВЫПЛАТЫ</b>\n\n"
+        "Плюс активируется <b>статистика</b>: сумма выплат, кол-во сделок, "
+        "твоё место в общем топе.\n\n"
+        "Команды в общем чате:\n"
+        "• <code>/топ</code> — топ 10 льов\n"
+        "• <code>/я</code> — твоя стата\n\n"
+        "Жми кнопку — задай тег 👇"
+    )
+    sent = 0
+    failed = 0
+    for wcid in targets:
+        try:
+            await message.bot.send_message(wcid, text, reply_markup=_client_tag_kb(wcid))
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("[tag_broadcast] chat=%s failed: %s", wcid, e)
+        await _aio.sleep(0.5)  # 2 msg/sec — безопасно
+    await message.reply(
+        f"✅ Готово.\n"
+        f"Отправлено: {sent}\n"
+        f"Ошибок: {failed}"
+    )
+
+
 @router.message(Command("statadd"))
 async def cmd_statadd(message: Message):
     """/statadd <тег> <сумма> [сделок=1] — owner добавляет запись в топ.
