@@ -1539,6 +1539,60 @@ class Storage:
             await self._save_unlocked()
         return final
 
+    # ═══════════════════════════════════════════════════════════════
+    # CLIENT STATS (SIMBA 2026-09): статистика клиентов для команд /топ /я
+    # в общем чате. Хранится по tg_user_id клиента.
+    # state["client_stats"] = {
+    #   "<tg_user_id>": {
+    #     "total_amount_usdt": 700.0, "deals_count": 3,
+    #     "tag": "#КрутойПерец", "work_chat_id": -100...,
+    #     "last_payout_ts": 1700...
+    #   }
+    # }
+    # ═══════════════════════════════════════════════════════════════
+
+    async def client_stat_add(self, tg_user_id: int, work_chat_id: int,
+                              amount: float, tag: str = "") -> dict:
+        """Инкремент stats клиента после выплаты."""
+        import time as _t
+        key = str(int(tg_user_id or 0))
+        if not key or key == "0":
+            return {}
+        async with _lock:
+            stats = self.state.setdefault("client_stats", {})
+            entry = stats.setdefault(key, {
+                "total_amount_usdt": 0.0, "deals_count": 0,
+                "tag": "", "work_chat_id": 0, "last_payout_ts": 0.0,
+            })
+            entry["total_amount_usdt"] = float(entry.get("total_amount_usdt") or 0) + float(amount or 0)
+            entry["deals_count"] = int(entry.get("deals_count") or 0) + 1
+            if tag:
+                entry["tag"] = tag
+            if work_chat_id:
+                entry["work_chat_id"] = int(work_chat_id)
+            entry["last_payout_ts"] = _t.time()
+            await self._save_unlocked()
+            return dict(entry)
+
+    def client_stat_get(self, tg_user_id: int) -> dict:
+        key = str(int(tg_user_id or 0))
+        return dict((self.state.get("client_stats") or {}).get(key) or {})
+
+    def client_stats_top(self, limit: int = 10) -> list:
+        """Топ клиентов по сумме выплат. [{tg_user_id, tag, amount, count, last_ts}, ...]"""
+        stats = self.state.get("client_stats") or {}
+        out = []
+        for uid, s in stats.items():
+            out.append({
+                "tg_user_id": int(uid),
+                "tag": s.get("tag") or f"id{uid}",
+                "total_amount_usdt": float(s.get("total_amount_usdt") or 0),
+                "deals_count": int(s.get("deals_count") or 0),
+                "last_payout_ts": float(s.get("last_payout_ts") or 0),
+            })
+        out.sort(key=lambda x: x["total_amount_usdt"], reverse=True)
+        return out[:limit]
+
     def get_effective_username(self, primary_username: str) -> str:
         """Возвращает какой username использовать для нового invite.
         Если primary помечен как full и есть alt — вернёт alt.
