@@ -2733,7 +2733,7 @@ async def cmd_tag_broadcast(message: Message):
     if not targets:
         return await message.reply("Некому слать — у всех уже задан тег (или нет work_chat_id).")
     await message.reply(
-        f"⏳ Рассылаю в {len(targets)} чатов… (~{len(targets) * 0.5:.0f} сек)"
+        f"⏳ Рассылаю в {len(targets)} чатов… (~{max(1, len(targets) // 20)} сек)"
     )
     text = (
         "🦁 <b>Хочешь попасть в ТОП PRIDE?</b>\n\n"
@@ -2757,7 +2757,9 @@ async def cmd_tag_broadcast(message: Message):
         except Exception as e:
             failed += 1
             logger.warning("[tag_broadcast] chat=%s failed: %s", wcid, e)
-        await _aio.sleep(0.5)  # 2 msg/sec — безопасно
+        # SIMBA 2026-09: 25 msg/sec — TG bot limit 30, оставляем запас.
+        # На разные чаты (у нас work_chats) лимит глобальный, не per-chat.
+        await _aio.sleep(0.04)
     await message.reply(
         f"✅ Готово.\n"
         f"Отправлено: {sent}\n"
