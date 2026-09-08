@@ -2575,7 +2575,7 @@ def _cancel_kb() -> InlineKeyboardMarkup:
 # SIMBA 2026-09: канал PRIDE ВЫПЛАТЫ — публичный, куда после каждой
 # оплаченной сделки уходит анонс без раскрытия ника клиента.
 # Env PAY_PUBLIC_CHAT_ID перекрывает если задан.
-_HARDCODED_PAY_PUBLIC_CHAT_ID = 0  # SIMBA даст ID канала выплат — захардкодим.
+_HARDCODED_PAY_PUBLIC_CHAT_ID = -1003987786185  # PRIDE ВЫПЛАТЫ (SIMBA 2026-09)
 
 
 def _pay_public_chat_id() -> int:
