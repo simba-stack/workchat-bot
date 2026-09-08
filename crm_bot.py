@@ -2714,13 +2714,50 @@ async def cmd_rebuild_stats(message: Message):
     )
 
 
+# SIMBA 2026-09: флаг остановки рассылки. Owner вызывает /stop_tag_broadcast.
+_tag_broadcast_stop_flag = False
+
+
+@router.message(Command("stop_tag_broadcast"))
+async def cmd_stop_tag_broadcast(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    global _tag_broadcast_stop_flag
+    _tag_broadcast_stop_flag = True
+    await message.reply("🛑 Флаг остановки установлен. Текущая рассылка прекратится в течение секунды.")
+
+
+# /тег — клиент в своей рабочей группе открывает меню установки тега.
+# Работает ТОЛЬКО в group/supergroup — не в ЛС и не в других чатах.
+@router.message(Command("тег", "tag", "settag", "mytag"))
+async def cmd_client_settag(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return  # silent — только в рабочих группах
+    wcid = int(message.chat.id)
+    current_tag = crm_storage.get_client_tag(wcid)
+    if current_tag:
+        await message.reply(
+            f"🦁 Твой текущий тег: <b>{current_tag}</b>\n\n"
+            f"Хочешь поменять? Жми кнопку:",
+            reply_markup=_client_tag_kb(wcid),
+        )
+    else:
+        await message.reply(
+            "🦁 Установи свой тег для канала PRIDE ВЫПЛАТЫ и топа:",
+            reply_markup=_client_tag_kb(wcid),
+        )
+
+
 @router.message(Command("tag_broadcast"))
 async def cmd_tag_broadcast(message: Message):
     """/tag_broadcast — разослать всем work_chat'ам приглашение установить тег.
-    Пропускает тех у кого тег уже задан. Owner-only."""
+    Пропускает тех у кого тег уже задан. Owner-only.
+    Остановить: /stop_tag_broadcast"""
     if not is_owner(message.from_user.id):
         return await message.reply("Только для owner.")
     import asyncio as _aio
+    global _tag_broadcast_stop_flag
+    _tag_broadcast_stop_flag = False  # reset
     owners = crm_storage.list_crm_owners() or {}
     targets = []
     for oid, o in owners.items():
@@ -2733,7 +2770,8 @@ async def cmd_tag_broadcast(message: Message):
     if not targets:
         return await message.reply("Некому слать — у всех уже задан тег (или нет work_chat_id).")
     await message.reply(
-        f"⏳ Рассылаю в {len(targets)} чатов… (~{max(1, len(targets) // 20)} сек)"
+        f"⏳ Рассылаю в {len(targets)} чатов… (~{max(1, len(targets) // 20)} сек)\n"
+        f"Остановить: /stop_tag_broadcast"
     )
     text = (
         "🦁 <b>Хочешь попасть в ТОП PRIDE?</b>\n\n"
@@ -2750,15 +2788,17 @@ async def cmd_tag_broadcast(message: Message):
     )
     sent = 0
     failed = 0
+    stopped = False
     for wcid in targets:
+        if _tag_broadcast_stop_flag:
+            stopped = True
+            break
         try:
             await message.bot.send_message(wcid, text, reply_markup=_client_tag_kb(wcid))
             sent += 1
         except Exception as e:
             failed += 1
             logger.warning("[tag_broadcast] chat=%s failed: %s", wcid, e)
-        # SIMBA 2026-09: 25 msg/sec — TG bot limit 30, оставляем запас.
-        # На разные чаты (у нас work_chats) лимит глобальный, не per-chat.
         await _aio.sleep(0.04)
     await message.reply(
         f"✅ Готово.\n"
