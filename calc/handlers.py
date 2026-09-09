@@ -66,6 +66,31 @@ async def _delete_later(bot: Bot, chat_id: int, message_id: int, delay: int = CL
         pass
 
 
+async def _delete_now(bot: Bot, chat_id: int, message_ids: list[int]):
+    """Мгновенное удаление списка сообщений (для очистки FSM-мусора)."""
+    for mid in message_ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
+async def _track_msg(state: FSMContext, msg: Message):
+    """Добавляет message_id в state[msgs_to_delete] для последующей очистки."""
+    data = await state.get_data()
+    ids = list(data.get("_trash_msgs") or [])
+    ids.append(msg.message_id)
+    await state.update_data(_trash_msgs=ids)
+
+
+async def _cleanup_fsm(bot: Bot, chat_id: int, state: FSMContext):
+    """Удаляет все сообщения, собранные через _track_msg."""
+    data = await state.get_data()
+    ids = list(data.get("_trash_msgs") or [])
+    if ids:
+        await _delete_now(bot, chat_id, ids)
+
+
 def _fmt_money_rub(x: float) -> str:
     return f"{int(x):,}".replace(",", " ")
 
@@ -156,22 +181,33 @@ async def cmd_admin_setup(message: Message):
 
 async def _show_client_setup(message: Message, entry: dict):
     dirs = entry.get("directions") or {}
+    user_id = message.from_user.id if message.from_user else 0
+    is_owner_user = storage.is_owner(user_id)
+    is_partner_user = user_id == entry.get("partner_tg_id")
     lines = [
         f"⚙️ <b>Настройки чата</b>",
         f"Партнёр: @{entry.get('partner_username') or '—'}",
         f"Курс: <b>{entry.get('rate') or '—'}</b>",
         f"Кошелёк TRC20: <code>{entry.get('wallet_trc20') or '—'}</code>",
         "",
-        f"Направления ({len(dirs)}):",
+        f"<b>Направления ({len(dirs)}):</b>",
     ]
+    if not dirs:
+        lines.append("  <i>пусто — админ должен добавить направления</i>")
     for d in dirs.values():
         onoff = "✅" if d.get("enabled") else "⛔"
-        lines.append(f"  {onoff} {d.get('name')} — {d.get('commission_pct')}%")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Направление", callback_data="setup:add_dir")],
-        [InlineKeyboardButton(text="💳 Изменить TRC20", callback_data="setup:set_wallet")],
-        [InlineKeyboardButton(text="🔄 Список направлений", callback_data="setup:list_dirs")],
-    ])
+        lines.append(f"  {onoff} <b>{d.get('name')}</b> — {d.get('commission_pct')}%")
+
+    # Партнёр видит только «Изменить TRC20». Направления/список — только owner.
+    kb_rows = []
+    if is_owner_user:
+        kb_rows.append([InlineKeyboardButton(text="➕ Направление", callback_data="setup:add_dir")])
+        kb_rows.append([InlineKeyboardButton(text="🔄 Список направлений", callback_data="setup:list_dirs")])
+    if is_partner_user or is_owner_user:
+        kb_rows.append([InlineKeyboardButton(text="💳 Изменить TRC20", callback_data="setup:set_wallet")])
+    if not is_owner_user:
+        lines.append("\n<i>ℹ️ Направления и % комиссии настраивает админ. Обратись в PRIDE-админ.</i>")
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
     await message.reply("\n".join(lines), reply_markup=kb)
 
 
@@ -843,34 +879,55 @@ async def cb_setup_add_dir(cb: CallbackQuery, state: FSMContext):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry:
         return await cb.answer()
-    if not _check_partner_or_perm(entry, cb.from_user.id, "add_directions"):
-        return await cb.answer("Нет прав.", show_alert=True)
+    # Только owner может добавлять направления
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer(
+            "Направления добавляет админ. Обратись в админ-чат PRIDE.",
+            show_alert=True,
+        )
     await state.set_state(Setup.wait_direction_name)
     await state.update_data(chat_id=cb.message.chat.id)
-    await cb.message.reply("Название направления (напр. О1):")
+    prompt = await cb.message.reply("Название направления (напр. О1, ДАЧА):")
+    await _track_msg(state, prompt)
     await cb.answer()
 
 
 @router.message(Setup.wait_direction_name)
 async def st_dir_name(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)  # трекаем ответ юзера
     name = (message.text or "").strip()
     if not name or len(name) > 32:
-        return await message.reply("Плохое имя. Пришли ещё раз (до 32 симв).")
+        err = await message.reply("Плохое имя. Пришли ещё раз (до 32 симв).")
+        await _track_msg(state, err)
+        return
     await state.update_data(direction_name=name)
     await state.set_state(Setup.wait_direction_pct)
-    await message.reply("Процент комиссии (число, напр. 20):")
+    prompt = await message.reply("Процент комиссии (число, напр. 20):")
+    await _track_msg(state, prompt)
 
 
 @router.message(Setup.wait_direction_pct)
-async def st_dir_pct(message: Message, state: FSMContext):
+async def st_dir_pct(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     try:
         pct = float((message.text or "").replace(",", "."))
     except ValueError:
-        return await message.reply("Число.")
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
+    if pct < 0 or pct > 100:
+        err = await message.reply("Процент от 0 до 100.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
     await storage.set_direction(data["chat_id"], data["direction_name"], pct, enabled=True)
+    await _cleanup_fsm(bot, message.chat.id, state)
     await state.clear()
-    await message.reply(f"✅ <b>{data['direction_name']}</b> — {pct}%")
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ Направление <b>{data['direction_name']}</b> — {pct:g}% добавлено."
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 10))
 
 
 @router.callback_query(F.data == "setup:set_wallet")
@@ -882,19 +939,25 @@ async def cb_setup_wallet(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("Нет прав.", show_alert=True)
     await state.set_state(Setup.wait_wallet)
     await state.update_data(chat_id=cb.message.chat.id)
-    await cb.message.reply("Пришли TRC20 адрес (начинается с T…):")
+    prompt = await cb.message.reply("Пришли TRC20 адрес (начинается с T…):")
+    await _track_msg(state, prompt)
     await cb.answer()
 
 
 @router.message(Setup.wait_wallet)
-async def st_wallet(message: Message, state: FSMContext):
+async def st_wallet(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     w = (message.text or "").strip()
     if not (w.startswith("T") and 30 <= len(w) <= 40):
-        return await message.reply("Не похоже на TRC20. Пришли валидный.")
+        err = await message.reply("Не похоже на TRC20. Пришли валидный.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
     await storage.update_client_chat(data["chat_id"], wallet_trc20=w)
+    await _cleanup_fsm(bot, message.chat.id, state)
     await state.clear()
-    await message.reply(f"✅ Кошелёк: <code>{w}</code>")
+    final = await bot.send_message(message.chat.id, f"✅ Кошелёк установлен: <code>{w}</code>")
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
 
 
 @router.callback_query(F.data == "setup:list_dirs")
@@ -960,9 +1023,10 @@ async def cb_pay_request(cb: CallbackQuery, state: FSMContext, bot: Bot):
     if not wallet:
         await state.set_state(Setup.wait_payout_wallet_edit)
         await state.update_data(chat_id=cb.message.chat.id, amount=remaining)
-        await cb.message.reply(
+        prompt = await cb.message.reply(
             f"Кошелёк не указан. Пришли TRC20 адрес чтобы создать заявку на {_fmt_money_usd(remaining)}$:"
         )
+        await _track_msg(state, prompt)
         return await cb.answer()
     # Есть кошелёк → показать подтверждение
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -990,29 +1054,33 @@ async def cb_pay_edit_wallet(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("Нет прав менять адрес.", show_alert=True)
     await state.set_state(Setup.wait_payout_wallet_edit)
     await state.update_data(chat_id=cb.message.chat.id, amount=None)
-    await cb.message.reply("Пришли новый TRC20 адрес:")
+    prompt = await cb.message.reply("Пришли новый TRC20 адрес:")
+    await _track_msg(state, prompt)
     await cb.answer()
 
 
 @router.message(Setup.wait_payout_wallet_edit)
 async def st_pay_wallet(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     w = (message.text or "").strip()
     if not (w.startswith("T") and 30 <= len(w) <= 40):
-        return await message.reply("Не похоже на TRC20.")
+        err = await message.reply("Не похоже на TRC20.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
     chat_id = data["chat_id"]
     amount = data.get("amount")
     await storage.update_client_chat(chat_id, wallet_trc20=w)
+    await _cleanup_fsm(bot, chat_id, state)
     await state.clear()
     if amount:
-        # сразу создаём заявку
         await _create_and_send_payout(
             bot, chat_id, amount, w,
             message.from_user.id, message.from_user.username or "",
         )
-        await message.reply(f"✅ Заявка на {_fmt_money_usd(amount)}$ создана.")
     else:
-        await message.reply(f"✅ Адрес обновлён: <code>{w}</code>")
+        final = await bot.send_message(chat_id, f"✅ Адрес обновлён: <code>{w}</code>")
+        asyncio.create_task(_delete_later(bot, chat_id, final.message_id, 15))
 
 
 @router.callback_query(F.data.startswith("pay:confirm:"))
@@ -1153,16 +1221,22 @@ async def cb_pay_done(cb: CallbackQuery, state: FSMContext):
 
 @router.message(Setup.wait_payout_amount)
 async def st_payout_amount(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     try:
         amt = float((message.text or "").replace(",", "."))
     except ValueError:
-        return await message.reply("Число.")
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
     if amt <= 0:
-        return await message.reply("Больше нуля.")
+        err = await message.reply("Больше нуля.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
     pid = data["payout_id"]
     req = storage.get_payout_request(pid)
     if not req:
+        await _cleanup_fsm(bot, message.chat.id, state)
         await state.clear()
         return await message.reply("Заявка пропала.")
     await storage.record_payout(
@@ -1170,8 +1244,12 @@ async def st_payout_amount(message: Message, state: FSMContext, bot: Bot):
         note=f"payout_req_id={pid}", admin_id=message.from_user.id,
     )
     await storage.update_payout_request(pid, status="paid", paid_amount_usd=amt)
+    await _cleanup_fsm(bot, message.chat.id, state)
     await state.clear()
-    await message.reply(f"✅ Записано: <b>{_fmt_money_usd(amt)}$</b> клиенту.")
+    final = await bot.send_message(
+        message.chat.id, f"✅ Записано: <b>{_fmt_money_usd(amt)}$</b> клиенту."
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
     # обновить сообщения
     try:
         await bot.edit_message_text(
@@ -1213,16 +1291,23 @@ async def cb_req_pick(cb: CallbackQuery, state: FSMContext):
     direction = cb.data.split(":", 2)[2]
     await state.set_state(Setup.wait_requisite_note)
     await state.update_data(chat_id=cb.message.chat.id, direction=direction)
-    await cb.message.reply(f"Направление: <b>{direction}</b>\nПришли примечание (текстом):")
+    prompt = await cb.message.reply(f"Направление: <b>{direction}</b>\nПришли примечание (текстом):")
+    await _track_msg(state, prompt)
+    # Также трекаем то сообщение с кнопками выбора направления
+    await _track_msg(state, cb.message)
     await cb.answer()
 
 
 @router.message(Setup.wait_requisite_note)
 async def st_req_note(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     note = (message.text or "").strip()
     if not note or len(note) > 500:
-        return await message.reply("Примечание 1-500 символов.")
+        err = await message.reply("Примечание 1-500 символов.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
+    await _cleanup_fsm(bot, message.chat.id, state)
     await state.clear()
     entry = storage.get_client_chat(data["chat_id"])
     req = await storage.create_requisite_request(
@@ -1347,16 +1432,19 @@ async def cb_wrk_add(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("Только партнёр.", show_alert=True)
     await state.set_state(Setup.wait_worker_username)
     await state.update_data(chat_id=cb.message.chat.id)
-    await cb.message.reply("Пришли @username работника (он должен написать в этот чат хотя бы раз):")
+    prompt = await cb.message.reply("Пришли @username работника (он должен быть админом чата):")
+    await _track_msg(state, prompt)
     await cb.answer()
 
 
 @router.message(Setup.wait_worker_username)
 async def st_wrk_uname(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     uname = (message.text or "").strip().lstrip("@")
     if not uname or not re.match(r"^\w{3,32}$", uname):
-        return await message.reply("Плохой username.")
-    # Пытаемся резолвнуть tg_id через админов чата (или ищем в /getChatMember по username)
+        err = await message.reply("Плохой username.")
+        await _track_msg(state, err)
+        return
     tg_id = 0
     try:
         admins = await bot.get_chat_administrators(message.chat.id)
@@ -1367,23 +1455,28 @@ async def st_wrk_uname(message: Message, state: FSMContext, bot: Bot):
     except Exception:
         pass
     if not tg_id:
-        # ищем в message.reply_to или последних участниках — не 100%
-        await message.reply(
+        await _cleanup_fsm(bot, message.chat.id, state)
+        await state.clear()
+        warn = await message.reply(
             f"⚠️ Не могу найти tg_id @{uname} в этом чате. "
             f"Пусть напишет хоть одно сообщение — потом снова добавь."
         )
-        await state.clear()
+        asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 20))
         return
     await state.update_data(worker_tg_id=tg_id, worker_username=uname)
     await state.set_state(Setup.wait_worker_role)
-    await message.reply(f"@{uname} (id {tg_id}). Роль (напр. Помощник):")
+    prompt = await message.reply(f"@{uname} (id {tg_id}). Роль (напр. Помощник):")
+    await _track_msg(state, prompt)
 
 
 @router.message(Setup.wait_worker_role)
-async def st_wrk_role(message: Message, state: FSMContext):
+async def st_wrk_role(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
     role = (message.text or "").strip()[:64]
     if not role:
-        return await message.reply("Пусто.")
+        err = await message.reply("Пусто.")
+        await _track_msg(state, err)
+        return
     data = await state.get_data()
     w = await storage.add_worker(
         chat_id=data["chat_id"],
@@ -1392,11 +1485,14 @@ async def st_wrk_role(message: Message, state: FSMContext):
         role=role,
         perms={"set_wallet": False, "add_directions": False, "request_payout": False},
     )
+    await _cleanup_fsm(bot, message.chat.id, state)
     await state.clear()
-    await message.reply(
+    final = await bot.send_message(
+        message.chat.id,
         f"✅ Работник @{w['username']} · {w['role']} добавлен.\n"
         f"Разрешения выключены — открой /профиль → Работники → ⚙️"
     )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 20))
 
 
 @router.callback_query(F.data.startswith("wrk:menu:"))
