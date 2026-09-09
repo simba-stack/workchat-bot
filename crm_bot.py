@@ -2669,13 +2669,26 @@ async def cmd_rebuild_stats(message: Message):
         crm_storage.state["client_stats"] = manuals
         await crm_storage._save_unlocked()
 
-    # 2) Группируем paid-карточки по client_id, суммируем
+    # 2) Группируем paid-карточки по client_id (fallback: lookup по work_chat_id).
+    # Строим индекс wcid → tg_user_id из crm_owners.
+    owners = crm_storage.list_crm_owners() or {}
+    wcid_to_tg = {}
+    for oid, o in owners.items():
+        _wc = int(o.get("work_chat_id") or 0)
+        _tg = int(o.get("tg_user_id") or 0)
+        if _wc and _tg:
+            wcid_to_tg[_wc] = _tg
+
     grouped = {}
+    skipped_no_id = 0
     for c in cards:
-        cid = int(c.get("client_id") or 0)
         wcid = int(c.get("work_chat_id") or 0)
         amt = float(c.get("payment_amount_usdt") or 0)
+        cid = int(c.get("client_id") or 0)
+        if not cid and wcid in wcid_to_tg:
+            cid = wcid_to_tg[wcid]  # fallback
         if not cid or amt <= 0:
+            skipped_no_id += 1
             continue
         entry = grouped.setdefault(cid, {
             "work_chat_id": wcid, "amount": 0.0, "count": 0,
@@ -2709,7 +2722,9 @@ async def cmd_rebuild_stats(message: Message):
         f"✅ Готово.\n\n"
         f"Обработано paid-карточек: <b>{len(cards)}</b>\n"
         f"Уникальных клиентов: <b>{added}</b>\n"
-        f"Manual-записей сохранено: <b>{len(manuals)}</b>\n\n"
+        f"Manual-записей сохранено: <b>{len(manuals)}</b>\n"
+        f"Пропущено (нет client_id и work_chat_id не в crm_owners): "
+        f"<b>{skipped_no_id}</b>\n\n"
         f"Проверь <code>/топ</code> в общем чате."
     )
 
