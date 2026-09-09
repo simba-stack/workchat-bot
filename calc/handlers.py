@@ -436,16 +436,217 @@ async def cmd_list_chats(message: Message):
         return
     chats = storage.list_client_chats()
     if not chats:
-        return await message.reply("Нет клиентских чатов.")
-    lines = [f"<b>Клиентские чаты ({len(chats)}):</b>\n"]
-    for c in chats:
-        dirs = c.get("directions") or {}
-        lines.append(
-            f"<code>{c['chat_id']}</code> · {html.escape(c.get('chat_title') or '')}\n"
-            f"  партнёр: @{c.get('partner_username') or '—'} · "
-            f"курс: {c.get('rate') or '—'} · направлений: {len(dirs)}"
+        return await message.reply(
+            "🦁 <b>PRIDE · Клиентская база</b>\n\n"
+            "<i>Партнёров ещё нет.</i>\n"
+            "Зарегистрируй первого: добавь бота в клиентский чат и напиши "
+            "<code>+партнёр @nick</code>"
         )
-    await message.reply("\n".join(lines))
+
+    # Считаем агрегаты по каждому чату
+    rows = []
+    total_rub_all = 0.0
+    total_usd_all = 0.0
+    total_paid_all = 0.0
+    total_remaining_all = 0.0
+    active_count = 0
+    pending_payouts = len([
+        p for p in (storage.state.get("pending_payouts") or [])
+        if p.get("status") == "pending"
+    ])
+    pending_reqs = len([
+        r for r in (storage.state.get("pending_requisites") or [])
+        if r.get("status") == "pending"
+    ])
+
+    for c in chats:
+        s = storage.compute_stats(c["chat_id"])
+        total_rub_all += s.get("total_rub") or 0
+        total_usd_all += s.get("total_usd_before_pay") or 0
+        total_paid_all += s.get("paid_usd") or 0
+        total_remaining_all += s.get("remaining_usd") or 0
+        if s.get("total_rub"):
+            active_count += 1
+        rows.append((c, s))
+
+    # Сортируем по остатку выплаты (крупные должники сверху)
+    rows.sort(key=lambda r: r[1].get("remaining_usd") or 0, reverse=True)
+
+    lines = [
+        "🦁 <b>PRIDE · Клиентская база</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"👥 Партнёров: <b>{len(chats)}</b>  ·  🔥 Активных: <b>{active_count}</b>",
+        f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
+        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd_all)}$</b>  ·  "
+        f"✅ Выплачено: <b>{_fmt_money_usd(total_paid_all)}$</b>",
+        f"🎯 <b>Долг партнёрам: {_fmt_money_usd(total_remaining_all)}$</b>",
+    ]
+    if pending_payouts or pending_reqs:
+        lines.append(
+            f"⚡ Ожидают: 💸 <b>{pending_payouts}</b> выплат  ·  "
+            f"📞 <b>{pending_reqs}</b> реквизитов"
+        )
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━\n")
+
+    for i, (c, s) in enumerate(rows, 1):
+        dirs = c.get("directions") or {}
+        dirs_on = sum(1 for d in dirs.values() if d.get("enabled"))
+        title = html.escape((c.get("chat_title") or "").strip() or "без названия")
+        partner = c.get("partner_username") or "—"
+        rate = c.get("rate") or 0
+        wallet_badge = "💳" if c.get("wallet_trc20") else "⚠️"
+        rub = s.get("total_rub") or 0
+        usd_total = s.get("total_usd_before_pay") or 0
+        paid = s.get("paid_usd") or 0
+        remaining = s.get("remaining_usd") or 0
+
+        # Медалька по объёму
+        if i == 1 and rub > 0:
+            badge = "🥇"
+        elif i == 2 and rub > 0:
+            badge = "🥈"
+        elif i == 3 and rub > 0:
+            badge = "🥉"
+        else:
+            badge = f"<b>{i}.</b>"
+
+        # Статус: если есть долг — 🔴, если всё выплачено — 🟢, если пусто — ⚪
+        if remaining > 0.01:
+            status = "🔴"
+        elif rub > 0:
+            status = "🟢"
+        else:
+            status = "⚪"
+
+        # По направлениям — короткая строка
+        by_dir = s.get("by_direction_rub") or {}
+        dir_line = ""
+        if by_dir:
+            top_dirs = sorted(by_dir.items(), key=lambda x: x[1], reverse=True)[:3]
+            dir_line = " · ".join(f"{d}: {_fmt_money_rub(v)}" for d, v in top_dirs)
+            if len(by_dir) > 3:
+                dir_line += f" +{len(by_dir)-3}"
+
+        block = [
+            f"{badge} {status} <b>{title}</b>",
+            f"   👤 @{partner}  ·  💱 {rate or '—'}  ·  {wallet_badge} {dirs_on}/{len(dirs)} напр.",
+            f"   💰 <b>{_fmt_money_rub(rub)} ₽</b>  →  "
+            f"💵 {_fmt_money_usd(usd_total)}$  |  "
+            f"✅ {_fmt_money_usd(paid)}$  |  🎯 <b>{_fmt_money_usd(remaining)}$</b>",
+        ]
+        if dir_line:
+            block.append(f"   📊 {dir_line}")
+        block.append(f"   <code>{c['chat_id']}</code>")
+        lines.append("\n".join(block))
+        lines.append("")  # пустая строка между блоками
+
+    lines.append(
+        "<i>🔴 есть долг  ·  🟢 всё выплачено  ·  ⚪ нет оборота</i>\n"
+        "<i>💳 адрес есть  ·  ⚠️ адрес не указан</i>"
+    )
+
+    # Инлайн-кнопки для детального просмотра по чатам с оборотом
+    active_rows = [(c, s) for c, s in rows if s.get("total_rub")]
+    kb = None
+    if active_rows:
+        kb_rows = []
+        for c, s in active_rows[:8]:  # макс 8 кнопок
+            title_short = (c.get("chat_title") or "чат")[:20]
+            remaining = s.get("remaining_usd") or 0
+            kb_rows.append([InlineKeyboardButton(
+                text=f"🔍 {title_short} · {_fmt_money_usd(remaining)}$",
+                callback_data=f"cli:detail:{c['chat_id']}"
+            )])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    text = "\n".join(lines)
+    # Разбиваем если слишком длинно
+    if len(text) > 3800:
+        chunks = []
+        cur = ""
+        for line in lines:
+            if len(cur) + len(line) > 3800:
+                chunks.append(cur)
+                cur = line + "\n"
+            else:
+                cur += line + "\n"
+        if cur:
+            chunks.append(cur)
+        for i, chunk in enumerate(chunks):
+            if i == len(chunks) - 1 and kb:
+                await message.reply(chunk, reply_markup=kb)
+            else:
+                await message.reply(chunk)
+    else:
+        await message.reply(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("cli:detail:"))
+async def cb_client_detail(cb: CallbackQuery):
+    if cb.message.chat.id != storage.get_admin_chat_id() and not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только для админ-чата.", show_alert=True)
+    chat_id = int(cb.data.split(":")[2])
+    c = storage.get_client_chat(chat_id)
+    if not c:
+        return await cb.answer("Чат не найден.", show_alert=True)
+    s = storage.compute_stats(chat_id)
+    dirs = c.get("directions") or {}
+    workers = c.get("workers") or {}
+    payouts = c.get("payouts") or []
+    by_dir_rub = s.get("by_direction_rub") or {}
+    by_dir_usd = s.get("by_direction_usd") or {}
+    dir_pcts = s.get("dir_pcts") or {}
+
+    lines = [
+        f"🔍 <b>Детали партнёра</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"🏢 <b>{html.escape(c.get('chat_title') or '—')}</b>",
+        f"👤 Партнёр: @{c.get('partner_username') or '—'}",
+        f"🆔 <code>{chat_id}</code>",
+        f"💱 Курс: <b>{c.get('rate') or '—'}</b>",
+        f"💳 Кошелёк: <code>{c.get('wallet_trc20') or '—'}</code>",
+        f"👥 Работников: {len(workers)}",
+        "",
+        f"💰 <b>Общий оборот: {_fmt_money_rub(s.get('total_rub') or 0)} ₽</b>",
+        f"💵 Насчитано: {_fmt_money_usd(s.get('total_usd_before_pay') or 0)}$",
+        f"✅ Выплачено: {_fmt_money_usd(s.get('paid_usd') or 0)}$",
+        f"🎯 <b>Остаток: {_fmt_money_usd(s.get('remaining_usd') or 0)}$</b>",
+    ]
+
+    if by_dir_rub:
+        lines.append("\n<b>📊 По направлениям:</b>")
+        for d in sorted(by_dir_rub.keys(), key=lambda k: by_dir_rub[k], reverse=True):
+            rub = by_dir_rub[d]
+            pct = dir_pcts.get(d, 0)
+            usd = by_dir_usd.get(d, 0)
+            cfg = dirs.get(d) or {}
+            onoff = "✅" if cfg.get("enabled") else "⛔"
+            lines.append(
+                f"  {onoff} <b>{d}</b>: {_fmt_money_rub(rub)}₽ − {pct:g}% = "
+                f"<b>{_fmt_money_usd(usd)}$</b>"
+            )
+
+    if payouts:
+        lines.append(f"\n<b>💸 Последние выплаты ({len(payouts)}):</b>")
+        for p in payouts[-5:][::-1]:
+            ts = datetime.fromtimestamp(p.get("ts") or 0, MSK).strftime("%d.%m %H:%M")
+            lines.append(f"  {ts} · <b>{_fmt_money_usd(p.get('amount_usd') or 0)}$</b>")
+
+    if workers:
+        lines.append(f"\n<b>👥 Работники:</b>")
+        for w in workers.values():
+            p = w.get("perms") or {}
+            badges = []
+            if p.get("set_wallet"): badges.append("💳")
+            if p.get("add_directions"): badges.append("➕")
+            if p.get("request_payout"): badges.append("💸")
+            lines.append(
+                f"  @{w.get('username') or '—'} · {w.get('role') or '—'} · "
+                f"{''.join(badges) or 'без прав'}"
+            )
+
+    await cb.message.reply("\n".join(lines))
+    await cb.answer()
 
 
 @router.message(Command("рассылка", "broadcast"))
@@ -1263,6 +1464,38 @@ async def cb_wrk_del(cb: CallbackQuery):
 # ============================================================
 # /старт /help — для DM/новых чатов
 # ============================================================
+@router.message(Command("whoami", "кто", "id"))
+async def cmd_whoami(message: Message):
+    """Диагностика — кто я, куда пишу, есть ли доступ."""
+    is_owner = storage.is_owner(message.from_user.id)
+    admin_chat = storage.get_admin_chat_id()
+    is_admin_chat = message.chat.id == admin_chat if admin_chat else False
+    entry = storage.get_client_chat(message.chat.id)
+    lines = [
+        "🔍 <b>WHOAMI</b>",
+        f"👤 Ты: @{message.from_user.username or '—'}",
+        f"🆔 Твой tg_id: <code>{message.from_user.id}</code>",
+        f"💬 Этот чат: <code>{message.chat.id}</code>",
+        f"📛 Тип чата: {message.chat.type}",
+        "",
+        f"🦁 Owner: <b>{'ДА' if is_owner else 'НЕТ'}</b>",
+        f"🛡 Админ-чат установлен: <code>{admin_chat or '—'}</code>",
+        f"🏢 Это админ-чат: <b>{'ДА' if is_admin_chat else 'НЕТ'}</b>",
+        f"📊 Это клиентский чат: <b>{'ДА' if entry else 'НЕТ'}</b>",
+    ]
+    if entry:
+        lines.append(f"   партнёр: @{entry.get('partner_username') or '—'}")
+        lines.append(f"   partner_tg_id: <code>{entry.get('partner_tg_id') or '0'}</code>")
+        lines.append(f"   курс: {entry.get('rate') or '—'}")
+        lines.append(f"   направлений: {len(entry.get('directions') or {})}")
+    if not is_owner:
+        lines.append(
+            "\n⚠️ Тебя нет в CALC_OWNER_IDS. Впиши свой tg_id в Railway → "
+            "calc-bot → Variables → CALC_OWNER_IDS"
+        )
+    await message.reply("\n".join(lines))
+
+
 @router.message(Command("start", "help"))
 async def cmd_start(message: Message):
     if message.chat.type == ChatType.PRIVATE:
