@@ -1691,7 +1691,10 @@ async def cb_wrk_add(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("Только партнёр.", show_alert=True)
     await state.set_state(Setup.wait_worker_username)
     await state.update_data(chat_id=cb.message.chat.id)
-    prompt = await cb.message.reply("Пришли @username работника (он должен быть админом чата):")
+    prompt = await cb.message.reply(
+        "Пришли <b>@username</b> работника.\n"
+        "<i>Он должен был хотя бы раз писать в этом чате.</i>"
+    )
     await _track_msg(state, prompt)
     await cb.answer()
 
@@ -1705,20 +1708,26 @@ async def st_wrk_uname(message: Message, state: FSMContext, bot: Bot):
         await _track_msg(state, err)
         return
     tg_id = 0
-    try:
-        admins = await bot.get_chat_administrators(message.chat.id)
-        for a in admins:
-            if (a.user.username or "").lower() == uname.lower():
-                tg_id = a.user.id
-                break
-    except Exception:
-        pass
+    # 1) Смотрим в member трекере (кто писал в чате)
+    mem = storage.find_member(message.chat.id, uname)
+    if mem:
+        tg_id = int(mem.get("tg_id") or 0)
+    # 2) Fallback — админы чата
+    if not tg_id:
+        try:
+            admins = await bot.get_chat_administrators(message.chat.id)
+            for a in admins:
+                if (a.user.username or "").lower() == uname.lower():
+                    tg_id = a.user.id
+                    break
+        except Exception:
+            pass
     if not tg_id:
         await _cleanup_fsm(bot, message.chat.id, state)
         await state.clear()
         warn = await message.reply(
-            f"⚠️ Не могу найти tg_id @{uname} в этом чате. "
-            f"Пусть напишет хоть одно сообщение — потом снова добавь."
+            f"⚠️ Не могу найти @{uname} в этом чате.\n"
+            f"Пусть напишет хоть одно сообщение сюда — потом снова добавь."
         )
         asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 20))
         return
@@ -1923,6 +1932,50 @@ async def cmd_setup(message: Message):
 
 
 # ============================================================
+# АЛИАСЫ БЕЗ СЛЕША — простые русские слова
+# Регистрируется ДО catch_partner_id, но ПОСЛЕ всех Command-хендлеров.
+# ============================================================
+_TEXT_ALIASES = {
+    "стата": cmd_stats,
+    "статистика": cmd_stats,
+    "статус": cmd_status,
+    "выплата": cmd_payout,
+    "профиль": cmd_profile,
+    "настройка": cmd_setup,
+    "настройки": cmd_setup,
+    "начатьдень": cmd_start_day,
+    "чаты": cmd_list_chats,
+    "кто": cmd_whoami,
+    "whoami": cmd_whoami,
+}
+
+
+@router.message(F.text)
+async def _text_command_aliases(message: Message, state: FSMContext, bot: Bot):
+    """Если пользователь пишет команду просто словом (без /), диспатчим."""
+    # НЕ трогаем если пользователь в FSM-состоянии (там ждём ответ)
+    cur_state = await state.get_state()
+    if cur_state:
+        return
+    text = (message.text or "").strip().lower()
+    # Разрешаем "стата" или "стата что-нибудь" — берём первое слово
+    first_word = text.split()[0] if text else ""
+    handler = _TEXT_ALIASES.get(first_word)
+    if not handler:
+        return
+    # Вызываем оригинальный хендлер. Сигнатуры у них разные,
+    # безопасно передавать все возможные kwargs — питон схавает.
+    import inspect
+    sig = inspect.signature(handler)
+    kwargs = {}
+    if "bot" in sig.parameters:
+        kwargs["bot"] = bot
+    if "state" in sig.parameters:
+        kwargs["state"] = state
+    await handler(message, **kwargs)
+
+
+# ============================================================
 # LAST — Подхват tg_id партнёра. Регистрируется в САМОМ КОНЦЕ
 # чтобы Command-хендлеры срабатывали раньше. Фильтр: не команда, есть текст, есть username.
 # ============================================================
@@ -1936,11 +1989,19 @@ async def _catch_partner_id(message: Message):
     if not message.from_user or not message.from_user.username:
         return
     entry = storage.get_client_chat(message.chat.id)
-    if not entry or entry.get("partner_tg_id"):
+    if not entry:
         return
-    if (entry.get("partner_username") or "").lower() == message.from_user.username.lower():
-        await storage.update_client_chat(
-            message.chat.id, partner_tg_id=int(message.from_user.id)
-        )
-        logger.info("[calc] partner_tg_id resolved for %s: %s",
-                    message.chat.id, message.from_user.id)
+    # Запоминаем всех кто писал — понадобится для добавления работника
+    await storage.remember_member(
+        message.chat.id,
+        message.from_user.id,
+        message.from_user.username,
+    )
+    # Резолвим partner_tg_id если он ещё 0
+    if not entry.get("partner_tg_id"):
+        if (entry.get("partner_username") or "").lower() == message.from_user.username.lower():
+            await storage.update_client_chat(
+                message.chat.id, partner_tg_id=int(message.from_user.id)
+            )
+            logger.info("[calc] partner_tg_id resolved for %s: %s",
+                        message.chat.id, message.from_user.id)

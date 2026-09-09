@@ -239,6 +239,31 @@ class CalcStorage:
                 return True
             return False
 
+    # ---------- CHAT MEMBERS TRACKER (username → tg_id) ----------
+    async def remember_member(
+        self, chat_id: int, tg_id: int, username: str
+    ) -> None:
+        """Запоминаем кто писал в чате — для последующего добавления в работники."""
+        if not tg_id or not username:
+            return
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return
+            mem = entry.setdefault("members", {})
+            mem[username.lstrip("@").lower()] = {
+                "tg_id": int(tg_id),
+                "username": username.lstrip("@"),
+            }
+            await self._save_unlocked()
+
+    def find_member(self, chat_id: int, username: str) -> dict | None:
+        entry = self.get_client_chat(chat_id)
+        if not entry:
+            return None
+        mem = entry.get("members") or {}
+        return mem.get((username or "").lstrip("@").lower())
+
     # ---------- STREAMS (партнёрские направления с TRC20) ----------
     async def add_stream(
         self, chat_id: int, name: str, trc20: str, enabled: bool = True
