@@ -3041,6 +3041,79 @@ async def cmd_statadd(message: Message):
     )
 
 
+@router.message(Command("statadd_tg"))
+async def cmd_statadd_tg(message: Message):
+    """/statadd_tg <tg_id> <тег> <сумма> [сделок=1] — owner доливает на РЕАЛЬНЫЙ tg_id клиента.
+    Пример: /statadd_tg 1964347675 Люцифер 7650 20
+    Отличие от /statadd — пишет на конкретный tg_id (не создаёт синтетику)."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 4:
+        return await message.reply(
+            "Формат: <code>/statadd_tg &lt;tg_id&gt; &lt;тег&gt; &lt;сумма&gt; [сделок]</code>\n"
+            "Пример: <code>/statadd_tg 1964347675 Люцифер 7650 20</code>"
+        )
+    try:
+        tg_id = int(parts[1])
+    except ValueError:
+        return await message.reply("tg_id должен быть числом.")
+    tag_raw = parts[2].lstrip("#")
+    try:
+        amount = float(parts[3].replace(",", "."))
+    except ValueError:
+        return await message.reply("Сумма должна быть числом.")
+    count = 1
+    if len(parts) >= 5:
+        try:
+            count = int(parts[4])
+        except ValueError:
+            pass
+    tag = f"#{tag_raw}"
+    # Определяем work_chat_id клиента через crm_owners
+    wcid = 0
+    owners = crm_storage.list_crm_owners() or {}
+    for _, o in owners.items():
+        if int(o.get("tg_user_id") or 0) == tg_id:
+            wcid = int(o.get("work_chat_id") or 0)
+            break
+    import time as _t
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        stats = crm_storage.state.setdefault("client_stats", {})
+        key = str(tg_id)
+        entry = stats.get(key) or {
+            "total_amount_usdt": 0.0, "deals_count": 0,
+            "tag": tag, "work_chat_id": wcid, "last_payout_ts": 0.0,
+            "tg_user_id": tg_id,
+        }
+        entry["total_amount_usdt"] = float(entry.get("total_amount_usdt") or 0) + amount
+        entry["deals_count"] = int(entry.get("deals_count") or 0) + count
+        entry["tag"] = tag
+        entry["tg_user_id"] = tg_id
+        if wcid and not entry.get("work_chat_id"):
+            entry["work_chat_id"] = wcid
+        entry["last_payout_ts"] = _t.time()
+        # НЕ помечаем manual чтобы rebuild_stats её не трогал… стоп, наоборот —
+        # rebuild manuals НЕ трогает, а real стирает. Значит manual=True нужен,
+        # чтобы rebuild сохранил эту запись при следующем прогоне.
+        entry["manual"] = True
+        stats[key] = entry
+        # Заодно привязываем тег к его work_chat_id (если знаем wcid)
+        if wcid:
+            tags = crm_storage.state.setdefault("client_tags", {})
+            tags[str(wcid)] = {"tag": tag, "tg_user_id": tg_id, "ts": _t.time()}
+        await crm_storage._save_unlocked()  # noqa
+    await message.reply(
+        f"✅ Долил на РЕАЛЬНЫЙ tg_id клиента:\n"
+        f"👤 tg_id: <code>{tg_id}</code>\n"
+        f"🏷 wcid: <code>{wcid or '—'}</code>\n"
+        f"🦁 <b>{tag}</b>\n"
+        f"💰 +{amount:g}$ (итого: {entry['total_amount_usdt']:g}$)\n"
+        f"📊 +{count} сделок (итого: {entry['deals_count']})"
+    )
+
+
 @router.message(Command("stat_del"))
 async def cmd_stat_del(message: Message):
     """/stat_del <tg_id|тег> — owner удаляет запись из client_stats.
