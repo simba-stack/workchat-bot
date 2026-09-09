@@ -2742,15 +2742,30 @@ async def cmd_debug_client(message: Message):
         lines.append(f"  сумма: {stat.get('total_amount_usdt')}$")
         lines.append(f"  сделок: {stat.get('deals_count')}")
         lines.append(f"  тег в stats: {stat.get('tag')}")
-    # Cards в audit-боте
+    # Cards в audit-боте — сначала все, потом по статусам
     try:
         import audit_bot_client
-        cards = await audit_bot_client.list_lk_cards(
-            work_chat_id=wcid, status="paid", use_cache=False,
+        all_cards = await audit_bot_client.list_lk_cards(
+            work_chat_id=wcid, use_cache=False,
         )
-        lines.append(f"paid карточек в audit: <b>{len(cards)}</b>")
-        for c in cards[:5]:
-            lines.append(f"  #{c.get('id')} · {c.get('bank')} · {c.get('payment_amount_usdt')}$")
+        lines.append(f"\n<b>Карточки в audit для этого wcid: {len(all_cards)}</b>")
+        # Группируем по статусу
+        by_status = {}
+        for c in all_cards:
+            s = c.get("status") or "?"
+            by_status.setdefault(s, []).append(c)
+        for st, items in sorted(by_status.items()):
+            lines.append(f"  {st}: {len(items)}")
+        # Первые 10 всех
+        lines.append("\n<b>Первые 10 карточек:</b>")
+        for c in all_cards[:10]:
+            lines.append(
+                f"  #{c.get('id')} · {c.get('bank') or '—'} · "
+                f"{c.get('status')} · {c.get('payment_amount_usdt') or 0}$"
+            )
+        if not all_cards:
+            lines.append("\n⚠️ Ни одной карточки не найдено для этого work_chat_id.")
+            lines.append("Возможно карточки хранятся с другим work_chat_id или без него.")
     except Exception as e:
         lines.append(f"audit-бот error: {e}")
     await message.reply("\n".join(lines))
