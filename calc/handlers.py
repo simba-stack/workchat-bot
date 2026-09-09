@@ -232,22 +232,7 @@ async def cmd_add_partner(message: Message, bot: Bot):
     )
 
 
-# Подхват tg_id партнёра когда он напишет в чате
-@router.message(F.chat.type.in_({"group", "supergroup"}))
-async def _catch_partner_id(message: Message):
-    """Если partner_tg_id=0, а автор совпадает с partner_username — сохраняем id.
-    Идёт ПОСЛЕ всех других хендлеров (регистрируется последним)."""
-    if not message.from_user or not message.from_user.username:
-        return
-    entry = storage.get_client_chat(message.chat.id)
-    if not entry or entry.get("partner_tg_id"):
-        return
-    if (entry.get("partner_username") or "").lower() == message.from_user.username.lower():
-        await storage.update_client_chat(
-            message.chat.id, partner_tg_id=int(message.from_user.id)
-        )
-        logger.info("[calc] partner_tg_id resolved for %s: %s",
-                    message.chat.id, message.from_user.id)
+# _catch_partner_id перенесён в САМЫЙ КОНЕЦ файла чтобы не перехватывать команды
 
 
 # ============================================================
@@ -1565,3 +1550,27 @@ async def cmd_setup(message: Message):
     if not entry:
         return await message.reply("Чат не зарегистрирован.")
     await _show_client_setup(message, entry)
+
+
+# ============================================================
+# LAST — Подхват tg_id партнёра. Регистрируется в САМОМ КОНЦЕ
+# чтобы Command-хендлеры срабатывали раньше. Фильтр: не команда, есть текст, есть username.
+# ============================================================
+@router.message(
+    F.chat.type.in_({"group", "supergroup"})
+    & F.text
+    & ~F.text.startswith("/")
+    & ~F.text.startswith("+")
+)
+async def _catch_partner_id(message: Message):
+    if not message.from_user or not message.from_user.username:
+        return
+    entry = storage.get_client_chat(message.chat.id)
+    if not entry or entry.get("partner_tg_id"):
+        return
+    if (entry.get("partner_username") or "").lower() == message.from_user.username.lower():
+        await storage.update_client_chat(
+            message.chat.id, partner_tg_id=int(message.from_user.id)
+        )
+        logger.info("[calc] partner_tg_id resolved for %s: %s",
+                    message.chat.id, message.from_user.id)
