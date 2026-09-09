@@ -2761,8 +2761,17 @@ async def cmd_debug_client(message: Message):
         for c in all_cards[:10]:
             lines.append(
                 f"  #{c.get('id')} · {c.get('bank') or '—'} · "
-                f"{c.get('status')} · {c.get('payment_amount_usdt') or 0}$"
+                f"{c.get('status')} · pay:{c.get('payment_amount_usdt') or 0}$ "
+                f"amt:{c.get('amount') or 0}$ tot:{c.get('total_price_usdt') or 0}$"
             )
+        # Показать raw dump первой paid карточки — для отладки полей
+        paid_first = next((c for c in all_cards if c.get("status") == "paid"), None)
+        if paid_first:
+            keys_with_num = {
+                k: v for k, v in paid_first.items()
+                if isinstance(v, (int, float)) and v
+            }
+            lines.append(f"\n<b>Числовые поля первой paid:</b> {keys_with_num}")
         if not all_cards:
             lines.append("\n⚠️ Ни одной карточки не найдено для этого work_chat_id.")
             lines.append("Возможно карточки хранятся с другим work_chat_id или без него.")
@@ -2807,14 +2816,25 @@ async def cmd_rebuild_stats(message: Message):
 
     grouped = {}
     skipped_no_id = 0
+    skipped_no_amt = 0
     for c in cards:
         wcid = int(c.get("work_chat_id") or 0)
-        amt = float(c.get("payment_amount_usdt") or 0)
+        # SIMBA 2026-09: fallback на legacy поле `amount` для старых paid карточек
+        # (те, что были оплачены до появления payment_amount_usdt/payment_share).
+        amt = float(
+            c.get("payment_amount_usdt")
+            or c.get("amount")
+            or c.get("total_price_usdt")
+            or 0
+        )
         cid = int(c.get("client_id") or 0)
         if not cid and wcid in wcid_to_tg:
             cid = wcid_to_tg[wcid]  # fallback
-        if not cid or amt <= 0:
+        if not cid:
             skipped_no_id += 1
+            continue
+        if amt <= 0:
+            skipped_no_amt += 1
             continue
         entry = grouped.setdefault(cid, {
             "work_chat_id": wcid, "amount": 0.0, "count": 0,
@@ -2849,8 +2869,8 @@ async def cmd_rebuild_stats(message: Message):
         f"Обработано paid-карточек: <b>{len(cards)}</b>\n"
         f"Уникальных клиентов: <b>{added}</b>\n"
         f"Manual-записей сохранено: <b>{len(manuals)}</b>\n"
-        f"Пропущено (нет client_id и work_chat_id не в crm_owners): "
-        f"<b>{skipped_no_id}</b>\n\n"
+        f"Пропущено — нет client_id и wcid не в crm_owners: <b>{skipped_no_id}</b>\n"
+        f"Пропущено — сумма 0 во всех полях: <b>{skipped_no_amt}</b>\n\n"
         f"Проверь <code>/топ</code> в общем чате."
     )
 
