@@ -2984,15 +2984,47 @@ async def handle_client_tag_input(message: Message, state: FSMContext):
         f"✅ Тег сохранён: <b>{_html.escape(saved)}</b>\n\n"
         f"Он будет использоваться в канале выплат вместо вашего @username."
     )
-    # SIMBA 2026-09: синк тега в client_stats (иначе /топ покажет старый id123).
+    # SIMBA 2026-09: синк тега в client_stats + автоподтяжка paid-карточек
+    # клиента по work_chat_id (если stats entry не было).
     try:
         from storage import _lock as _st_lock
+        client_tg_id = int(message.from_user.id)
+        wcid_int = int(wcid)
         async with _st_lock:
             stats = crm_storage.state.setdefault("client_stats", {})
-            key = str(message.from_user.id)
-            if key in stats:
-                stats[key]["tag"] = saved
+            key = str(client_tg_id)
+            entry = stats.get(key)
+            if entry:
+                entry["tag"] = saved
                 await crm_storage._save_unlocked()  # noqa
+        # Если entry не существовало — рассчитаем из paid-карточек этого work_chat
+        if not entry:
+            try:
+                import audit_bot_client
+                cards = await audit_bot_client.list_lk_cards(
+                    work_chat_id=wcid_int, status="paid", use_cache=False,
+                )
+                total = sum(float(c.get("payment_amount_usdt") or 0) for c in (cards or []))
+                count = len([c for c in (cards or []) if float(c.get("payment_amount_usdt") or 0) > 0])
+                if count > 0:
+                    await crm_storage.client_stat_add(
+                        tg_user_id=client_tg_id,
+                        work_chat_id=wcid_int,
+                        amount=total,
+                        tag=saved,
+                    )
+                    # client_stat_add инкрементит count=1 → добираем остальное
+                    remain = count - 1
+                    if remain > 0:
+                        async with _st_lock:
+                            e2 = crm_storage.state["client_stats"].get(str(client_tg_id))
+                            if e2:
+                                e2["deals_count"] = int(e2.get("deals_count") or 0) + remain
+                                await crm_storage._save_unlocked()  # noqa
+                    logger.info("[client_tag] backfilled stats for %s: %s$ %s deals",
+                                client_tg_id, total, count)
+            except Exception as _be:
+                logger.warning("[client_tag] backfill failed: %s", _be)
     except Exception as _se:
         logger.warning("[client_tag] sync stats.tag failed: %s", _se)
     # SIMBA 2026-09: если есть отложенный пост в канал — публикуем СРАЗУ с тегом.
