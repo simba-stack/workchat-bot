@@ -3114,6 +3114,33 @@ async def cmd_statadd_tg(message: Message):
     )
 
 
+@router.message(Command("stat_list"))
+async def cmd_stat_list(message: Message):
+    """/stat_list — owner, показывает ВСЕ entry client_stats с ключами."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    stats = crm_storage.state.get("client_stats") or {}
+    if not stats:
+        return await message.reply("client_stats пуст.")
+    lines = [f"<b>client_stats: {len(stats)} записей</b>\n"]
+    for k, v in sorted(
+        stats.items(),
+        key=lambda kv: float(kv[1].get("total_amount_usdt") or 0),
+        reverse=True,
+    ):
+        manual = " [MANUAL]" if v.get("manual") else ""
+        lines.append(
+            f"<code>{k}</code>{manual} · {v.get('tag') or '—'} · "
+            f"{float(v.get('total_amount_usdt') or 0):g}$ · "
+            f"{int(v.get('deals_count') or 0)} сд · "
+            f"wcid={v.get('work_chat_id') or '—'}"
+        )
+    # Разбиваем на куски если длинно
+    text = "\n".join(lines)
+    for i in range(0, len(text), 3800):
+        await message.reply(text[i:i+3800])
+
+
 @router.message(Command("stat_del"))
 async def cmd_stat_del(message: Message):
     """/stat_del <tg_id|тег> — owner удаляет запись из client_stats.
