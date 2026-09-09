@@ -2993,15 +2993,32 @@ async def cmd_statadd(message: Message):
         except ValueError:
             pass
     tag = f"#{tag_raw}"
-    # Синтетический tg_user_id для ручных записей — hash от тега (отрицательный чтобы не конфликтовать)
-    fake_tg_id = -abs(hash(tag)) % 10**10
-    fake_tg_id = -(fake_tg_id + 1)
     import time as _t
     from storage import _lock as _st_lock
     async with _st_lock:
         stats = crm_storage.state.setdefault("client_stats", {})
-        key = str(fake_tg_id)
-        entry = stats.get(key) or {
+        # SIMBA 2026-09: ищем существующую entry с таким же тегом (real или manual),
+        # чтобы не плодить дубли. Приоритет — real (не manual), самая жирная сумма.
+        target_key = None
+        candidates = [
+            (k, v) for k, v in stats.items()
+            if (v.get("tag") or "").lower() == tag.lower()
+        ]
+        if candidates:
+            candidates.sort(
+                key=lambda kv: (
+                    0 if kv[1].get("manual") else 1,  # real сначала
+                    float(kv[1].get("total_amount_usdt") or 0),  # потом по сумме
+                ),
+                reverse=True,
+            )
+            target_key = candidates[0][0]
+        if not target_key:
+            # Синтетический tg_user_id для новых ручных записей
+            fake_tg_id = -abs(hash(tag)) % 10**10
+            fake_tg_id = -(fake_tg_id + 1)
+            target_key = str(fake_tg_id)
+        entry = stats.get(target_key) or {
             "total_amount_usdt": 0.0, "deals_count": 0,
             "tag": tag, "work_chat_id": 0, "last_payout_ts": 0.0,
             "manual": True,
@@ -3010,15 +3027,65 @@ async def cmd_statadd(message: Message):
         entry["deals_count"] = int(entry.get("deals_count") or 0) + count
         entry["tag"] = tag
         entry["last_payout_ts"] = _t.time()
-        entry["manual"] = True
-        stats[key] = entry
+        # manual флаг сохраняем как есть если entry уже real, иначе True
+        if "manual" not in entry:
+            entry["manual"] = True
+        stats[target_key] = entry
         await crm_storage._save_unlocked()  # noqa
+    who = "существующую entry" if target_key and not target_key.startswith("-") else "новую manual entry"
     await message.reply(
-        f"✅ Добавлено в топ:\n"
-        f"🦁 <b>{tag}</b>\n"
+        f"✅ Долил в {who}:\n"
+        f"🦁 <b>{tag}</b> (key={target_key})\n"
         f"💰 +{amount:g}$ (итого: {entry['total_amount_usdt']:g}$)\n"
         f"📊 +{count} сделок (итого: {entry['deals_count']})"
     )
+
+
+@router.message(Command("stat_del"))
+async def cmd_stat_del(message: Message):
+    """/stat_del <tg_id|тег> — owner удаляет запись из client_stats.
+    Полезно чтобы убрать дубли или пустые entry."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return await message.reply(
+            "Формат: <code>/stat_del &lt;tg_id|тег&gt;</code>\n"
+            "Примеры:\n"
+            "  <code>/stat_del 1964347675</code>\n"
+            "  <code>/stat_del Люцифер</code>  — удалит ВСЕ entry с этим тегом"
+        )
+    q = parts[1].strip().lstrip("#")
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        stats = crm_storage.state.setdefault("client_stats", {})
+        removed = []
+        # Пробуем как tg_id
+        if q.lstrip("-").isdigit():
+            key = str(int(q))
+            if key in stats:
+                removed.append((key, stats.pop(key)))
+        # Если не нашли по id — пробуем как тег
+        if not removed:
+            tag_l = q.lower()
+            keys_to_del = [
+                k for k, v in stats.items()
+                if (v.get("tag") or "").lstrip("#").lower() == tag_l
+            ]
+            for k in keys_to_del:
+                removed.append((k, stats.pop(k)))
+        if removed:
+            await crm_storage._save_unlocked()  # noqa
+    if not removed:
+        return await message.reply(f"❌ Не нашёл записей по <code>{q}</code>")
+    lines = [f"🗑 Удалено записей: <b>{len(removed)}</b>"]
+    for k, v in removed:
+        lines.append(
+            f"  key={k} · tag={v.get('tag') or '—'} · "
+            f"{float(v.get('total_amount_usdt') or 0):g}$ · "
+            f"{int(v.get('deals_count') or 0)} сделок"
+        )
+    await message.reply("\n".join(lines))
 
 
 @router.message(Command("топ", "top"))
