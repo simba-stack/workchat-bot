@@ -2645,6 +2645,117 @@ async def _post_payout_to_channels(work_chat_id: int, card: dict):
 # SIMBA 2026-09: команды /топ /я для клиентов в общем чате (CLIENTS_CHAT_ID).
 # /топ  — топ 10 клиентов по сумме выплат
 # /я    — своя стата (сумма + кол-во сделок)
+@router.message(Command("tag_client"))
+async def cmd_tag_client(message: Message):
+    """/tag_client @username Тег — насильно поставить тег клиенту + backfill stats.
+    Owner-only. Полезно если автомат сломался."""
+    if not is_owner(message.from_user.id):
+        return await message.reply("Только для owner.")
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3:
+        return await message.reply(
+            "Формат: <code>/tag_client @username Тег</code>\n"
+            "Или: <code>/tag_client tg_id Тег</code>"
+        )
+    who = parts[1].lstrip("@")
+    tag = parts[2].strip()
+    # Ищем owner по username или tg_id
+    owner = None
+    if who.isdigit():
+        owner = crm_storage.find_crm_owner_by_tg(int(who))
+    else:
+        owner = crm_storage.find_crm_owner_by_username(who)
+    if not owner:
+        return await message.reply(
+            f"❌ Не нашёл клиента <code>{who}</code> в crm_owners."
+        )
+    wcid = int(owner.get("work_chat_id") or 0)
+    tg_id = int(owner.get("tg_user_id") or 0)
+    if not wcid or not tg_id:
+        return await message.reply(
+            f"❌ У {who} нет work_chat_id ({wcid}) или tg_user_id ({tg_id})."
+        )
+    # 1) Сохраняем тег
+    saved_tag = await crm_storage.set_client_tag(wcid, tag)
+    if not saved_tag:
+        return await message.reply("❌ Тег невалидный (буквы/цифры/_).")
+    # 2) Тянем paid-карточки этого wcid из audit-бота
+    try:
+        import audit_bot_client
+        cards = await audit_bot_client.list_lk_cards(
+            work_chat_id=wcid, status="paid", use_cache=False,
+        )
+    except Exception as e:
+        cards = []
+        logger.warning("[tag_client] list_lk_cards failed: %s", e)
+    paid_amount = sum(float(c.get("payment_amount_usdt") or 0) for c in (cards or []))
+    paid_count = len([c for c in (cards or []) if float(c.get("payment_amount_usdt") or 0) > 0])
+    # 3) Пересобираем entry в client_stats
+    from storage import _lock as _st_lock
+    async with _st_lock:
+        stats = crm_storage.state.setdefault("client_stats", {})
+        stats[str(tg_id)] = {
+            "total_amount_usdt": paid_amount,
+            "deals_count": paid_count,
+            "tag": saved_tag,
+            "work_chat_id": wcid,
+            "last_payout_ts": max((float(c.get("updated_at") or 0) for c in (cards or [])), default=0),
+        }
+        await crm_storage._save_unlocked()  # noqa
+    await message.reply(
+        f"✅ Клиент обновлён:\n"
+        f"@{who} (id <code>{tg_id}</code>)\n"
+        f"work_chat: <code>{wcid}</code>\n"
+        f"тег: <b>{saved_tag}</b>\n"
+        f"paid-карточек: <b>{paid_count}</b>, сумма: <b>{paid_amount:g}$</b>\n\n"
+        f"Проверь <code>/топ</code>."
+    )
+
+
+@router.message(Command("debug_client"))
+async def cmd_debug_client(message: Message):
+    """/debug_client @username|tg_id — диагностика клиента."""
+    if not is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: /debug_client @user или /debug_client tg_id")
+    who = parts[1].lstrip("@")
+    owner = None
+    if who.isdigit():
+        owner = crm_storage.find_crm_owner_by_tg(int(who))
+    else:
+        owner = crm_storage.find_crm_owner_by_username(who)
+    lines = [f"<b>Диагностика {who}</b>", ""]
+    if not owner:
+        lines.append("❌ Не найден в crm_owners")
+        return await message.reply("\n".join(lines))
+    wcid = int(owner.get("work_chat_id") or 0)
+    tg_id = int(owner.get("tg_user_id") or 0)
+    lines.append(f"tg_user_id: <code>{tg_id}</code>")
+    lines.append(f"work_chat_id: <code>{wcid}</code>")
+    lines.append(f"username: {owner.get('username') or '—'}")
+    lines.append(f"tag сохранён: {crm_storage.get_client_tag(wcid) or '—'}")
+    stat = crm_storage.client_stat_get(tg_id)
+    lines.append(f"stats entry: {'ЕСТЬ' if stat else 'НЕТ'}")
+    if stat:
+        lines.append(f"  сумма: {stat.get('total_amount_usdt')}$")
+        lines.append(f"  сделок: {stat.get('deals_count')}")
+        lines.append(f"  тег в stats: {stat.get('tag')}")
+    # Cards в audit-боте
+    try:
+        import audit_bot_client
+        cards = await audit_bot_client.list_lk_cards(
+            work_chat_id=wcid, status="paid", use_cache=False,
+        )
+        lines.append(f"paid карточек в audit: <b>{len(cards)}</b>")
+        for c in cards[:5]:
+            lines.append(f"  #{c.get('id')} · {c.get('bank')} · {c.get('payment_amount_usdt')}$")
+    except Exception as e:
+        lines.append(f"audit-бот error: {e}")
+    await message.reply("\n".join(lines))
+
+
 @router.message(Command("rebuild_stats"))
 async def cmd_rebuild_stats(message: Message):
     """/rebuild_stats — пересобирает статистику клиентов из paid карточек
