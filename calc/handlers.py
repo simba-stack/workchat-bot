@@ -1692,8 +1692,8 @@ async def cb_wrk_add(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Setup.wait_worker_username)
     await state.update_data(chat_id=cb.message.chat.id)
     prompt = await cb.message.reply(
-        "Пришли <b>@username</b> работника.\n"
-        "<i>Он должен был хотя бы раз писать в этом чате.</i>"
+        "Пришли <b>@username</b> или <b>tg_id</b> работника.\n"
+        "<i>Узнать tg_id — @userinfobot</i>"
     )
     await _track_msg(state, prompt)
     await cb.answer()
@@ -1702,34 +1702,54 @@ async def cb_wrk_add(cb: CallbackQuery, state: FSMContext):
 @router.message(Setup.wait_worker_username)
 async def st_wrk_uname(message: Message, state: FSMContext, bot: Bot):
     await _track_msg(state, message)
-    uname = (message.text or "").strip().lstrip("@")
-    if not uname or not re.match(r"^\w{3,32}$", uname):
-        err = await message.reply("Плохой username.")
-        await _track_msg(state, err)
-        return
+    raw = (message.text or "").strip()
     tg_id = 0
-    # 1) Смотрим в member трекере (кто писал в чате)
-    mem = storage.find_member(message.chat.id, uname)
-    if mem:
-        tg_id = int(mem.get("tg_id") or 0)
-    # 2) Fallback — админы чата
-    if not tg_id:
-        try:
-            admins = await bot.get_chat_administrators(message.chat.id)
-            for a in admins:
-                if (a.user.username or "").lower() == uname.lower():
-                    tg_id = a.user.id
-                    break
-        except Exception:
-            pass
+    uname = ""
+    # Вариант 1: чистый tg_id (цифры)
+    if raw.lstrip("-").isdigit():
+        tg_id = int(raw)
+        # попробуем достать username из member трекера или get_chat_member
+        entry = storage.get_client_chat(message.chat.id)
+        mem = entry.get("members") or {} if entry else {}
+        for m in mem.values():
+            if int(m.get("tg_id") or 0) == tg_id:
+                uname = m.get("username") or ""
+                break
+        if not uname:
+            try:
+                m = await bot.get_chat_member(message.chat.id, tg_id)
+                uname = (m.user.username or "") if m and m.user else ""
+            except Exception:
+                pass
+    else:
+        # Вариант 2: username
+        uname = raw.lstrip("@")
+        if not re.match(r"^\w{3,32}$", uname):
+            err = await message.reply("Плохой username или tg_id.")
+            await _track_msg(state, err)
+            return
+        # Резолвим tg_id: member трекер → админы чата
+        mem = storage.find_member(message.chat.id, uname)
+        if mem:
+            tg_id = int(mem.get("tg_id") or 0)
+        if not tg_id:
+            try:
+                admins = await bot.get_chat_administrators(message.chat.id)
+                for a in admins:
+                    if (a.user.username or "").lower() == uname.lower():
+                        tg_id = a.user.id
+                        break
+            except Exception:
+                pass
     if not tg_id:
         await _cleanup_fsm(bot, message.chat.id, state)
         await state.clear()
         warn = await message.reply(
-            f"⚠️ Не могу найти @{uname} в этом чате.\n"
-            f"Пусть напишет хоть одно сообщение сюда — потом снова добавь."
+            f"⚠️ Не могу найти @{uname or raw} в этом чате.\n"
+            f"Либо пусть напишет хоть раз сюда, либо пришли его <b>tg_id</b> "
+            f"(узнать: @userinfobot)."
         )
-        asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 20))
+        asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 30))
         return
     await state.update_data(worker_tg_id=tg_id, worker_username=uname)
     await state.set_state(Setup.wait_worker_role)
