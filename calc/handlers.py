@@ -132,6 +132,9 @@ class Setup(StatesGroup):
     wait_payout_wallet_edit = State()
     wait_requisite_note = State()
     wait_payout_amount = State()  # админ вводит фактическую сумму выплаты
+    wait_stream_name = State()    # партнёр: имя своего направления
+    wait_stream_trc20 = State()   # партнёр: TRC20 для этого направления
+    wait_stream_trc20_edit = State()  # редактирование адреса существующего
 
 
 # ============================================================
@@ -701,40 +704,61 @@ async def handle_amount_input(message: Message, bot: Bot):
     if not entry:
         return
     text = (message.text or "").strip()
-    # Формат: +сумма направление
-    parts = text.split(maxsplit=1)
-    if len(parts) < 2:
-        return  # без направления игнор
+    # Формат: +сумма <направление_партнёра> <способ_приёма>
+    parts = text.split()
+    if len(parts) < 3:
+        reply = await message.reply(
+            "❓ Формат: <code>+сумма НАПРАВЛЕНИЕ СПОСОБ</code>\n"
+            "Пример: <code>+100к Мороженое ДАЧА</code>\n"
+            "  • НАПРАВЛЕНИЕ = твой магазин (жми /профиль → 📍 Мои направления)\n"
+            "  • СПОСОБ = способ приёма от админа (см. /статус)"
+        )
+        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 15))
+        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id, 15))
+        return
     amount = _parse_amount(parts[0])
     if amount is None or amount <= 0:
         return
-    dir_name = parts[1].strip()
-    directions = entry.get("directions") or {}
-    if dir_name not in directions:
-        reply = await message.reply(
-            f"❓ Направления <b>{html.escape(dir_name)}</b> нет.\n"
-            f"Доступные: {', '.join(directions.keys()) or '—'}"
+    stream_name = parts[1].strip()
+    method_name = parts[2].strip()
+    streams = entry.get("streams") or {}
+    methods = entry.get("directions") or {}
+
+    err_text = None
+    if stream_name not in streams:
+        err_text = (
+            f"❓ Твоего направления <b>{html.escape(stream_name)}</b> нет.\n"
+            f"Твои направления: {', '.join(streams.keys()) or '—'}\n"
+            f"Добавь: /профиль → 📍 Мои направления"
         )
-        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id))
-        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id))
+    elif not streams[stream_name].get("enabled"):
+        err_text = f"⛔ <b>{stream_name}</b> у тебя выключено."
+    elif method_name not in methods:
+        err_text = (
+            f"❓ Способа приёма <b>{html.escape(method_name)}</b> нет.\n"
+            f"Доступные способы: {', '.join(methods.keys()) or '—'}"
+        )
+    elif not methods[method_name].get("enabled"):
+        err_text = f"⛔ Способ <b>{method_name}</b> сейчас выключен."
+
+    if err_text:
+        reply = await message.reply(err_text)
+        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 20))
+        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id, 20))
         return
-    if not directions[dir_name].get("enabled"):
-        reply = await message.reply(f"⛔ <b>{dir_name}</b> сейчас выключено.")
-        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id))
-        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id))
-        return
+
     await storage.add_stat_entry(
         chat_id=message.chat.id,
         date_str=today_msk(),
         amount_rub=amount,
-        direction=dir_name,
+        stream=stream_name,
+        payment_method=method_name,
         author_id=message.from_user.id,
         author_username=message.from_user.username or "",
     )
     reply = await message.reply(
-        f"✅ +{_fmt_money_rub(amount)}₽ → <b>{dir_name}</b>"
+        f"✅ +{_fmt_money_rub(amount)}₽ → <b>{stream_name}</b> · <i>{method_name}</i>"
     )
-    # Удаляем и вход и ответ через N сек — мусор
     asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id))
     asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id))
 
@@ -758,47 +782,60 @@ async def _send_stats(message: Message, entry: dict):
         return await message.reply("Нет данных.")
     rate = s["rate"]
     total_rub = s["total_rub"]
-    by_dir_rub = s["by_direction_rub"]
-    by_dir_usd = s["by_direction_usd"]
-    dir_pcts = s["dir_pcts"]
+    by_stream_rub = s.get("by_stream_rub") or {}
+    by_stream_usd = s.get("by_stream_usd") or {}
+    by_stream_method_rub = s.get("by_stream_method_rub") or {}
+    method_pcts = s.get("method_pcts") or {}
+    paid_by_stream = s.get("paid_by_stream") or {}
+    remaining_by_stream = s.get("remaining_by_stream") or {}
     total_usd = s["total_usd_before_pay"]
     paid = s["paid_usd"]
     remaining = s["remaining_usd"]
 
     lines = [
-        "<b>[PRIDE] Панель партнёра</b>",
-        f"Статистика {today_msk()}",
-        f"Курс: <b>{rate or '—'}</b>",
-        "",
-        f"💰 Общая в рублях: <b>{_fmt_money_rub(total_rub)} руб.</b>",
+        "🦁 <b>PRIDE · Панель партнёра</b>",
+        f"📅 {today_msk()}  ·  💱 Курс: <b>{rate or '—'}</b>",
+        "━━━━━━━━━━━━━━━━━━━",
+        f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
+        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
+        f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
+        f"🎯 <b>Остаток: {_fmt_money_usd(remaining)}$</b>",
     ]
-    if len(by_dir_rub) > 1:
-        lines.append("\n<b>По направлениям:</b>")
-        for d, amt in by_dir_rub.items():
-            pct = dir_pcts.get(d, 0)
-            usd = by_dir_usd.get(d, 0)
+
+    if by_stream_rub:
+        lines.append("\n<b>📍 По твоим направлениям:</b>")
+        for stream in sorted(by_stream_rub.keys(), key=lambda k: by_stream_rub[k], reverse=True):
+            rub = by_stream_rub[stream]
+            usd = by_stream_usd.get(stream, 0)
+            paid_s = paid_by_stream.get(stream, 0)
+            rem_s = remaining_by_stream.get(stream, 0)
             lines.append(
-                f"  <b>{d}</b>: {_fmt_money_rub(amt)}₽ − {pct:g}% = "
-                f"{_fmt_money_rub(amt * (1 - pct/100))}₽ / {rate or '—'} = "
+                f"\n  📍 <b>{stream}</b>: {_fmt_money_rub(rub)}₽ = "
                 f"<b>{_fmt_money_usd(usd)}$</b>"
             )
-    elif len(by_dir_rub) == 1:
-        d, amt = next(iter(by_dir_rub.items()))
-        pct = dir_pcts.get(d, 0)
-        after = amt * (1 - pct/100)
-        lines.append(
-            f"  Расчёт: {_fmt_money_rub(amt)} − {pct:g}% = "
-            f"{_fmt_money_rub(after)} / {rate or '—'} = "
-            f"<b>{_fmt_money_usd(by_dir_usd.get(d,0))}$</b>"
-        )
-    lines.append(f"\n💵 Общая выплата: <b>{_fmt_money_usd(total_usd)}$</b>")
-    lines.append(f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>")
-    lines.append(f"🎯 Остаток: <b>{_fmt_money_usd(remaining)}$</b>")
+            if paid_s or rem_s != usd:
+                lines.append(
+                    f"     ✅ {_fmt_money_usd(paid_s)}$  ·  🎯 <b>{_fmt_money_usd(rem_s)}$</b>"
+                )
+            # Разбивка по способам приёма внутри направления
+            methods = by_stream_method_rub.get(stream) or {}
+            if len(methods) > 1 or (methods and list(methods.keys())[0] != "—"):
+                for m, m_rub in sorted(methods.items(), key=lambda x: x[1], reverse=True):
+                    pct = method_pcts.get(m, 0)
+                    after = m_rub * (1 - pct/100)
+                    m_usd = after / rate if rate > 0 else 0
+                    lines.append(
+                        f"     • <i>{m}</i>: {_fmt_money_rub(m_rub)}₽ −{pct:g}% = {_fmt_money_usd(m_usd)}$"
+                    )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💸 Запросить выплату", callback_data="pay:request")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="stats:setup")],
-    ])
+    if not total_rub:
+        lines.append("\n<i>Ещё ничего не сдано. Пиши: <code>+100к НАПРАВЛЕНИЕ СПОСОБ</code></i>")
+
+    kb_rows = []
+    if remaining > 0.01:
+        kb_rows.append([InlineKeyboardButton(text="💸 Запросить выплату", callback_data="pay:request")])
+    kb_rows.append([InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
 
@@ -838,18 +875,195 @@ async def cmd_profile(message: Message):
         return
     s = storage.compute_stats(entry["chat_id"])
     workers = entry.get("workers") or {}
+    streams = entry.get("streams") or {}
     lines = [
         "<b>👤 Профиль партнёра</b>",
         f"Партнёр: @{entry.get('partner_username') or '—'}",
         f"Общая сумма: <b>{_fmt_money_rub(s.get('total_rub') or 0)} руб.</b>",
         f"Выплачено: <b>{_fmt_money_usd(s.get('paid_usd') or 0)}$</b>",
-        f"Работников: <b>{len(workers)}</b>",
+        f"Направлений: <b>{len(streams)}</b>  ·  Работников: <b>{len(workers)}</b>",
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")],
         [InlineKeyboardButton(text="👥 Мои работники", callback_data="prof:workers")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="stats:setup")],
     ])
     await message.reply("\n".join(lines), reply_markup=kb)
+
+
+# ============================================================
+# ПАРТНЁРСКИЕ НАПРАВЛЕНИЯ (streams)
+# ============================================================
+@router.callback_query(F.data == "prof:streams")
+async def cb_prof_streams(cb: CallbackQuery):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    is_partner = cb.from_user.id == entry.get("partner_tg_id")
+    can_add = is_partner or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")
+    streams = entry.get("streams") or {}
+    lines = [f"<b>📍 Мои направления ({len(streams)}):</b>"]
+    if not streams:
+        lines.append("  <i>пусто — добавь своё первое направление</i>")
+    for st in streams.values():
+        onoff = "✅" if st.get("enabled") else "⛔"
+        trc = st.get("trc20") or "—"
+        trc_short = trc if len(trc) < 20 else trc[:6] + "…" + trc[-4:]
+        lines.append(f"  {onoff} <b>{st.get('name')}</b> → <code>{trc_short}</code>")
+    rows = []
+    for st in streams.values():
+        rows.append([
+            InlineKeyboardButton(
+                text=f"⚙️ {st.get('name')}",
+                callback_data=f"stream:menu:{st.get('name')}",
+            ),
+        ])
+    if can_add:
+        rows.append([InlineKeyboardButton(text="➕ Добавить направление", callback_data="stream:add")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    await cb.message.reply("\n".join(lines), reply_markup=kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "stream:add")
+async def cb_stream_add(cb: CallbackQuery, state: FSMContext):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    if not (cb.from_user.id == entry.get("partner_tg_id")
+            or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")):
+        return await cb.answer("Только партнёр или его работник с правом.", show_alert=True)
+    await state.set_state(Setup.wait_stream_name)
+    await state.update_data(chat_id=cb.message.chat.id)
+    prompt = await cb.message.reply(
+        "Название направления (напр. Мороженое, Лопаты, Магазин1):"
+    )
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_stream_name)
+async def st_stream_name(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    name = (message.text or "").strip()
+    if not name or len(name) > 32:
+        err = await message.reply("Плохое имя (до 32 симв).")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    entry = storage.get_client_chat(data["chat_id"])
+    if entry and name in (entry.get("streams") or {}):
+        err = await message.reply(f"Направление <b>{name}</b> уже есть. Пришли другое.")
+        await _track_msg(state, err)
+        return
+    await state.update_data(stream_name=name)
+    await state.set_state(Setup.wait_stream_trc20)
+    prompt = await message.reply(
+        f"Направление: <b>{name}</b>\n"
+        f"Пришли TRC20 адрес для выплат по этому направлению (начинается с T):"
+    )
+    await _track_msg(state, prompt)
+
+
+@router.message(Setup.wait_stream_trc20)
+async def st_stream_trc20(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    trc = (message.text or "").strip()
+    if not (trc.startswith("T") and 30 <= len(trc) <= 40):
+        err = await message.reply("Не похоже на TRC20 (начинается с T, длина ~34).")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    await storage.add_stream(data["chat_id"], data["stream_name"], trc, enabled=True)
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ Направление <b>{data['stream_name']}</b> добавлено.\n"
+        f"TRC20: <code>{trc}</code>"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
+
+
+@router.callback_query(F.data.startswith("stream:menu:"))
+async def cb_stream_menu(cb: CallbackQuery):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    name = cb.data.split(":", 2)[2]
+    st = (entry.get("streams") or {}).get(name)
+    if not st:
+        return await cb.answer("Не найдено.", show_alert=True)
+    onoff = "✅ ВКЛ" if st.get("enabled") else "⛔ ВЫКЛ"
+    trc = st.get("trc20") or "—"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{onoff} · переключить", callback_data=f"stream:tgl:{name}")],
+        [InlineKeyboardButton(text="💳 Изменить TRC20", callback_data=f"stream:trc:{name}")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"stream:del:{name}")],
+    ])
+    await cb.message.reply(
+        f"📍 <b>{name}</b>\nTRC20: <code>{trc}</code>", reply_markup=kb
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("stream:tgl:"))
+async def cb_stream_tgl(cb: CallbackQuery):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry or not (cb.from_user.id == entry.get("partner_tg_id")
+                         or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")):
+        return await cb.answer("Нет прав.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    new = await storage.toggle_stream(cb.message.chat.id, name)
+    await cb.answer(f"{name}: {'ВКЛ' if new else 'ВЫКЛ'}")
+
+
+@router.callback_query(F.data.startswith("stream:trc:"))
+async def cb_stream_trc(cb: CallbackQuery, state: FSMContext):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry or not (cb.from_user.id == entry.get("partner_tg_id")
+                         or _check_partner_or_perm(entry, cb.from_user.id, "set_wallet")):
+        return await cb.answer("Нет прав.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    await state.set_state(Setup.wait_stream_trc20_edit)
+    await state.update_data(chat_id=cb.message.chat.id, stream_name=name)
+    prompt = await cb.message.reply(f"Новый TRC20 для <b>{name}</b>:")
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_stream_trc20_edit)
+async def st_stream_trc_edit(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    trc = (message.text or "").strip()
+    if not (trc.startswith("T") and 30 <= len(trc) <= 40):
+        err = await message.reply("Не похоже на TRC20.")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    await storage.update_stream_trc20(data["chat_id"], data["stream_name"], trc)
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ TRC20 для <b>{data['stream_name']}</b>: <code>{trc}</code>"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
+
+
+@router.callback_query(F.data.startswith("stream:del:"))
+async def cb_stream_del(cb: CallbackQuery):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry or cb.from_user.id != entry.get("partner_tg_id"):
+        return await cb.answer("Только партнёр.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    ok = await storage.delete_stream(cb.message.chat.id, name)
+    await cb.answer("Удалено" if ok else "Не найдено")
+    if ok:
+        try:
+            await cb.message.edit_text(f"🗑 Направление <b>{name}</b> удалено.")
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1016,33 +1230,65 @@ async def cb_pay_request(cb: CallbackQuery, state: FSMContext, bot: Bot):
     if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
         return await cb.answer("Нет прав на запрос выплаты.", show_alert=True)
     s = storage.compute_stats(entry["chat_id"])
-    remaining = s.get("remaining_usd") or 0
-    if remaining <= 0:
+    remaining_by_stream = s.get("remaining_by_stream") or {}
+    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    if not active:
         return await cb.answer("Остаток к выплате = 0.", show_alert=True)
-    wallet = entry.get("wallet_trc20") or ""
-    if not wallet:
-        await state.set_state(Setup.wait_payout_wallet_edit)
-        await state.update_data(chat_id=cb.message.chat.id, amount=remaining)
-        prompt = await cb.message.reply(
-            f"Кошелёк не указан. Пришли TRC20 адрес чтобы создать заявку на {_fmt_money_usd(remaining)}$:"
-        )
-        await _track_msg(state, prompt)
+    # Если несколько направлений с остатком — выбор
+    if len(active) > 1:
+        rows = []
+        for st, amt in sorted(active.items(), key=lambda x: x[1], reverse=True):
+            rows.append([InlineKeyboardButton(
+                text=f"📍 {st} · {_fmt_money_usd(amt)}$",
+                callback_data=f"pay:stream:{st}"
+            )])
+        kb = InlineKeyboardMarkup(inline_keyboard=rows)
+        await cb.message.reply("Выбери направление для выплаты:", reply_markup=kb)
         return await cb.answer()
-    # Есть кошелёк → показать подтверждение
+    # Одно направление с остатком
+    stream_name, remaining = next(iter(active.items()))
+    return await _show_payout_confirm(cb, entry, stream_name, remaining, state, bot)
+
+
+async def _show_payout_confirm(cb, entry, stream_name, remaining, state, bot):
+    streams = entry.get("streams") or {}
+    st = streams.get(stream_name)
+    wallet = (st or {}).get("trc20") or entry.get("wallet_trc20") or ""
+    if not wallet:
+        await cb.message.reply(
+            f"⚠️ У направления <b>{stream_name}</b> не указан TRC20 адрес.\n"
+            f"Открой /профиль → 📍 Мои направления → выбери <b>{stream_name}</b> → 💳 Изменить TRC20"
+        )
+        return await cb.answer()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"✅ Запросить {_fmt_money_usd(remaining)}$",
-            callback_data=f"pay:confirm:{int(remaining*100)}"
+            callback_data=f"pay:confirm:{stream_name}:{int(remaining*100)}"
         )],
-        [InlineKeyboardButton(text="✏️ Изменить адрес", callback_data="pay:edit_wallet")],
     ])
     await cb.message.reply(
         f"💸 <b>Заявка на выплату</b>\n"
-        f"Сумма: <b>{_fmt_money_usd(remaining)}$</b>\n"
-        f"На адрес: <code>{wallet}</code>",
+        f"📍 Направление: <b>{stream_name}</b>\n"
+        f"💰 Сумма: <b>{_fmt_money_usd(remaining)}$</b>\n"
+        f"💳 Адрес: <code>{wallet}</code>",
         reply_markup=kb,
     )
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("pay:stream:"))
+async def cb_pay_stream(cb: CallbackQuery, state: FSMContext, bot: Bot):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
+        return await cb.answer("Нет прав.", show_alert=True)
+    stream_name = cb.data.split(":", 2)[2]
+    s = storage.compute_stats(entry["chat_id"])
+    remaining = (s.get("remaining_by_stream") or {}).get(stream_name, 0)
+    if remaining <= 0:
+        return await cb.answer("Остаток по этому направлению = 0.", show_alert=True)
+    return await _show_payout_confirm(cb, entry, stream_name, remaining, state, bot)
 
 
 @router.callback_query(F.data == "pay:edit_wallet")
@@ -1090,33 +1336,44 @@ async def cb_pay_confirm(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
         return await cb.answer("Нет прав.", show_alert=True)
-    amount = int(cb.data.split(":")[2]) / 100.0
-    wallet = entry.get("wallet_trc20") or ""
+    parts = cb.data.split(":")
+    # pay:confirm:<stream>:<amount*100>
+    stream_name = parts[2] if len(parts) >= 4 else ""
+    amount = int(parts[-1]) / 100.0
+    streams = entry.get("streams") or {}
+    wallet = ""
+    if stream_name and stream_name in streams:
+        wallet = streams[stream_name].get("trc20") or ""
     if not wallet:
-        return await cb.answer("Нет кошелька.", show_alert=True)
+        wallet = entry.get("wallet_trc20") or ""
+    if not wallet:
+        return await cb.answer("Нет кошелька для этого направления.", show_alert=True)
     await _create_and_send_payout(
         bot, cb.message.chat.id, amount, wallet,
         cb.from_user.id, cb.from_user.username or "",
+        stream=stream_name,
     )
     await cb.answer("Заявка создана.")
 
 
 async def _create_and_send_payout(
     bot: Bot, chat_id: int, amount: float, wallet: str,
-    user_id: int, username: str,
+    user_id: int, username: str, stream: str = "",
 ):
     entry = storage.get_client_chat(chat_id)
     req = await storage.create_payout_request(
         chat_id=chat_id, amount_usd=amount, wallet=wallet,
-        requested_by_id=user_id, requested_by_name=username,
+        requested_by_id=user_id, requested_by_name=username, stream=stream,
     )
     # Клиенту
     client_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отменить", callback_data=f"pay:cancel:{req['id']}")],
     ])
+    stream_line = f"📍 Направление: <b>{stream}</b>\n" if stream else ""
     client_msg = await bot.send_message(
         chat_id,
         f"💸 <b>Заявка на выплату #{req['id']}</b>\n"
+        f"{stream_line}"
         f"Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
         f"Адрес: <code>{wallet}</code>\n"
         f"Статус: ⏳ ожидает подтверждения",
@@ -1138,6 +1395,7 @@ async def _create_and_send_payout(
             f"🔔 <b>Новая заявка на выплату #{req['id']}</b>\n"
             f"Чат: <code>{chat_id}</code> · {html.escape(entry.get('chat_title') or '')}\n"
             f"Партнёр: @{entry.get('partner_username') or '—'}\n"
+            f"{stream_line}"
             f"Запросил: @{username or '—'} (<code>{user_id}</code>)\n"
             f"Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
             f"Адрес: <code>{wallet}</code>",
@@ -1242,6 +1500,7 @@ async def st_payout_amount(message: Message, state: FSMContext, bot: Bot):
     await storage.record_payout(
         chat_id=req["chat_id"], amount_usd=amt,
         note=f"payout_req_id={pid}", admin_id=message.from_user.id,
+        stream=req.get("stream") or "",
     )
     await storage.update_payout_request(pid, status="paid", paid_amount_usd=amt)
     await _cleanup_fsm(bot, message.chat.id, state)
@@ -1612,28 +1871,43 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
     if not _check_partner_or_perm(entry, message.from_user.id, "request_payout"):
         return await message.reply("Нет прав на запрос выплаты.")
     s = storage.compute_stats(entry["chat_id"])
-    remaining = s.get("remaining_usd") or 0
-    if remaining <= 0:
-        return await message.reply(f"Остаток к выплате = 0.")
-    wallet = entry.get("wallet_trc20") or ""
-    if not wallet:
-        await state.set_state(Setup.wait_payout_wallet_edit)
-        await state.update_data(chat_id=message.chat.id, amount=remaining)
+    remaining_by_stream = s.get("remaining_by_stream") or {}
+    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    if not active:
+        return await message.reply("Остаток к выплате = 0.")
+    streams = entry.get("streams") or {}
+    # Одно направление — сразу подтверждение
+    if len(active) == 1:
+        stream_name, remaining = next(iter(active.items()))
+        wallet = (streams.get(stream_name) or {}).get("trc20") or ""
+        if not wallet:
+            return await message.reply(
+                f"⚠️ У направления <b>{stream_name}</b> не указан TRC20.\n"
+                f"Открой /профиль → 📍 Мои направления → <b>{stream_name}</b> → 💳"
+            )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"✅ Запросить {_fmt_money_usd(remaining)}$",
+                callback_data=f"pay:confirm:{stream_name}:{int(remaining*100)}"
+            )],
+        ])
         return await message.reply(
-            f"Кошелёк не указан. Пришли TRC20 адрес чтобы создать заявку на {_fmt_money_usd(remaining)}$:"
+            f"💸 <b>Заявка на выплату</b>\n"
+            f"📍 <b>{stream_name}</b>\n"
+            f"💰 <b>{_fmt_money_usd(remaining)}$</b>\n"
+            f"💳 <code>{wallet}</code>",
+            reply_markup=kb,
         )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"✅ Запросить {_fmt_money_usd(remaining)}$",
-            callback_data=f"pay:confirm:{int(remaining*100)}"
-        )],
-        [InlineKeyboardButton(text="✏️ Изменить адрес", callback_data="pay:edit_wallet")],
-    ])
+    # Несколько направлений — выбор
+    rows = []
+    for st, amt in sorted(active.items(), key=lambda x: x[1], reverse=True):
+        rows.append([InlineKeyboardButton(
+            text=f"📍 {st} · {_fmt_money_usd(amt)}$",
+            callback_data=f"pay:stream:{st}"
+        )])
     await message.reply(
-        f"💸 <b>Заявка на выплату</b>\n"
-        f"Сумма: <b>{_fmt_money_usd(remaining)}$</b>\n"
-        f"На адрес: <code>{wallet}</code>",
-        reply_markup=kb,
+        "Выбери направление для выплаты:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 

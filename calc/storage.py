@@ -177,10 +177,11 @@ class CalcStorage:
                 "partner_tg_id": int(partner_tg_id or 0),
                 "partner_username": (partner_username or "").lstrip("@"),
                 "rate": 0.0,
-                "wallet_trc20": "",
-                "directions": {},
+                "wallet_trc20": "",       # legacy fallback (общий адрес)
+                "directions": {},          # админские способы приёма: {name: {name, commission_pct, enabled}}
+                "streams": {},             # партнёрские направления: {name: {name, trc20, enabled}}
                 "days": {},
-                "payouts": [],
+                "payouts": [],             # общий список
                 "workers": {},
             }
             chats[key] = entry
@@ -238,13 +239,62 @@ class CalcStorage:
                 return True
             return False
 
+    # ---------- STREAMS (партнёрские направления с TRC20) ----------
+    async def add_stream(
+        self, chat_id: int, name: str, trc20: str, enabled: bool = True
+    ) -> None:
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return
+            streams = entry.setdefault("streams", {})
+            streams[name] = {"name": name, "trc20": trc20 or "", "enabled": bool(enabled)}
+            await self._save_unlocked()
+
+    async def update_stream_trc20(self, chat_id: int, name: str, trc20: str) -> bool:
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return False
+            streams = entry.get("streams") or {}
+            if name not in streams:
+                return False
+            streams[name]["trc20"] = trc20 or ""
+            await self._save_unlocked()
+            return True
+
+    async def toggle_stream(self, chat_id: int, name: str) -> bool | None:
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return None
+            s = (entry.get("streams") or {}).get(name)
+            if not s:
+                return None
+            s["enabled"] = not bool(s.get("enabled"))
+            await self._save_unlocked()
+            return s["enabled"]
+
+    async def delete_stream(self, chat_id: int, name: str) -> bool:
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return False
+            streams = entry.get("streams") or {}
+            if name in streams:
+                del streams[name]
+                await self._save_unlocked()
+                return True
+            return False
+
     # ---------- STATS ENTRIES ----------
     async def add_stat_entry(
         self,
         chat_id: int,
         date_str: str,
         amount_rub: float,
-        direction: str,
+        stream: str,               # партнёрское направление (магазин)
+        payment_method: str,       # админский способ приёма
         author_id: int,
         author_username: str,
     ) -> dict | None:
@@ -258,7 +308,10 @@ class CalcStorage:
             record = {
                 "ts": time.time(),
                 "amount_rub": float(amount_rub),
-                "direction": direction,
+                "stream": stream,
+                "payment_method": payment_method,
+                # legacy alias:
+                "direction": payment_method,
                 "author_id": int(author_id),
                 "author_username": (author_username or "").lstrip("@"),
             }
@@ -285,6 +338,7 @@ class CalcStorage:
         wallet: str,
         requested_by_id: int,
         requested_by_name: str,
+        stream: str = "",
     ) -> dict:
         async with _lock:
             pid = int(self.state.get("next_payout_id") or 1)
@@ -301,6 +355,7 @@ class CalcStorage:
                 "admin_msg_id": 0,
                 "client_msg_id": 0,
                 "paid_amount_usd": 0.0,
+                "stream": stream or "",
             }
             self.state.setdefault("pending_payouts", []).append(req)
             self.state["next_payout_id"] = pid + 1
@@ -324,7 +379,8 @@ class CalcStorage:
             return None
 
     async def record_payout(
-        self, chat_id: int, amount_usd: float, note: str, admin_id: int
+        self, chat_id: int, amount_usd: float, note: str, admin_id: int,
+        stream: str = "",
     ) -> None:
         async with _lock:
             entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
@@ -336,6 +392,7 @@ class CalcStorage:
                 "amount_usd": float(amount_usd),
                 "note": note or "",
                 "admin_id": int(admin_id),
+                "stream": stream or "",
             })
             await self._save_unlocked()
 
@@ -450,49 +507,84 @@ class CalcStorage:
 
     # ---------- AGGREGATES ----------
     def compute_stats(self, chat_id: int, date_str: str | None = None) -> dict:
-        """Считаем общую по чату. Если date_str — только за эту дату.
-        Возвращает: total_rub, by_direction={dir: rub}, total_usd_before_pay,
-        paid_usd, remaining_usd, rate, dir_pcts={dir: pct}."""
+        """Двухмерная разбивка:
+        - by_stream_rub: {stream: total_rub}
+        - by_stream_usd: {stream: total_usd_after_commissions}
+        - by_stream_method_rub: {stream: {method: rub}}
+        - by_method_rub: {method: total_rub}
+        - method_pcts: {method: pct}
+        - paid_by_stream: {stream: usd_paid} (по атрибуту stream в payouts)
+        - remaining_by_stream: {stream: usd_remaining}
+        - total_*: сводные
+        """
         entry = self.get_client_chat(chat_id)
         if not entry:
             return {}
         rate = float(entry.get("rate") or 0)
         days = entry.get("days") or {}
-        by_direction: dict[str, float] = {}
+        directions_cfg = entry.get("directions") or {}
+        method_pcts = {name: float(d.get("commission_pct") or 0) for name, d in directions_cfg.items()}
+
+        by_stream_method_rub: dict[str, dict[str, float]] = {}
+        by_method_rub: dict[str, float] = {}
+        by_stream_rub: dict[str, float] = {}
+
         if date_str:
-            day = days.get(date_str) or {"entries": []}
-            days_iter = [(date_str, day)]
+            days_iter = [(date_str, days.get(date_str) or {"entries": []})]
         else:
             days_iter = list(days.items())
+
         for _, day in days_iter:
             for e in day.get("entries") or []:
-                d = e.get("direction") or "—"
-                by_direction[d] = by_direction.get(d, 0.0) + float(e.get("amount_rub") or 0)
-        total_rub = sum(by_direction.values())
+                stream = e.get("stream") or "—"
+                method = e.get("payment_method") or e.get("direction") or "—"
+                amt = float(e.get("amount_rub") or 0)
+                by_stream_method_rub.setdefault(stream, {})
+                by_stream_method_rub[stream][method] = by_stream_method_rub[stream].get(method, 0.0) + amt
+                by_method_rub[method] = by_method_rub.get(method, 0.0) + amt
+                by_stream_rub[stream] = by_stream_rub.get(stream, 0.0) + amt
 
-        directions_cfg = entry.get("directions") or {}
-        dir_pcts = {}
-        total_usd = 0.0
-        by_direction_usd: dict[str, float] = {}
-        for d, amt_rub in by_direction.items():
-            cfg = directions_cfg.get(d)
-            pct = float(cfg.get("commission_pct") or 0) if cfg else 0.0
-            dir_pcts[d] = pct
-            after_comm = amt_rub * (1 - pct / 100.0)
-            usd = (after_comm / rate) if rate > 0 else 0.0
-            by_direction_usd[d] = usd
-            total_usd += usd
+        # USD расчёт: для каждого stream суммируем по методам с их %
+        by_stream_usd: dict[str, float] = {}
+        for stream, methods in by_stream_method_rub.items():
+            usd = 0.0
+            for m, amt_rub in methods.items():
+                pct = method_pcts.get(m, 0.0)
+                after = amt_rub * (1 - pct / 100.0)
+                usd += (after / rate) if rate > 0 else 0.0
+            by_stream_usd[stream] = usd
 
-        paid_usd = sum(float(p.get("amount_usd") or 0) for p in (entry.get("payouts") or []))
+        total_rub = sum(by_stream_rub.values())
+        total_usd = sum(by_stream_usd.values())
+
+        # Payouts — раскладываем по stream если указан, иначе в "—"
+        paid_by_stream: dict[str, float] = {}
+        for p in (entry.get("payouts") or []):
+            s = p.get("stream") or "—"
+            paid_by_stream[s] = paid_by_stream.get(s, 0.0) + float(p.get("amount_usd") or 0)
+        paid_usd = sum(paid_by_stream.values())
+
+        remaining_by_stream: dict[str, float] = {}
+        for s in set(list(by_stream_usd.keys()) + list(paid_by_stream.keys())):
+            remaining_by_stream[s] = by_stream_usd.get(s, 0.0) - paid_by_stream.get(s, 0.0)
+
         return {
             "rate": rate,
             "total_rub": total_rub,
-            "by_direction_rub": by_direction,
-            "by_direction_usd": by_direction_usd,
-            "dir_pcts": dir_pcts,
+            "by_stream_rub": by_stream_rub,
+            "by_stream_usd": by_stream_usd,
+            "by_stream_method_rub": by_stream_method_rub,
+            "by_method_rub": by_method_rub,
+            "method_pcts": method_pcts,
             "total_usd_before_pay": total_usd,
             "paid_usd": paid_usd,
+            "paid_by_stream": paid_by_stream,
             "remaining_usd": total_usd - paid_usd,
+            "remaining_by_stream": remaining_by_stream,
+            # legacy для совместимости со старым UI
+            "by_direction_rub": by_method_rub,
+            "by_direction_usd": {},
+            "dir_pcts": method_pcts,
         }
 
 
