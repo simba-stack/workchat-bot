@@ -2942,12 +2942,37 @@ def _client_tag_kb(work_chat_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def _find_client_tg_id_by_wcid(wcid: int) -> int:
+    """По work_chat_id ищем client_id (tg_user_id клиента) в crm_owners.
+    Возвращает 0 если не нашли."""
+    try:
+        owners = crm_storage.list_crm_owners() or {}
+        for oid, o in owners.items():
+            if int(o.get("work_chat_id") or 0) == int(wcid):
+                return int(o.get("tg_user_id") or 0)
+    except Exception:
+        pass
+    # Fallback: get_chat_info из managed_chats
+    try:
+        info = crm_storage.get_chat_info(int(wcid)) or {}
+        return int(info.get("client_id") or 0)
+    except Exception:
+        pass
+    return 0
+
+
 @router.callback_query(F.data.startswith("cli_tag:set:"))
 async def cb_client_set_tag(call: CallbackQuery, state: FSMContext):
-    """Клиент жмёт «Указать свой тег» → просим текст."""
+    """Клиент (или admin в его work_chat) жмёт «Указать свой тег» → просим текст."""
     wcid = call.data.split(":", 2)[2]
+    # SIMBA 2026-09: определяем client_tg_id по work_chat, а не по нажавшему
+    # (чтобы admin мог задать тег за клиента и stats привязались к клиенту).
+    client_tg_id = _find_client_tg_id_by_wcid(int(wcid))
+    # Fallback: если не нашли — используем нажавшего (для legacy кейсов).
+    if not client_tg_id:
+        client_tg_id = int(call.from_user.id)
     await state.set_state(ClientTagForm.waiting_tag)
-    await state.update_data(work_chat_id=wcid)
+    await state.update_data(work_chat_id=wcid, client_tg_id=client_tg_id)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -2986,9 +3011,11 @@ async def handle_client_tag_input(message: Message, state: FSMContext):
     )
     # SIMBA 2026-09: синк тега в client_stats + автоподтяжка paid-карточек
     # клиента по work_chat_id (если stats entry не было).
+    # client_tg_id берём из state (может быть != message.from_user.id — если
+    # admin задал тег за клиента).
     try:
         from storage import _lock as _st_lock
-        client_tg_id = int(message.from_user.id)
+        client_tg_id = int(data.get("client_tg_id") or message.from_user.id)
         wcid_int = int(wcid)
         async with _st_lock:
             stats = crm_storage.state.setdefault("client_stats", {})
