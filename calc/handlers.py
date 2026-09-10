@@ -183,9 +183,10 @@ async def cmd_admin_setup(message: Message):
     await message.reply("Команда для админ-чата.")
 
 
-async def _show_client_setup(message: Message, entry: dict):
+async def _show_client_setup(message: Message, entry: dict, user_id: int = 0):
     dirs = entry.get("directions") or {}
-    user_id = message.from_user.id if message.from_user else 0
+    if not user_id:
+        user_id = message.from_user.id if message.from_user else 0
     is_owner_user = storage.is_owner(user_id)
     is_partner_user = user_id == entry.get("partner_tg_id")
     team = entry.get("team_name") or ""
@@ -945,7 +946,8 @@ async def cb_prof_streams(cb: CallbackQuery):
     if not entry:
         return await cb.answer()
     is_partner = cb.from_user.id == entry.get("partner_tg_id")
-    can_add = is_partner or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")
+    is_owner = storage.is_owner(cb.from_user.id)
+    can_add = is_partner or is_owner or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")
     streams = entry.get("streams") or {}
     lines = [f"<b>📍 Мои направления ({len(streams)}):</b>"]
     if not streams:
@@ -976,6 +978,7 @@ async def cb_stream_add(cb: CallbackQuery, state: FSMContext):
     if not entry:
         return await cb.answer()
     if not (cb.from_user.id == entry.get("partner_tg_id")
+            or storage.is_owner(cb.from_user.id)
             or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")):
         return await cb.answer("Только партнёр или его работник с правом.", show_alert=True)
     await state.set_state(Setup.wait_stream_name)
@@ -1056,6 +1059,7 @@ async def cb_stream_menu(cb: CallbackQuery):
 async def cb_stream_tgl(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry or not (cb.from_user.id == entry.get("partner_tg_id")
+                         or storage.is_owner(cb.from_user.id)
                          or _check_partner_or_perm(entry, cb.from_user.id, "add_directions")):
         return await cb.answer("Нет прав.", show_alert=True)
     name = cb.data.split(":", 2)[2]
@@ -1067,6 +1071,7 @@ async def cb_stream_tgl(cb: CallbackQuery):
 async def cb_stream_trc(cb: CallbackQuery, state: FSMContext):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry or not (cb.from_user.id == entry.get("partner_tg_id")
+                         or storage.is_owner(cb.from_user.id)
                          or _check_partner_or_perm(entry, cb.from_user.id, "set_wallet")):
         return await cb.answer("Нет прав.", show_alert=True)
     name = cb.data.split(":", 2)[2]
@@ -1099,7 +1104,8 @@ async def st_stream_trc_edit(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("stream:del:"))
 async def cb_stream_del(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
-    if not entry or cb.from_user.id != entry.get("partner_tg_id"):
+    if not entry or not (cb.from_user.id == entry.get("partner_tg_id")
+                         or storage.is_owner(cb.from_user.id)):
         return await cb.answer("Только партнёр.", show_alert=True)
     name = cb.data.split(":", 2)[2]
     ok = await storage.delete_stream(cb.message.chat.id, name)
@@ -1130,7 +1136,7 @@ async def cb_stats_setup(cb: CallbackQuery):
     if not entry:
         return await cb.answer()
     await cb.answer()
-    await _show_client_setup(cb.message, entry)
+    await _show_client_setup(cb.message, entry, user_id=cb.from_user.id)
 
 
 @router.callback_query(F.data == "setup:add_dir")
