@@ -87,6 +87,9 @@ def _default_state() -> dict:
         "pending_requisites": [],
         "next_payout_id": 1,
         "next_req_id": 1,
+        # Глобальные шлюзы — методы приёма платежей. Копируются в client_chat при регистрации.
+        # {name: {name, commission_pct, cost_pct, enabled}}
+        "gateways": {},
     }
 
 
@@ -238,6 +241,69 @@ class CalcStorage:
                 await self._save_unlocked()
                 return True
             return False
+
+    # ---------- GLOBAL GATEWAYS ----------
+    def list_gateways(self) -> dict:
+        return self.state.get("gateways") or {}
+
+    async def set_gateway(
+        self, name: str, commission_pct: float, cost_pct: float = 0.0,
+        enabled: bool = True,
+    ) -> None:
+        async with _lock:
+            gws = self.state.setdefault("gateways", {})
+            gws[name] = {
+                "name": name,
+                "commission_pct": float(commission_pct),
+                "cost_pct": float(cost_pct),
+                "enabled": bool(enabled),
+            }
+            await self._save_unlocked()
+
+    async def toggle_gateway(self, name: str) -> bool | None:
+        async with _lock:
+            gws = self.state.get("gateways") or {}
+            g = gws.get(name)
+            if not g:
+                return None
+            g["enabled"] = not bool(g.get("enabled"))
+            await self._save_unlocked()
+            return g["enabled"]
+
+    async def delete_gateway(self, name: str) -> bool:
+        async with _lock:
+            gws = self.state.get("gateways") or {}
+            if name in gws:
+                del gws[name]
+                await self._save_unlocked()
+                return True
+            return False
+
+    async def apply_gateways_to_chat(self, chat_id: int) -> int:
+        """Копирует все ВКЛЮЧЕННЫЕ глобальные шлюзы в directions клиента.
+        Существующие шлюзы клиента с тем же именем — сохраняем как есть.
+        Возвращает число добавленных."""
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return 0
+            gws = self.state.get("gateways") or {}
+            dirs = entry.setdefault("directions", {})
+            added = 0
+            for name, g in gws.items():
+                if not g.get("enabled"):
+                    continue
+                if name in dirs:
+                    continue  # уже есть, не перезаписываем
+                dirs[name] = {
+                    "name": name,
+                    "commission_pct": float(g.get("commission_pct") or 0),
+                    "enabled": True,
+                }
+                added += 1
+            if added:
+                await self._save_unlocked()
+            return added
 
     # ---------- DANGER: DELETE ----------
     async def delete_client_chat(self, chat_id: int) -> bool:

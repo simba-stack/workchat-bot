@@ -347,6 +347,8 @@ async def cmd_add_partner(message: Message, bot: Bot):
         partner_tg_id=partner_tg_id,
         partner_username=partner_username,
     )
+    # Автоматически подтягиваем все включённые глобальные шлюзы
+    gateways_added = await storage.apply_gateways_to_chat(message.chat.id)
     # В клиентский чат — минимум
     await message.reply(
         f"✅ Чат зарегистрирован как клиентский.\n"
@@ -358,6 +360,9 @@ async def cmd_add_partner(message: Message, bot: Bot):
     if admin_id and admin_id != message.chat.id:
         tg_line = (f"tg_id: <code>{partner_tg_id}</code>" if partner_tg_id
                    else "tg_id: <i>подхватится когда партнёр напишет в чате</i>")
+        gw_line = (f"🌐 Шлюзов подтянуто из глобальных: <b>{gateways_added}</b>\n"
+                   if gateways_added else
+                   f"⚠️ Глобальных шлюзов нет. Добавь: <code>/шлюз_добавить ДАЧА 20</code>\n")
         try:
             await bot.send_message(
                 admin_id,
@@ -365,12 +370,11 @@ async def cmd_add_partner(message: Message, bot: Bot):
                 f"🏢 {html.escape(message.chat.title or '—')}\n"
                 f"🆔 <code>{message.chat.id}</code>\n"
                 f"👤 Партнёр: @{partner_username}\n"
-                f"{tg_line}\n\n"
+                f"{tg_line}\n"
+                f"{gw_line}\n"
                 f"<b>Настройка:</b>\n"
                 f"<code>/курс {message.chat.id} 80</code>\n"
-                f"<code>/напр {message.chat.id} О1 20</code>\n"
-                f"<code>/напр {message.chat.id} О2 15</code>\n\n"
-                f"Или прямо в клиентском чате как owner: <code>/напр О1 20</code>",
+                f"Переопределить % на клиента: <code>/напр {message.chat.id} ДАЧА 18</code>",
                 reply_markup=_close_kb(),
             )
         except Exception as e:
@@ -527,6 +531,136 @@ async def cmd_close_day(message: Message, bot: Bot):
         f"🌙 День <b>{date_str}</b> закрыт.\n"
         f"Рассылка: <b>{sent}</b> чатов, ошибок: {failed}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n{report}",
+        reply_markup=_close_kb(),
+    )
+
+
+@router.message(Command("шлюзы", "gateways"))
+async def cmd_gateways(message: Message):
+    """/шлюзы — список глобальных шлюзов (owner/admin)."""
+    if not is_owner_or_admin_msg(message):
+        return
+    gws = storage.list_gateways()
+    if not gws:
+        return await message.reply(
+            "🌐 <b>Шлюзы:</b> пусто.\n\n"
+            "Добавь: <code>/шлюз_добавить ДАЧА 20 5</code>\n"
+            "  — 20% комиссии клиенту, 5% расход нам на мерчанта",
+            reply_markup=_close_kb(),
+        )
+    total_ok = sum(1 for g in gws.values() if g.get("enabled"))
+    lines = [f"🌐 <b>Шлюзы ({total_ok}/{len(gws)} вкл):</b>"]
+    for name, g in sorted(gws.items()):
+        onoff = "✅" if g.get("enabled") else "⛔"
+        c = float(g.get("commission_pct") or 0)
+        r = float(g.get("cost_pct") or 0)
+        margin = c - r
+        lines.append(
+            f"\n  {onoff} <b>{name}</b>\n"
+            f"     💰 комиссия клиенту: <b>{c:g}%</b>\n"
+            f"     💸 расход нам: <b>{r:g}%</b>\n"
+            f"     📈 маржа: <b>{margin:g}%</b>"
+        )
+    lines.append(
+        "\n\n<i>Команды:</i>\n"
+        "<code>/шлюз_добавить &lt;имя&gt; &lt;ком%&gt; [расход%]</code>\n"
+        "<code>/шлюз_вкл &lt;имя&gt;</code> · <code>/шлюз_выкл &lt;имя&gt;</code>\n"
+        "<code>/шлюз_удал &lt;имя&gt;</code>\n"
+        "<code>/шлюз_применить &lt;chat_id&gt;</code> — донакатить новые шлюзы на клиента"
+    )
+    await message.reply("\n".join(lines), reply_markup=_close_kb())
+
+
+@router.message(Command("шлюз_добавить", "шлюздобавить", "gateway_add"))
+async def cmd_gateway_add(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        return await message.reply(
+            "Формат: <code>/шлюз_добавить &lt;имя&gt; &lt;комиссия%&gt; [расход%]</code>\n"
+            "Пример: <code>/шлюз_добавить ДАЧА 20 5</code>"
+        )
+    name = parts[1].strip()
+    try:
+        commission = float(parts[2].replace(",", "."))
+    except ValueError:
+        return await message.reply("Комиссия — число.")
+    cost = 0.0
+    if len(parts) >= 4:
+        try:
+            cost = float(parts[3].replace(",", "."))
+        except ValueError:
+            pass
+    await storage.set_gateway(name, commission, cost, enabled=True)
+    await message.reply(
+        f"✅ Шлюз <b>{name}</b>\n"
+        f"💰 ком: {commission:g}%  ·  💸 расход: {cost:g}%",
+        reply_markup=_close_kb(),
+    )
+
+
+@router.message(Command("шлюз_вкл", "gateway_on"))
+async def cmd_gateway_on(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    name = parts[1].strip()
+    gws = storage.list_gateways()
+    if name not in gws:
+        return await message.reply("Не найден.")
+    if not gws[name].get("enabled"):
+        await storage.toggle_gateway(name)
+    await message.reply(f"✅ Шлюз <b>{name}</b> вкл", reply_markup=_close_kb())
+
+
+@router.message(Command("шлюз_выкл", "gateway_off"))
+async def cmd_gateway_off(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    name = parts[1].strip()
+    gws = storage.list_gateways()
+    if name not in gws:
+        return await message.reply("Не найден.")
+    if gws[name].get("enabled"):
+        await storage.toggle_gateway(name)
+    await message.reply(f"⛔ Шлюз <b>{name}</b> выкл", reply_markup=_close_kb())
+
+
+@router.message(Command("шлюз_удал", "gateway_del"))
+async def cmd_gateway_del(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    name = parts[1].strip()
+    ok = await storage.delete_gateway(name)
+    await message.reply(f"🗑 <b>{name}</b> удалён" if ok else "Не найден", reply_markup=_close_kb())
+
+
+@router.message(Command("шлюз_применить", "gateway_apply"))
+async def cmd_gateway_apply(message: Message):
+    """/шлюз_применить <chat_id> — добавляет новые глобальные шлюзы клиенту."""
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: <code>/шлюз_применить &lt;chat_id&gt;</code>")
+    try:
+        cid = int(parts[1])
+    except ValueError:
+        return await message.reply("chat_id — число.")
+    if not storage.get_client_chat(cid):
+        return await message.reply("Чата нет.")
+    n = await storage.apply_gateways_to_chat(cid)
+    await message.reply(
+        f"🌐 Донакатил в клиента <code>{cid}</code>: <b>{n}</b> новых шлюзов.",
         reply_markup=_close_kb(),
     )
 
