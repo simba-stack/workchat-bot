@@ -347,18 +347,34 @@ async def cmd_add_partner(message: Message, bot: Bot):
         partner_tg_id=partner_tg_id,
         partner_username=partner_username,
     )
-    tg_line = (f"tg_id: <code>{partner_tg_id}</code>" if partner_tg_id
-               else "tg_id пока не найден (партнёр напишет в чате — подхватим)")
+    # В клиентский чат — минимум
     await message.reply(
         f"✅ Чат зарегистрирован как клиентский.\n"
-        f"Партнёр: @{partner_username}\n"
-        f"{tg_line}\n\n"
-        f"Дальше:\n"
-        f"1) admin в админ-чате: <code>/курс {message.chat.id} 80</code>\n"
-        f"2) admin: <code>/напр {message.chat.id} О1 20</code>\n"
-        f"3) партнёр: <code>/начатьдень</code>\n"
-        f"4) сумму пишешь: <code>+100к О1</code>"
+        f"Партнёр: @{partner_username}",
+        reply_markup=_close_kb(),
     )
+    # В админ-чат — подробная инструкция
+    admin_id = storage.get_admin_chat_id()
+    if admin_id and admin_id != message.chat.id:
+        tg_line = (f"tg_id: <code>{partner_tg_id}</code>" if partner_tg_id
+                   else "tg_id: <i>подхватится когда партнёр напишет в чате</i>")
+        try:
+            await bot.send_message(
+                admin_id,
+                f"🆕 <b>Новый клиентский чат</b>\n"
+                f"🏢 {html.escape(message.chat.title or '—')}\n"
+                f"🆔 <code>{message.chat.id}</code>\n"
+                f"👤 Партнёр: @{partner_username}\n"
+                f"{tg_line}\n\n"
+                f"<b>Настройка:</b>\n"
+                f"<code>/курс {message.chat.id} 80</code>\n"
+                f"<code>/напр {message.chat.id} О1 20</code>\n"
+                f"<code>/напр {message.chat.id} О2 15</code>\n\n"
+                f"Или прямо в клиентском чате как owner: <code>/напр О1 20</code>",
+                reply_markup=_close_kb(),
+            )
+        except Exception as e:
+            logger.warning("[calc] failed to notify admin_chat about new client: %s", e)
 
 
 # _catch_partner_id перенесён в САМЫЙ КОНЕЦ файла чтобы не перехватывать команды
@@ -1462,12 +1478,17 @@ async def cb_pay_request(cb: CallbackQuery, state: FSMContext, bot: Bot):
         return await cb.answer("Остаток к выплате = 0.", show_alert=True)
     # Если несколько направлений с остатком — выбор
     if len(active) > 1:
-        rows = []
+        total = sum(active.values())
+        rows = [[InlineKeyboardButton(
+            text=f"💥 ВСЕ направления · {_fmt_money_usd(total)}$",
+            callback_data="pay:all",
+        )]]
         for st, amt in sorted(active.items(), key=lambda x: x[1], reverse=True):
             rows.append([InlineKeyboardButton(
                 text=f"📍 {st} · {_fmt_money_usd(amt)}$",
                 callback_data=f"pay:stream:{st}"
             )])
+        rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
         await cb.message.reply("Выбери направление для выплаты:", reply_markup=kb)
         return await cb.answer()
@@ -1500,6 +1521,46 @@ async def _show_payout_confirm(cb, entry, stream_name, remaining, state, bot):
         reply_markup=kb,
     )
     await cb.answer()
+
+
+@router.callback_query(F.data == "pay:all")
+async def cb_pay_all(cb: CallbackQuery, bot: Bot):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
+        return await cb.answer("Нет прав.", show_alert=True)
+    s = storage.compute_stats(entry["chat_id"])
+    remaining_by_stream = s.get("remaining_by_stream") or {}
+    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    if not active:
+        return await cb.answer("Нет остатков.", show_alert=True)
+    streams = entry.get("streams") or {}
+    created = 0
+    skipped_no_wallet = []
+    for stream_name, amount in active.items():
+        st = streams.get(stream_name) or {}
+        wallet = st.get("trc20") or ""
+        if not wallet:
+            skipped_no_wallet.append(stream_name)
+            continue
+        await _create_and_send_payout(
+            bot, cb.message.chat.id, amount, wallet,
+            cb.from_user.id, cb.from_user.username or "",
+            stream=stream_name,
+        )
+        created += 1
+    lines = [f"✅ Создано заявок: <b>{created}</b>"]
+    if skipped_no_wallet:
+        lines.append(
+            f"⚠️ Не отправлено (нет TRC20): {', '.join(skipped_no_wallet)}"
+        )
+    await cb.message.reply("\n".join(lines), reply_markup=_close_kb())
+    await cb.answer(f"Создано: {created} заявок")
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("pay:stream:"))
@@ -2289,13 +2350,18 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
             f"💳 <code>{wallet}</code>",
             reply_markup=kb,
         )
-    # Несколько направлений — выбор
-    rows = []
+    # Несколько направлений — выбор + "ВСЕ"
+    total = sum(active.values())
+    rows = [[InlineKeyboardButton(
+        text=f"💥 ВСЕ направления · {_fmt_money_usd(total)}$",
+        callback_data="pay:all",
+    )]]
     for st, amt in sorted(active.items(), key=lambda x: x[1], reverse=True):
         rows.append([InlineKeyboardButton(
             text=f"📍 {st} · {_fmt_money_usd(amt)}$",
             callback_data=f"pay:stream:{st}"
         )])
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
     await message.reply(
         "Выбери направление для выплаты:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
