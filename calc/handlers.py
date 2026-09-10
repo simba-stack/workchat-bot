@@ -1016,24 +1016,36 @@ async def _send_stats(message: Message, entry: dict):
         f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
         f"💵 Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
         f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
-        f"🎯 <b>Остаток: {_fmt_money_usd(remaining)}$</b>",
     ]
+    pending = s.get("pending_usd") or 0
+    available = s.get("available_usd") or 0
+    if pending > 0.01:
+        lines.append(f"⏳ В очереди на выплату: <b>{_fmt_money_usd(pending)}$</b>")
+    lines.append(f"🎯 <b>Доступно к запросу: {_fmt_money_usd(available)}$</b>")
+    if pending > 0.01:
+        lines.append(f"<i>(общий остаток {_fmt_money_usd(remaining)}$ = доступно + в очереди)</i>")
 
     if by_stream_rub:
+        pending_by_stream = s.get("pending_by_stream") or {}
+        available_by_stream = s.get("available_by_stream") or {}
         lines.append("\n<b>📍 По твоим направлениям:</b>")
         for stream in sorted(by_stream_rub.keys(), key=lambda k: by_stream_rub[k], reverse=True):
             rub = by_stream_rub[stream]
             usd = by_stream_usd.get(stream, 0)
             paid_s = paid_by_stream.get(stream, 0)
-            rem_s = remaining_by_stream.get(stream, 0)
+            pending_s = pending_by_stream.get(stream, 0)
+            avail_s = available_by_stream.get(stream, 0)
             lines.append(
                 f"\n  📍 <b>{stream}</b>: {_fmt_money_rub(rub)}₽ = "
                 f"<b>{_fmt_money_usd(usd)}$</b>"
             )
-            if paid_s or rem_s != usd:
-                lines.append(
-                    f"     ✅ {_fmt_money_usd(paid_s)}$  ·  🎯 <b>{_fmt_money_usd(rem_s)}$</b>"
-                )
+            details = []
+            if paid_s > 0.01:
+                details.append(f"✅ {_fmt_money_usd(paid_s)}$")
+            if pending_s > 0.01:
+                details.append(f"⏳ {_fmt_money_usd(pending_s)}$")
+            details.append(f"🎯 <b>{_fmt_money_usd(avail_s)}$</b>")
+            lines.append(f"     " + "  ·  ".join(details))
             # Разбивка по способам приёма внутри направления
             methods = by_stream_method_rub.get(stream) or {}
             if len(methods) > 1 or (methods and list(methods.keys())[0] != "—"):
@@ -1472,9 +1484,16 @@ async def cb_pay_request(cb: CallbackQuery, state: FSMContext, bot: Bot):
     if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
         return await cb.answer("Нет прав на запрос выплаты.", show_alert=True)
     s = storage.compute_stats(entry["chat_id"])
-    remaining_by_stream = s.get("remaining_by_stream") or {}
-    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    # используем available (за вычетом уже висящих заявок)
+    available_by_stream = s.get("available_by_stream") or {}
+    active = {k: v for k, v in available_by_stream.items() if v > 0.01}
     if not active:
+        pending = s.get("pending_usd") or 0
+        if pending > 0:
+            return await cb.answer(
+                f"Все остатки уже в очереди на выплату ({_fmt_money_usd(pending)}$). Ждём админа.",
+                show_alert=True,
+            )
         return await cb.answer("Остаток к выплате = 0.", show_alert=True)
     # Если несколько направлений с остатком — выбор
     if len(active) > 1:
@@ -1536,9 +1555,14 @@ async def cb_pay_all(cb: CallbackQuery, bot: Bot):
     if not _check_partner_or_perm(entry, cb.from_user.id, "request_payout"):
         return await cb.answer("Нет прав.", show_alert=True)
     s = storage.compute_stats(entry["chat_id"])
-    remaining_by_stream = s.get("remaining_by_stream") or {}
-    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    available_by_stream = s.get("available_by_stream") or {}
+    active = {k: v for k, v in available_by_stream.items() if v > 0.01}
     if not active:
+        pending = s.get("pending_usd") or 0
+        if pending > 0:
+            return await cb.answer(
+                f"Всё уже в очереди ({_fmt_money_usd(pending)}$).", show_alert=True
+            )
         return await cb.answer("Нет остатков.", show_alert=True)
     streams = entry.get("streams") or {}
     # Case-insensitive lookup: строим карту lower→canonical
@@ -1587,10 +1611,16 @@ async def cb_pay_stream(cb: CallbackQuery, state: FSMContext, bot: Bot):
         return await cb.answer("Нет прав.", show_alert=True)
     stream_name = cb.data.split(":", 2)[2]
     s = storage.compute_stats(entry["chat_id"])
-    remaining = (s.get("remaining_by_stream") or {}).get(stream_name, 0)
-    if remaining <= 0:
+    available = (s.get("available_by_stream") or {}).get(stream_name, 0)
+    if available <= 0:
+        pending = (s.get("pending_by_stream") or {}).get(stream_name, 0)
+        if pending > 0:
+            return await cb.answer(
+                f"Остаток по <b>{stream_name}</b> уже в очереди ({_fmt_money_usd(pending)}$).",
+                show_alert=True,
+            )
         return await cb.answer("Остаток по этому направлению = 0.", show_alert=True)
-    return await _show_payout_confirm(cb, entry, stream_name, remaining, state, bot)
+    return await _show_payout_confirm(cb, entry, stream_name, available, state, bot)
 
 
 @router.callback_query(F.data == "pay:edit_wallet")
@@ -1650,12 +1680,23 @@ async def cb_pay_confirm(cb: CallbackQuery, bot: Bot):
         wallet = entry.get("wallet_trc20") or ""
     if not wallet:
         return await cb.answer("Нет кошелька для этого направления.", show_alert=True)
+    # Финальная сверка: не превысить available (защита от race/повторного клика)
+    s = storage.compute_stats(cb.message.chat.id)
+    available = (s.get("available_by_stream") or {}).get(stream_name, 0)
+    if amount > available + 0.01:
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        return await cb.answer(
+            f"⚠️ Уже в очереди / оплачено. Доступно к запросу: {_fmt_money_usd(max(available, 0))}$",
+            show_alert=True,
+        )
     await _create_and_send_payout(
         bot, cb.message.chat.id, amount, wallet,
         cb.from_user.id, cb.from_user.username or "",
         stream=stream_name,
     )
-    # Удаляем сообщение с кнопкой чтобы не жали второй раз
     try:
         await cb.message.delete()
     except Exception:
@@ -2343,9 +2384,14 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
     if not _check_partner_or_perm(entry, message.from_user.id, "request_payout"):
         return await message.reply("Нет прав на запрос выплаты.")
     s = storage.compute_stats(entry["chat_id"])
-    remaining_by_stream = s.get("remaining_by_stream") or {}
-    active = {k: v for k, v in remaining_by_stream.items() if v > 0.01}
+    available_by_stream = s.get("available_by_stream") or {}
+    active = {k: v for k, v in available_by_stream.items() if v > 0.01}
     if not active:
+        pending = s.get("pending_usd") or 0
+        if pending > 0:
+            return await message.reply(
+                f"Все остатки уже в очереди на выплату ({_fmt_money_usd(pending)}$)."
+            )
         return await message.reply("Остаток к выплате = 0.")
     streams = entry.get("streams") or {}
     # Одно направление — сразу подтверждение

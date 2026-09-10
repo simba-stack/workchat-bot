@@ -531,6 +531,18 @@ class CalcStorage:
             return perms[perm]
 
     # ---------- AGGREGATES ----------
+    def get_pending_payout_amounts_by_stream(self, chat_id: int) -> dict[str, float]:
+        """{stream: sum of pending/taken payout requests}."""
+        out: dict[str, float] = {}
+        for r in self.state.get("pending_payouts") or []:
+            if int(r.get("chat_id") or 0) != int(chat_id):
+                continue
+            if r.get("status") not in ("pending", "taken"):
+                continue
+            s = r.get("stream") or "—"
+            out[s] = out.get(s, 0.0) + float(r.get("amount_usd") or 0)
+        return out
+
     def compute_stats(self, chat_id: int, date_str: str | None = None) -> dict:
         """Двухмерная разбивка:
         - by_stream_rub: {stream: total_rub}
@@ -593,6 +605,13 @@ class CalcStorage:
         for s in set(list(by_stream_usd.keys()) + list(paid_by_stream.keys())):
             remaining_by_stream[s] = by_stream_usd.get(s, 0.0) - paid_by_stream.get(s, 0.0)
 
+        # Pending заявки (ещё не оплаченные) — резервируем как "занятое"
+        pending_by_stream = self.get_pending_payout_amounts_by_stream(chat_id)
+        pending_usd = sum(pending_by_stream.values())
+        available_by_stream: dict[str, float] = {}
+        for s in set(list(remaining_by_stream.keys()) + list(pending_by_stream.keys())):
+            available_by_stream[s] = remaining_by_stream.get(s, 0.0) - pending_by_stream.get(s, 0.0)
+
         return {
             "rate": rate,
             "total_rub": total_rub,
@@ -604,8 +623,13 @@ class CalcStorage:
             "total_usd_before_pay": total_usd,
             "paid_usd": paid_usd,
             "paid_by_stream": paid_by_stream,
+            "pending_usd": pending_usd,
+            "pending_by_stream": pending_by_stream,
             "remaining_usd": total_usd - paid_usd,
             "remaining_by_stream": remaining_by_stream,
+            # available = сколько РЕАЛЬНО можно ещё запросить (после вычета pending)
+            "available_usd": total_usd - paid_usd - pending_usd,
+            "available_by_stream": available_by_stream,
             # legacy для совместимости со старым UI
             "by_direction_rub": by_method_rub,
             "by_direction_usd": {},
