@@ -135,6 +135,7 @@ class Setup(StatesGroup):
     wait_stream_name = State()    # партнёр: имя своего направления
     wait_stream_trc20 = State()   # партнёр: TRC20 для этого направления
     wait_stream_trc20_edit = State()  # редактирование адреса существующего
+    wait_team_name = State()          # название команды (напр. "Львята")
 
 
 # ============================================================
@@ -187,13 +188,14 @@ async def _show_client_setup(message: Message, entry: dict):
     user_id = message.from_user.id if message.from_user else 0
     is_owner_user = storage.is_owner(user_id)
     is_partner_user = user_id == entry.get("partner_tg_id")
+    team = entry.get("team_name") or ""
     lines = [
         f"⚙️ <b>Настройки чата</b>",
+        f"🦁 Команда: <b>{team or '—'}</b>",
         f"Партнёр: @{entry.get('partner_username') or '—'}",
         f"Курс: <b>{entry.get('rate') or '—'}</b>",
-        f"Кошелёк TRC20: <code>{entry.get('wallet_trc20') or '—'}</code>",
         "",
-        f"<b>Направления ({len(dirs)}):</b>",
+        f"<b>Способы приёма админа ({len(dirs)}):</b>",
     ]
     if not dirs:
         lines.append("  <i>пусто — админ должен добавить направления</i>")
@@ -201,17 +203,55 @@ async def _show_client_setup(message: Message, entry: dict):
         onoff = "✅" if d.get("enabled") else "⛔"
         lines.append(f"  {onoff} <b>{d.get('name')}</b> — {d.get('commission_pct')}%")
 
-    # Партнёр видит только «Изменить TRC20». Направления/список — только owner.
     kb_rows = []
-    if is_owner_user:
-        kb_rows.append([InlineKeyboardButton(text="➕ Направление", callback_data="setup:add_dir")])
-        kb_rows.append([InlineKeyboardButton(text="🔄 Список направлений", callback_data="setup:list_dirs")])
+    # Название команды — партнёр или owner
     if is_partner_user or is_owner_user:
-        kb_rows.append([InlineKeyboardButton(text="💳 Изменить TRC20", callback_data="setup:set_wallet")])
+        kb_rows.append([InlineKeyboardButton(text="🦁 Название команды", callback_data="setup:team")])
+    # Направления партнёра — партнёр или owner
+    if is_partner_user or is_owner_user:
+        kb_rows.append([InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")])
+    # Способы приёма (с %) — только owner
+    if is_owner_user:
+        kb_rows.append([InlineKeyboardButton(text="➕ Способ приёма", callback_data="setup:add_dir")])
+        kb_rows.append([InlineKeyboardButton(text="🔄 Список способов", callback_data="setup:list_dirs")])
     if not is_owner_user:
-        lines.append("\n<i>ℹ️ Направления и % комиссии настраивает админ. Обратись в PRIDE-админ.</i>")
+        lines.append("\n<i>ℹ️ Способы приёма и % настраивает админ.</i>")
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
     await message.reply("\n".join(lines), reply_markup=kb)
+
+
+@router.callback_query(F.data == "setup:team")
+async def cb_setup_team(cb: CallbackQuery, state: FSMContext):
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    if not (cb.from_user.id == entry.get("partner_tg_id") or storage.is_owner(cb.from_user.id)):
+        return await cb.answer("Только партнёр.", show_alert=True)
+    await state.set_state(Setup.wait_team_name)
+    await state.update_data(chat_id=cb.message.chat.id)
+    prompt = await cb.message.reply(
+        "Как называется твоя команда? (напр. <b>Львята</b>, <b>PRIDE Team</b>)"
+    )
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_team_name)
+async def st_team_name(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    name = (message.text or "").strip()
+    if not name or len(name) > 40:
+        err = await message.reply("Плохое название (до 40 симв).")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    await storage.update_client_chat(data["chat_id"], team_name=name)
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id, f"✅ Команда: <b>{html.escape(name)}</b>"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
 
 
 # ============================================================
@@ -515,7 +555,9 @@ async def cmd_list_chats(message: Message):
     for i, (c, s) in enumerate(rows, 1):
         dirs = c.get("directions") or {}
         dirs_on = sum(1 for d in dirs.values() if d.get("enabled"))
-        title = html.escape((c.get("chat_title") or "").strip() or "без названия")
+        team = c.get("team_name") or ""
+        title_raw = (c.get("chat_title") or "").strip() or "без названия"
+        title = html.escape(team or title_raw)
         partner = c.get("partner_username") or "—"
         rate = c.get("rate") or 0
         wallet_badge = "💳" if c.get("wallet_trc20") else "⚠️"
@@ -792,8 +834,9 @@ async def _send_stats(message: Message, entry: dict):
     paid = s["paid_usd"]
     remaining = s["remaining_usd"]
 
+    team = entry.get("team_name") or "PRIDE · Панель партнёра"
     lines = [
-        "🦁 <b>PRIDE · Панель партнёра</b>",
+        f"🦁 <b>{html.escape(team)}</b>",
         f"📅 {today_msk()}  ·  💱 Курс: <b>{rate or '—'}</b>",
         "━━━━━━━━━━━━━━━━━━━",
         f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
@@ -876,8 +919,10 @@ async def cmd_profile(message: Message):
     s = storage.compute_stats(entry["chat_id"])
     workers = entry.get("workers") or {}
     streams = entry.get("streams") or {}
+    team = entry.get("team_name") or ""
     lines = [
         "<b>👤 Профиль партнёра</b>",
+        f"🦁 Команда: <b>{team or '— (задай в настройках)'}</b>",
         f"Партнёр: @{entry.get('partner_username') or '—'}",
         f"Общая сумма: <b>{_fmt_money_rub(s.get('total_rub') or 0)} руб.</b>",
         f"Выплачено: <b>{_fmt_money_usd(s.get('paid_usd') or 0)}$</b>",
@@ -1379,26 +1424,48 @@ async def _create_and_send_payout(
         f"Статус: ⏳ ожидает подтверждения",
         reply_markup=client_kb,
     )
-    # Админам
+    # Ссылка на клиентское сообщение
+    def _msg_link(cid: int, mid: int) -> str:
+        s = str(cid)
+        if s.startswith("-100"):
+            s = s[4:]
+        elif s.startswith("-"):
+            s = s[1:]
+        return f"https://t.me/c/{s}/{mid}"
+    client_link = _msg_link(chat_id, client_msg.message_id)
+    team = entry.get("team_name") or ""
+    team_line = f"🦁 Команда: <b>{html.escape(team)}</b>\n" if team else ""
+
     admin_id = storage.get_admin_chat_id()
-    if admin_id:
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="💰 Выплата произведена", callback_data=f"pay:done:{req['id']}"
-            )],
-            [InlineKeyboardButton(
-                text="❌ Отклонить", callback_data=f"pay:reject:{req['id']}"
-            )],
-        ])
+    logger.info(
+        "[calc] payout: admin_id=%s chat=%s req_id=%s",
+        admin_id, chat_id, req["id"],
+    )
+    if not admin_id:
+        warn = await bot.send_message(
+            chat_id,
+            "⚠️ Админ-чат не настроен. Заявка сохранена, но админ не получил уведомление."
+        )
+        asyncio.create_task(_delete_later(bot, chat_id, warn.message_id, 30))
+        return
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🖐 Взял", callback_data=f"pay:take:{req['id']}")],
+        [InlineKeyboardButton(text="💰 Выплата произведена", callback_data=f"pay:done:{req['id']}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"pay:reject:{req['id']}")],
+        [InlineKeyboardButton(text="🔗 К сообщению клиента", url=client_link)],
+    ])
+    try:
         admin_msg = await bot.send_message(
             admin_id,
             f"🔔 <b>Новая заявка на выплату #{req['id']}</b>\n"
-            f"Чат: <code>{chat_id}</code> · {html.escape(entry.get('chat_title') or '')}\n"
-            f"Партнёр: @{entry.get('partner_username') or '—'}\n"
+            f"{team_line}"
+            f"💬 Чат: {html.escape(entry.get('chat_title') or '')} "
+            f"(<code>{chat_id}</code>)\n"
+            f"👤 Партнёр: @{entry.get('partner_username') or '—'}\n"
             f"{stream_line}"
-            f"Запросил: @{username or '—'} (<code>{user_id}</code>)\n"
-            f"Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
-            f"Адрес: <code>{wallet}</code>",
+            f"✍️ Запросил: @{username or '—'} (<code>{user_id}</code>)\n"
+            f"💰 Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
+            f"💳 Адрес: <code>{wallet}</code>",
             reply_markup=admin_kb,
         )
         await storage.update_payout_request(
@@ -1406,6 +1473,13 @@ async def _create_and_send_payout(
             client_msg_id=client_msg.message_id,
             admin_msg_id=admin_msg.message_id,
         )
+    except Exception as e:
+        logger.exception("[calc] failed to send payout to admin_chat %s: %s", admin_id, e)
+        warn = await bot.send_message(
+            chat_id,
+            f"⚠️ Не смог отправить заявку в админ-чат: <code>{e}</code>"
+        )
+        asyncio.create_task(_delete_later(bot, chat_id, warn.message_id, 60))
 
 
 @router.callback_query(F.data.startswith("pay:cancel:"))
@@ -1437,13 +1511,47 @@ async def cb_pay_cancel(cb: CallbackQuery, bot: Bot):
     await cb.answer("Отменено.")
 
 
+@router.callback_query(F.data.startswith("pay:take:"))
+async def cb_pay_take(cb: CallbackQuery, bot: Bot):
+    if cb.message.chat.id != storage.get_admin_chat_id():
+        return await cb.answer()
+    pid = int(cb.data.split(":")[2])
+    req = storage.get_payout_request(pid)
+    if not req or req.get("status") != "pending":
+        return await cb.answer("Уже обработана.", show_alert=True)
+    await storage.update_payout_request(
+        pid, status="taken",
+        taken_by_id=cb.from_user.id,
+        taken_by_name=cb.from_user.username or "",
+    )
+    try:
+        current = cb.message.html_text or cb.message.text or ""
+        await cb.message.edit_text(
+            f"🖐 <b>ВЗЯЛ:</b> @{cb.from_user.username or cb.from_user.id}\n\n{current}",
+            reply_markup=cb.message.reply_markup,
+        )
+    except Exception:
+        pass
+    try:
+        await bot.edit_message_text(
+            f"💸 <b>Заявка #{pid}</b>\n"
+            f"Сумма: <b>{_fmt_money_usd(req['amount_usd'])}$</b>\n"
+            f"Адрес: <code>{req['wallet']}</code>\n"
+            f"Статус: 🖐 В работе — @{cb.from_user.username or 'admin'}",
+            chat_id=req["chat_id"], message_id=req["client_msg_id"],
+        )
+    except Exception:
+        pass
+    await cb.answer("Взял в работу.")
+
+
 @router.callback_query(F.data.startswith("pay:reject:"))
 async def cb_pay_reject(cb: CallbackQuery, bot: Bot):
     if cb.message.chat.id != storage.get_admin_chat_id():
         return await cb.answer()
     pid = int(cb.data.split(":")[2])
     req = storage.get_payout_request(pid)
-    if not req or req.get("status") != "pending":
+    if not req or req.get("status") not in ("pending", "taken"):
         return await cb.answer("Уже обработана.", show_alert=True)
     await storage.update_payout_request(pid, status="cancelled")
     try:
@@ -1466,7 +1574,7 @@ async def cb_pay_done(cb: CallbackQuery, state: FSMContext):
         return await cb.answer()
     pid = int(cb.data.split(":")[2])
     req = storage.get_payout_request(pid)
-    if not req or req.get("status") != "pending":
+    if not req or req.get("status") not in ("pending", "taken"):
         return await cb.answer("Уже обработана.", show_alert=True)
     await state.set_state(Setup.wait_payout_amount)
     await state.update_data(payout_id=pid)
@@ -1581,22 +1689,49 @@ async def st_req_note(message: Message, state: FSMContext, bot: Bot):
         f"Примечание: {html.escape(note)}\n"
         f"Статус: ⏳ ожидает"
     )
+    # Ссылка на клиентское сообщение (t.me/c/<chat_id>/<msg_id>)
+    def _msg_link(chat_id: int, msg_id: int) -> str:
+        cid = str(chat_id)
+        if cid.startswith("-100"):
+            cid = cid[4:]
+        elif cid.startswith("-"):
+            cid = cid[1:]
+        return f"https://t.me/c/{cid}/{msg_id}"
+
+    client_link = _msg_link(data["chat_id"], client_msg.message_id)
+    team = entry.get("team_name") or ""
+    team_line = f"🦁 Команда: <b>{html.escape(team)}</b>\n" if team else ""
+
     # Админам
     admin_id = storage.get_admin_chat_id()
-    if admin_id:
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Отправлено", callback_data=f"req:done:{req['id']}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"req:reject:{req['id']}")],
-        ])
+    logger.info(
+        "[calc] req_note: admin_id=%s chat=%s req_id=%s",
+        admin_id, data["chat_id"], req["id"],
+    )
+    if not admin_id:
+        # предупреждаем клиента
+        warn = await message.reply(
+            "⚠️ Админ-чат не настроен. Заявка сохранена, но никто не получил уведомление."
+        )
+        asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 30))
+        return
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🖐 Взял", callback_data=f"req:take:{req['id']}")],
+        [InlineKeyboardButton(text="✅ Отправлено", callback_data=f"req:done:{req['id']}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"req:reject:{req['id']}")],
+        [InlineKeyboardButton(text="🔗 К сообщению клиента", url=client_link)],
+    ])
+    try:
         admin_msg = await bot.send_message(
             admin_id,
             f"🔔 <b>Заявка на реквизит #{req['id']}</b>\n"
-            f"Чат: <code>{data['chat_id']}</code> · "
-            f"{html.escape(entry.get('chat_title') or '')}\n"
-            f"Партнёр: @{entry.get('partner_username') or '—'}\n"
-            f"Запросил: @{message.from_user.username or '—'}\n"
-            f"Направление: <b>{data['direction']}</b>\n"
-            f"Примечание: {html.escape(note)}",
+            f"{team_line}"
+            f"💬 Чат: {html.escape(entry.get('chat_title') or '')} "
+            f"(<code>{data['chat_id']}</code>)\n"
+            f"👤 Партнёр: @{entry.get('partner_username') or '—'}\n"
+            f"✍️ Запросил: @{message.from_user.username or '—'}\n"
+            f"📥 Направление приёма: <b>{data['direction']}</b>\n"
+            f"📝 Примечание: {html.escape(note)}",
             reply_markup=admin_kb,
         )
         await storage.update_requisite_request(
@@ -1604,6 +1739,51 @@ async def st_req_note(message: Message, state: FSMContext, bot: Bot):
             client_msg_id=client_msg.message_id,
             admin_msg_id=admin_msg.message_id,
         )
+    except Exception as e:
+        logger.exception("[calc] failed to send req to admin_chat %s: %s", admin_id, e)
+        warn = await message.reply(
+            f"⚠️ Не смог отправить заявку в админ-чат: <code>{e}</code>\n"
+            f"Проверь что бот в чате <code>{admin_id}</code> и имеет права писать."
+        )
+        asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 60))
+
+
+@router.callback_query(F.data.startswith("req:take:"))
+async def cb_req_take(cb: CallbackQuery, bot: Bot):
+    if cb.message.chat.id != storage.get_admin_chat_id():
+        return await cb.answer()
+    rid = int(cb.data.split(":")[2])
+    req = storage.get_requisite_request(rid)
+    if not req:
+        return await cb.answer("Не найдено.", show_alert=True)
+    if req.get("status") != "pending":
+        return await cb.answer("Уже обработана.", show_alert=True)
+    await storage.update_requisite_request(
+        rid, status="taken",
+        taken_by_id=cb.from_user.id,
+        taken_by_name=cb.from_user.username or "",
+    )
+    # Обновляем сообщение админов
+    try:
+        current = cb.message.html_text or cb.message.text or ""
+        await cb.message.edit_text(
+            f"🖐 <b>ВЗЯЛ:</b> @{cb.from_user.username or cb.from_user.id}\n\n{current}",
+            reply_markup=cb.message.reply_markup,
+        )
+    except Exception:
+        pass
+    # Обновляем клиенту
+    try:
+        await bot.edit_message_text(
+            f"📞 <b>Заявка #{rid}</b>\n"
+            f"Направление: <b>{req.get('direction')}</b>\n"
+            f"Примечание: {html.escape(req.get('note') or '')}\n"
+            f"Статус: 🖐 В работе — @{cb.from_user.username or 'admin'}",
+            chat_id=req["chat_id"], message_id=req["client_msg_id"],
+        )
+    except Exception:
+        pass
+    await cb.answer("Взял в работу.")
 
 
 @router.callback_query(F.data.startswith("req:done:"))
@@ -1612,7 +1792,7 @@ async def cb_req_done(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     rid = int(cb.data.split(":")[2])
     req = storage.get_requisite_request(rid)
-    if not req or req.get("status") != "pending":
+    if not req or req.get("status") not in ("pending", "taken"):
         return await cb.answer("Уже обработано.", show_alert=True)
     await storage.update_requisite_request(rid, status="done")
     try:
@@ -1635,7 +1815,7 @@ async def cb_req_reject(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     rid = int(cb.data.split(":")[2])
     req = storage.get_requisite_request(rid)
-    if not req or req.get("status") != "pending":
+    if not req or req.get("status") not in ("pending", "taken"):
         return await cb.answer("Уже обработано.", show_alert=True)
     await storage.update_requisite_request(rid, status="cancelled")
     try:
