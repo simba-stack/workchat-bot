@@ -652,7 +652,8 @@ class CalcStorage:
         return out
 
     def compute_stats(self, chat_id: int, date_str: str | None = None,
-                       date_from: str | None = None) -> dict:
+                       date_from: str | None = None,
+                       respect_day_reset: bool = True) -> dict:
         """Двухмерная разбивка:
         - by_stream_rub: {stream: total_rub}
         - by_stream_usd: {stream: total_usd_after_commissions}
@@ -682,8 +683,22 @@ class CalcStorage:
         else:
             days_iter = list(days.items())
 
+        # SIMBA 2026-09: если день закрыт вручную, для сегодняшнего запроса
+        # (date_str == today) фильтруем entries начиная с day_reset_ts.
+        day_reset_ts = float(entry.get("day_reset_ts") or 0) if respect_day_reset else 0.0
+        from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+        _MSK2 = _tz2(_td2(hours=3))
+        today_msk_str = _dt2.now(_MSK2).strftime("%Y-%m-%d")
+        apply_reset = day_reset_ts > 0 and (
+            date_str == today_msk_str
+            or (date_str is None and date_from is None)
+        )
+
         for _, day in days_iter:
             for e in day.get("entries") or []:
+                # respect_day_reset — если день закрыт, пропускаем entries до момента сброса
+                if apply_reset and float(e.get("ts") or 0) < day_reset_ts:
+                    continue
                 stream = e.get("stream") or "—"
                 method = e.get("payment_method") or e.get("direction") or "—"
                 amt = float(e.get("amount_rub") or 0)
@@ -717,6 +732,8 @@ class CalcStorage:
                 if date_str and pdate != date_str:
                     continue
                 if date_from and pdate < date_from:
+                    continue
+                if apply_reset and float(ts) < day_reset_ts:
                     continue
             s = p.get("stream") or "—"
             paid_by_stream[s] = paid_by_stream.get(s, 0.0) + float(p.get("amount_usd") or 0)

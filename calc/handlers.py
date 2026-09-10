@@ -580,13 +580,16 @@ async def cmd_close_day(message: Message, bot: Bot):
             "Только партнёр или админ может закрыть день.",
             reply_markup=_close_kb(),
         )
+    # Отчёт партнёру ДО обнуления (иначе покажет пустоту)
+    report = _build_chat_day_report(message.chat.id, date_str)
+    # Ставим reset_ts — /стата за сегодня будет считаться с этого момента
+    import time as _t
+    await storage.update_client_chat(message.chat.id, day_reset_ts=_t.time())
     # Шлём endday-текст в этот чат
     try:
         await bot.send_message(message.chat.id, text)
     except Exception:
         pass
-    # Отчёт партнёру
-    report = _build_chat_day_report(message.chat.id, date_str)
     await message.reply(report, reply_markup=_close_kb())
     # Дублируем в админ-чат
     if admin_id and admin_id != message.chat.id:
@@ -1366,7 +1369,8 @@ async def cmd_stats(message: Message):
 
 
 async def _send_stats(message: Message, entry: dict):
-    s = storage.compute_stats(entry["chat_id"])
+    # /стата показывает СЕГОДНЯ (с учётом ручного закрытия дня)
+    s = storage.compute_stats(entry["chat_id"], date_str=today_msk())
     if not s:
         return await message.reply("Нет данных.")
     rate = s["rate"]
