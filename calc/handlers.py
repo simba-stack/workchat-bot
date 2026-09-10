@@ -1326,7 +1326,10 @@ async def cmd_list_chats(message: Message):
             "Добавь бота в клиентский чат и напиши <code>+партнёр @nick</code>"
         )
 
-    # Считаем агрегаты по каждому чату
+    # По умолчанию — ТОЛЬКО СЕГОДНЯ (МСК). Дата за пределами → передавай argument.
+    parts = (message.text or "").split()
+    date_str = parts[1] if len(parts) >= 2 else today_msk()
+
     rows = []
     total_rub_all = 0.0
     total_usd_all = 0.0
@@ -1343,7 +1346,7 @@ async def cmd_list_chats(message: Message):
     ])
 
     for c in chats:
-        s = storage.compute_stats(c["chat_id"])
+        s = storage.compute_stats(c["chat_id"], date_str=date_str)
         total_rub_all += s.get("total_rub") or 0
         total_usd_all += s.get("total_usd_before_pay") or 0
         total_paid_all += s.get("paid_usd") or 0
@@ -1356,7 +1359,7 @@ async def cmd_list_chats(message: Message):
     rows.sort(key=lambda r: r[1].get("remaining_usd") or 0, reverse=True)
 
     lines = [
-        "<b>Клиентская база</b>",
+        f"<b>Клиентская база · {date_str}</b>",
         "",
         f"Партнёров: <b>{len(chats)}</b> · Активных: <b>{active_count}</b>",
         f"Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
