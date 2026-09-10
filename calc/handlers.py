@@ -115,7 +115,7 @@ async def _track_msg(state: FSMContext, msg: Message):
 def _close_kb() -> InlineKeyboardMarkup:
     """Клавиатура только с кнопкой Закрыть — для добавления к любому bot-ответу."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")]
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")]
     ])
 
 
@@ -127,7 +127,7 @@ def _with_close(kb: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup:
         for b in r:
             if b.callback_data == "ui:close":
                 return kb or _close_kb()
-    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -270,7 +270,7 @@ async def _show_client_setup(message: Message, entry: dict, user_id: int = 0):
         kb_rows.append([InlineKeyboardButton(text="🔄 Список способов", callback_data="setup:list_dirs")])
     if not is_owner_user:
         lines.append("\n<i>ℹ️ Способы приёма и % настраивает админ.</i>")
-    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb_rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -365,21 +365,20 @@ async def cmd_add_partner(message: Message, bot: Bot):
     if admin_id and admin_id != message.chat.id:
         tg_line = (f"tg_id: <code>{partner_tg_id}</code>" if partner_tg_id
                    else "tg_id: <i>подхватится когда партнёр напишет в чате</i>")
-        gw_line = (f"🌐 Шлюзов подтянуто из глобальных: <b>{gateways_added}</b>\n"
+        gw_line = (f"Шлюзов подтянуто: <b>{gateways_added}</b>\n"
                    if gateways_added else
-                   f"⚠️ Глобальных шлюзов нет. Добавь: <code>/шлюз_добавить ДАЧА 20</code>\n")
+                   f"<i>Шлюзов нет. Добавь: /шлюз_добавить ДАЧА 5 82</i>\n")
         try:
             await bot.send_message(
                 admin_id,
-                f"🆕 <b>Новый клиентский чат</b>\n"
-                f"🏢 {html.escape(message.chat.title or '—')}\n"
-                f"🆔 <code>{message.chat.id}</code>\n"
-                f"👤 Партнёр: @{partner_username}\n"
+                f"<b>Новый клиентский чат</b>\n"
+                f"{html.escape(message.chat.title or '—')}\n"
+                f"<code>{message.chat.id}</code>\n"
+                f"Партнёр: @{partner_username}\n"
                 f"{tg_line}\n"
                 f"{gw_line}\n"
-                f"<b>Настройка:</b>\n"
-                f"<code>/курс {message.chat.id} 80</code>\n"
-                f"Переопределить % на клиента: <code>/напр {message.chat.id} ДАЧА 18</code>",
+                f"Настройка: <code>/курс {message.chat.id} 80</code>\n"
+                f"Переопр. %: <code>/напр {message.chat.id} ДАЧА 18</code>",
                 reply_markup=_close_kb(),
             )
         except Exception as e:
@@ -517,22 +516,21 @@ def _build_day_report(date_str: str) -> str:
         }
 
     lines = [
-        f"📊 <b>Итог дня — {date_str}</b>",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
-        f"📥 От мерчантов: <b>{_fmt_money_usd(total_our_income)}$</b>",
-        f"📤 Клиентам: <b>{_fmt_money_usd(total_client_owed)}$</b>",
-        f"💎 <b>МАРЖА: {_fmt_money_usd(total_margin)}$</b>",
-        "─────────",
-        f"✅ Выплачено клиентам: {_fmt_money_usd(total_paid_all)}$",
-        f"👥 Активных клиентов: {len(partner_summary)}",
+        f"<b>Итог дня — {date_str}</b>",
+        "",
+        f"Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
+        f"От мерчантов: <b>{_fmt_money_usd(total_our_income)}$</b>",
+        f"Клиентам: <b>{_fmt_money_usd(total_client_owed)}$</b>",
+        f"<b>МАРЖА: {_fmt_money_usd(total_margin)}$</b>",
+        "",
+        f"Выплачено: {_fmt_money_usd(total_paid_all)}$ · Клиентов: {len(partner_summary)}",
         "",
     ]
     if not partner_summary:
         lines.append("<i>Ничего не было.</i>")
         return "\n".join(lines)
 
-    lines.append("<b>👤 По партнёрам (маржа):</b>")
+    lines.append("<b>По партнёрам:</b>")
     for key in sorted(partner_summary.keys(),
                       key=lambda k: partner_summary[k]["margin"]["margin_usd"], reverse=True):
         p = partner_summary[key]
@@ -543,29 +541,27 @@ def _build_day_report(date_str: str) -> str:
             top = sorted(streams.items(), key=lambda x: x[1], reverse=True)
             stream_line = " · ".join(f"{d} {_fmt_money_rub(v)}₽" for d, v in top[:3])
         lines.append(
-            f"\n  🦁 <b>{html.escape(str(key))}</b>\n"
-            f"     💰 {_fmt_money_rub(p['rub'])}₽\n"
-            f"     📥 {_fmt_money_usd(m['our_income_usd'])}$  →  "
-            f"📤 {_fmt_money_usd(m['client_owed_usd'])}$  =  "
-            f"💎 <b>{_fmt_money_usd(m['margin_usd'])}$</b>"
+            f"\n <b>{html.escape(str(key))}</b>\n"
+            f"    {_fmt_money_rub(p['rub'])}₽\n"
+            f"    приход {_fmt_money_usd(m['our_income_usd'])}$ · "
+            f"клиенту {_fmt_money_usd(m['client_owed_usd'])}$ · "
+            f"<b>маржа {_fmt_money_usd(m['margin_usd'])}$</b>"
         )
         if stream_line:
-            lines.append(f"     📍 {stream_line}")
-        # По шлюзам (маржа)
+            lines.append(f"    {stream_line}")
         by_method = m.get("by_method") or {}
         if len(by_method) > 1:
             for mname, mval in sorted(by_method.items(), key=lambda x: x[1]["margin_usd"], reverse=True):
                 lines.append(
-                    f"     • <i>{mname}</i>: {_fmt_money_rub(mval['rub'])}₽ "
-                    f"→ маржа <b>{_fmt_money_usd(mval['margin_usd'])}$</b>"
+                    f"    <i>{mname}</i>: {_fmt_money_rub(mval['rub'])}₽ · "
+                    f"маржа <b>{_fmt_money_usd(mval['margin_usd'])}$</b>"
                 )
-        # По направлениям выплат
         if p["by_dir_paid"]:
             dir_str = " · ".join(
-                f"{d}: {_fmt_money_usd(v)}$"
+                f"{d} {_fmt_money_usd(v)}$"
                 for d, v in sorted(p["by_dir_paid"].items(), key=lambda x: x[1], reverse=True)
             )
-            lines.append(f"     💸 выплат сегодня: {dir_str}")
+            lines.append(f"    выплаты: {dir_str}")
     return "\n".join(lines)
 
 
@@ -687,36 +683,31 @@ async def cmd_gateways(message: Message):
     gws = storage.list_gateways()
     if not gws:
         return await message.reply(
-            "🌐 <b>Шлюзы:</b> пусто.\n\n"
-            "Формат: <code>/шлюз_добавить &lt;имя&gt; &lt;мерчант_себе%&gt; &lt;курс_мерчанта&gt;</code>\n"
-            "Пример: <code>/шлюз_добавить ДАЧА 5 82</code>\n"
-            "<i>Мерчант забирает 5% себе, остальное платит нам по курсу 82₽/$</i>\n\n"
-            "Комиссия клиенту и курс клиента — задаются в клиентском чате.",
+            "<b>Шлюзы:</b> пусто.\n\n"
+            "Пример: <code>/шлюз_добавить ДАЧА 5 82</code>",
             reply_markup=_close_kb(),
         )
     total_ok = sum(1 for g in gws.values() if g.get("enabled"))
-    lines = [f"🌐 <b>Шлюзы ({total_ok}/{len(gws)} вкл):</b>"]
+    lines = [f"<b>Шлюзы ({total_ok}/{len(gws)} вкл):</b>"]
     for name, g in sorted(gws.items()):
-        onoff = "✅" if g.get("enabled") else "⛔"
+        onoff = "вкл" if g.get("enabled") else "выкл"
         cost = float(g.get("merchant_cost_pct") or g.get("cost_pct") or 0)
         rate = float(g.get("merchant_rate") or 0)
         lines.append(
-            f"\n  {onoff} <b>{name}</b>\n"
-            f"     🏦 мерчант себе: <b>{cost:g}%</b>\n"
-            f"     💱 курс мерчанта → нам: <b>{rate:g}₽/$</b>"
+            f"\n <b>{name}</b> · {onoff}\n"
+            f"    мерчант {cost:g}% · курс {rate:g}₽/$"
         )
     lines.append(
-        "\n<i>Комиссию клиенту ставь в клиентском чате:</i>\n"
-        "<code>/напр &lt;имя_шлюза&gt; &lt;комиссия_клиенту%&gt;</code>"
+        "\n<i>Комиссия клиенту — в клиентском чате: /напр &lt;имя&gt; &lt;%&gt;</i>"
     )
     rows = []
     for name in sorted(gws.keys()):
         rows.append([InlineKeyboardButton(
-            text=f"⚙️ {name}",
+            text=name,
             callback_data=f"gw:menu:{name}",
         )])
-    rows.append([InlineKeyboardButton(text="➕ Новый шлюз", callback_data="gw:add")])
-    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    rows.append([InlineKeyboardButton(text="+ Новый шлюз", callback_data="gw:add")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -737,7 +728,7 @@ async def cb_gw_menu(cb: CallbackQuery):
         [InlineKeyboardButton(text=f"🏦 Изменить % мерчанта ({cost:g}%)", callback_data=f"gw:cost:{name}")],
         [InlineKeyboardButton(text=f"{onoff} · переключить", callback_data=f"gw:toggle:{name}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"gw:del:{name}")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
     ])
     await cb.message.reply(
         f"⚙️ <b>{name}</b>\n"
@@ -1330,10 +1321,9 @@ async def cmd_list_chats(message: Message):
     chats = storage.list_client_chats()
     if not chats:
         return await message.reply(
-            "🦁 <b>PRIDE · Клиентская база</b>\n\n"
+            "<b>Клиентская база</b>\n\n"
             "<i>Партнёров ещё нет.</i>\n"
-            "Зарегистрируй первого: добавь бота в клиентский чат и напиши "
-            "<code>+партнёр @nick</code>"
+            "Добавь бота в клиентский чат и напиши <code>+партнёр @nick</code>"
         )
 
     # Считаем агрегаты по каждому чату
@@ -1366,20 +1356,19 @@ async def cmd_list_chats(message: Message):
     rows.sort(key=lambda r: r[1].get("remaining_usd") or 0, reverse=True)
 
     lines = [
-        "🦁 <b>PRIDE · Клиентская база</b>",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"👥 Партнёров: <b>{len(chats)}</b>  ·  🔥 Активных: <b>{active_count}</b>",
-        f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
-        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd_all)}$</b>  ·  "
-        f"✅ Выплачено: <b>{_fmt_money_usd(total_paid_all)}$</b>",
-        f"🎯 <b>Долг партнёрам: {_fmt_money_usd(total_remaining_all)}$</b>",
+        "<b>Клиентская база</b>",
+        "",
+        f"Партнёров: <b>{len(chats)}</b> · Активных: <b>{active_count}</b>",
+        f"Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
+        f"Насчитано {_fmt_money_usd(total_usd_all)}$ · выплачено {_fmt_money_usd(total_paid_all)}$",
+        f"<b>Долг партнёрам: {_fmt_money_usd(total_remaining_all)}$</b>",
     ]
     if pending_payouts or pending_reqs:
         lines.append(
-            f"⚡ Ожидают: 💸 <b>{pending_payouts}</b> выплат  ·  "
-            f"📞 <b>{pending_reqs}</b> реквизитов"
+            f"Ожидают: <b>{pending_payouts}</b> выплат · "
+            f"<b>{pending_reqs}</b> реквизитов"
         )
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━\n")
+    lines.append("")
 
     for i, (c, s) in enumerate(rows, 1):
         dirs = c.get("directions") or {}
@@ -1405,13 +1394,13 @@ async def cmd_list_chats(message: Message):
         else:
             badge = f"<b>{i}.</b>"
 
-        # Статус: если есть долг — 🔴, если всё выплачено — 🟢, если пусто — ⚪
+        # Статус: если есть долг — •, если всё выплачено — •, если пусто — ·
         if remaining > 0.01:
-            status = "🔴"
+            status = "•"
         elif rub > 0:
-            status = "🟢"
+            status = "•"
         else:
-            status = "⚪"
+            status = "·"
 
         # По направлениям — короткая строка
         by_dir = s.get("by_direction_rub") or {}
@@ -1424,21 +1413,17 @@ async def cmd_list_chats(message: Message):
 
         block = [
             f"{badge} {status} <b>{title}</b>",
-            f"   👤 @{partner}  ·  💱 {rate or '—'}  ·  {wallet_badge} {dirs_on}/{len(dirs)} напр.",
-            f"   💰 <b>{_fmt_money_rub(rub)} ₽</b>  →  "
-            f"💵 {_fmt_money_usd(usd_total)}$  |  "
-            f"✅ {_fmt_money_usd(paid)}$  |  🎯 <b>{_fmt_money_usd(remaining)}$</b>",
+            f"   @{partner} · курс {rate or '—'} · {wallet_badge} {dirs_on}/{len(dirs)} напр.",
+            f"   <b>{_fmt_money_rub(rub)}₽</b> → "
+            f"{_fmt_money_usd(usd_total)}$ · "
+            f"выпл. {_fmt_money_usd(paid)}$ · "
+            f"<b>ост. {_fmt_money_usd(remaining)}$</b>",
         ]
         if dir_line:
-            block.append(f"   📊 {dir_line}")
+            block.append(f"   {dir_line}")
         block.append(f"   <code>{c['chat_id']}</code>")
         lines.append("\n".join(block))
-        lines.append("")  # пустая строка между блоками
-
-    lines.append(
-        "<i>🔴 есть долг  ·  🟢 всё выплачено  ·  ⚪ нет оборота</i>\n"
-        "<i>💳 адрес есть  ·  ⚠️ адрес не указан</i>"
-    )
+        lines.append("")
 
     # Инлайн-кнопки для детального просмотра по чатам с оборотом
     active_rows = [(c, s) for c, s in rows if s.get("total_rub")]
@@ -1674,27 +1659,25 @@ async def _send_stats(message: Message, entry: dict):
     paid = s["paid_usd"]
     remaining = s["remaining_usd"]
 
-    team = entry.get("team_name") or "PRIDE · Панель партнёра"
+    team = entry.get("team_name") or "Панель партнёра"
     lines = [
-        f"🦁 <b>{html.escape(team)}</b>",
-        f"📅 {today_msk()}  ·  💱 Курс: <b>{rate or '—'}</b>",
-        "━━━━━━━━━━━━━━━━━━━",
-        f"💰 Общий оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
-        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
-        f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
+        f"<b>{html.escape(team)}</b>",
+        f"{today_msk()} · курс <b>{rate or '—'}</b>",
+        "",
+        f"Оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
+        f"Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
+        f"Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
     ]
     pending = s.get("pending_usd") or 0
     available = s.get("available_usd") or 0
     if pending > 0.01:
-        lines.append(f"⏳ В очереди на выплату: <b>{_fmt_money_usd(pending)}$</b>")
-    lines.append(f"🎯 <b>Доступно к запросу: {_fmt_money_usd(available)}$</b>")
-    if pending > 0.01:
-        lines.append(f"<i>(общий остаток {_fmt_money_usd(remaining)}$ = доступно + в очереди)</i>")
+        lines.append(f"В очереди: <b>{_fmt_money_usd(pending)}$</b>")
+    lines.append(f"К запросу: <b>{_fmt_money_usd(available)}$</b>")
 
     if by_stream_rub:
         pending_by_stream = s.get("pending_by_stream") or {}
         available_by_stream = s.get("available_by_stream") or {}
-        lines.append("\n<b>📍 По твоим направлениям:</b>")
+        lines.append("\n<b>По направлениям:</b>")
         for stream in sorted(by_stream_rub.keys(), key=lambda k: by_stream_rub[k], reverse=True):
             rub = by_stream_rub[stream]
             usd = by_stream_usd.get(stream, 0)
@@ -1702,16 +1685,16 @@ async def _send_stats(message: Message, entry: dict):
             pending_s = pending_by_stream.get(stream, 0)
             avail_s = available_by_stream.get(stream, 0)
             lines.append(
-                f"\n  📍 <b>{stream}</b>: {_fmt_money_rub(rub)}₽ = "
+                f"\n <b>{stream}</b>: {_fmt_money_rub(rub)}₽ = "
                 f"<b>{_fmt_money_usd(usd)}$</b>"
             )
             details = []
             if paid_s > 0.01:
-                details.append(f"✅ {_fmt_money_usd(paid_s)}$")
+                details.append(f"выпл. {_fmt_money_usd(paid_s)}$")
             if pending_s > 0.01:
-                details.append(f"⏳ {_fmt_money_usd(pending_s)}$")
-            details.append(f"🎯 <b>{_fmt_money_usd(avail_s)}$</b>")
-            lines.append(f"     " + "  ·  ".join(details))
+                details.append(f"в очереди {_fmt_money_usd(pending_s)}$")
+            details.append(f"остаток <b>{_fmt_money_usd(avail_s)}$</b>")
+            lines.append(f"    " + " · ".join(details))
             # Разбивка по способам приёма внутри направления
             methods = by_stream_method_rub.get(stream) or {}
             if len(methods) > 1 or (methods and list(methods.keys())[0] != "—"):
@@ -1730,7 +1713,7 @@ async def _send_stats(message: Message, entry: dict):
     if remaining > 0.01:
         kb_rows.append([InlineKeyboardButton(text="💸 Запросить выплату", callback_data="pay:request")])
     kb_rows.append([InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")])
-    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb_rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -1746,17 +1729,26 @@ async def cmd_status(message: Message):
     if not entry:
         return
     dirs = entry.get("directions") or {}
-    lines = ["<b>📋 Доступные направления:</b>\n"]
-    enabled_dirs = [d for d in dirs.values() if d.get("enabled")]
-    if not enabled_dirs:
-        lines.append("Пока нет активных направлений.")
-    for d in dirs.values():
-        onoff = "✅" if d.get("enabled") else "⛔"
-        lines.append(f"  {onoff} <b>{d.get('name')}</b> — {d.get('commission_pct')}%")
+    global_gws = storage.list_gateways()
+    lines = ["<b>Шлюзы приёма:</b>", ""]
+    enabled_dirs = []
+    # Показываем ВСЕ клиентские шлюзы (свои commission_pct), + метку если глобально выкл
+    for name, d in sorted(dirs.items()):
+        gw_enabled = (global_gws.get(name) or {}).get("enabled", True)
+        active = d.get("enabled") and gw_enabled
+        onoff = "вкл" if active else "выкл"
+        pct = float(d.get("commission_pct") or 0)
+        lines.append(f" <b>{name}</b> · {pct:g}% · {onoff}")
+        if active:
+            enabled_dirs.append(d)
+    if not dirs:
+        lines.append("<i>Шлюзов ещё нет.</i>")
+    elif not enabled_dirs:
+        lines.append("\n<i>Нет активных шлюзов.</i>")
     kb_rows = []
     if enabled_dirs:
-        kb_rows.append([InlineKeyboardButton(text="📞 Запросить реквизит", callback_data="req:start")])
-    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+        kb_rows.append([InlineKeyboardButton(text="Запросить реквизит", callback_data="req:start")])
+    kb_rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -1787,28 +1779,27 @@ async def cmd_profile(message: Message):
         avail = s.get("available_usd") or 0
         return (
             f"<b>{label}</b>\n"
-            f"  💰 {_fmt_money_rub(rub)}₽ = {_fmt_money_usd(usd)}$\n"
-            f"  ✅ выплачено: {_fmt_money_usd(paid)}$  ·  "
-            f"🎯 остаток: {_fmt_money_usd(avail)}$"
+            f"   {_fmt_money_rub(rub)}₽ = {_fmt_money_usd(usd)}$\n"
+            f"   выплачено {_fmt_money_usd(paid)}$ · остаток <b>{_fmt_money_usd(avail)}$</b>"
         )
 
     lines = [
-        "<b>👤 Профиль партнёра</b>",
-        f"🦁 Команда: <b>{team or '— (задай в настройках)'}</b>",
-        f"👤 Партнёр: @{entry.get('partner_username') or '—'}",
-        f"📍 Направлений: <b>{len(streams)}</b>  ·  👥 Работников: <b>{len(workers)}</b>",
-        "━━━━━━━━━━━━━━━━━━━",
-        _line("📅 Сегодня", s_day),
+        "<b>Профиль партнёра</b>",
+        f"Команда: <b>{team or '—'}</b>",
+        f"Партнёр: @{entry.get('partner_username') or '—'}",
+        f"Направлений: {len(streams)} · Работников: {len(workers)}",
         "",
-        _line("📆 За месяц", s_month),
+        _line("Сегодня", s_day),
         "",
-        _line("📊 За всё время", s_all),
+        _line("За месяц", s_month),
+        "",
+        _line("За всё время", s_all),
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")],
-        [InlineKeyboardButton(text="👥 Мои работники", callback_data="prof:workers")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="stats:setup")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+        [InlineKeyboardButton(text="Мои направления", callback_data="prof:streams")],
+        [InlineKeyboardButton(text="Мои работники", callback_data="prof:workers")],
+        [InlineKeyboardButton(text="Настройки", callback_data="stats:setup")],
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
     ])
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -1843,7 +1834,7 @@ async def cb_prof_streams(cb: CallbackQuery):
         ])
     if can_add:
         rows.append([InlineKeyboardButton(text="➕ Добавить направление", callback_data="stream:add")])
-    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await cb.message.reply("\n".join(lines), reply_markup=kb)
     await cb.answer()
@@ -1935,7 +1926,7 @@ async def cb_stream_menu(cb: CallbackQuery):
         [InlineKeyboardButton(text=f"{onoff} · переключить", callback_data=f"stream:tgl:{name}")],
         [InlineKeyboardButton(text="💳 Изменить TRC20", callback_data=f"stream:trc:{name}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"stream:del:{name}")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
     ])
     await cb.message.reply(
         f"📍 <b>{name}</b>\nTRC20: <code>{trc}</code>", reply_markup=kb
@@ -2194,7 +2185,7 @@ async def cb_pay_request(cb: CallbackQuery, state: FSMContext, bot: Bot):
                 text=f"📍 {st} · {_fmt_money_usd(amt)}$",
                 callback_data=f"pay:stream:{st}"
             )])
-        rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+        rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
         await cb.message.reply("Выбери направление для выплаты:", reply_markup=kb)
         return await cb.answer()
@@ -2222,7 +2213,7 @@ async def _show_payout_confirm(cb, entry, stream_name, remaining, state, bot):
             text="✏️ Изменить адрес",
             callback_data=f"stream:trc:{stream_name}",
         )],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
     ])
     await cb.message.reply(
         f"💸 <b>Заявка на выплату</b>\n"
@@ -2439,23 +2430,23 @@ async def _create_and_send_payout(
         asyncio.create_task(_delete_later(bot, chat_id, warn.message_id, 30))
         return
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖐 Взял", callback_data=f"pay:take:{req['id']}")],
-        [InlineKeyboardButton(text="💰 Выплата произведена", callback_data=f"pay:done:{req['id']}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"pay:reject:{req['id']}")],
-        [InlineKeyboardButton(text="🔗 К сообщению клиента", url=client_link)],
+        [InlineKeyboardButton(text="Взял", callback_data=f"pay:take:{req['id']}")],
+        [InlineKeyboardButton(text="Выплата произведена", callback_data=f"pay:done:{req['id']}")],
+        [InlineKeyboardButton(text="Отклонить", callback_data=f"pay:reject:{req['id']}")],
+        [InlineKeyboardButton(text="К сообщению клиента", url=client_link)],
     ])
     try:
         admin_msg = await bot.send_message(
             admin_id,
-            f"🔔 <b>Новая заявка на выплату #{req['id']}</b>\n"
+            f"<b>Заявка на выплату #{req['id']}</b>\n"
             f"{team_line}"
-            f"💬 Чат: {html.escape(entry.get('chat_title') or '')} "
+            f"Чат: {html.escape(entry.get('chat_title') or '')} "
             f"(<code>{chat_id}</code>)\n"
-            f"👤 Партнёр: @{entry.get('partner_username') or '—'}\n"
+            f"Партнёр: @{entry.get('partner_username') or '—'}\n"
             f"{stream_line}"
-            f"✍️ Запросил: @{username or '—'} (<code>{user_id}</code>)\n"
-            f"💰 Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
-            f"💳 Адрес: <code>{wallet}</code>",
+            f"Запросил: @{username or '—'}\n"
+            f"Сумма: <b>{_fmt_money_usd(amount)}$</b>\n"
+            f"Адрес: <code>{wallet}</code>",
             reply_markup=admin_kb,
         )
         await storage.update_payout_request(
@@ -2775,22 +2766,22 @@ async def st_req_note(message: Message, state: FSMContext, bot: Bot):
         asyncio.create_task(_delete_later(bot, message.chat.id, warn.message_id, 30))
         return
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖐 Взял", callback_data=f"req:take:{req['id']}")],
-        [InlineKeyboardButton(text="✅ Отправлено", callback_data=f"req:done:{req['id']}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"req:reject:{req['id']}")],
-        [InlineKeyboardButton(text="🔗 К сообщению клиента", url=client_link)],
+        [InlineKeyboardButton(text="Взял", callback_data=f"req:take:{req['id']}")],
+        [InlineKeyboardButton(text="Отправлено", callback_data=f"req:done:{req['id']}")],
+        [InlineKeyboardButton(text="Отклонить", callback_data=f"req:reject:{req['id']}")],
+        [InlineKeyboardButton(text="К сообщению клиента", url=client_link)],
     ])
     try:
         admin_msg = await bot.send_message(
             admin_id,
-            f"🔔 <b>Заявка на реквизит #{req['id']}</b>\n"
+            f"<b>Заявка на реквизит #{req['id']}</b>\n"
             f"{team_line}"
-            f"💬 Чат: {html.escape(entry.get('chat_title') or '')} "
+            f"Чат: {html.escape(entry.get('chat_title') or '')} "
             f"(<code>{data['chat_id']}</code>)\n"
-            f"👤 Партнёр: @{entry.get('partner_username') or '—'}\n"
-            f"✍️ Запросил: @{message.from_user.username or '—'}\n"
-            f"📥 Направление приёма: <b>{data['direction']}</b>\n"
-            f"📝 Примечание: {html.escape(note)}",
+            f"Партнёр: @{entry.get('partner_username') or '—'}\n"
+            f"Запросил: @{message.from_user.username or '—'}\n"
+            f"Шлюз: <b>{data['direction']}</b>\n"
+            f"Примечание: {html.escape(note)}",
             reply_markup=admin_kb,
         )
         await storage.update_requisite_request(
@@ -2916,7 +2907,7 @@ async def cb_prof_workers(cb: CallbackQuery):
             ),
         ])
     rows.append([InlineKeyboardButton(text="➕ Добавить работника", callback_data="wrk:add")])
-    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await cb.message.reply("\n".join(lines), reply_markup=kb)
     await cb.answer()
@@ -3168,7 +3159,7 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
                 text="✏️ Изменить адрес",
                 callback_data=f"stream:trc:{stream_name}",
             )],
-            [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+            [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
         ])
         return await message.reply(
             f"💸 <b>Заявка на выплату</b>\n"
@@ -3188,7 +3179,7 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
             text=f"📍 {st} · {_fmt_money_usd(amt)}$",
             callback_data=f"pay:stream:{st}"
         )])
-    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     await message.reply(
         "Выбери направление для выплаты:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
