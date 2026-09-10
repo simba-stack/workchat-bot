@@ -1428,19 +1428,11 @@ async def cmd_list_chats(message: Message):
         lines.append("\n".join(block))
         lines.append("")
 
-    # Инлайн-кнопки для детального просмотра по чатам с оборотом
-    active_rows = [(c, s) for c, s in rows if s.get("total_rub")]
-    kb = None
-    if active_rows:
-        kb_rows = []
-        for c, s in active_rows[:8]:  # макс 8 кнопок
-            title_short = (c.get("chat_title") or "чат")[:20]
-            remaining = s.get("remaining_usd") or 0
-            kb_rows.append([InlineKeyboardButton(
-                text=f"🔍 {title_short} · {_fmt_money_usd(remaining)}$",
-                callback_data=f"cli:detail:{c['chat_id']}"
-            )])
-        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Управление чатами", callback_data="cli:manage")],
+        [InlineKeyboardButton(text="Статистика", callback_data="cli:stats")],
+        [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
+    ])
 
     text = "\n".join(lines)
     # Разбиваем если слишком длинно
@@ -1462,6 +1454,60 @@ async def cmd_list_chats(message: Message):
                 await message.reply(chunk)
     else:
         await message.reply(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "cli:manage")
+async def cb_cli_manage(cb: CallbackQuery):
+    if cb.message.chat.id != storage.get_admin_chat_id() and not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только для админ-чата.", show_alert=True)
+    chats = storage.list_client_chats()
+    if not chats:
+        return await cb.answer("Нет чатов.", show_alert=True)
+    rows = []
+    for c in chats:
+        team = c.get("team_name") or c.get("chat_title") or "чат"
+        rows.append([InlineKeyboardButton(
+            text=str(team)[:40],
+            callback_data=f"cli:detail:{c['chat_id']}"
+        )])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
+    await cb.message.reply(
+        "<b>Управление чатами</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "cli:stats")
+async def cb_cli_stats(cb: CallbackQuery):
+    """Меню выбора: за какой день или период смотреть статистику."""
+    if cb.message.chat.id != storage.get_admin_chat_id() and not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только для админ-чата.", show_alert=True)
+    today = today_msk()
+    # Последние 7 дней
+    from datetime import datetime as _dt, timedelta as _tdd
+    d0 = _dt.strptime(today, "%Y-%m-%d")
+    rows = []
+    for i in range(7):
+        d = (d0 - _tdd(days=i)).strftime("%Y-%m-%d")
+        label = "Сегодня" if i == 0 else ("Вчера" if i == 1 else d)
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"cli:day:{d}")])
+    rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
+    await cb.message.reply(
+        "<b>Статистика · выбери день</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cli:day:"))
+async def cb_cli_day(cb: CallbackQuery):
+    if cb.message.chat.id != storage.get_admin_chat_id() and not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только для админ-чата.", show_alert=True)
+    date_str = cb.data.split(":", 2)[2]
+    report = _build_day_report(date_str)
+    await cb.message.reply(report, reply_markup=_close_kb())
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("cli:detail:"))
