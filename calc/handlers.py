@@ -434,6 +434,7 @@ def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
 
     our_income = 0.0
     client_owed = 0.0
+    merchant_commission = 0.0
     by_method: dict[str, dict] = {}
     unknown_methods: set[str] = set()
     for e in day.get("entries") or []:
@@ -451,10 +452,12 @@ def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
             continue
 
         merchant_usd = (rub * (1 - merchant_take / 100.0) / merchant_rate)
+        merchant_commission_usd = (rub * (merchant_take / 100.0) / merchant_rate)
         client_usd = (rub * (1 - client_com / 100.0) / client_rate) if client_rate > 0 else 0.0
 
         our_income += merchant_usd
         client_owed += client_usd
+        merchant_commission += merchant_commission_usd
         m = by_method.setdefault(method, {
             "rub": 0.0, "merchant_usd": 0.0, "client_usd": 0.0, "margin_usd": 0.0
         })
@@ -466,6 +469,7 @@ def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
     return {
         "our_income_usd": our_income,
         "client_owed_usd": client_owed,
+        "merchant_commission_usd": merchant_commission,
         "margin_usd": our_income - client_owed,
         "by_method": by_method,
         "unknown_methods": list(unknown_methods),
@@ -482,6 +486,7 @@ def _build_day_report(date_str: str) -> str:
     total_our_income = 0.0
     total_client_owed = 0.0
     total_margin = 0.0
+    total_merchant_commission = 0.0
     payouts_all: list[tuple] = []  # (partner, stream, amt_usd, ts)
     partner_summary: dict[str, dict] = {}  # partner_username → {rub, usd, paid}
 
@@ -515,6 +520,7 @@ def _build_day_report(date_str: str) -> str:
         total_our_income += margin["our_income_usd"]
         total_client_owed += margin["client_owed_usd"]
         total_margin += margin["margin_usd"]
+        total_merchant_commission += margin.get("merchant_commission_usd") or 0
         key = c.get("team_name") or f"@{c.get('partner_username') or c.get('chat_id')}"
         partner_summary[key] = {
             "rub": rub_today,
@@ -534,6 +540,7 @@ def _build_day_report(date_str: str) -> str:
         "",
         f"Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
         f"От мерчантов: <b>{_fmt_money_usd(total_our_income)}$</b>",
+        f"Комиссия мерчанта: <b>{_fmt_money_usd(total_merchant_commission)}$</b>",
         f"Клиентам: <b>{_fmt_money_usd(total_client_owed)}$</b>",
         f"<b>МАРЖА: {_fmt_money_usd(total_margin)}$</b>",
         "",
@@ -565,10 +572,12 @@ def _build_day_report(date_str: str) -> str:
         if title:
             header_parts.append(f"<i>{html.escape(title)}</i>")
         header = " · ".join(header_parts) if header_parts else f"<b>{html.escape(str(key))}</b>"
+        merch_com = m.get("merchant_commission_usd") or 0
         lines.append(
             f"\n {header}\n"
             f"    {_fmt_money_rub(p['rub'])}₽\n"
             f"    приход {_fmt_money_usd(m['our_income_usd'])}$ · "
+            f"ком.мерч {_fmt_money_usd(merch_com)}$ · "
             f"клиенту {_fmt_money_usd(m['client_owed_usd'])}$ · "
             f"<b>маржа {_fmt_money_usd(m['margin_usd'])}$</b>"
         )
