@@ -425,22 +425,31 @@ def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
     client_rate = float(entry.get("rate") or 0)
     client_dirs = entry.get("directions") or {}
     gateways = storage.list_gateways()
+    # Case-insensitive карты для матчинга
+    gw_lookup = {k.lower(): v for k, v in gateways.items()}
+    dir_lookup = {k.lower(): v for k, v in client_dirs.items()}
     days = entry.get("days") or {}
     day = days.get(date_str) or {"entries": []}
 
     our_income = 0.0
     client_owed = 0.0
     by_method: dict[str, dict] = {}
+    unknown_methods: set[str] = set()
     for e in day.get("entries") or []:
         method = e.get("payment_method") or e.get("direction") or "—"
         rub = float(e.get("amount_rub") or 0)
-        gw = gateways.get(method) or {}
+        gw = gw_lookup.get(method.lower()) or {}
+        client_dir = dir_lookup.get(method.lower()) or {}
         merchant_take = float(gw.get("merchant_cost_pct") or gw.get("cost_pct") or 0)
         merchant_rate = float(gw.get("merchant_rate") or 0)
-        client_dir = client_dirs.get(method) or {}
         client_com = float(client_dir.get("commission_pct") or 0)
 
-        merchant_usd = (rub * (1 - merchant_take / 100.0) / merchant_rate) if merchant_rate > 0 else 0.0
+        # Если шлюза нет в глобальной таблице — маржу не считаем (пропускаем в income/owed).
+        if not gw or merchant_rate <= 0:
+            unknown_methods.add(method)
+            continue
+
+        merchant_usd = (rub * (1 - merchant_take / 100.0) / merchant_rate)
         client_usd = (rub * (1 - client_com / 100.0) / client_rate) if client_rate > 0 else 0.0
 
         our_income += merchant_usd
@@ -458,6 +467,7 @@ def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
         "client_owed_usd": client_owed,
         "margin_usd": our_income - client_owed,
         "by_method": by_method,
+        "unknown_methods": list(unknown_methods),
     }
 
 
@@ -562,6 +572,12 @@ def _build_day_report(date_str: str) -> str:
                 for d, v in sorted(p["by_dir_paid"].items(), key=lambda x: x[1], reverse=True)
             )
             lines.append(f"    выплаты: {dir_str}")
+        unknown = m.get("unknown_methods") or []
+        if unknown:
+            lines.append(
+                f"    <i>⚠️ маржа не посчитана по шлюзам "
+                f"(нет в /шлюзы): {', '.join(unknown)}</i>"
+            )
     return "\n".join(lines)
 
 
