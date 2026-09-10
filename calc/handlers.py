@@ -367,18 +367,62 @@ async def cmd_add_partner(message: Message, bot: Bot):
 # ============================================================
 # /начатьдень
 # ============================================================
+_DEFAULT_STARTDAY_TEXT = (
+    "☀️ <b>Админ на связи!</b>\n"
+    "📅 {date} — приём открыт.\n"
+    "Пишите суммы: <code>+сумма НАПРАВЛЕНИЕ СПОСОБ</code>"
+)
+_DEFAULT_ENDDAY_TEXT = (
+    "🌙 <b>Приём закрыт</b> — админ ушёл спать.\n"
+    "Заявки на выплату/реквизит обработаются с утра."
+)
+
+
+def _get_saved_template(key: str, default: str) -> str:
+    return storage.state.get(key) or default
+
+
+async def _save_template(key: str, text: str) -> None:
+    from calc.storage import _lock as _st_lock
+    async with _st_lock:
+        storage.state[key] = text
+        await storage._save_unlocked()
+
+
+@router.message(Command("шаблоны", "templates"))
+async def cmd_templates(message: Message):
+    """Показать сохранённые шаблоны рассылки. Только owner/admin."""
+    if not is_owner_or_admin_msg(message):
+        return
+    sd = _get_saved_template("startday_text", _DEFAULT_STARTDAY_TEXT)
+    ed = _get_saved_template("endday_text", _DEFAULT_ENDDAY_TEXT)
+    await message.reply(
+        f"<b>📄 Шаблоны рассылок</b>\n\n"
+        f"<b>☀️ Начало дня:</b>\n{sd}\n\n"
+        f"<b>🌙 Конец дня:</b>\n{ed}\n\n"
+        f"<i>Заменить: /начатьдень &lt;новый текст&gt; или /конецдня &lt;новый текст&gt;</i>\n"
+        f"<i>Плейсхолдер {{date}} заменится на сегодняшнюю дату.</i>",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("конецдня", "endday", "закончитьдень"))
 async def cmd_end_day(message: Message, bot: Bot):
-    """В админ-чате — рассылает всем клиентам "приём закрыт"."""
+    """В админ-чате — рассылает всем клиентам "приём закрыт".
+    Если после команды есть текст — рассылает его и сохраняет как шаблон.
+    Без текста — используется последний сохранённый (или дефолтный)."""
     admin_id = storage.get_admin_chat_id()
     if not is_group(message.chat.type) or message.chat.id != admin_id:
         return
     if not is_owner_or_admin_msg(message):
         return
-    text = (
-        f"🌙 <b>Приём закрыт</b> — админ ушёл спать.\n"
-        f"Заявки на выплату/реквизит обработаются с утра."
-    )
+    parts = (message.text or "").split(maxsplit=1)
+    custom = parts[1].strip() if len(parts) >= 2 else ""
+    if custom:
+        text = custom
+        await _save_template("endday_text", custom)
+    else:
+        text = _get_saved_template("endday_text", _DEFAULT_ENDDAY_TEXT)
     chats = storage.list_client_chats()
     sent = 0
     failed = 0
@@ -390,6 +434,8 @@ async def cmd_end_day(message: Message, bot: Bot):
             failed += 1
         await asyncio.sleep(0.05)
     await message.reply(
+        f"🌙 Конец дня объявлен. Разослано: <b>{sent}</b>, ошибок: {failed}\n"
+        f"<i>Текст сохранён как шаблон.</i>" if custom else
         f"🌙 Конец дня объявлен. Разослано: <b>{sent}</b>, ошибок: {failed}",
         reply_markup=_close_kb(),
     )
@@ -405,11 +451,13 @@ async def cmd_start_day(message: Message, bot: Bot):
     if not is_owner_or_admin_msg(message):
         return
     date_str = today_msk()
-    text = (
-        f"☀️ <b>Админ на связи!</b>\n"
-        f"📅 {date_str} — приём открыт.\n"
-        f"Пишите суммы: <code>+сумма НАПРАВЛЕНИЕ СПОСОБ</code>"
-    )
+    parts = (message.text or "").split(maxsplit=1)
+    custom = parts[1].strip() if len(parts) >= 2 else ""
+    if custom:
+        text = custom.replace("{date}", date_str)
+        await _save_template("startday_text", custom)
+    else:
+        text = _get_saved_template("startday_text", _DEFAULT_STARTDAY_TEXT).replace("{date}", date_str)
     chats = storage.list_client_chats()
     sent = 0
     failed = 0
@@ -424,7 +472,8 @@ async def cmd_start_day(message: Message, bot: Bot):
         await asyncio.sleep(0.05)
     await message.reply(
         f"☀️ День {date_str} объявлен.\n"
-        f"Разослано: <b>{sent}</b> чатов  ·  Ошибок: {failed}",
+        f"Разослано: <b>{sent}</b> чатов  ·  Ошибок: {failed}"
+        + ("\n<i>Текст сохранён как шаблон.</i>" if custom else ""),
         reply_markup=_close_kb(),
     )
 
