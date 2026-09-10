@@ -1771,9 +1771,6 @@ async def _send_stats(message: Message, entry: dict):
                         f"     • <i>{m}</i>: {_fmt_money_rub(m_rub)}₽ −{pct:g}% = {_fmt_money_usd(m_usd)}$"
                     )
 
-    if not total_rub:
-        lines.append("\n<i>Ещё ничего не сдано. Пиши: <code>+100к НАПРАВЛЕНИЕ СПОСОБ</code></i>")
-
     kb_rows = []
     if remaining > 0.01:
         kb_rows.append([InlineKeyboardButton(text="💸 Запросить выплату", callback_data="pay:request")])
