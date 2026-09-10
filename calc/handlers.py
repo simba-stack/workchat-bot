@@ -1148,6 +1148,8 @@ async def cb_stream_del(cb: CallbackQuery):
 # CALLBACKS
 # ============================================================
 def _check_partner_or_perm(entry: dict, user_id: int, perm: str) -> bool:
+    if storage.is_owner(user_id):
+        return True
     if user_id == entry.get("partner_tg_id"):
         return True
     workers = entry.get("workers") or {}
@@ -1901,7 +1903,7 @@ async def cb_wrk_add(cb: CallbackQuery, state: FSMContext):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry:
         return await cb.answer()
-    if cb.from_user.id != entry.get("partner_tg_id"):
+    if cb.from_user.id != entry.get("partner_tg_id") and not storage.is_owner(cb.from_user.id):
         return await cb.answer("Только партнёр.", show_alert=True)
     await state.set_state(Setup.wait_worker_username)
     await state.update_data(chat_id=cb.message.chat.id)
@@ -2000,7 +2002,7 @@ async def st_wrk_role(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("wrk:menu:"))
 async def cb_wrk_menu(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
-    if not entry or cb.from_user.id != entry.get("partner_tg_id"):
+    if not entry or (cb.from_user.id != entry.get("partner_tg_id") and not storage.is_owner(cb.from_user.id)):
         return await cb.answer("Только партнёр.", show_alert=True)
     wid = int(cb.data.split(":")[2])
     w = (entry.get("workers") or {}).get(str(wid))
@@ -2022,7 +2024,7 @@ async def cb_wrk_menu(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("wrk:tgl:"))
 async def cb_wrk_tgl(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
-    if not entry or cb.from_user.id != entry.get("partner_tg_id"):
+    if not entry or (cb.from_user.id != entry.get("partner_tg_id") and not storage.is_owner(cb.from_user.id)):
         return await cb.answer("Только партнёр.", show_alert=True)
     _, _, wid_s, perm = cb.data.split(":", 3)
     wid = int(wid_s)
@@ -2033,7 +2035,7 @@ async def cb_wrk_tgl(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("wrk:del:"))
 async def cb_wrk_del(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
-    if not entry or cb.from_user.id != entry.get("partner_tg_id"):
+    if not entry or (cb.from_user.id != entry.get("partner_tg_id") and not storage.is_owner(cb.from_user.id)):
         return await cb.answer("Только партнёр.", show_alert=True)
     wid = int(cb.data.split(":")[2])
     await storage.remove_worker(cb.message.chat.id, wid)
