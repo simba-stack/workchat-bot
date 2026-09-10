@@ -1902,7 +1902,7 @@ async def cb_prof_workers(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry:
         return await cb.answer()
-    if cb.from_user.id != entry.get("partner_tg_id") and not is_owner_or_admin_msg(cb.message):
+    if cb.from_user.id != entry.get("partner_tg_id") and not storage.is_owner(cb.from_user.id):
         return await cb.answer("Только партнёр.", show_alert=True)
     workers = entry.get("workers") or {}
     lines = [f"<b>Работники ({len(workers)}):</b>"]
