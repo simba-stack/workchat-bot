@@ -112,6 +112,25 @@ async def _track_msg(state: FSMContext, msg: Message):
     await state.update_data(_trash_msgs=ids)
 
 
+def _close_kb() -> InlineKeyboardMarkup:
+    """Клавиатура только с кнопкой Закрыть — для добавления к любому bot-ответу."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")]
+    ])
+
+
+def _with_close(kb: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup:
+    """Добавляет к существующей клавиатуре ряд с «Закрыть»."""
+    rows = list(kb.inline_keyboard) if kb else []
+    # Не дублируем если уже есть
+    for r in rows:
+        for b in r:
+            if b.callback_data == "ui:close":
+                return kb or _close_kb()
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _cleanup_fsm(bot: Bot, chat_id: int, state: FSMContext):
     """Удаляет все сообщения, собранные через _track_msg."""
     data = await state.get_data()
@@ -348,20 +367,66 @@ async def cmd_add_partner(message: Message, bot: Bot):
 # ============================================================
 # /начатьдень
 # ============================================================
+@router.message(Command("конецдня", "endday", "закончитьдень"))
+async def cmd_end_day(message: Message, bot: Bot):
+    """В админ-чате — рассылает всем клиентам "приём закрыт"."""
+    admin_id = storage.get_admin_chat_id()
+    if not is_group(message.chat.type) or message.chat.id != admin_id:
+        return
+    if not is_owner_or_admin_msg(message):
+        return
+    text = (
+        f"🌙 <b>Приём закрыт</b> — админ ушёл спать.\n"
+        f"Заявки на выплату/реквизит обработаются с утра."
+    )
+    chats = storage.list_client_chats()
+    sent = 0
+    failed = 0
+    for c in chats:
+        try:
+            await bot.send_message(c["chat_id"], text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await message.reply(
+        f"🌙 Конец дня объявлен. Разослано: <b>{sent}</b>, ошибок: {failed}",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("начатьдень", "startday"))
 async def cmd_start_day(message: Message, bot: Bot):
-    if not is_group(message.chat.type):
-        return await message.reply("Команда для клиентского чата.")
-    entry = storage.get_client_chat(message.chat.id)
-    if not entry:
-        return await message.reply("Чат не зарегистрирован.")
+    """В админ-чате — рассылает всем клиентам "админ на связи, день начат".
+    В остальных чатах — ничего не делает."""
+    admin_id = storage.get_admin_chat_id()
+    if not is_group(message.chat.type) or message.chat.id != admin_id:
+        return
+    if not is_owner_or_admin_msg(message):
+        return
     date_str = today_msk()
-    await storage.start_day(message.chat.id, date_str)
-    reply = await message.reply(
-        f"☀️ День <b>{date_str}</b> начат. Пиши <code>+сумма НАПРАВЛЕНИЕ</code>."
+    text = (
+        f"☀️ <b>Админ на связи!</b>\n"
+        f"📅 {date_str} — приём открыт.\n"
+        f"Пишите суммы: <code>+сумма НАПРАВЛЕНИЕ СПОСОБ</code>"
     )
-    asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 60))
-    asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id, 60))
+    chats = storage.list_client_chats()
+    sent = 0
+    failed = 0
+    for c in chats:
+        try:
+            await bot.send_message(c["chat_id"], text)
+            await storage.start_day(c["chat_id"], date_str)
+            sent += 1
+        except Exception as e:
+            logger.warning("[calc startday] fail %s: %s", c["chat_id"], e)
+            failed += 1
+        await asyncio.sleep(0.05)
+    await message.reply(
+        f"☀️ День {date_str} объявлен.\n"
+        f"Разослано: <b>{sent}</b> чатов  ·  Ошибок: {failed}",
+        reply_markup=_close_kb(),
+    )
 
 
 # ============================================================
@@ -414,7 +479,7 @@ async def cmd_set_rate(message: Message):
     if not entry:
         return await message.reply(f"Чат <code>{target_chat}</code> не зарегистрирован.")
     await storage.update_client_chat(target_chat, rate=rate)
-    await message.reply(f"✅ Курс для чата {target_chat}: <b>{rate}</b>")
+    await message.reply(f"✅ Курс для чата {target_chat}: <b>{rate}</b>", reply_markup=_close_kb())
 
 
 @router.message(Command("напр"))
@@ -454,7 +519,7 @@ async def cmd_add_dir(message: Message):
     if not storage.get_client_chat(target_chat):
         return await message.reply("Такого чата нет в базе.")
     await storage.set_direction(target_chat, name, pct, enabled=True)
-    await message.reply(f"✅ Направление <b>{name}</b> — {pct}% (вкл)")
+    await message.reply(f"✅ Направление <b>{name}</b> — {pct}% (вкл)", reply_markup=_close_kb())
 
 
 @router.message(Command("напр_вкл"))
@@ -495,7 +560,10 @@ async def _toggle_dir_cmd(message: Message, target_state: bool):
         return await message.reply("Направление не найдено.")
     if bool(d.get("enabled")) != target_state:
         await storage.toggle_direction(target_chat, name)
-    await message.reply(f"{'✅' if target_state else '⛔'} <b>{name}</b>: {'вкл' if target_state else 'выкл'}")
+    await message.reply(
+        f"{'✅' if target_state else '⛔'} <b>{name}</b>: {'вкл' if target_state else 'выкл'}",
+        reply_markup=_close_kb(),
+    )
 
 
 @router.message(Command("напр_удал"))
@@ -522,7 +590,7 @@ async def cmd_dir_del(message: Message):
             return
         name = parts[2].strip()
     ok = await storage.delete_direction(target_chat, name)
-    await message.reply("🗑 Удалено" if ok else "Не найдено")
+    await message.reply("🗑 Удалено" if ok else "Не найдено", reply_markup=_close_kb())
 
 
 @router.message(Command("чаты"))
@@ -765,7 +833,7 @@ async def cmd_broadcast(message: Message, bot: Bot):
             logger.warning("[calc broadcast] fail %s: %s", c["chat_id"], e)
             failed += 1
         await asyncio.sleep(0.05)
-    await message.reply(f"📣 Отправлено: <b>{sent}</b>, ошибок: {failed}")
+    await message.reply(f"📣 Отправлено: <b>{sent}</b>, ошибок: {failed}", reply_markup=_close_kb())
 
 
 # ============================================================
@@ -2107,7 +2175,7 @@ async def cmd_whoami(message: Message):
             "\n⚠️ Тебя нет в CALC_OWNER_IDS. Впиши свой tg_id в Railway → "
             "calc-bot → Variables → CALC_OWNER_IDS"
         )
-    await message.reply("\n".join(lines))
+    await message.reply("\n".join(lines), reply_markup=_close_kb())
 
 
 @router.message(Command("start", "help"))
@@ -2208,11 +2276,20 @@ _TEXT_ALIASES = {
     "профиль": cmd_profile,
     "настройка": cmd_setup,
     "настройки": cmd_setup,
-    "начатьдень": cmd_start_day,
     "чаты": cmd_list_chats,
     "кто": cmd_whoami,
     "whoami": cmd_whoami,
+    # Админские рассылочные команды:
+    "начатьдень": cmd_start_day,
+    "начать": cmd_start_day,
+    "деньначат": cmd_start_day,
 }
+# Подвязываем end_day алиасы после определения функции (она объявлена ниже в файле)
+try:
+    _TEXT_ALIASES["закончитьдень"] = cmd_end_day
+    _TEXT_ALIASES["конецдня"] = cmd_end_day
+except NameError:
+    pass  # cmd_end_day определится позже — тогда подвяжется при следующей загрузке
 
 
 @router.message(F.text)
