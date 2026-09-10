@@ -405,6 +405,132 @@ async def _save_template(key: str, text: str) -> None:
         await storage._save_unlocked()
 
 
+def _build_day_report(date_str: str) -> str:
+    """Собирает отчёт за день по всем клиентам.
+    Показывает: обороты, выплаты, разбивку по партнёрам и направлениям."""
+    chats = storage.list_client_chats()
+    total_rub_all = 0.0
+    total_usd_all = 0.0
+    total_paid_all = 0.0
+    payouts_all: list[tuple] = []  # (partner, stream, amt_usd, ts)
+    partner_summary: dict[str, dict] = {}  # partner_username → {rub, usd, paid}
+
+    for c in chats:
+        s = storage.compute_stats(c["chat_id"], date_str=date_str)
+        rub_today = s.get("total_rub") or 0
+        usd_today = s.get("total_usd_before_pay") or 0
+        # Выплаты только за date_str
+        paid_today = 0.0
+        by_dir_today: dict[str, float] = {}
+        for p in c.get("payouts") or []:
+            ts = p.get("ts") or 0
+            d = datetime.fromtimestamp(ts, MSK).strftime("%Y-%m-%d")
+            if d != date_str:
+                continue
+            amt = float(p.get("amount_usd") or 0)
+            paid_today += amt
+            stream = p.get("stream") or "—"
+            by_dir_today[stream] = by_dir_today.get(stream, 0) + amt
+            payouts_all.append((
+                c.get("team_name") or c.get("partner_username") or "—",
+                stream, amt, ts
+            ))
+        if not (rub_today or paid_today):
+            continue
+        total_rub_all += rub_today
+        total_usd_all += usd_today
+        total_paid_all += paid_today
+        key = c.get("team_name") or f"@{c.get('partner_username') or c.get('chat_id')}"
+        partner_summary[key] = {
+            "rub": rub_today,
+            "usd": usd_today,
+            "paid": paid_today,
+            "by_dir_paid": by_dir_today,
+            "streams_rub": s.get("by_stream_rub") or {},
+            "chat_id": c["chat_id"],
+        }
+
+    lines = [
+        f"📊 <b>Итог дня — {date_str}</b>",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        f"💰 Оборот всего: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
+        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd_all)}$</b>",
+        f"✅ Выплачено: <b>{_fmt_money_usd(total_paid_all)}$</b>",
+        f"👥 Активных клиентов: <b>{len(partner_summary)}</b>",
+        "",
+    ]
+    if not partner_summary:
+        lines.append("<i>Ничего не было.</i>")
+        return "\n".join(lines)
+
+    lines.append("<b>👤 По партнёрам:</b>")
+    for key in sorted(partner_summary.keys(),
+                      key=lambda k: partner_summary[k]["rub"], reverse=True):
+        p = partner_summary[key]
+        streams = p["streams_rub"]
+        stream_line = ""
+        if streams:
+            top = sorted(streams.items(), key=lambda x: x[1], reverse=True)
+            stream_line = " · ".join(f"{d} {_fmt_money_rub(v)}₽" for d, v in top[:3])
+        lines.append(
+            f"\n  🦁 <b>{html.escape(str(key))}</b>\n"
+            f"     💰 {_fmt_money_rub(p['rub'])}₽ = {_fmt_money_usd(p['usd'])}$  ·  "
+            f"✅ {_fmt_money_usd(p['paid'])}$"
+        )
+        if stream_line:
+            lines.append(f"     📍 {stream_line}")
+        # По направлениям выплат
+        if p["by_dir_paid"]:
+            dir_str = " · ".join(
+                f"{d}: {_fmt_money_usd(v)}$"
+                for d, v in sorted(p["by_dir_paid"].items(), key=lambda x: x[1], reverse=True)
+            )
+            lines.append(f"     💸 выплат: {dir_str}")
+    return "\n".join(lines)
+
+
+@router.message(Command("итогдня", "итог", "dayreport"))
+async def cmd_day_report(message: Message):
+    """/итогдня — сводка за сегодня для админа."""
+    if not is_owner_or_admin_msg(message):
+        return
+    parts = (message.text or "").split()
+    date_str = parts[1] if len(parts) >= 2 else today_msk()
+    report = _build_day_report(date_str)
+    await message.reply(report, reply_markup=_close_kb())
+
+
+@router.message(Command("обновитьдень", "новыйдень", "закрытьдень"))
+async def cmd_close_day(message: Message, bot: Bot):
+    """/обновитьдень — рассылает "день закрыт" + показывает админу отчёт."""
+    admin_id = storage.get_admin_chat_id()
+    if not is_group(message.chat.type) or message.chat.id != admin_id:
+        return
+    if not is_owner_or_admin_msg(message):
+        return
+    date_str = today_msk()
+    # Рассылка клиентам
+    text = _get_saved_template("endday_text", _DEFAULT_ENDDAY_TEXT)
+    chats = storage.list_client_chats()
+    sent = 0
+    failed = 0
+    for c in chats:
+        try:
+            await bot.send_message(c["chat_id"], text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    # Отчёт админу
+    report = _build_day_report(date_str)
+    await message.reply(
+        f"🌙 День <b>{date_str}</b> закрыт.\n"
+        f"Рассылка: <b>{sent}</b> чатов, ошибок: {failed}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n{report}",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("шаблоны", "templates"))
 async def cmd_templates(message: Message):
     """Показать сохранённые шаблоны рассылки. Только owner/admin."""
@@ -1105,17 +1231,38 @@ async def cmd_profile(message: Message):
     entry = storage.get_client_chat(message.chat.id)
     if not entry:
         return
-    s = storage.compute_stats(entry["chat_id"])
+    today = today_msk()
+    month_start = today[:7] + "-01"  # напр. 2026-09-01
+    s_all = storage.compute_stats(entry["chat_id"])
+    s_month = storage.compute_stats(entry["chat_id"], date_from=month_start)
+    s_day = storage.compute_stats(entry["chat_id"], date_str=today)
     workers = entry.get("workers") or {}
     streams = entry.get("streams") or {}
     team = entry.get("team_name") or ""
+
+    def _line(label: str, s: dict) -> str:
+        rub = s.get("total_rub") or 0
+        paid = s.get("paid_usd") or 0
+        usd = s.get("total_usd_before_pay") or 0
+        avail = s.get("available_usd") or 0
+        return (
+            f"<b>{label}</b>\n"
+            f"  💰 {_fmt_money_rub(rub)}₽ = {_fmt_money_usd(usd)}$\n"
+            f"  ✅ выплачено: {_fmt_money_usd(paid)}$  ·  "
+            f"🎯 остаток: {_fmt_money_usd(avail)}$"
+        )
+
     lines = [
         "<b>👤 Профиль партнёра</b>",
         f"🦁 Команда: <b>{team or '— (задай в настройках)'}</b>",
-        f"Партнёр: @{entry.get('partner_username') or '—'}",
-        f"Общая сумма: <b>{_fmt_money_rub(s.get('total_rub') or 0)} руб.</b>",
-        f"Выплачено: <b>{_fmt_money_usd(s.get('paid_usd') or 0)}$</b>",
-        f"Направлений: <b>{len(streams)}</b>  ·  Работников: <b>{len(workers)}</b>",
+        f"👤 Партнёр: @{entry.get('partner_username') or '—'}",
+        f"📍 Направлений: <b>{len(streams)}</b>  ·  👥 Работников: <b>{len(workers)}</b>",
+        "━━━━━━━━━━━━━━━━━━━",
+        _line("📅 Сегодня", s_day),
+        "",
+        _line("📆 За месяц", s_month),
+        "",
+        _line("📊 За всё время", s_all),
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")],

@@ -543,7 +543,8 @@ class CalcStorage:
             out[s] = out.get(s, 0.0) + float(r.get("amount_usd") or 0)
         return out
 
-    def compute_stats(self, chat_id: int, date_str: str | None = None) -> dict:
+    def compute_stats(self, chat_id: int, date_str: str | None = None,
+                       date_from: str | None = None) -> dict:
         """Двухмерная разбивка:
         - by_stream_rub: {stream: total_rub}
         - by_stream_usd: {stream: total_usd_after_commissions}
@@ -568,6 +569,8 @@ class CalcStorage:
 
         if date_str:
             days_iter = [(date_str, days.get(date_str) or {"entries": []})]
+        elif date_from:
+            days_iter = [(d, day) for d, day in days.items() if d >= date_from]
         else:
             days_iter = list(days.items())
 
@@ -594,9 +597,19 @@ class CalcStorage:
         total_rub = sum(by_stream_rub.values())
         total_usd = sum(by_stream_usd.values())
 
-        # Payouts — раскладываем по stream если указан, иначе в "—"
+        # Payouts — раскладываем по stream если указан, иначе в "—".
+        # Фильтруем по date_str/date_from.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _MSK = _tz(_td(hours=3))
         paid_by_stream: dict[str, float] = {}
         for p in (entry.get("payouts") or []):
+            ts = p.get("ts") or 0
+            if ts:
+                pdate = _dt.fromtimestamp(ts, _MSK).strftime("%Y-%m-%d")
+                if date_str and pdate != date_str:
+                    continue
+                if date_from and pdate < date_from:
+                    continue
             s = p.get("stream") or "—"
             paid_by_stream[s] = paid_by_stream.get(s, 0.0) + float(p.get("amount_usd") or 0)
         paid_usd = sum(paid_by_stream.values())
