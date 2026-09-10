@@ -1879,12 +1879,81 @@ async def cb_pay_done(cb: CallbackQuery, state: FSMContext):
     req = storage.get_payout_request(pid)
     if not req or req.get("status") not in ("pending", "taken"):
         return await cb.answer("Уже обработана.", show_alert=True)
+    req_amount = req.get("amount_usd") or 0
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"✅ Полная — {_fmt_money_usd(req_amount)}$",
+            callback_data=f"pay:donefull:{pid}",
+        )],
+        [InlineKeyboardButton(text="✏️ Частичная — ввести сумму", callback_data=f"pay:donepart:{pid}")],
+        [InlineKeyboardButton(text="⬅️ Отмена", callback_data="ui:close")],
+    ])
+    await cb.message.reply(
+        f"Выплата по заявке #{pid} (запрошено {_fmt_money_usd(req_amount)}$):",
+        reply_markup=kb,
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("pay:donefull:"))
+async def cb_pay_done_full(cb: CallbackQuery, bot: Bot):
+    if cb.message.chat.id != storage.get_admin_chat_id():
+        return await cb.answer()
+    pid = int(cb.data.split(":")[2])
+    req = storage.get_payout_request(pid)
+    if not req or req.get("status") not in ("pending", "taken"):
+        return await cb.answer("Уже обработана.", show_alert=True)
+    amt = float(req.get("amount_usd") or 0)
+    await storage.record_payout(
+        chat_id=req["chat_id"], amount_usd=amt,
+        note=f"payout_req_id={pid}", admin_id=cb.from_user.id,
+        stream=req.get("stream") or "",
+    )
+    await storage.update_payout_request(pid, status="paid", paid_amount_usd=amt)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    # Обновляем сообщения
+    try:
+        await bot.edit_message_text(
+            f"✅ Заявка #{pid} — оплачено <b>{_fmt_money_usd(amt)}$</b> (полная)",
+            chat_id=req["chat_id"], message_id=req["client_msg_id"],
+        )
+    except Exception:
+        pass
+    if req.get("admin_msg_id"):
+        try:
+            await bot.edit_message_text(
+                f"✅ Заявка #{pid} — оплачено {_fmt_money_usd(amt)}$ (полная)\n"
+                f"Оплатил: @{cb.from_user.username or cb.from_user.id}",
+                chat_id=storage.get_admin_chat_id(),
+                message_id=req["admin_msg_id"],
+            )
+        except Exception:
+            pass
+    await cb.answer(f"✅ Оплачено {_fmt_money_usd(amt)}$")
+
+
+@router.callback_query(F.data.startswith("pay:donepart:"))
+async def cb_pay_done_part(cb: CallbackQuery, state: FSMContext):
+    if cb.message.chat.id != storage.get_admin_chat_id():
+        return await cb.answer()
+    pid = int(cb.data.split(":")[2])
+    req = storage.get_payout_request(pid)
+    if not req or req.get("status") not in ("pending", "taken"):
+        return await cb.answer("Уже обработана.", show_alert=True)
     await state.set_state(Setup.wait_payout_amount)
     await state.update_data(payout_id=pid)
-    await cb.message.reply(
-        f"Укажи <b>фактическую</b> сумму выплаты в $ по заявке #{pid} "
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    prompt = await cb.message.answer(
+        f"Введи фактическую сумму в $ по заявке #{pid} "
         f"(запрошено {_fmt_money_usd(req['amount_usd'])}$):"
     )
+    await _track_msg(state, prompt)
     await cb.answer()
 
 
