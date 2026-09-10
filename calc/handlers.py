@@ -1710,18 +1710,18 @@ async def _send_stats(message: Message, entry: dict):
 
     team = entry.get("team_name") or "Панель партнёра"
     lines = [
-        f"<b>{html.escape(team)}</b>",
+        f"👑 <b>{html.escape(team)}</b>",
         f"{today_msk()} · курс <b>{rate or '—'}</b>",
         "",
-        f"Оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
-        f"Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
-        f"Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
+        f"💰 Оборот: <b>{_fmt_money_rub(total_rub)} ₽</b>",
+        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd)}$</b>",
+        f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
     ]
     pending = s.get("pending_usd") or 0
     available = s.get("available_usd") or 0
     if pending > 0.01:
-        lines.append(f"В очереди: <b>{_fmt_money_usd(pending)}$</b>")
-    lines.append(f"К запросу: <b>{_fmt_money_usd(available)}$</b>")
+        lines.append(f"⏳ В очереди: <b>{_fmt_money_usd(pending)}$</b>")
+    lines.append(f"🎯 К запросу: <b>{_fmt_money_usd(available)}$</b>")
 
     if by_stream_rub:
         pending_by_stream = s.get("pending_by_stream") or {}
@@ -1779,24 +1779,29 @@ async def cmd_status(message: Message):
         return
     dirs = entry.get("directions") or {}
     global_gws = storage.list_gateways()
-    lines = ["<b>Шлюзы приёма:</b>", ""]
+    lines = ["🌐 <b>Шлюзы приёма</b>", ""]
     enabled_dirs = []
-    # Показываем ВСЕ клиентские шлюзы (свои commission_pct), + метку если глобально выкл
-    for name, d in sorted(dirs.items()):
-        gw_enabled = (global_gws.get(name) or {}).get("enabled", True)
-        active = d.get("enabled") and gw_enabled
-        onoff = "вкл" if active else "выкл"
-        pct = float(d.get("commission_pct") or 0)
-        lines.append(f" <b>{name}</b> · {pct:g}% · {onoff}")
+    # Показываем только шлюзы которые ЕСТЬ в глобальной админке (актуальные).
+    for name in sorted(global_gws.keys()):
+        gw = global_gws[name]
+        client_dir = dirs.get(name)
+        if not client_dir:
+            continue  # у клиента этого шлюза нет — не показываем
+        gw_enabled = bool(gw.get("enabled", True))
+        client_enabled = bool(client_dir.get("enabled"))
+        active = gw_enabled and client_enabled
+        mark = "🟢" if active else "🔴"
+        pct = float(client_dir.get("commission_pct") or 0)
+        lines.append(f"{mark} <b>{name}</b> · {pct:g}%")
         if active:
-            enabled_dirs.append(d)
-    if not dirs:
-        lines.append("<i>Шлюзов ещё нет.</i>")
+            enabled_dirs.append(client_dir)
+    if not any(dirs.get(n) for n in global_gws):
+        lines.append("<i>Шлюзы ещё не подключены.</i>")
     elif not enabled_dirs:
         lines.append("\n<i>Нет активных шлюзов.</i>")
     kb_rows = []
     if enabled_dirs:
-        kb_rows.append([InlineKeyboardButton(text="Запросить реквизит", callback_data="req:start")])
+        kb_rows.append([InlineKeyboardButton(text="📞 Запросить реквизит", callback_data="req:start")])
     kb_rows.append([InlineKeyboardButton(text="Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
@@ -1833,21 +1838,21 @@ async def cmd_profile(message: Message):
         )
 
     lines = [
-        "<b>Профиль партнёра</b>",
+        "👤 <b>Профиль партнёра</b>",
         f"Команда: <b>{team or '—'}</b>",
         f"Партнёр: @{entry.get('partner_username') or '—'}",
         f"Направлений: {len(streams)} · Работников: {len(workers)}",
         "",
-        _line("Сегодня", s_day),
+        _line("📅 Сегодня", s_day),
         "",
-        _line("За месяц", s_month),
+        _line("📆 За месяц", s_month),
         "",
-        _line("За всё время", s_all),
+        _line("📊 За всё время", s_all),
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Мои направления", callback_data="prof:streams")],
-        [InlineKeyboardButton(text="Мои работники", callback_data="prof:workers")],
-        [InlineKeyboardButton(text="Настройки", callback_data="stats:setup")],
+        [InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")],
+        [InlineKeyboardButton(text="👥 Мои работники", callback_data="prof:workers")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="stats:setup")],
         [InlineKeyboardButton(text="Закрыть", callback_data="ui:close")],
     ])
     await message.reply("\n".join(lines), reply_markup=kb)
