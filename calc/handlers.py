@@ -524,6 +524,9 @@ def _build_day_report(date_str: str) -> str:
             "streams_rub": s.get("by_stream_rub") or {},
             "chat_id": c["chat_id"],
             "margin": margin,
+            "partner_username": c.get("partner_username") or "",
+            "chat_title": c.get("chat_title") or "",
+            "team_name": c.get("team_name") or "",
         }
 
     lines = [
@@ -551,8 +554,19 @@ def _build_day_report(date_str: str) -> str:
         if streams:
             top = sorted(streams.items(), key=lambda x: x[1], reverse=True)
             stream_line = " · ".join(f"{d} {_fmt_money_rub(v)}₽" for d, v in top[:3])
+        team = p.get("team_name") or ""
+        title = p.get("chat_title") or ""
+        pu = p.get("partner_username") or ""
+        header_parts = []
+        if team:
+            header_parts.append(f"<b>{html.escape(team)}</b>")
+        if pu:
+            header_parts.append(f"@{pu}")
+        if title:
+            header_parts.append(f"<i>{html.escape(title)}</i>")
+        header = " · ".join(header_parts) if header_parts else f"<b>{html.escape(str(key))}</b>"
         lines.append(
-            f"\n <b>{html.escape(str(key))}</b>\n"
+            f"\n {header}\n"
             f"    {_fmt_money_rub(p['rub'])}₽\n"
             f"    приход {_fmt_money_usd(m['our_income_usd'])}$ · "
             f"клиенту {_fmt_money_usd(m['client_owed_usd'])}$ · "
