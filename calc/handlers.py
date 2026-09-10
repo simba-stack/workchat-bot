@@ -217,7 +217,8 @@ async def _show_client_setup(message: Message, entry: dict, user_id: int = 0):
         kb_rows.append([InlineKeyboardButton(text="🔄 Список способов", callback_data="setup:list_dirs")])
     if not is_owner_user:
         lines.append("\n<i>ℹ️ Способы приёма и % настраивает админ.</i>")
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
 
@@ -762,23 +763,33 @@ async def handle_amount_input(message: Message, bot: Bot):
     amount = _parse_amount(parts[0])
     if amount is None or amount <= 0:
         return
-    stream_name = parts[1].strip()
-    method_name = parts[2].strip()
+    stream_input = parts[1].strip()
+    method_input = parts[2].strip()
     streams = entry.get("streams") or {}
     methods = entry.get("directions") or {}
 
+    # Case-insensitive lookup: находим канонический ключ
+    stream_name = next(
+        (k for k in streams.keys() if k.lower() == stream_input.lower()),
+        None,
+    )
+    method_name = next(
+        (k for k in methods.keys() if k.lower() == method_input.lower()),
+        None,
+    )
+
     err_text = None
-    if stream_name not in streams:
+    if not stream_name:
         err_text = (
-            f"❓ Твоего направления <b>{html.escape(stream_name)}</b> нет.\n"
+            f"❓ Твоего направления <b>{html.escape(stream_input)}</b> нет.\n"
             f"Твои направления: {', '.join(streams.keys()) or '—'}\n"
             f"Добавь: /профиль → 📍 Мои направления"
         )
     elif not streams[stream_name].get("enabled"):
         err_text = f"⛔ <b>{stream_name}</b> у тебя выключено."
-    elif method_name not in methods:
+    elif not method_name:
         err_text = (
-            f"❓ Способа приёма <b>{html.escape(method_name)}</b> нет.\n"
+            f"❓ Способа приёма <b>{html.escape(method_input)}</b> нет.\n"
             f"Доступные способы: {', '.join(methods.keys()) or '—'}"
         )
     elif not methods[method_name].get("enabled"):
@@ -879,6 +890,7 @@ async def _send_stats(message: Message, entry: dict):
     if remaining > 0.01:
         kb_rows.append([InlineKeyboardButton(text="💸 Запросить выплату", callback_data="pay:request")])
     kb_rows.append([InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")])
+    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -901,9 +913,11 @@ async def cmd_status(message: Message):
     for d in dirs.values():
         onoff = "✅" if d.get("enabled") else "⛔"
         lines.append(f"  {onoff} <b>{d.get('name')}</b> — {d.get('commission_pct')}%")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📞 Запросить реквизит", callback_data="req:start")],
-    ]) if enabled_dirs else None
+    kb_rows = []
+    if enabled_dirs:
+        kb_rows.append([InlineKeyboardButton(text="📞 Запросить реквизит", callback_data="req:start")])
+    kb_rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await message.reply("\n".join(lines), reply_markup=kb)
 
 
@@ -933,6 +947,7 @@ async def cmd_profile(message: Message):
         [InlineKeyboardButton(text="📍 Мои направления", callback_data="prof:streams")],
         [InlineKeyboardButton(text="👥 Мои работники", callback_data="prof:workers")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="stats:setup")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
     ])
     await message.reply("\n".join(lines), reply_markup=kb)
 
@@ -967,8 +982,19 @@ async def cb_prof_streams(cb: CallbackQuery):
         ])
     if can_add:
         rows.append([InlineKeyboardButton(text="➕ Добавить направление", callback_data="stream:add")])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await cb.message.reply("\n".join(lines), reply_markup=kb)
+    await cb.answer()
+
+
+# Универсальный обработчик закрытия сообщений
+@router.callback_query(F.data == "ui:close")
+async def cb_ui_close(cb: CallbackQuery):
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
     await cb.answer()
 
 
@@ -1048,6 +1074,7 @@ async def cb_stream_menu(cb: CallbackQuery):
         [InlineKeyboardButton(text=f"{onoff} · переключить", callback_data=f"stream:tgl:{name}")],
         [InlineKeyboardButton(text="💳 Изменить TRC20", callback_data=f"stream:trc:{name}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"stream:del:{name}")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
     ])
     await cb.message.reply(
         f"📍 <b>{name}</b>\nTRC20: <code>{trc}</code>", reply_markup=kb
@@ -1863,6 +1890,7 @@ async def cb_prof_workers(cb: CallbackQuery):
             ),
         ])
     rows.append([InlineKeyboardButton(text="➕ Добавить работника", callback_data="wrk:add")])
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await cb.message.reply("\n".join(lines), reply_markup=kb)
     await cb.answer()
