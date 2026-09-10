@@ -189,6 +189,7 @@ class Setup(StatesGroup):
     wait_gw_new_name = State()        # новый шлюз: имя
     wait_gw_new_cost = State()        # новый шлюз: % мерчанта
     wait_gw_new_rate = State()        # новый шлюз: курс
+    wait_pending_stream = State()     # ждём выбор направления когда написали +сумма ШЛЮЗ
 
 
 # ============================================================
@@ -1619,79 +1620,216 @@ async def cmd_broadcast(message: Message, bot: Bot):
 # ============================================================
 # +СУММА НАПРАВЛЕНИЕ (в клиент-чате)
 # ============================================================
+# in-memory pending для +сумма → выбор направления/шлюза через инлайн
+# key: (chat_id, user_id, uid) → {amount, stream, method, orig_msg_id}
+_PENDING_ADD: dict[str, dict] = {}
+_PENDING_COUNTER = [0]
+
+
+def _pending_id() -> str:
+    _PENDING_COUNTER[0] += 1
+    return str(_PENDING_COUNTER[0])
+
+
+def _pick_kb(pid: str, items: list[str], kind: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=name, callback_data=f"pick:{kind}:{pid}:{i}")]
+            for i, name in enumerate(items)]
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data=f"pick:x:{pid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _finalize_pending(bot: Bot, message: Message, pending: dict):
+    """Если оба выбраны — записываем и удаляем pending."""
+    if not pending.get("stream") or not pending.get("method"):
+        return False
+    await storage.add_stat_entry(
+        chat_id=message.chat.id,
+        date_str=today_msk(),
+        amount_rub=pending["amount"],
+        stream=pending["stream"],
+        payment_method=pending["method"],
+        author_id=pending["author_id"],
+        author_username=pending.get("author_username") or "",
+    )
+    await bot.send_message(
+        message.chat.id,
+        f"✅ +{_fmt_money_rub(pending['amount'])}₽ → "
+        f"<b>{pending['stream']}</b> · <i>{pending['method']}</i>"
+    )
+    # Удаляем оригинал юзера + сам пикер, финальное сообщение бота ОСТАВЛЯЕМ
+    if pending.get("orig_msg_id"):
+        try:
+            await bot.delete_message(message.chat.id, pending["orig_msg_id"])
+        except Exception:
+            pass
+    if pending.get("picker_msg_id"):
+        try:
+            await bot.delete_message(message.chat.id, pending["picker_msg_id"])
+        except Exception:
+            pass
+    return True
+
+
 @router.message(F.chat.type.in_({"group", "supergroup"}) & F.text.regexp(r"^\s*\+\d"))
 async def handle_amount_input(message: Message, bot: Bot):
     entry = storage.get_client_chat(message.chat.id)
     if not entry:
         return
     text = (message.text or "").strip()
-    # Формат: +сумма <направление_партнёра> <способ_приёма>
     parts = text.split()
-    if len(parts) < 3:
-        reply = await message.reply(
-            "❓ Формат: <code>+сумма НАПРАВЛЕНИЕ СПОСОБ</code>\n"
-            "Пример: <code>+100к Мороженое ДАЧА</code>\n"
-            "  • НАПРАВЛЕНИЕ = твой магазин (жми /профиль → 📍 Мои направления)\n"
-            "  • СПОСОБ = способ приёма от админа (см. /статус)"
-        )
-        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 15))
-        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id, 15))
-        return
     amount = _parse_amount(parts[0])
     if amount is None or amount <= 0:
         return
-    stream_input = parts[1].strip()
-    method_input = parts[2].strip()
-    streams = entry.get("streams") or {}
-    methods = entry.get("directions") or {}
 
-    # Case-insensitive lookup: находим канонический ключ
-    stream_name = next(
-        (k for k in streams.keys() if k.lower() == stream_input.lower()),
-        None,
-    )
-    method_name = next(
-        (k for k in methods.keys() if k.lower() == method_input.lower()),
-        None,
-    )
+    streams_dict = entry.get("streams") or {}
+    methods_dict = entry.get("directions") or {}
+    # активные варианты (по клиенту + глобалке где применимо)
+    global_gws = storage.list_gateways()
+    streams_active = [k for k, v in streams_dict.items() if v.get("enabled")]
+    methods_active = [
+        k for k, v in methods_dict.items()
+        if v.get("enabled") and (global_gws.get(k) or {}).get("enabled", True)
+    ]
 
-    err_text = None
-    if not stream_name:
-        err_text = (
-            f"❓ Твоего направления <b>{html.escape(stream_input)}</b> нет.\n"
-            f"Твои направления: {', '.join(streams.keys()) or '—'}\n"
-            f"Добавь: /профиль → 📍 Мои направления"
-        )
-    elif not streams[stream_name].get("enabled"):
-        err_text = f"⛔ <b>{stream_name}</b> у тебя выключено."
-    elif not method_name:
-        err_text = (
-            f"❓ Способа приёма <b>{html.escape(method_input)}</b> нет.\n"
-            f"Доступные способы: {', '.join(methods.keys()) or '—'}"
-        )
-    elif not methods[method_name].get("enabled"):
-        err_text = f"⛔ Способ <b>{method_name}</b> сейчас выключен."
-
-    if err_text:
-        reply = await message.reply(err_text)
-        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 20))
-        asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id, 20))
+    if not streams_active:
+        r = await message.reply("Нет твоих активных направлений. Добавь их в /профиль.")
+        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 15))
+        asyncio.create_task(_delete_later(bot, message.chat.id, r.message_id, 15))
+        return
+    if not methods_active:
+        r = await message.reply("Нет активных шлюзов. Обратись к админу.")
+        asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id, 15))
+        asyncio.create_task(_delete_later(bot, message.chat.id, r.message_id, 15))
         return
 
-    await storage.add_stat_entry(
-        chat_id=message.chat.id,
-        date_str=today_msk(),
-        amount_rub=amount,
-        stream=stream_name,
-        payment_method=method_name,
-        author_id=message.from_user.id,
-        author_username=message.from_user.username or "",
+    # Резолвим что уже указано (case-insensitive)
+    stream_name = None
+    method_name = None
+    if len(parts) >= 2:
+        arg = parts[1].strip().lower()
+        stream_name = next((k for k in streams_active if k.lower() == arg), None)
+        if not stream_name:
+            method_name = next((k for k in methods_active if k.lower() == arg), None)
+    if len(parts) >= 3:
+        arg = parts[2].strip().lower()
+        if not stream_name:
+            stream_name = next((k for k in streams_active if k.lower() == arg), None)
+        if not method_name:
+            method_name = next((k for k in methods_active if k.lower() == arg), None)
+
+    # Прямой fast-path: оба указаны
+    if stream_name and method_name:
+        await storage.add_stat_entry(
+            chat_id=message.chat.id,
+            date_str=today_msk(),
+            amount_rub=amount,
+            stream=stream_name,
+            payment_method=method_name,
+            author_id=message.from_user.id,
+            author_username=message.from_user.username or "",
+        )
+        # Bot posts confirmation (стоящее сообщение)
+        await bot.send_message(
+            message.chat.id,
+            f"✅ +{_fmt_money_rub(amount)}₽ → <b>{stream_name}</b> · <i>{method_name}</i>"
+        )
+        # Удаляем ввод пользователя, ответ остаётся
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    # Иначе сохраняем pending и показываем пикер того чего нет
+    pid = _pending_id()
+    _PENDING_ADD[pid] = {
+        "amount": amount,
+        "stream": stream_name,
+        "method": method_name,
+        "author_id": message.from_user.id,
+        "author_username": message.from_user.username or "",
+        "orig_msg_id": message.message_id,
+        "picker_msg_id": None,
+    }
+    # Что просить в первую очередь: если нет обоих — сперва направление
+    need = "stream" if not stream_name else "method"
+    items = streams_active if need == "stream" else methods_active
+    kb = _pick_kb(pid, items, need)
+    prompt_txt = f"<b>+{_fmt_money_rub(amount)}₽</b>\n"
+    prompt_txt += "Выбери направление:" if need == "stream" else "Выбери шлюз:"
+    picker = await message.reply(prompt_txt, reply_markup=kb)
+    _PENDING_ADD[pid]["picker_msg_id"] = picker.message_id
+
+
+@router.callback_query(F.data.startswith("pick:x:"))
+async def cb_pick_cancel(cb: CallbackQuery):
+    pid = cb.data.split(":")[2]
+    p = _PENDING_ADD.pop(pid, None)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    await cb.answer("Отменено")
+
+
+@router.callback_query(F.data.startswith("pick:stream:") | F.data.startswith("pick:method:"))
+async def cb_pick(cb: CallbackQuery, bot: Bot):
+    _, kind, pid, idx = cb.data.split(":", 3)
+    p = _PENDING_ADD.get(pid)
+    if not p:
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        return await cb.answer("Устарело", show_alert=False)
+    if cb.from_user.id != p["author_id"] and not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Не твой ввод.", show_alert=True)
+    entry = storage.get_client_chat(cb.message.chat.id)
+    if not entry:
+        return await cb.answer()
+    streams_dict = entry.get("streams") or {}
+    methods_dict = entry.get("directions") or {}
+    global_gws = storage.list_gateways()
+    streams_active = [k for k, v in streams_dict.items() if v.get("enabled")]
+    methods_active = [
+        k for k, v in methods_dict.items()
+        if v.get("enabled") and (global_gws.get(k) or {}).get("enabled", True)
+    ]
+    items = streams_active if kind == "stream" else methods_active
+    try:
+        i = int(idx)
+        chosen = items[i]
+    except (ValueError, IndexError):
+        return await cb.answer("Ошибка", show_alert=True)
+    if kind == "stream":
+        p["stream"] = chosen
+    else:
+        p["method"] = chosen
+
+    # Обе есть? — финализируем
+    if p["stream"] and p["method"]:
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        _PENDING_ADD.pop(pid, None)
+        await _finalize_pending(bot, cb.message, p)
+        return await cb.answer()
+
+    # Нужен второй выбор
+    need = "stream" if not p["stream"] else "method"
+    items = streams_active if need == "stream" else methods_active
+    kb = _pick_kb(pid, items, need)
+    picked_line = p["stream"] or p["method"]
+    prompt_txt = (
+        f"<b>+{_fmt_money_rub(p['amount'])}₽</b> · <i>{picked_line}</i>\n"
+        + ("Выбери направление:" if need == "stream" else "Выбери шлюз:")
     )
-    reply = await message.reply(
-        f"✅ +{_fmt_money_rub(amount)}₽ → <b>{stream_name}</b> · <i>{method_name}</i>"
-    )
-    asyncio.create_task(_delete_later(bot, message.chat.id, message.message_id))
-    asyncio.create_task(_delete_later(bot, message.chat.id, reply.message_id))
+    try:
+        await cb.message.edit_text(prompt_txt, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer()
 
 
 # ============================================================
