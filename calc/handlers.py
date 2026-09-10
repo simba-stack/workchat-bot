@@ -504,35 +504,100 @@ async def cmd_day_report(message: Message):
     await message.reply(report, reply_markup=_close_kb())
 
 
+def _build_chat_day_report(chat_id: int, date_str: str) -> str:
+    """Сводка за день по одному клиентскому чату."""
+    entry = storage.get_client_chat(chat_id)
+    if not entry:
+        return ""
+    s = storage.compute_stats(chat_id, date_str=date_str)
+    team = entry.get("team_name") or entry.get("partner_username") or ""
+    rub = s.get("total_rub") or 0
+    usd = s.get("total_usd_before_pay") or 0
+    paid = s.get("paid_usd") or 0
+    pending = s.get("pending_usd") or 0
+    avail = s.get("available_usd") or 0
+    by_stream = s.get("by_stream_rub") or {}
+    lines = [
+        f"📊 <b>Итог дня — {date_str}</b>",
+        f"🦁 {html.escape(str(team))}",
+        "━━━━━━━━━━━━━━━━━━━",
+        f"💰 Оборот: <b>{_fmt_money_rub(rub)} ₽</b>",
+        f"💵 Насчитано: <b>{_fmt_money_usd(usd)}$</b>",
+        f"✅ Выплачено: <b>{_fmt_money_usd(paid)}$</b>",
+    ]
+    if pending > 0.01:
+        lines.append(f"⏳ В очереди: <b>{_fmt_money_usd(pending)}$</b>")
+    lines.append(f"🎯 Доступно к запросу: <b>{_fmt_money_usd(avail)}$</b>")
+    if by_stream:
+        lines.append("\n<b>📍 По направлениям:</b>")
+        for st in sorted(by_stream.keys(), key=lambda k: by_stream[k], reverse=True):
+            lines.append(f"  📍 <b>{st}</b>: {_fmt_money_rub(by_stream[st])}₽")
+    return "\n".join(lines)
+
+
 @router.message(Command("обновитьдень", "новыйдень", "закрытьдень"))
 async def cmd_close_day(message: Message, bot: Bot):
-    """/обновитьдень — рассылает "день закрыт" + показывает админу отчёт."""
+    """/обновитьдень:
+    - в админ-чате: рассылка всем клиентам + сводный отчёт
+    - в клиентском чате: рассылка тексту в ЭТОТ чат + отчёт по этому чату"""
+    if not is_group(message.chat.type):
+        return
     admin_id = storage.get_admin_chat_id()
-    if not is_group(message.chat.type) or message.chat.id != admin_id:
-        return
-    if not is_owner_or_admin_msg(message):
-        return
     date_str = today_msk()
-    # Рассылка клиентам
     text = _get_saved_template("endday_text", _DEFAULT_ENDDAY_TEXT)
-    chats = storage.list_client_chats()
-    sent = 0
-    failed = 0
-    for c in chats:
+
+    # 1) АДМИН-ЧАТ → массовая рассылка + общий отчёт
+    if message.chat.id == admin_id:
+        if not is_owner_or_admin_msg(message):
+            return
+        chats = storage.list_client_chats()
+        sent = 0
+        failed = 0
+        for c in chats:
+            try:
+                await bot.send_message(c["chat_id"], text)
+                sent += 1
+            except Exception:
+                failed += 1
+            await asyncio.sleep(0.05)
+        report = _build_day_report(date_str)
+        await message.reply(
+            f"🌙 День <b>{date_str}</b> закрыт (МАССОВО).\n"
+            f"Рассылка: <b>{sent}</b> чатов, ошибок: {failed}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n{report}",
+            reply_markup=_close_kb(),
+        )
+        return
+
+    # 2) КЛИЕНТСКИЙ ЧАТ → закрываем только его
+    entry = storage.get_client_chat(message.chat.id)
+    if not entry:
+        return
+    # Права: партнёр этого чата или owner
+    if not (message.from_user.id == entry.get("partner_tg_id")
+            or storage.is_owner(message.from_user.id)):
+        return await message.reply(
+            "Только партнёр или админ может закрыть день.",
+            reply_markup=_close_kb(),
+        )
+    # Шлём endday-текст в этот чат
+    try:
+        await bot.send_message(message.chat.id, text)
+    except Exception:
+        pass
+    # Отчёт партнёру
+    report = _build_chat_day_report(message.chat.id, date_str)
+    await message.reply(report, reply_markup=_close_kb())
+    # Дублируем в админ-чат
+    if admin_id and admin_id != message.chat.id:
         try:
-            await bot.send_message(c["chat_id"], text)
-            sent += 1
+            await bot.send_message(
+                admin_id,
+                f"🌙 Закрыт день у клиента:\n\n{report}",
+                reply_markup=_close_kb(),
+            )
         except Exception:
-            failed += 1
-        await asyncio.sleep(0.05)
-    # Отчёт админу
-    report = _build_day_report(date_str)
-    await message.reply(
-        f"🌙 День <b>{date_str}</b> закрыт.\n"
-        f"Рассылка: <b>{sent}</b> чатов, ошибок: {failed}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n{report}",
-        reply_markup=_close_kb(),
-    )
+            pass
 
 
 @router.message(Command("шлюзы", "gateways"))
