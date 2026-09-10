@@ -1541,25 +1541,35 @@ async def cb_pay_all(cb: CallbackQuery, bot: Bot):
     if not active:
         return await cb.answer("Нет остатков.", show_alert=True)
     streams = entry.get("streams") or {}
+    # Case-insensitive lookup: строим карту lower→canonical
+    stream_lookup = {k.lower(): k for k in streams.keys()}
     created = 0
     skipped_no_wallet = []
+    errors = []
     for stream_name, amount in active.items():
-        st = streams.get(stream_name) or {}
+        canonical = stream_lookup.get(stream_name.lower()) or stream_name
+        st = streams.get(canonical) or {}
         wallet = st.get("trc20") or ""
         if not wallet:
             skipped_no_wallet.append(stream_name)
             continue
-        await _create_and_send_payout(
-            bot, cb.message.chat.id, amount, wallet,
-            cb.from_user.id, cb.from_user.username or "",
-            stream=stream_name,
-        )
-        created += 1
+        try:
+            await _create_and_send_payout(
+                bot, cb.message.chat.id, amount, wallet,
+                cb.from_user.id, cb.from_user.username or "",
+                stream=canonical,
+            )
+            created += 1
+        except Exception as e:
+            logger.exception("[calc] pay:all error for %s: %s", stream_name, e)
+            errors.append(f"{stream_name}: {e}")
     lines = [f"✅ Создано заявок: <b>{created}</b>"]
     if skipped_no_wallet:
         lines.append(
             f"⚠️ Не отправлено (нет TRC20): {', '.join(skipped_no_wallet)}"
         )
+    if errors:
+        lines.append("❌ Ошибки:\n" + "\n".join(errors[:5]))
     await cb.message.reply("\n".join(lines), reply_markup=_close_kb())
     await cb.answer(f"Создано: {created} заявок")
     try:
@@ -1645,6 +1655,11 @@ async def cb_pay_confirm(cb: CallbackQuery, bot: Bot):
         cb.from_user.id, cb.from_user.username or "",
         stream=stream_name,
     )
+    # Удаляем сообщение с кнопкой чтобы не жали второй раз
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
     await cb.answer("Заявка создана.")
 
 
