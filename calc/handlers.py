@@ -2762,14 +2762,24 @@ async def cb_req_start(cb: CallbackQuery):
     entry = storage.get_client_chat(cb.message.chat.id)
     if not entry:
         return await cb.answer()
-    dirs = [d for d in (entry.get("directions") or {}).values() if d.get("enabled")]
+    client_dirs = entry.get("directions") or {}
+    global_gws = storage.list_gateways()
+    # Только те шлюзы, что есть В ГЛОБАЛЕ и включены и там, и у клиента
+    dirs = []
+    for name, gw in global_gws.items():
+        if not gw.get("enabled"):
+            continue
+        cd = client_dirs.get(name)
+        if not cd or not cd.get("enabled"):
+            continue
+        dirs.append(cd)
     if not dirs:
-        return await cb.answer("Нет активных направлений.", show_alert=True)
+        return await cb.answer("Нет активных шлюзов.", show_alert=True)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=d["name"], callback_data=f"req:pick:{d['name']}")]
         for d in dirs
-    ])
-    await cb.message.reply("Выбери направление:", reply_markup=kb)
+    ] + [[InlineKeyboardButton(text="Закрыть", callback_data="ui:close")]])
+    await cb.message.reply("Выбери шлюз:", reply_markup=kb)
     await cb.answer()
 
 
