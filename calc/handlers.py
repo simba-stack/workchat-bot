@@ -409,13 +409,64 @@ async def _save_template(key: str, text: str) -> None:
         await storage._save_unlocked()
 
 
+def _compute_margin_for_chat(chat_id: int, date_str: str) -> dict:
+    """Расчёт маржи по клиенту за дату:
+    Приход_от_мерчанта = rub × (1 - мерчант_себе%) / курс_мерчанта
+    Клиенту = rub × (1 - клиент_ком%) / курс_клиента
+    Маржа = приход - клиенту (в USD)
+    Возвращает {our_income_usd, client_owed_usd, margin_usd, by_method: {...}}"""
+    entry = storage.get_client_chat(chat_id)
+    if not entry:
+        return {"our_income_usd": 0, "client_owed_usd": 0, "margin_usd": 0, "by_method": {}}
+    client_rate = float(entry.get("rate") or 0)
+    client_dirs = entry.get("directions") or {}
+    gateways = storage.list_gateways()
+    days = entry.get("days") or {}
+    day = days.get(date_str) or {"entries": []}
+
+    our_income = 0.0
+    client_owed = 0.0
+    by_method: dict[str, dict] = {}
+    for e in day.get("entries") or []:
+        method = e.get("payment_method") or e.get("direction") or "—"
+        rub = float(e.get("amount_rub") or 0)
+        gw = gateways.get(method) or {}
+        merchant_take = float(gw.get("merchant_cost_pct") or gw.get("cost_pct") or 0)
+        merchant_rate = float(gw.get("merchant_rate") or 0)
+        client_dir = client_dirs.get(method) or {}
+        client_com = float(client_dir.get("commission_pct") or 0)
+
+        merchant_usd = (rub * (1 - merchant_take / 100.0) / merchant_rate) if merchant_rate > 0 else 0.0
+        client_usd = (rub * (1 - client_com / 100.0) / client_rate) if client_rate > 0 else 0.0
+
+        our_income += merchant_usd
+        client_owed += client_usd
+        m = by_method.setdefault(method, {
+            "rub": 0.0, "merchant_usd": 0.0, "client_usd": 0.0, "margin_usd": 0.0
+        })
+        m["rub"] += rub
+        m["merchant_usd"] += merchant_usd
+        m["client_usd"] += client_usd
+        m["margin_usd"] += (merchant_usd - client_usd)
+
+    return {
+        "our_income_usd": our_income,
+        "client_owed_usd": client_owed,
+        "margin_usd": our_income - client_owed,
+        "by_method": by_method,
+    }
+
+
 def _build_day_report(date_str: str) -> str:
     """Собирает отчёт за день по всем клиентам.
-    Показывает: обороты, выплаты, разбивку по партнёрам и направлениям."""
+    Показывает: обороты, выплаты, разбивку по партнёрам и направлениям, маржу."""
     chats = storage.list_client_chats()
     total_rub_all = 0.0
     total_usd_all = 0.0
     total_paid_all = 0.0
+    total_our_income = 0.0
+    total_client_owed = 0.0
+    total_margin = 0.0
     payouts_all: list[tuple] = []  # (partner, stream, amt_usd, ts)
     partner_summary: dict[str, dict] = {}  # partner_username → {rub, usd, paid}
 
@@ -441,9 +492,14 @@ def _build_day_report(date_str: str) -> str:
             ))
         if not (rub_today or paid_today):
             continue
+        # Расчёт маржи для этого клиента
+        margin = _compute_margin_for_chat(c["chat_id"], date_str)
         total_rub_all += rub_today
         total_usd_all += usd_today
         total_paid_all += paid_today
+        total_our_income += margin["our_income_usd"]
+        total_client_owed += margin["client_owed_usd"]
+        total_margin += margin["margin_usd"]
         key = c.get("team_name") or f"@{c.get('partner_username') or c.get('chat_id')}"
         partner_summary[key] = {
             "rub": rub_today,
@@ -452,25 +508,30 @@ def _build_day_report(date_str: str) -> str:
             "by_dir_paid": by_dir_today,
             "streams_rub": s.get("by_stream_rub") or {},
             "chat_id": c["chat_id"],
+            "margin": margin,
         }
 
     lines = [
         f"📊 <b>Итог дня — {date_str}</b>",
         "━━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Оборот всего: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
-        f"💵 Насчитано: <b>{_fmt_money_usd(total_usd_all)}$</b>",
-        f"✅ Выплачено: <b>{_fmt_money_usd(total_paid_all)}$</b>",
-        f"👥 Активных клиентов: <b>{len(partner_summary)}</b>",
+        f"💰 Оборот: <b>{_fmt_money_rub(total_rub_all)} ₽</b>",
+        f"📥 От мерчантов: <b>{_fmt_money_usd(total_our_income)}$</b>",
+        f"📤 Клиентам: <b>{_fmt_money_usd(total_client_owed)}$</b>",
+        f"💎 <b>МАРЖА: {_fmt_money_usd(total_margin)}$</b>",
+        "─────────",
+        f"✅ Выплачено клиентам: {_fmt_money_usd(total_paid_all)}$",
+        f"👥 Активных клиентов: {len(partner_summary)}",
         "",
     ]
     if not partner_summary:
         lines.append("<i>Ничего не было.</i>")
         return "\n".join(lines)
 
-    lines.append("<b>👤 По партнёрам:</b>")
+    lines.append("<b>👤 По партнёрам (маржа):</b>")
     for key in sorted(partner_summary.keys(),
-                      key=lambda k: partner_summary[k]["rub"], reverse=True):
+                      key=lambda k: partner_summary[k]["margin"]["margin_usd"], reverse=True):
         p = partner_summary[key]
+        m = p["margin"]
         streams = p["streams_rub"]
         stream_line = ""
         if streams:
@@ -478,18 +539,28 @@ def _build_day_report(date_str: str) -> str:
             stream_line = " · ".join(f"{d} {_fmt_money_rub(v)}₽" for d, v in top[:3])
         lines.append(
             f"\n  🦁 <b>{html.escape(str(key))}</b>\n"
-            f"     💰 {_fmt_money_rub(p['rub'])}₽ = {_fmt_money_usd(p['usd'])}$  ·  "
-            f"✅ {_fmt_money_usd(p['paid'])}$"
+            f"     💰 {_fmt_money_rub(p['rub'])}₽\n"
+            f"     📥 {_fmt_money_usd(m['our_income_usd'])}$  →  "
+            f"📤 {_fmt_money_usd(m['client_owed_usd'])}$  =  "
+            f"💎 <b>{_fmt_money_usd(m['margin_usd'])}$</b>"
         )
         if stream_line:
             lines.append(f"     📍 {stream_line}")
+        # По шлюзам (маржа)
+        by_method = m.get("by_method") or {}
+        if len(by_method) > 1:
+            for mname, mval in sorted(by_method.items(), key=lambda x: x[1]["margin_usd"], reverse=True):
+                lines.append(
+                    f"     • <i>{mname}</i>: {_fmt_money_rub(mval['rub'])}₽ "
+                    f"→ маржа <b>{_fmt_money_usd(mval['margin_usd'])}$</b>"
+                )
         # По направлениям выплат
         if p["by_dir_paid"]:
             dir_str = " · ".join(
                 f"{d}: {_fmt_money_usd(v)}$"
                 for d, v in sorted(p["by_dir_paid"].items(), key=lambda x: x[1], reverse=True)
             )
-            lines.append(f"     💸 выплат: {dir_str}")
+            lines.append(f"     💸 выплат сегодня: {dir_str}")
     return "\n".join(lines)
 
 
