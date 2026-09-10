@@ -531,6 +531,54 @@ async def cmd_close_day(message: Message, bot: Bot):
     )
 
 
+@router.message(Command("удалитьчата", "удалитьклиента", "deletechat"))
+async def cmd_delete_chat(message: Message):
+    """/удалитьчата <chat_id> — полное удаление клиентского чата из БД (owner)."""
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        chats = storage.list_client_chats()
+        lines = ["<b>Формат:</b> <code>/удалитьчата &lt;chat_id&gt;</code>\n\nСписок:"]
+        for c in chats:
+            team = c.get("team_name") or c.get("partner_username") or "—"
+            lines.append(f"  <code>{c['chat_id']}</code> · {team} · @{c.get('partner_username') or '—'}")
+        return await message.reply("\n".join(lines), reply_markup=_close_kb())
+    try:
+        chat_id = int(parts[1])
+    except ValueError:
+        return await message.reply("chat_id — число.")
+    entry = storage.get_client_chat(chat_id)
+    if not entry:
+        return await message.reply(f"Чата <code>{chat_id}</code> нет в базе.")
+    team = entry.get("team_name") or entry.get("partner_username") or "—"
+    ok = await storage.delete_client_chat(chat_id)
+    await message.reply(
+        f"🗑 <b>Удалено:</b> <code>{chat_id}</code> · {team}" if ok else "Не удалось.",
+        reply_markup=_close_kb(),
+    )
+
+
+@router.message(Command("сбросчата", "resetchat"))
+async def cmd_reset_chat(message: Message):
+    """/сбросчата <chat_id> — обнуляет статистику (days + payouts) чата, сохраняет настройки."""
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: <code>/сбросчата &lt;chat_id&gt;</code>")
+    try:
+        chat_id = int(parts[1])
+    except ValueError:
+        return await message.reply("chat_id — число.")
+    ok = await storage.reset_client_stats(chat_id)
+    await message.reply(
+        f"♻️ Стата чата <code>{chat_id}</code> обнулена. Направления/курс сохранены."
+        if ok else "Чат не найден.",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("шаблоны", "templates"))
 async def cmd_templates(message: Message):
     """Показать сохранённые шаблоны рассылки. Только owner/admin."""

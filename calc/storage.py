@@ -239,6 +239,48 @@ class CalcStorage:
                 return True
             return False
 
+    # ---------- DANGER: DELETE ----------
+    async def delete_client_chat(self, chat_id: int) -> bool:
+        """Полное удаление клиентского чата из БД."""
+        async with _lock:
+            chats = self.state.get("client_chats") or {}
+            key = str(int(chat_id))
+            if key not in chats:
+                return False
+            del chats[key]
+            # Заодно чистим связанные заявки
+            self.state["pending_payouts"] = [
+                p for p in (self.state.get("pending_payouts") or [])
+                if int(p.get("chat_id") or 0) != int(chat_id)
+            ]
+            self.state["pending_requisites"] = [
+                r for r in (self.state.get("pending_requisites") or [])
+                if int(r.get("chat_id") or 0) != int(chat_id)
+            ]
+            await self._save_unlocked()
+            return True
+
+    async def reset_client_stats(self, chat_id: int) -> bool:
+        """Обнуляет статистику (days + payouts) клиентского чата,
+        сохраняя направления, курс, работников."""
+        async with _lock:
+            entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not entry:
+                return False
+            entry["days"] = {}
+            entry["payouts"] = []
+            # заявки чата тоже
+            self.state["pending_payouts"] = [
+                p for p in (self.state.get("pending_payouts") or [])
+                if int(p.get("chat_id") or 0) != int(chat_id)
+            ]
+            self.state["pending_requisites"] = [
+                r for r in (self.state.get("pending_requisites") or [])
+                if int(r.get("chat_id") or 0) != int(chat_id)
+            ]
+            await self._save_unlocked()
+            return True
+
     # ---------- CHAT MEMBERS TRACKER (username → tg_id) ----------
     async def remember_member(
         self, chat_id: int, tg_id: int, username: str
