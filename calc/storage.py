@@ -334,6 +334,97 @@ class CalcStorage:
             await self._save_unlocked()
             return True
 
+    async def reset_today_all_chats(self, date_str: str) -> dict:
+        """Обнуляет за сегодня: entries[date_str], сегодняшние payouts,
+        все pending_payouts/pending_requisites (в любом статусе).
+        Возвращает {chats_touched, entries_removed, payouts_removed, pending_removed}."""
+        import time
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _MSK = _tz(_td(hours=3))
+        chats_touched = 0
+        entries_removed = 0
+        payouts_removed = 0
+        async with _lock:
+            chats = self.state.get("client_chats") or {}
+            for c in chats.values():
+                # entries
+                days = c.get("days") or {}
+                if date_str in days:
+                    entries_removed += len(days[date_str].get("entries") or [])
+                    del days[date_str]
+                    chats_touched += 1
+                # payouts за сегодня
+                new_payouts = []
+                for p in c.get("payouts") or []:
+                    ts = p.get("ts") or 0
+                    pdate = _dt.fromtimestamp(ts, _MSK).strftime("%Y-%m-%d") if ts else ""
+                    if pdate == date_str:
+                        payouts_removed += 1
+                        continue
+                    new_payouts.append(p)
+                c["payouts"] = new_payouts
+                # сброс day_reset_ts
+                if c.get("day_reset_ts"):
+                    c["day_reset_ts"] = 0
+            pending_removed = len(self.state.get("pending_payouts") or []) + len(self.state.get("pending_requisites") or [])
+            self.state["pending_payouts"] = []
+            self.state["pending_requisites"] = []
+            await self._save_unlocked()
+        return {
+            "chats_touched": chats_touched,
+            "entries_removed": entries_removed,
+            "payouts_removed": payouts_removed,
+            "pending_removed": pending_removed,
+        }
+
+    async def reset_today_for_chat(self, chat_id: int, date_str: str) -> dict:
+        """Обнуляет за сегодня для одного клиентского чата."""
+        import time
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _MSK = _tz(_td(hours=3))
+        entries_removed = 0
+        payouts_removed = 0
+        pending_removed = 0
+        async with _lock:
+            c = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
+            if not c:
+                return {"entries_removed": 0, "payouts_removed": 0, "pending_removed": 0}
+            days = c.get("days") or {}
+            if date_str in days:
+                entries_removed = len(days[date_str].get("entries") or [])
+                del days[date_str]
+            new_payouts = []
+            for p in c.get("payouts") or []:
+                ts = p.get("ts") or 0
+                pdate = _dt.fromtimestamp(ts, _MSK).strftime("%Y-%m-%d") if ts else ""
+                if pdate == date_str:
+                    payouts_removed += 1
+                    continue
+                new_payouts.append(p)
+            c["payouts"] = new_payouts
+            c["day_reset_ts"] = 0
+            # pending заявки этого чата — сбрасываем все
+            new_pp = []
+            for p in self.state.get("pending_payouts") or []:
+                if int(p.get("chat_id") or 0) == int(chat_id):
+                    pending_removed += 1
+                    continue
+                new_pp.append(p)
+            self.state["pending_payouts"] = new_pp
+            new_pr = []
+            for r in self.state.get("pending_requisites") or []:
+                if int(r.get("chat_id") or 0) == int(chat_id):
+                    pending_removed += 1
+                    continue
+                new_pr.append(r)
+            self.state["pending_requisites"] = new_pr
+            await self._save_unlocked()
+        return {
+            "entries_removed": entries_removed,
+            "payouts_removed": payouts_removed,
+            "pending_removed": pending_removed,
+        }
+
     async def reset_client_stats(self, chat_id: int) -> bool:
         """Обнуляет статистику (days + payouts) клиентского чата,
         сохраняя направления, курс, работников."""

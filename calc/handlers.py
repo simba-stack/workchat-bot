@@ -1058,6 +1058,45 @@ async def cmd_delete_chat(message: Message):
     )
 
 
+@router.message(Command("сбросдня", "reset_day"))
+async def cmd_reset_day(message: Message):
+    """/сбросдня — обнуляет ВСЕ данные за сегодня (entries, payouts, pending)
+    для клиентского чата.
+    В клиентском чате: за этот чат.
+    В админ-чате: /сбросдня <chat_id>."""
+    if not is_group(message.chat.type):
+        return
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    admin_id = storage.get_admin_chat_id()
+    parts = (message.text or "").split()
+    if message.chat.id == admin_id:
+        if len(parts) < 2:
+            return await message.reply(
+                "В админ-чате: <code>/сбросдня &lt;chat_id&gt;</code>",
+                reply_markup=_close_kb(),
+            )
+        try:
+            target_chat = int(parts[1])
+        except ValueError:
+            return await message.reply("chat_id — число.")
+    else:
+        target_chat = message.chat.id
+    entry = storage.get_client_chat(target_chat)
+    if not entry:
+        return await message.reply("Чат не зарегистрирован.")
+    date_str = today_msk()
+    r = await storage.reset_today_for_chat(target_chat, date_str)
+    team = entry.get("team_name") or entry.get("partner_username") or "чата"
+    await message.reply(
+        f"♻️ Сброс сегодня ({date_str}) для <b>{team}</b>\n"
+        f"Записей удалено: <b>{r['entries_removed']}</b>\n"
+        f"Выплат удалено: <b>{r['payouts_removed']}</b>\n"
+        f"Заявок удалено: <b>{r['pending_removed']}</b>",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("сбросчата", "resetchat"))
 async def cmd_reset_chat(message: Message):
     """/сбросчата <chat_id> — обнуляет статистику (days + payouts) чата, сохраняет настройки."""
