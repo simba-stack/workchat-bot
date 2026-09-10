@@ -186,6 +186,9 @@ class Setup(StatesGroup):
     wait_team_name = State()          # название команды (напр. "Львята")
     wait_gw_rate = State()            # редактирование курса шлюза
     wait_gw_cost = State()            # редактирование % мерчанта
+    wait_gw_new_name = State()        # новый шлюз: имя
+    wait_gw_new_cost = State()        # новый шлюз: % мерчанта
+    wait_gw_new_rate = State()        # новый шлюз: курс
 
 
 # ============================================================
@@ -845,12 +848,87 @@ async def cb_gw_del(cb: CallbackQuery):
 
 
 @router.callback_query(F.data == "gw:add")
-async def cb_gw_add(cb: CallbackQuery):
-    await cb.answer(
-        "Добавление через команду:\n/шлюз_добавить <имя> <%_мерчанта> <курс>\n"
-        "Пример: /шлюз_добавить ДАЧА 5 82",
-        show_alert=True,
+async def cb_gw_add(cb: CallbackQuery, state: FSMContext):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    await state.set_state(Setup.wait_gw_new_name)
+    prompt = await cb.message.reply(
+        "🌐 <b>Новый шлюз</b>\n\nШаг 1/3: пришли <b>имя</b> шлюза (напр. ДАЧА, QR, БАНКА):"
     )
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_gw_new_name)
+async def st_gw_new_name(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    name = (message.text or "").strip()
+    if not name or len(name) > 32:
+        err = await message.reply("Плохое имя (до 32 симв).")
+        await _track_msg(state, err)
+        return
+    if name in storage.list_gateways():
+        err = await message.reply(f"Шлюз <b>{name}</b> уже есть. Пришли другое имя.")
+        await _track_msg(state, err)
+        return
+    await state.update_data(gw_name=name)
+    await state.set_state(Setup.wait_gw_new_cost)
+    prompt = await message.reply(
+        f"Имя: <b>{name}</b>\n\n"
+        f"Шаг 2/3: <b>% мерчанта</b> (сколько мерчант забирает себе, напр. 5):"
+    )
+    await _track_msg(state, prompt)
+
+
+@router.message(Setup.wait_gw_new_cost)
+async def st_gw_new_cost(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    try:
+        cost = float((message.text or "").replace(",", "."))
+    except ValueError:
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
+    if cost < 0 or cost > 100:
+        err = await message.reply("Процент от 0 до 100.")
+        await _track_msg(state, err)
+        return
+    await state.update_data(gw_cost=cost)
+    await state.set_state(Setup.wait_gw_new_rate)
+    data = await state.get_data()
+    prompt = await message.reply(
+        f"Имя: <b>{data['gw_name']}</b>  ·  % мерчанта: <b>{cost:g}%</b>\n\n"
+        f"Шаг 3/3: <b>курс мерчанта</b> (по которому платит нам, напр. 82):"
+    )
+    await _track_msg(state, prompt)
+
+
+@router.message(Setup.wait_gw_new_rate)
+async def st_gw_new_rate(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    try:
+        rate = float((message.text or "").replace(",", "."))
+    except ValueError:
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
+    if rate <= 0:
+        err = await message.reply("Больше нуля.")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    name = data["gw_name"]
+    cost = data["gw_cost"]
+    await storage.set_gateway(name, cost, rate, enabled=True)
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ Шлюз <b>{name}</b> создан\n"
+        f"🏦 мерчант себе: {cost:g}%\n"
+        f"💱 курс: {rate:g}₽/$"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 20))
 
 
 @router.message(Command("шлюз_добавить", "шлюздобавить", "gateway_add"))
