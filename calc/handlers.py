@@ -184,6 +184,8 @@ class Setup(StatesGroup):
     wait_stream_trc20 = State()   # партнёр: TRC20 для этого направления
     wait_stream_trc20_edit = State()  # редактирование адреса существующего
     wait_team_name = State()          # название команды (напр. "Львята")
+    wait_gw_rate = State()            # редактирование курса шлюза
+    wait_gw_cost = State()            # редактирование % мерчанта
 
 
 # ============================================================
@@ -701,15 +703,154 @@ async def cmd_gateways(message: Message):
             f"     💱 курс мерчанта → нам: <b>{rate:g}₽/$</b>"
         )
     lines.append(
-        "\n\n<i>Команды:</i>\n"
-        "<code>/шлюз_добавить &lt;имя&gt; &lt;расход%&gt; &lt;курс&gt;</code>\n"
-        "<code>/шлюз_вкл &lt;имя&gt;</code> · <code>/шлюз_выкл &lt;имя&gt;</code>\n"
-        "<code>/шлюз_удал &lt;имя&gt;</code>\n"
-        "<code>/шлюз_применить &lt;chat_id&gt;</code> — донакатить на клиента\n\n"
-        "<i>Комиссию клиенту ставь в клиентском чате:</i>\n"
+        "\n<i>Комиссию клиенту ставь в клиентском чате:</i>\n"
         "<code>/напр &lt;имя_шлюза&gt; &lt;комиссия_клиенту%&gt;</code>"
     )
-    await message.reply("\n".join(lines), reply_markup=_close_kb())
+    rows = []
+    for name in sorted(gws.keys()):
+        rows.append([InlineKeyboardButton(
+            text=f"⚙️ {name}",
+            callback_data=f"gw:menu:{name}",
+        )])
+    rows.append([InlineKeyboardButton(text="➕ Новый шлюз", callback_data="gw:add")])
+    rows.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await message.reply("\n".join(lines), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("gw:menu:"))
+async def cb_gw_menu(cb: CallbackQuery):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    g = storage.list_gateways().get(name)
+    if not g:
+        return await cb.answer("Не найден.", show_alert=True)
+    onoff = "✅ ВКЛ" if g.get("enabled") else "⛔ ВЫКЛ"
+    cost = float(g.get("merchant_cost_pct") or g.get("cost_pct") or 0)
+    rate = float(g.get("merchant_rate") or 0)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💱 Изменить курс ({rate:g})", callback_data=f"gw:rate:{name}")],
+        [InlineKeyboardButton(text=f"🏦 Изменить % мерчанта ({cost:g}%)", callback_data=f"gw:cost:{name}")],
+        [InlineKeyboardButton(text=f"{onoff} · переключить", callback_data=f"gw:toggle:{name}")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"gw:del:{name}")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
+    ])
+    await cb.message.reply(
+        f"⚙️ <b>{name}</b>\n"
+        f"🏦 мерчант себе: <b>{cost:g}%</b>\n"
+        f"💱 курс: <b>{rate:g}₽/$</b>",
+        reply_markup=kb,
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("gw:rate:"))
+async def cb_gw_rate(cb: CallbackQuery, state: FSMContext):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    await state.set_state(Setup.wait_gw_rate)
+    await state.update_data(gw_name=name)
+    prompt = await cb.message.reply(f"Новый курс для шлюза <b>{name}</b> (число, напр. 82.5):")
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_gw_rate)
+async def st_gw_rate(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    try:
+        rate = float((message.text or "").replace(",", "."))
+    except ValueError:
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
+    if rate <= 0:
+        err = await message.reply("Больше нуля.")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    name = data["gw_name"]
+    g = storage.list_gateways().get(name) or {}
+    cost = float(g.get("merchant_cost_pct") or g.get("cost_pct") or 0)
+    await storage.set_gateway(name, cost, rate, enabled=bool(g.get("enabled", True)))
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ Курс шлюза <b>{name}</b>: <b>{rate:g}₽/$</b>"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
+
+
+@router.callback_query(F.data.startswith("gw:cost:"))
+async def cb_gw_cost(cb: CallbackQuery, state: FSMContext):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    await state.set_state(Setup.wait_gw_cost)
+    await state.update_data(gw_name=name)
+    prompt = await cb.message.reply(f"Новый % мерчанта для <b>{name}</b> (напр. 5):")
+    await _track_msg(state, prompt)
+    await cb.answer()
+
+
+@router.message(Setup.wait_gw_cost)
+async def st_gw_cost(message: Message, state: FSMContext, bot: Bot):
+    await _track_msg(state, message)
+    try:
+        cost = float((message.text or "").replace(",", "."))
+    except ValueError:
+        err = await message.reply("Число.")
+        await _track_msg(state, err)
+        return
+    data = await state.get_data()
+    name = data["gw_name"]
+    g = storage.list_gateways().get(name) or {}
+    rate = float(g.get("merchant_rate") or 0)
+    await storage.set_gateway(name, cost, rate, enabled=bool(g.get("enabled", True)))
+    await _cleanup_fsm(bot, message.chat.id, state)
+    await state.clear()
+    final = await bot.send_message(
+        message.chat.id,
+        f"✅ % мерчанта для <b>{name}</b>: <b>{cost:g}%</b>"
+    )
+    asyncio.create_task(_delete_later(bot, message.chat.id, final.message_id, 15))
+
+
+@router.callback_query(F.data.startswith("gw:toggle:"))
+async def cb_gw_toggle(cb: CallbackQuery):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    new_state = await storage.toggle_gateway(name)
+    if new_state is None:
+        return await cb.answer("Не найден.", show_alert=True)
+    await cb.answer(f"{name}: {'ВКЛ' if new_state else 'ВЫКЛ'}")
+
+
+@router.callback_query(F.data.startswith("gw:del:"))
+async def cb_gw_del(cb: CallbackQuery):
+    if not storage.is_owner(cb.from_user.id):
+        return await cb.answer("Только owner.", show_alert=True)
+    name = cb.data.split(":", 2)[2]
+    ok = await storage.delete_gateway(name)
+    await cb.answer(f"{name} удалён" if ok else "Не найден")
+    if ok:
+        try:
+            await cb.message.edit_text(f"🗑 <b>{name}</b> удалён")
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data == "gw:add")
+async def cb_gw_add(cb: CallbackQuery):
+    await cb.answer(
+        "Добавление через команду:\n/шлюз_добавить <имя> <%_мерчанта> <курс>\n"
+        "Пример: /шлюз_добавить ДАЧА 5 82",
+        show_alert=True,
+    )
 
 
 @router.message(Command("шлюз_добавить", "шлюздобавить", "gateway_add"))
