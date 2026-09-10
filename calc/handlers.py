@@ -612,29 +612,31 @@ async def cmd_gateways(message: Message):
     if not gws:
         return await message.reply(
             "🌐 <b>Шлюзы:</b> пусто.\n\n"
-            "Добавь: <code>/шлюз_добавить ДАЧА 20 5</code>\n"
-            "  — 20% комиссии клиенту, 5% расход нам на мерчанта",
+            "Формат: <code>/шлюз_добавить &lt;имя&gt; &lt;мерчант_себе%&gt; &lt;курс_мерчанта&gt;</code>\n"
+            "Пример: <code>/шлюз_добавить ДАЧА 5 82</code>\n"
+            "<i>Мерчант забирает 5% себе, остальное платит нам по курсу 82₽/$</i>\n\n"
+            "Комиссия клиенту и курс клиента — задаются в клиентском чате.",
             reply_markup=_close_kb(),
         )
     total_ok = sum(1 for g in gws.values() if g.get("enabled"))
     lines = [f"🌐 <b>Шлюзы ({total_ok}/{len(gws)} вкл):</b>"]
     for name, g in sorted(gws.items()):
         onoff = "✅" if g.get("enabled") else "⛔"
-        c = float(g.get("commission_pct") or 0)
-        r = float(g.get("cost_pct") or 0)
-        margin = c - r
+        cost = float(g.get("merchant_cost_pct") or g.get("cost_pct") or 0)
+        rate = float(g.get("merchant_rate") or 0)
         lines.append(
             f"\n  {onoff} <b>{name}</b>\n"
-            f"     💰 комиссия клиенту: <b>{c:g}%</b>\n"
-            f"     💸 расход нам: <b>{r:g}%</b>\n"
-            f"     📈 маржа: <b>{margin:g}%</b>"
+            f"     🏦 мерчант себе: <b>{cost:g}%</b>\n"
+            f"     💱 курс мерчанта → нам: <b>{rate:g}₽/$</b>"
         )
     lines.append(
         "\n\n<i>Команды:</i>\n"
-        "<code>/шлюз_добавить &lt;имя&gt; &lt;ком%&gt; [расход%]</code>\n"
+        "<code>/шлюз_добавить &lt;имя&gt; &lt;расход%&gt; &lt;курс&gt;</code>\n"
         "<code>/шлюз_вкл &lt;имя&gt;</code> · <code>/шлюз_выкл &lt;имя&gt;</code>\n"
         "<code>/шлюз_удал &lt;имя&gt;</code>\n"
-        "<code>/шлюз_применить &lt;chat_id&gt;</code> — донакатить новые шлюзы на клиента"
+        "<code>/шлюз_применить &lt;chat_id&gt;</code> — донакатить на клиента\n\n"
+        "<i>Комиссию клиенту ставь в клиентском чате:</i>\n"
+        "<code>/напр &lt;имя_шлюза&gt; &lt;комиссия_клиенту%&gt;</code>"
     )
     await message.reply("\n".join(lines), reply_markup=_close_kb())
 
@@ -644,26 +646,23 @@ async def cmd_gateway_add(message: Message):
     if not storage.is_owner(message.from_user.id):
         return await message.reply("Только owner.")
     parts = (message.text or "").split()
-    if len(parts) < 3:
+    if len(parts) < 4:
         return await message.reply(
-            "Формат: <code>/шлюз_добавить &lt;имя&gt; &lt;комиссия%&gt; [расход%]</code>\n"
-            "Пример: <code>/шлюз_добавить ДАЧА 20 5</code>"
+            "Формат: <code>/шлюз_добавить &lt;имя&gt; &lt;расход_мерчанту%&gt; &lt;курс_мерчанта&gt;</code>\n"
+            "Пример: <code>/шлюз_добавить ДАЧА 5 82</code>\n"
+            "<i>5% отдаём мерчанту, курс по которому мерчант платит нам = 82</i>"
         )
     name = parts[1].strip()
     try:
-        commission = float(parts[2].replace(",", "."))
+        cost = float(parts[2].replace(",", "."))
+        rate = float(parts[3].replace(",", "."))
     except ValueError:
-        return await message.reply("Комиссия — число.")
-    cost = 0.0
-    if len(parts) >= 4:
-        try:
-            cost = float(parts[3].replace(",", "."))
-        except ValueError:
-            pass
-    await storage.set_gateway(name, commission, cost, enabled=True)
+        return await message.reply("Расход и курс — числа.")
+    await storage.set_gateway(name, cost, rate, enabled=True)
     await message.reply(
         f"✅ Шлюз <b>{name}</b>\n"
-        f"💰 ком: {commission:g}%  ·  💸 расход: {cost:g}%",
+        f"💸 расход мерчанту: {cost:g}%  ·  💱 курс мерчанта: {rate:g}\n\n"
+        f"<i>Комиссию клиенту задавай в клиентских чатах: <code>/напр {name} 20</code></i>",
         reply_markup=_close_kb(),
     )
 

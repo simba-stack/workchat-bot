@@ -247,16 +247,24 @@ class CalcStorage:
         return self.state.get("gateways") or {}
 
     async def set_gateway(
-        self, name: str, commission_pct: float, cost_pct: float = 0.0,
+        self, name: str,
+        merchant_cost_pct: float,
+        merchant_rate: float,
         enabled: bool = True,
     ) -> None:
+        """Глобальный шлюз: расход % (что мы платим мерчанту) + курс мерчанта.
+        Клиентская комиссия и курс — задаются per-client."""
         async with _lock:
             gws = self.state.setdefault("gateways", {})
+            existing = gws.get(name) or {}
             gws[name] = {
                 "name": name,
-                "commission_pct": float(commission_pct),
-                "cost_pct": float(cost_pct),
+                "merchant_cost_pct": float(merchant_cost_pct),
+                "merchant_rate": float(merchant_rate),
                 "enabled": bool(enabled),
+                # Совместимость со старым кодом (не удаляем):
+                "commission_pct": float(existing.get("commission_pct") or 0),
+                "cost_pct": float(merchant_cost_pct),
             }
             await self._save_unlocked()
 
@@ -280,9 +288,9 @@ class CalcStorage:
             return False
 
     async def apply_gateways_to_chat(self, chat_id: int) -> int:
-        """Копирует все ВКЛЮЧЕННЫЕ глобальные шлюзы в directions клиента.
-        Существующие шлюзы клиента с тем же именем — сохраняем как есть.
-        Возвращает число добавленных."""
+        """Копирует ВКЛЮЧЁННЫЕ глобальные шлюзы клиенту как directions.
+        commission_pct у клиента = 0 (задаёт админ индивидуально).
+        Существующие direction'ы не перезаписываются."""
         async with _lock:
             entry = (self.state.get("client_chats") or {}).get(str(int(chat_id)))
             if not entry:
@@ -294,10 +302,10 @@ class CalcStorage:
                 if not g.get("enabled"):
                     continue
                 if name in dirs:
-                    continue  # уже есть, не перезаписываем
+                    continue
                 dirs[name] = {
                     "name": name,
-                    "commission_pct": float(g.get("commission_pct") or 0),
+                    "commission_pct": 0.0,  # админ задаёт под клиента
                     "enabled": True,
                 }
                 added += 1
