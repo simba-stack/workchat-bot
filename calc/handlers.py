@@ -1512,6 +1512,11 @@ async def _show_payout_confirm(cb, entry, stream_name, remaining, state, bot):
             text=f"✅ Запросить {_fmt_money_usd(remaining)}$",
             callback_data=f"pay:confirm:{stream_name}:{int(remaining*100)}"
         )],
+        [InlineKeyboardButton(
+            text="✏️ Изменить адрес",
+            callback_data=f"stream:trc:{stream_name}",
+        )],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
     ])
     await cb.message.reply(
         f"💸 <b>Заявка на выплату</b>\n"
@@ -2342,6 +2347,11 @@ async def cmd_payout(message: Message, state: FSMContext, bot: Bot):
                 text=f"✅ Запросить {_fmt_money_usd(remaining)}$",
                 callback_data=f"pay:confirm:{stream_name}:{int(remaining*100)}"
             )],
+            [InlineKeyboardButton(
+                text="✏️ Изменить адрес",
+                callback_data=f"stream:trc:{stream_name}",
+            )],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data="ui:close")],
         ])
         return await message.reply(
             f"💸 <b>Заявка на выплату</b>\n"
