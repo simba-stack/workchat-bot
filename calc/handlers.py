@@ -42,6 +42,35 @@ MSK = timezone(timedelta(hours=3))
 CLEANUP_DELAY_SEC = 20  # автоудаление промежуточных сообщений
 
 
+async def _ensure_partner_tg_id(chat_id: int, user_id: int, username: str) -> None:
+    """Если у клиентского чата partner_tg_id=0, а автор совпадает с partner_username —
+    записываем его tg_id. Вызывать при каждом сообщении/клике в клиентском чате."""
+    if not user_id or not username:
+        return
+    entry = storage.get_client_chat(chat_id)
+    if not entry or entry.get("partner_tg_id"):
+        return
+    if (entry.get("partner_username") or "").lower() == username.lower():
+        await storage.update_client_chat(chat_id, partner_tg_id=user_id)
+        logger.info(
+            "[calc] auto-resolved partner_tg_id via click: chat=%s user=%s",
+            chat_id, user_id,
+        )
+
+
+@router.callback_query.outer_middleware()
+async def _resolve_partner_on_callback(handler, event: CallbackQuery, data):
+    """Перед любым callback резолвим partner_tg_id если ещё не задан."""
+    try:
+        if event.message and event.from_user and event.from_user.username:
+            await _ensure_partner_tg_id(
+                event.message.chat.id, event.from_user.id, event.from_user.username
+            )
+    except Exception:
+        pass
+    return await handler(event, data)
+
+
 def today_msk() -> str:
     return datetime.now(MSK).strftime("%Y-%m-%d")
 
