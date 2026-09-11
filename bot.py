@@ -130,6 +130,7 @@ def _welcome_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="💬 ЧАТ PRIDE",  url="https://t.me/pride_projectv2"),
             InlineKeyboardButton(text="📢 КАНАЛ PRIDE", url="https://t.me/pride_projectv2"),
         ],
+        [InlineKeyboardButton(text="📊 WORK STATUS", url="https://t.me/prideworkstatus")],
     ])
 
 
@@ -425,12 +426,75 @@ async def on_source_pick(call: CallbackQuery, state: FSMContext):
     await _send_post_survey(call, state)
 
 
+async def _check_subs(bot, user_id: int) -> list[dict]:
+    """Возвращает список required subs где юзер НЕ подписан."""
+    missing = []
+    for s in storage.list_required_subs():
+        try:
+            m = await bot.get_chat_member(int(s["chat_id"]), int(user_id))
+            if m.status in ("left", "kicked"):
+                missing.append(s)
+        except Exception:
+            # Бот не может проверить (не в чате как админ) — считаем что нужно
+            missing.append(s)
+    return missing
+
+
+def _subs_gate_kb(missing: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for s in missing:
+        title = s.get("title") or f"@{s.get('username') or 'канал'}"
+        uname = s.get("username")
+        if uname:
+            url = f"https://t.me/{uname.lstrip('@')}"
+        else:
+            url = f"https://t.me/c/{str(s['chat_id']).lstrip('-100')}"
+        rows.append([InlineKeyboardButton(text=f"➕ {title}", url=url)])
+    rows.append([InlineKeyboardButton(text="🔄 Я подписался — проверить", callback_data="sub:check")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@main_router.callback_query(F.data == "sub:check")
+async def on_sub_check(call: CallbackQuery, state: FSMContext):
+    missing = await _check_subs(call.message.bot, call.from_user.id)
+    if missing:
+        try:
+            await call.message.edit_text(
+                "❌ <b>Вы всё ещё не подписаны на все каналы.</b>\n\n"
+                "Подпишитесь и нажмите «Проверить»:",
+                reply_markup=_subs_gate_kb(missing),
+            )
+        except Exception:
+            await call.message.answer(
+                "❌ Ещё не все подписки. Подпишись и попробуй ещё раз.",
+                reply_markup=_subs_gate_kb(missing),
+            )
+        return await call.answer("Не все подписки.", show_alert=True)
+    # Всё ок — пропускаем к выбору направления
+    await call.answer("✅ Отлично!")
+    return await on_get_chat_clicked(call, state)
+
+
 @main_router.callback_query(F.data == "gw:get")
 async def on_get_chat_clicked(call: CallbackQuery, state: FSMContext):
     """SIMBA 2026-09: перед капчей — выбор направления.
     Клиент выбирает по какому направлению создать рабочую беседу
     (ИП/Дебет/Телефония/GSM или другое настроенное owner-ом)."""
     await call.answer()
+    # Обязательные подписки
+    missing = await _check_subs(call.message.bot, call.from_user.id)
+    if missing:
+        try:
+            await call.message.edit_text(
+                "🔒 <b>Прежде чем создать рабочую беседу — подпишись на наши каналы:</b>",
+                reply_markup=_subs_gate_kb(missing),
+            )
+        except Exception:
+            await call.message.answer(
+                "🔒 Прежде чем создать рабочую беседу — подпишись на наши каналы:",
+                reply_markup=_subs_gate_kb(missing),
+            )
+        return
     directions = storage.list_directions(only_enabled=True)
     if not directions:
         # Fallback — сразу капча если направления не настроены
