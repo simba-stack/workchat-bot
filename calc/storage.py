@@ -364,22 +364,41 @@ class CalcStorage:
             m = (self.state.get("managers") or {}).get(str(int(tg_id)))
             if not m:
                 return False
+            gateway_key = (gateway or "").strip()
             assignments = m.setdefault("assignments", [])
-            # Replace если такой (chat_id + gateway) уже есть
+            # Case-insensitive match для gateway, точное для chat_id
             for a in assignments:
-                if int(a.get("chat_id") or 0) == int(chat_id) and (a.get("gateway") or "") == gateway:
+                if int(a.get("chat_id") or 0) == int(chat_id) and (a.get("gateway") or "").lower() == gateway_key.lower():
+                    a["gateway"] = gateway_key  # нормализуем к вводу
                     a["rule"] = rule_type
                     a["value"] = float(value)
                     await self._save_unlocked()
                     return True
             assignments.append({
                 "chat_id": int(chat_id),
-                "gateway": gateway or "",
+                "gateway": gateway_key,
                 "rule": rule_type,
                 "value": float(value),
             })
             await self._save_unlocked()
             return True
+
+    async def dedupe_manager_rules(self, tg_id: int) -> int:
+        """Убирает дубли assignments по (chat_id, gateway lowercase). Оставляет последний."""
+        async with _lock:
+            m = (self.state.get("managers") or {}).get(str(int(tg_id)))
+            if not m:
+                return 0
+            seen: dict[tuple, int] = {}
+            for i, a in enumerate(m.get("assignments") or []):
+                k = (int(a.get("chat_id") or 0), (a.get("gateway") or "").strip().lower())
+                seen[k] = i  # перезаписываем — оставляем последний
+            new_list = [m["assignments"][i] for i in sorted(seen.values())]
+            removed = len(m.get("assignments") or []) - len(new_list)
+            m["assignments"] = new_list
+            if removed:
+                await self._save_unlocked()
+            return removed
 
     async def del_manager_rule(self, tg_id: int, chat_id: int, gateway: str) -> bool:
         async with _lock:

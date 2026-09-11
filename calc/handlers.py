@@ -1365,14 +1365,42 @@ async def cmd_managers(message: Message):
             f"<code>{m['tg_id']}</code>"
         )
         for a in m.get("assignments") or []:
-            entry = storage.get_client_chat(int(a.get("chat_id") or 0))
-            team = entry.get("team_name") if entry else "?"
+            cid = int(a.get("chat_id") or 0)
+            entry = storage.get_client_chat(cid)
+            if entry:
+                team = entry.get("team_name") or entry.get("partner_username") or f"chat {cid}"
+            else:
+                team = f"<i>чат {cid} не найден</i>"
             gw = a.get("gateway") or "все"
             rule = _RULE_LABELS.get(a.get("rule"), a.get("rule"))
             lines.append(f"    · {team} / <b>{gw}</b> · {rule} <b>{a.get('value'):g}</b>")
         if not m.get("assignments"):
             lines.append("    <i>без правил</i>")
+    lines.append(
+        "\n<i>Убрать дубли: /менеджер_очистить &lt;tg_id&gt;</i>"
+    )
     await message.reply("\n".join(lines), reply_markup=_close_kb())
+
+
+@router.message(Command("менеджер_очистить", "manager_dedupe"))
+async def cmd_manager_dedupe(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply(
+            "Формат: <code>/менеджер_очистить &lt;tg_id&gt;</code>",
+            reply_markup=_close_kb(),
+        )
+    try:
+        tg_id = int(parts[1])
+    except ValueError:
+        return await message.reply("tg_id — число.")
+    removed = await storage.dedupe_manager_rules(tg_id)
+    await message.reply(
+        f"Удалено дублей: <b>{removed}</b>",
+        reply_markup=_close_kb(),
+    )
 
 
 @router.message(Command("зарплата", "salary"))
