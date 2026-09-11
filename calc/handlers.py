@@ -1140,6 +1140,303 @@ async def cmd_reset_chat(message: Message):
     )
 
 
+def _compute_manager_salary(tg_id: int, date_str: str | None = None,
+                             date_from: str | None = None) -> dict:
+    """Считает зарплату менеджера за период по его assignments."""
+    m = storage.get_manager(tg_id)
+    if not m:
+        return {"total_usd": 0, "by_rule": []}
+    gateways = storage.list_gateways()
+    gw_lookup = {k.lower(): v for k, v in gateways.items()}
+    by_rule = []
+    total = 0.0
+    for a in m.get("assignments") or []:
+        chat_id = int(a.get("chat_id") or 0)
+        gateway = a.get("gateway") or ""
+        rule = a.get("rule") or ""
+        value = float(a.get("value") or 0)
+        entry = storage.get_client_chat(chat_id)
+        if not entry:
+            continue
+        # Итерируем entries за период по этому чату + шлюзу (или все если "")
+        client_rate = float(entry.get("rate") or 0)
+        client_dirs = entry.get("directions") or {}
+        days = entry.get("days") or {}
+        if date_str:
+            days_iter = [(date_str, days.get(date_str) or {"entries": []})]
+        elif date_from:
+            days_iter = [(d, day) for d, day in days.items() if d >= date_from]
+        else:
+            days_iter = list(days.items())
+        rub_sum = 0.0
+        margin_sum = 0.0
+        income_sum = 0.0
+        for _, day in days_iter:
+            for e in day.get("entries") or []:
+                m_name = e.get("payment_method") or e.get("direction") or ""
+                if gateway and gateway.lower() != m_name.lower():
+                    continue
+                gw = gw_lookup.get(m_name.lower()) or {}
+                merchant_take = float(gw.get("merchant_cost_pct") or gw.get("cost_pct") or 0)
+                merchant_rate = float(gw.get("merchant_rate") or 0)
+                cd = client_dirs.get(m_name) or {}
+                client_com = float(cd.get("commission_pct") or 0)
+                rub = float(e.get("amount_rub") or 0)
+                rub_sum += rub
+                if merchant_rate > 0:
+                    merchant_usd = rub * (1 - merchant_take / 100.0) / merchant_rate
+                else:
+                    merchant_usd = 0
+                income_sum += merchant_usd
+                client_usd = (rub * (1 - client_com / 100.0) / client_rate) if client_rate > 0 else 0
+                margin_sum += (merchant_usd - client_usd)
+        # Считаем зарплату по правилу
+        salary_usd = 0.0
+        team = entry.get("team_name") or entry.get("partner_username") or str(chat_id)
+        if rule == "pct_turnover":
+            # % от rub → переводим в USD по merchant_rate шлюза (или первому доступному)
+            # для простоты — берём среднее по gateway. Для 1 шлюза точнее.
+            mr = 0
+            if gateway:
+                mr = float((gateways.get(gateway) or {}).get("merchant_rate") or 0)
+            if mr <= 0:
+                # среднее по глобалу
+                rates = [float(g.get("merchant_rate") or 0) for g in gateways.values() if g.get("merchant_rate")]
+                mr = sum(rates) / len(rates) if rates else 90
+            salary_usd = rub_sum * (value / 100.0) / mr
+        elif rule == "pct_margin":
+            salary_usd = margin_sum * (value / 100.0)
+        elif rule == "pct_income":
+            salary_usd = income_sum * (value / 100.0)
+        elif rule == "fixed":
+            salary_usd = value
+        by_rule.append({
+            "team": team,
+            "chat_id": chat_id,
+            "gateway": gateway or "все",
+            "rule": rule,
+            "value": value,
+            "rub": rub_sum,
+            "income_usd": income_sum,
+            "margin_usd": margin_sum,
+            "salary_usd": salary_usd,
+        })
+        total += salary_usd
+    return {"total_usd": total, "by_rule": by_rule, "name": m.get("name") or "",
+            "username": m.get("username") or ""}
+
+
+_RULE_LABELS = {
+    "pct_turnover": "% оборота",
+    "pct_margin": "% маржи",
+    "pct_income": "% прихода",
+    "fixed": "фикс",
+}
+
+
+@router.message(Command("менеджер_добавить", "менеджердобавить", "manager_add"))
+async def cmd_manager_add(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2:
+        return await message.reply(
+            "Формат: <code>/менеджер_добавить @nick|tg_id [Имя]</code>",
+            reply_markup=_close_kb(),
+        )
+    arg = parts[1].strip().lstrip("@")
+    name = parts[2].strip() if len(parts) >= 3 else ""
+    tg_id = 0
+    username = ""
+    if arg.lstrip("-").isdigit():
+        tg_id = int(arg)
+    else:
+        username = arg
+        # Пытаемся найти в member трекерах клиентских чатов
+        for c in storage.list_client_chats():
+            mem = c.get("members") or {}
+            found = mem.get(username.lower())
+            if found:
+                tg_id = int(found.get("tg_id") or 0)
+                break
+    if not tg_id:
+        return await message.reply(
+            f"Не могу найти tg_id для @{username}. Пришли числовой tg_id: "
+            f"<code>/менеджер_добавить &lt;tg_id&gt; Имя</code>"
+        )
+    m = await storage.add_manager(tg_id, username, name)
+    await message.reply(
+        f"Менеджер добавлен: <b>{html.escape(m.get('name') or '—')}</b>\n"
+        f"@{m.get('username') or '—'} · tg_id: <code>{m['tg_id']}</code>\n\n"
+        f"Правила: <code>/менеджер_правило {m['tg_id']} &lt;chat_id&gt; &lt;шлюз|all&gt; &lt;тип&gt; &lt;значение&gt;</code>\n"
+        f"Типы: pct_turnover · pct_margin · pct_income · fixed",
+        reply_markup=_close_kb(),
+    )
+
+
+@router.message(Command("менеджер_правило", "менеджерправило", "manager_rule"))
+async def cmd_manager_rule(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return await message.reply("Только owner.")
+    parts = (message.text or "").split()
+    if len(parts) < 6:
+        return await message.reply(
+            "Формат: <code>/менеджер_правило &lt;tg_id&gt; &lt;chat_id&gt; &lt;шлюз|all&gt; &lt;тип&gt; &lt;значение&gt;</code>\n"
+            "Типы: pct_turnover · pct_margin · pct_income · fixed\n"
+            "Пример: <code>/менеджер_правило 12345 -100477... QR-1 pct_margin 33</code>",
+            reply_markup=_close_kb(),
+        )
+    try:
+        tg_id = int(parts[1])
+        chat_id = int(parts[2])
+    except ValueError:
+        return await message.reply("tg_id/chat_id — числа.")
+    gateway = parts[3].strip()
+    if gateway.lower() == "all":
+        gateway = ""
+    rule_type = parts[4].strip()
+    if rule_type not in _RULE_LABELS:
+        return await message.reply(f"Тип должен быть: {', '.join(_RULE_LABELS.keys())}")
+    try:
+        value = float(parts[5].replace(",", "."))
+    except ValueError:
+        return await message.reply("Значение — число.")
+    ok = await storage.add_manager_rule(tg_id, chat_id, gateway, rule_type, value)
+    if not ok:
+        return await message.reply("Менеджер не найден. Сначала /менеджер_добавить.")
+    await message.reply(
+        f"Правило добавлено:\n"
+        f"Чат <code>{chat_id}</code> · шлюз <b>{gateway or 'все'}</b>\n"
+        f"{_RULE_LABELS[rule_type]}: <b>{value:g}</b>",
+        reply_markup=_close_kb(),
+    )
+
+
+@router.message(Command("менеджер_удалправило", "manager_del_rule"))
+async def cmd_manager_del_rule(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 4:
+        return await message.reply(
+            "Формат: <code>/менеджер_удалправило &lt;tg_id&gt; &lt;chat_id&gt; &lt;шлюз|all&gt;</code>"
+        )
+    try:
+        tg_id = int(parts[1])
+        chat_id = int(parts[2])
+    except ValueError:
+        return
+    gateway = parts[3].strip()
+    if gateway.lower() == "all":
+        gateway = ""
+    ok = await storage.del_manager_rule(tg_id, chat_id, gateway)
+    await message.reply("Удалено" if ok else "Не найдено", reply_markup=_close_kb())
+
+
+@router.message(Command("менеджер_удал", "manager_del"))
+async def cmd_manager_del(message: Message):
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return
+    try:
+        tg_id = int(parts[1])
+    except ValueError:
+        return
+    ok = await storage.delete_manager(tg_id)
+    await message.reply("Удалён" if ok else "Не найден", reply_markup=_close_kb())
+
+
+@router.message(Command("менеджеры", "managers"))
+async def cmd_managers(message: Message):
+    if not is_owner_or_admin_msg(message):
+        return
+    mgs = storage.list_managers()
+    if not mgs:
+        return await message.reply(
+            "Менеджеров пока нет.\nДобавь: <code>/менеджер_добавить @nick Имя</code>",
+            reply_markup=_close_kb(),
+        )
+    lines = [f"<b>Менеджеры ({len(mgs)}):</b>"]
+    for m in mgs.values():
+        lines.append(
+            f"\n <b>{html.escape(m.get('name') or '—')}</b> · @{m.get('username') or '—'} · "
+            f"<code>{m['tg_id']}</code>"
+        )
+        for a in m.get("assignments") or []:
+            entry = storage.get_client_chat(int(a.get("chat_id") or 0))
+            team = entry.get("team_name") if entry else "?"
+            gw = a.get("gateway") or "все"
+            rule = _RULE_LABELS.get(a.get("rule"), a.get("rule"))
+            lines.append(f"    · {team} / <b>{gw}</b> · {rule} <b>{a.get('value'):g}</b>")
+        if not m.get("assignments"):
+            lines.append("    <i>без правил</i>")
+    await message.reply("\n".join(lines), reply_markup=_close_kb())
+
+
+@router.message(Command("зарплата", "salary"))
+async def cmd_salary(message: Message):
+    """/зарплата — сегодня по всем.
+    /зарплата 2026-09 — за месяц.
+    /зарплата @nick — детально."""
+    if not is_owner_or_admin_msg(message):
+        return
+    parts = (message.text or "").split()
+    period_date = None
+    period_from = None
+    target_uname = None
+    if len(parts) >= 2:
+        a = parts[1].strip().lstrip("@")
+        if a.startswith("2") and len(a) == 10:  # YYYY-MM-DD
+            period_date = a
+        elif a.startswith("2") and len(a) == 7:  # YYYY-MM
+            period_from = a + "-01"
+        else:
+            target_uname = a
+    if not period_date and not period_from:
+        period_date = today_msk()
+
+    mgs = storage.list_managers()
+    label = period_date or (f"с {period_from}")
+    lines = [f"<b>Зарплата · {label}</b>", ""]
+    if target_uname:
+        target = None
+        for m in mgs.values():
+            if (m.get("username") or "").lower() == target_uname.lower():
+                target = m
+                break
+        if not target:
+            return await message.reply(f"Менеджер @{target_uname} не найден.")
+        r = _compute_manager_salary(target["tg_id"], date_str=period_date, date_from=period_from)
+        lines.append(
+            f"<b>{html.escape(r['name'] or '—')}</b> · @{r['username'] or '—'}"
+        )
+        for br in r["by_rule"]:
+            lines.append(
+                f"\n {html.escape(str(br['team']))} · <b>{br['gateway']}</b>"
+                f"\n    {_RULE_LABELS.get(br['rule'], br['rule'])} {br['value']:g}"
+                f"\n    оборот {_fmt_money_rub(br['rub'])}₽ · маржа {_fmt_money_usd(br['margin_usd'])}$"
+                f"\n    <b>ЗП: {_fmt_money_usd(br['salary_usd'])}$</b>"
+            )
+        lines.append(f"\n<b>ИТОГО: {_fmt_money_usd(r['total_usd'])}$</b>")
+    else:
+        total_all = 0.0
+        rows = []
+        for m in mgs.values():
+            r = _compute_manager_salary(m["tg_id"], date_str=period_date, date_from=period_from)
+            total_all += r["total_usd"]
+            rows.append((m, r))
+        rows.sort(key=lambda x: x[1]["total_usd"], reverse=True)
+        for m, r in rows:
+            lines.append(
+                f" <b>{html.escape(m.get('name') or '—')}</b> · @{m.get('username') or '—'} · "
+                f"<b>{_fmt_money_usd(r['total_usd'])}$</b>"
+            )
+        lines.append(f"\n<b>ФОТ: {_fmt_money_usd(total_all)}$</b>")
+    await message.reply("\n".join(lines), reply_markup=_close_kb())
+
+
 @router.message(Command("шаблоны", "templates"))
 async def cmd_templates(message: Message):
     """Показать сохранённые шаблоны рассылки. Только owner/admin."""

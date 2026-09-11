@@ -90,6 +90,9 @@ def _default_state() -> dict:
         # Глобальные шлюзы — методы приёма платежей. Копируются в client_chat при регистрации.
         # {name: {name, commission_pct, cost_pct, enabled}}
         "gateways": {},
+        # Менеджеры: {tg_id: {tg_id, username, name, assignments: [{chat_id, gateway, rule, value}]}}
+        # rule: "pct_turnover" (% от rub) | "pct_margin" (% от маржи) | "pct_income" (% от прихода) | "fixed" ($)
+        "managers": {},
     }
 
 
@@ -312,6 +315,87 @@ class CalcStorage:
             if added:
                 await self._save_unlocked()
             return added
+
+    # ---------- MANAGERS ----------
+    def list_managers(self) -> dict:
+        return self.state.get("managers") or {}
+
+    def get_manager(self, tg_id: int) -> dict | None:
+        return (self.state.get("managers") or {}).get(str(int(tg_id)))
+
+    async def add_manager(self, tg_id: int, username: str, name: str) -> dict:
+        async with _lock:
+            mgs = self.state.setdefault("managers", {})
+            key = str(int(tg_id))
+            existing = mgs.get(key)
+            if existing:
+                if username:
+                    existing["username"] = username.lstrip("@")
+                if name:
+                    existing["name"] = name
+                await self._save_unlocked()
+                return existing
+            m = {
+                "tg_id": int(tg_id),
+                "username": (username or "").lstrip("@"),
+                "name": name or "",
+                "assignments": [],
+            }
+            mgs[key] = m
+            await self._save_unlocked()
+            return m
+
+    async def delete_manager(self, tg_id: int) -> bool:
+        async with _lock:
+            mgs = self.state.get("managers") or {}
+            key = str(int(tg_id))
+            if key not in mgs:
+                return False
+            del mgs[key]
+            await self._save_unlocked()
+            return True
+
+    async def add_manager_rule(
+        self, tg_id: int, chat_id: int, gateway: str,
+        rule_type: str, value: float,
+    ) -> bool:
+        """rule_type: pct_turnover | pct_margin | pct_income | fixed"""
+        async with _lock:
+            m = (self.state.get("managers") or {}).get(str(int(tg_id)))
+            if not m:
+                return False
+            assignments = m.setdefault("assignments", [])
+            # Replace если такой (chat_id + gateway) уже есть
+            for a in assignments:
+                if int(a.get("chat_id") or 0) == int(chat_id) and (a.get("gateway") or "") == gateway:
+                    a["rule"] = rule_type
+                    a["value"] = float(value)
+                    await self._save_unlocked()
+                    return True
+            assignments.append({
+                "chat_id": int(chat_id),
+                "gateway": gateway or "",
+                "rule": rule_type,
+                "value": float(value),
+            })
+            await self._save_unlocked()
+            return True
+
+    async def del_manager_rule(self, tg_id: int, chat_id: int, gateway: str) -> bool:
+        async with _lock:
+            m = (self.state.get("managers") or {}).get(str(int(tg_id)))
+            if not m:
+                return False
+            before = len(m.get("assignments") or [])
+            m["assignments"] = [
+                a for a in (m.get("assignments") or [])
+                if not (int(a.get("chat_id") or 0) == int(chat_id) and (a.get("gateway") or "") == gateway)
+            ]
+            after = len(m["assignments"])
+            if before != after:
+                await self._save_unlocked()
+                return True
+            return False
 
     # ---------- DANGER: DELETE ----------
     async def delete_client_chat(self, chat_id: int) -> bool:
