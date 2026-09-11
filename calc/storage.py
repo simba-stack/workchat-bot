@@ -383,6 +383,27 @@ class CalcStorage:
             await self._save_unlocked()
             return True
 
+    async def cleanup_phantom_rules(self, tg_id: int | None = None) -> int:
+        """Удаляет assignments у менеджеров, где chat_id не существует в client_chats.
+        Если tg_id указан — только у него, иначе у всех."""
+        async with _lock:
+            chats = self.state.get("client_chats") or {}
+            valid_ids = {int(k) for k in chats.keys()}
+            mgs = self.state.get("managers") or {}
+            targets = [str(int(tg_id))] if tg_id else list(mgs.keys())
+            removed = 0
+            for key in targets:
+                m = mgs.get(key)
+                if not m:
+                    continue
+                before = m.get("assignments") or []
+                after = [a for a in before if int(a.get("chat_id") or 0) in valid_ids]
+                removed += len(before) - len(after)
+                m["assignments"] = after
+            if removed:
+                await self._save_unlocked()
+            return removed
+
     async def dedupe_manager_rules(self, tg_id: int) -> int:
         """Убирает дубли assignments по (chat_id, gateway lowercase). Оставляет последний."""
         async with _lock:

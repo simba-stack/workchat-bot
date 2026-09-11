@@ -1403,6 +1403,26 @@ async def cmd_manager_dedupe(message: Message):
     )
 
 
+@router.message(Command("менеджер_фантомы", "manager_phantoms"))
+async def cmd_manager_phantoms(message: Message):
+    """Удаляет правила менеджеров ссылающиеся на несуществующие чаты."""
+    if not storage.is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    tg_id = None
+    if len(parts) >= 2:
+        try:
+            tg_id = int(parts[1])
+        except ValueError:
+            pass
+    removed = await storage.cleanup_phantom_rules(tg_id)
+    who = f"tg_id {tg_id}" if tg_id else "всех менеджеров"
+    await message.reply(
+        f"Удалено фантомных правил ({who}): <b>{removed}</b>",
+        reply_markup=_close_kb(),
+    )
+
+
 @router.message(Command("зарплата", "salary"))
 async def cmd_salary(message: Message):
     """/зарплата — сегодня по всем.
