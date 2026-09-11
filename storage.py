@@ -709,6 +709,39 @@ class Storage:
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.state["admins"]
 
+    # ---------- BLACKLIST (бан InviteWork бота) ----------
+    def is_banned(self, user_id: int) -> bool:
+        bl = self.state.get("invite_blacklist") or []
+        return int(user_id) in {int(x) for x in bl}
+
+    async def ban_user(self, user_id: int, note: str = "") -> None:
+        async with _lock:
+            bl = self.state.setdefault("invite_blacklist", [])
+            uid = int(user_id)
+            if uid not in [int(x) for x in bl]:
+                bl.append(uid)
+            notes = self.state.setdefault("invite_ban_notes", {})
+            if note:
+                notes[str(uid)] = note
+            await self._save_unlocked()
+
+    async def unban_user(self, user_id: int) -> bool:
+        async with _lock:
+            bl = self.state.get("invite_blacklist") or []
+            uid = int(user_id)
+            new = [x for x in bl if int(x) != uid]
+            if len(new) == len(bl):
+                return False
+            self.state["invite_blacklist"] = new
+            (self.state.get("invite_ban_notes") or {}).pop(str(uid), None)
+            await self._save_unlocked()
+            return True
+
+    def list_banned(self) -> list[dict]:
+        bl = self.state.get("invite_blacklist") or []
+        notes = self.state.get("invite_ban_notes") or {}
+        return [{"tg_id": int(x), "note": notes.get(str(x), "")} for x in bl]
+
     async def add_admin(self, user_id: int):
         async with _lock:
             if user_id not in self.state["admins"]:

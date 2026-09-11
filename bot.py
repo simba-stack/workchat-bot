@@ -309,6 +309,16 @@ async def _send_post_survey(message_or_call, state: FSMContext):
 @main_router.message(CommandStart())
 async def on_start(message: Message, state: FSMContext):
     await state.clear()
+    # Blacklist: забаненные не проходят дальше
+    if storage.is_banned(message.from_user.id):
+        try:
+            await message.reply(
+                "🚫 <b>Доступ закрыт.</b>\n"
+                "Ваш аккаунт заблокирован администрацией PRIDE."
+            )
+        except Exception:
+            pass
+        return
     # Воронка: считаем нажатия /start
     try:
         await storage.bump_funnel("starts")

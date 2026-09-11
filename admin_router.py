@@ -270,6 +270,62 @@ async def cmd_admin(message: Message, state: FSMContext):
     await message.answer("🔐 <b>Админ-панель</b>", reply_markup=main_menu_kb())
 
 
+@router.message(Command("бан", "ban"))
+async def cmd_ban(message: Message):
+    """/бан <tg_id> [причина] — заблокировать юзера в InviteBot."""
+    if not storage.is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2:
+        return await message.reply(
+            "Формат: <code>/бан &lt;tg_id&gt; [причина]</code>\n"
+            "Пример: <code>/бан 123456789 скам</code>"
+        )
+    try:
+        uid = int(parts[1].strip().lstrip("@"))
+    except ValueError:
+        return await message.reply(
+            "tg_id должен быть числом. Узнать: перешли сообщение юзера на @userinfobot"
+        )
+    note = parts[2].strip() if len(parts) >= 3 else ""
+    await storage.ban_user(uid, note=note)
+    await message.reply(
+        f"🚫 Забанен <code>{uid}</code>"
+        + (f"\nПричина: {html.escape(note)}" if note else "")
+    )
+
+
+@router.message(Command("разбан", "unban"))
+async def cmd_unban(message: Message):
+    if not storage.is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        return await message.reply("Формат: <code>/разбан &lt;tg_id&gt;</code>")
+    try:
+        uid = int(parts[1].strip().lstrip("@"))
+    except ValueError:
+        return await message.reply("tg_id — число.")
+    ok = await storage.unban_user(uid)
+    await message.reply(
+        f"✅ Разбанен <code>{uid}</code>" if ok else f"Не в списке."
+    )
+
+
+@router.message(Command("бан_список", "banlist", "banned"))
+async def cmd_banlist(message: Message):
+    if not storage.is_admin(message.from_user.id):
+        return
+    lst = storage.list_banned()
+    if not lst:
+        return await message.reply("Забаненных нет.")
+    lines = [f"🚫 <b>Забаненные ({len(lst)}):</b>"]
+    for b in lst:
+        note = f" — {html.escape(b['note'])}" if b.get("note") else ""
+        lines.append(f"  <code>{b['tg_id']}</code>{note}")
+    await message.reply("\n".join(lines))
+
+
 @router.message(Command("healthcheck"))
 async def cmd_healthcheck(message: Message):
     """Прогоняет проверку всех систем и шлёт отчёт. Доступно только админам."""
