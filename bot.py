@@ -478,23 +478,8 @@ async def on_sub_check(call: CallbackQuery, state: FSMContext):
 @main_router.callback_query(F.data == "gw:get")
 async def on_get_chat_clicked(call: CallbackQuery, state: FSMContext):
     """SIMBA 2026-09: перед капчей — выбор направления.
-    Клиент выбирает по какому направлению создать рабочую беседу
-    (ИП/Дебет/Телефония/GSM или другое настроенное owner-ом)."""
+    Клиент выбирает по какому направлению создать рабочую беседу."""
     await call.answer()
-    # Обязательные подписки
-    missing = await _check_subs(call.message.bot, call.from_user.id)
-    if missing:
-        try:
-            await call.message.edit_text(
-                "🔒 <b>Прежде чем создать рабочую беседу — подпишись на наши каналы:</b>",
-                reply_markup=_subs_gate_kb(missing),
-            )
-        except Exception:
-            await call.message.answer(
-                "🔒 Прежде чем создать рабочую беседу — подпишись на наши каналы:",
-                reply_markup=_subs_gate_kb(missing),
-            )
-        return
     directions = storage.list_directions(only_enabled=True)
     if not directions:
         # Fallback — сразу капча если направления не настроены
@@ -687,6 +672,24 @@ async def _create_chat_for_user(reply_chat_id: int, user: TgUser, direction_key:
     )
     try:
         await progress.edit_text(client_text, disable_web_page_preview=False)
+    except Exception:
+        pass
+
+    # Напоминание подписаться на все ресурсы PRIDE
+    subs_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💬 ЧАТ PRIDE", url="https://t.me/pride_projectv2"),
+            InlineKeyboardButton(text="📢 КАНАЛ PRIDE", url="https://t.me/pride_projectv2"),
+        ],
+        [InlineKeyboardButton(text="📊 WORK STATUS", url="https://t.me/prideworkstatus")],
+    ])
+    try:
+        await bot.send_message(
+            reply_chat_id,
+            "📌 <b>Не забудь подписаться на все ресурсы PRIDE</b>\n\n"
+            "Там мы публикуем актуальные статусы работы, объявления и важные новости.",
+            reply_markup=subs_kb,
+        )
     except Exception:
         pass
 
